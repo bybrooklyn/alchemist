@@ -8,6 +8,7 @@ pub enum Vendor {
     Nvidia,
     Amd,
     Intel,
+    Apple,
 }
 
 impl std::fmt::Display for Vendor {
@@ -16,6 +17,7 @@ impl std::fmt::Display for Vendor {
             Vendor::Nvidia => write!(f, "NVIDIA (NVENC)"),
             Vendor::Amd => write!(f, "AMD (VAAPI/AMF)"),
             Vendor::Intel => write!(f, "Intel (QSV)"),
+            Vendor::Apple => write!(f, "Apple (VideoToolbox)"),
         }
     }
 }
@@ -26,6 +28,15 @@ pub struct HardwareInfo {
 }
 
 pub fn detect_hardware() -> Result<HardwareInfo> {
+    // 0. Check for Apple (macOS)
+    if cfg!(target_os = "macos") {
+        info!("Detected macOS hardware");
+        return Ok(HardwareInfo {
+            vendor: Vendor::Apple,
+            device_path: None,
+        });
+    }
+
     // 1. Check for NVIDIA (Simplest check via nvidia-smi or /dev/nvidiactl)
     if Path::new("/dev/nvidiactl").exists() || Command::new("nvidia-smi").output().is_ok() {
         info!("Detected NVIDIA hardware");
