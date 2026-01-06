@@ -13,6 +13,8 @@ use std::sync::Arc;
 use crate::app::*;
 use crate::db::{Db, JobState};
 use crate::config::Config;
+use serde::{Serialize, Deserialize};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -33,13 +35,12 @@ pub async fn run_server(db: Arc<Db>, config: Arc<Config>, tx: broadcast::Sender<
         .route("/api/events", get(sse_handler))
         .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
         .leptos_routes(&leptos_options, routes, App)
+        .fallback(leptos_axum::render_app_to_stream(leptos_options.clone(), App))
         .with_state(leptos_options)
         .layer(axum::Extension(db))
         .layer(axum::Extension(config))
         .layer(axum::Extension(tx));
 
-    // run our app with hyper
-    // `axum::Server` is re-exported from `hyper`
     info!("listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

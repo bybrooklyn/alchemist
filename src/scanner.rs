@@ -5,6 +5,7 @@ use tracing::{info, debug};
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct ScannedFile {
     pub path: PathBuf,
     pub mtime: SystemTime,

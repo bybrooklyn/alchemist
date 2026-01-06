@@ -8,6 +8,7 @@ use alchemist::{analyzer, config, db, hardware, orchestrator, scanner};
 use alchemist::db::JobState;
 use alchemist::server::AlchemistEvent;
 use tokio::sync::broadcast;
+use leptos::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

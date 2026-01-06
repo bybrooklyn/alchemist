@@ -5,6 +5,7 @@ use tracing::{info, error};
 use crate::hardware::{Vendor, HardwareInfo};
 use crate::server::AlchemistEvent;
 use tokio::sync::broadcast;
+use std::sync::Arc;
 
 pub struct Orchestrator {
     ffmpeg_path: String,
