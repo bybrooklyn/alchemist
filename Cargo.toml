@@ -15,5 +15,15 @@ anyhow = "1.0"
 subprocess = "0.2.9" 
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
-futures = "0.3"
+futures = { version = "0.3" }
+toml = "0.8"
+leptos = { version = "0.6", features = ["ssr"] }
+leptos_axum = "0.6"
+axum = { version = "0.7", features = ["macros"] }
+tower = { version = "0.4" }
+tower-http = { version = "0.5", features = ["fs"] }
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+log = "0.4"
+rayon = "1.10"
 

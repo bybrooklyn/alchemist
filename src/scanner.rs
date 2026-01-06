@@ -1,6 +1,14 @@
 use std::path::PathBuf;
+use std::time::SystemTime;
 use walkdir::WalkDir;
 use tracing::{info, debug};
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
+
+pub struct ScannedFile {
+    pub path: PathBuf,
+    pub mtime: SystemTime,
+}
 
 pub struct Scanner {
     extensions: Vec<String>,
@@ -19,22 +27,34 @@ impl Scanner {
         }
     }
 
-    pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        for dir in directories {
+    pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<ScannedFile> {
+        let files = Arc::new(Mutex::new(Vec::new()));
+        
+        directories.into_par_iter().for_each(|dir| {
             info!("Scanning directory: {:?}", dir);
+            let mut local_files = Vec::new();
             for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
                 if entry.file_type().is_file() {
                     if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                         if self.extensions.contains(&ext.to_lowercase()) {
                             debug!("Found media file: {:?}", entry.path());
-                            files.push(entry.path().to_path_buf());
+                            let mtime = entry.metadata().map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH)).unwrap_or(SystemTime::UNIX_EPOCH);
+                            local_files.push(ScannedFile {
+                                path: entry.path().to_path_buf(),
+                                mtime,
+                            });
                         }
                     }
                 }
             }
-        }
-        info!("Found {} candidate media files", files.len());
-        files
+            files.lock().unwrap().extend(local_files);
+        });
+
+        let mut final_files = files.lock().unwrap().clone();
+        // Deterministic ordering
+        final_files.sort_by(|a, b| a.path.cmp(&b.path));
+        
+        info!("Found {} candidate media files", final_files.len());
+        final_files
     }
 }

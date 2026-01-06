@@ -18,6 +18,8 @@ pub struct Stream {
     pub height: Option<u32>,
     pub bit_rate: Option<String>,
     pub bits_per_raw_sample: Option<String>,
+    pub channel_layout: Option<String>,
+    pub channels: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,7 +52,7 @@ impl Analyzer {
         Ok(metadata)
     }
 
-    pub fn should_transcode(_path: &Path, metadata: &MediaMetadata) -> (bool, String) {
+    pub fn should_transcode(_path: &Path, metadata: &MediaMetadata, config: &crate::config::Config) -> (bool, String) {
         // 1. Codec Check (skip if already AV1 + 10-bit)
         let video_stream = metadata.streams.iter().find(|s| s.codec_type == "video");
         
@@ -86,19 +88,41 @@ impl Analyzer {
         let bpp = bitrate / (width * height);
         
         // Heuristic: If BPP is already very low, don't murder it further.
-        // threshold 0.1 is very low for h264, maybe 0.05 for av1.
-        if bpp < 0.1 {
-            return (false, format!("BPP too low ({:.4}), avoiding quality murder", bpp));
+        if bpp < config.transcode.min_bpp_threshold {
+            return (false, format!("BPP too low ({:.4} < {:.2}), avoiding quality murder", bpp, config.transcode.min_bpp_threshold));
         }
 
         // 4. Projected Size Logic
-        // Target AV1 is roughly 30-50% smaller than H264 for same quality.
-        // If it's already a small file (e.g. under 50MB), maybe skip?
         let size_bytes = metadata.format.size.parse::<u64>().unwrap_or(0);
-        if size_bytes < 50 * 1024 * 1024 {
-            return (false, "File too small to justify transcode overhead".to_string());
+        let min_size_bytes = config.transcode.min_file_size_mb * 1024 * 1024;
+        if size_bytes < min_size_bytes {
+            return (false, format!("File too small ({}MB < {}MB) to justify transcode overhead", 
+                size_bytes / 1024 / 1024, config.transcode.min_file_size_mb));
         }
 
         (true, format!("Ready for AV1 transcode (Current codec: {}, BPP: {:.4})", video_stream.codec_name, bpp))
+    }
+
+    pub fn should_transcode_audio(stream: &Stream) -> bool {
+        if stream.codec_type != "audio" {
+            return false;
+        }
+
+        // Transcode if it's a "heavy" codec or very high bitrate
+        let heavy_codecs = ["truehd", "dts-hd", "flac", "pcm_s24le", "pcm_s16le"];
+        if heavy_codecs.contains(&stream.codec_name.to_lowercase().as_str()) {
+            return true;
+        }
+
+        let bitrate = stream.bit_rate.as_ref()
+            .and_then(|b| b.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        // If bitrate > 640kbps (standard AC3 max), maybe transcode?
+        if bitrate > 640000 {
+            return true;
+        }
+
+        false
     }
 }
