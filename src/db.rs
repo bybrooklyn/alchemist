@@ -1,11 +1,13 @@
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
-use std::path::Path;
-use anyhow::Result;
+use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "ssr")]
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, Copy, PartialEq, Eq)]
-#[sqlx(rename_all = "lowercase")]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ssr", derive(sqlx::Type))]
+#[cfg_attr(feature = "ssr", sqlx(rename_all = "lowercase"))]
 pub enum JobState {
     Queued,
     Analyzing,
@@ -19,10 +21,24 @@ pub enum JobState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum AlchemistEvent {
-    JobStateChanged { job_id: i64, status: JobState },
-    Progress { job_id: i64, percentage: f64, time: String },
-    Decision { job_id: i64, action: String, reason: String },
-    Log { job_id: i64, message: String },
+    JobStateChanged {
+        job_id: i64,
+        status: JobState,
+    },
+    Progress {
+        job_id: i64,
+        percentage: f64,
+        time: String,
+    },
+    Decision {
+        job_id: i64,
+        action: String,
+        reason: String,
+    },
+    Log {
+        job_id: i64,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for JobState {
@@ -40,7 +56,8 @@ impl std::fmt::Display for JobState {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
 pub struct Job {
     pub id: i64,
     pub input_path: String,
@@ -51,7 +68,8 @@ pub struct Job {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
 pub struct Decision {
     pub id: i64,
     pub job_id: i64,
@@ -60,10 +78,12 @@ pub struct Decision {
     pub created_at: DateTime<Utc>,
 }
 
+#[cfg(feature = "ssr")]
 pub struct Db {
     pool: SqlitePool,
 }
 
+#[cfg(feature = "ssr")]
 impl Db {
     pub async fn new(db_path: &str) -> Result<Self> {
         let options = SqliteConnectOptions::new()
@@ -75,7 +95,7 @@ impl Db {
         let db = Self { pool };
         db.init().await?;
         db.reset_interrupted_jobs().await?;
-        
+
         Ok(db)
     }
 
@@ -89,7 +109,7 @@ impl Db {
                 mtime_hash TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )"
+            )",
         )
         .execute(&self.pool)
         .await?;
@@ -102,7 +122,7 @@ impl Db {
                 reason TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(job_id) REFERENCES jobs(id)
-            )"
+            )",
         )
         .execute(&self.pool)
         .await?;
@@ -111,19 +131,26 @@ impl Db {
     }
 
     pub async fn reset_interrupted_jobs(&self) -> Result<()> {
-        sqlx::query(
-            "UPDATE jobs SET status = 'queued' WHERE status IN ('analyzing', 'encoding')"
-        )
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE jobs SET status = 'queued' WHERE status IN ('analyzing', 'encoding')")
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
 
-    pub async fn enqueue_job(&self, input_path: &Path, output_path: &Path, mtime: std::time::SystemTime) -> Result<()> {
-        let input_str = input_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid input path"))?;
-        let output_str = output_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid output path"))?;
-        
+    pub async fn enqueue_job(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        mtime: std::time::SystemTime,
+    ) -> Result<()> {
+        let input_str = input_path
+            .to_str()
+            .ok_or_else(|| crate::error::AlchemistError::Config("Invalid input path".into()))?;
+        let output_str = output_path
+            .to_str()
+            .ok_or_else(|| crate::error::AlchemistError::Config("Invalid output path".into()))?;
+
         // simple mtime hash
         let mtime_hash = format!("{:?}", mtime);
 
@@ -134,7 +161,7 @@ impl Db {
              status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
              mtime_hash = excluded.mtime_hash,
              updated_at = CURRENT_TIMESTAMP
-             WHERE mtime_hash != excluded.mtime_hash"
+             WHERE mtime_hash != excluded.mtime_hash",
         )
         .bind(input_str)
         .bind(output_str)
@@ -148,7 +175,7 @@ impl Db {
     pub async fn get_next_job(&self) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
             "SELECT id, input_path, output_path, status, created_at, updated_at 
-             FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+             FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -157,26 +184,22 @@ impl Db {
     }
 
     pub async fn update_job_status(&self, id: i64, status: JobState) -> Result<()> {
-        sqlx::query(
-            "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-        )
-        .bind(status)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
 
     pub async fn add_decision(&self, job_id: i64, action: &str, reason: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO decisions (job_id, action, reason) VALUES (?, ?, ?)"
-        )
-        .bind(job_id)
-        .bind(action)
-        .bind(reason)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO decisions (job_id, action, reason) VALUES (?, ?, ?)")
+            .bind(job_id)
+            .bind(action)
+            .bind(reason)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -197,7 +220,7 @@ impl Db {
 
     pub async fn get_job_decision(&self, job_id: i64) -> Result<Option<Decision>> {
         let decision = sqlx::query_as::<_, Decision>(
-            "SELECT * FROM decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1"
+            "SELECT * FROM decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
@@ -207,11 +230,9 @@ impl Db {
     }
 
     pub async fn get_stats(&self) -> Result<serde_json::Value> {
-        let stats = sqlx::query(
-            "SELECT status, count(*) as count FROM jobs GROUP BY status"
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let stats = sqlx::query("SELECT status, count(*) as count FROM jobs GROUP BY status")
+            .fetch_all(&self.pool)
+            .await?;
 
         let mut map = serde_json::Map::new();
         for row in stats {

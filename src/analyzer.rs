@@ -1,6 +1,7 @@
-use anyhow::{anyhow, Result};
+use crate::error::{AlchemistError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(feature = "ssr")]
 use std::process::Command;
 // use tracing::info; // Removed unused import
 
@@ -29,33 +30,45 @@ pub struct Format {
     pub bit_rate: String,
 }
 
+#[cfg(feature = "ssr")]
 pub struct Analyzer;
 
+#[cfg(feature = "ssr")]
 impl Analyzer {
     pub fn probe(path: &Path) -> Result<MediaMetadata> {
         let output = Command::new("ffprobe")
             .args(&[
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
             ])
             .arg(path)
-            .output()?;
+            .output()
+            .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("ffprobe failed: {}", err));
+            return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
         }
 
-        let metadata: MediaMetadata = serde_json::from_slice(&output.stdout)?;
+        let metadata: MediaMetadata = serde_json::from_slice(&output.stdout).map_err(|e| {
+            AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+        })?;
+
         Ok(metadata)
     }
 
-    pub fn should_transcode(_path: &Path, metadata: &MediaMetadata, config: &crate::config::Config) -> (bool, String) {
+    pub fn should_transcode(
+        _path: &Path,
+        metadata: &MediaMetadata,
+        config: &crate::config::Config,
+    ) -> (bool, String) {
         // 1. Codec Check (skip if already AV1 + 10-bit)
         let video_stream = metadata.streams.iter().find(|s| s.codec_type == "video");
-        
+
         let video_stream = match video_stream {
             Some(v) => v,
             None => return (false, "No video stream found".to_string()),
@@ -68,12 +81,14 @@ impl Analyzer {
 
         // 2. Resolution logic (don't upscale)
         // For Phase 1, we target AV1 10-bit as the gold standard.
-        
+
         // 3. Efficiency Rules (BPP)
         // BPP = Bitrate / (Width * Height * Framerate)
         // We'll simplify for now as framerate is tricky from ffprobe without more flags.
         // Let's use bits per pixel: Bitrate / (Width * Height)
-        let bitrate = video_stream.bit_rate.as_ref()
+        let bitrate = video_stream
+            .bit_rate
+            .as_ref()
             .and_then(|b| b.parse::<f64>().ok())
             .or_else(|| metadata.format.bit_rate.parse::<f64>().ok())
             .unwrap_or(0.0);
@@ -82,25 +97,46 @@ impl Analyzer {
         let height = video_stream.height.unwrap_or(0) as f64;
 
         if width == 0.0 || height == 0.0 || bitrate == 0.0 {
-            return (false, "Incomplete metadata (bitrate/resolution)".to_string());
+            return (
+                false,
+                "Incomplete metadata (bitrate/resolution)".to_string(),
+            );
         }
 
         let bpp = bitrate / (width * height);
-        
+
         // Heuristic: If BPP is already very low, don't murder it further.
         if bpp < config.transcode.min_bpp_threshold {
-            return (false, format!("BPP too low ({:.4} < {:.2}), avoiding quality murder", bpp, config.transcode.min_bpp_threshold));
+            return (
+                false,
+                format!(
+                    "BPP too low ({:.4} < {:.2}), avoiding quality murder",
+                    bpp, config.transcode.min_bpp_threshold
+                ),
+            );
         }
 
         // 4. Projected Size Logic
         let size_bytes = metadata.format.size.parse::<u64>().unwrap_or(0);
         let min_size_bytes = config.transcode.min_file_size_mb * 1024 * 1024;
         if size_bytes < min_size_bytes {
-            return (false, format!("File too small ({}MB < {}MB) to justify transcode overhead", 
-                size_bytes / 1024 / 1024, config.transcode.min_file_size_mb));
+            return (
+                false,
+                format!(
+                    "File too small ({}MB < {}MB) to justify transcode overhead",
+                    size_bytes / 1024 / 1024,
+                    config.transcode.min_file_size_mb
+                ),
+            );
         }
 
-        (true, format!("Ready for AV1 transcode (Current codec: {}, BPP: {:.4})", video_stream.codec_name, bpp))
+        (
+            true,
+            format!(
+                "Ready for AV1 transcode (Current codec: {}, BPP: {:.4})",
+                video_stream.codec_name, bpp
+            ),
+        )
     }
 
     pub fn should_transcode_audio(stream: &Stream) -> bool {
@@ -114,7 +150,9 @@ impl Analyzer {
             return true;
         }
 
-        let bitrate = stream.bit_rate.as_ref()
+        let bitrate = stream
+            .bit_rate
+            .as_ref()
             .and_then(|b| b.parse::<u64>().ok())
             .unwrap_or(0);
 

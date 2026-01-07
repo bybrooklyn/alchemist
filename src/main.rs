@@ -1,9 +1,10 @@
+use alchemist::error::Result;
+use alchemist::{Orchestrator, Processor, config, db, hardware};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use alchemist::{config, db, hardware, Processor, Orchestrator};
 
 use tokio::sync::broadcast;
 
@@ -28,7 +29,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
@@ -37,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Alchemist starting...");
 
     let args = Args::parse();
-    
+
     // 0. Load Configuration
     let config_path = std::path::Path::new("config.toml");
     let config = config::Config::load(config_path).unwrap_or_else(|e| {
@@ -68,11 +69,11 @@ async fn main() -> anyhow::Result<()> {
     let orchestrator = Arc::new(Orchestrator::new());
     let config = Arc::new(config);
     let processor = Arc::new(Processor::new(
-        db.clone(), 
-        orchestrator.clone(), 
-        config.clone(), 
-        hw_info, 
-        tx.clone()
+        db.clone(),
+        orchestrator.clone(),
+        config.clone(),
+        hw_info,
+        tx.clone(),
     ));
 
     info!("Database and services initialized.");
@@ -89,16 +90,23 @@ async fn main() -> anyhow::Result<()> {
     } else {
         // CLI Mode
         if args.directories.is_empty() {
-            error!("No directories provided. Usage: alchemist <DIRECTORIES>... or alchemist --server");
-            return Err(anyhow::anyhow!("Missing directories for CLI mode"));
+            error!(
+                "No directories provided. Usage: alchemist <DIRECTORIES>... or alchemist --server"
+            );
+            return Err(alchemist::error::AlchemistError::Config(
+                "Missing directories for CLI mode".into(),
+            ));
         }
         processor.scan_and_enqueue(args.directories).await?;
-        
+
         // Wait until all jobs are processed
         info!("Waiting for jobs to complete...");
         loop {
             let stats = db.get_stats().await?;
-            let processing = stats.get("processing").and_then(|v| v.as_i64()).unwrap_or(0);
+            let processing = stats
+                .get("processing")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             let queued = stats.get("queued").and_then(|v| v.as_i64()).unwrap_or(0);
             let analyzing = stats.get("analyzing").and_then(|v| v.as_i64()).unwrap_or(0);
             let encoding = stats.get("encoding").and_then(|v| v.as_i64()).unwrap_or(0);

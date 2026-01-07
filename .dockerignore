@@ -1,0 +1,5 @@
+target
+alchemist.db
+.git
+.github
+*.log

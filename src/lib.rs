@@ -1,7 +1,10 @@
+#[cfg(feature = "ssr")]
 pub mod analyzer;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod hardware;
+#[cfg(feature = "ssr")]
 pub mod scanner;
 
 #[cfg(feature = "ssr")]
@@ -13,9 +16,11 @@ pub mod server;
 
 pub mod app;
 
-#[cfg(feature = "ssr")] pub use orchestrator::Orchestrator;
-#[cfg(feature = "ssr")] pub use processor::Processor;
 pub use db::AlchemistEvent;
+#[cfg(feature = "ssr")]
+pub use orchestrator::Orchestrator;
+#[cfg(feature = "ssr")]
+pub use processor::Processor;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

@@ -1,13 +1,14 @@
+use crate::Orchestrator;
+use crate::analyzer::Analyzer;
+use crate::config::Config;
+use crate::db::{AlchemistEvent, Db, JobState};
+use crate::error::Result;
+use crate::hardware::HardwareInfo;
+use crate::scanner::Scanner;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{broadcast, Semaphore};
-use tracing::{info, error, warn};
-use crate::db::{Db, JobState, AlchemistEvent};
-use crate::Orchestrator;
-use crate::config::Config;
-use crate::hardware::HardwareInfo;
-use crate::analyzer::Analyzer;
-use crate::scanner::Scanner;
+use tokio::sync::{Semaphore, broadcast};
+use tracing::{error, info, warn};
 
 pub struct Processor {
     db: Arc<Db>,
@@ -37,7 +38,7 @@ impl Processor {
         }
     }
 
-    pub async fn scan_and_enqueue(&self, directories: Vec<PathBuf>) -> anyhow::Result<()> {
+    pub async fn scan_and_enqueue(&self, directories: Vec<PathBuf>) -> Result<()> {
         info!("Starting manual scan of directories: {:?}", directories);
         let scanner = Scanner::new();
         let files = scanner.scan(directories);
@@ -45,13 +46,20 @@ impl Processor {
         for scanned_file in files {
             let mut output_path = scanned_file.path.clone();
             output_path.set_extension("av1.mkv");
-            
-            if let Err(e) = self.db.enqueue_job(&scanned_file.path, &output_path, scanned_file.mtime).await {
+
+            if let Err(e) = self
+                .db
+                .enqueue_job(&scanned_file.path, &output_path, scanned_file.mtime)
+                .await
+            {
                 error!("Failed to enqueue job for {:?}: {}", scanned_file.path, e);
             }
         }
-        
-        let _ = self.tx.send(AlchemistEvent::JobStateChanged { job_id: 0, status: JobState::Queued }); // Trigger UI refresh
+
+        let _ = self.tx.send(AlchemistEvent::JobStateChanged {
+            job_id: 0,
+            status: JobState::Queued,
+        }); // Trigger UI refresh
         Ok(())
     }
 
@@ -72,49 +80,110 @@ impl Processor {
                         let file_path = PathBuf::from(&job.input_path);
                         let output_path = PathBuf::from(&job.output_path);
 
-                        info!("--- Processing Job {}: {:?} ---", job.id, file_path.file_name().unwrap_or_default());
-                        
+                        info!(
+                            "--- Processing Job {}: {:?} ---",
+                            job.id,
+                            file_path.file_name().unwrap_or_default()
+                        );
+
                         // 1. ANALYZING
                         let _ = db.update_job_status(job.id, JobState::Analyzing).await;
-                        let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Analyzing });
+                        let _ = tx.send(AlchemistEvent::JobStateChanged {
+                            job_id: job.id,
+                            status: JobState::Analyzing,
+                        });
 
                         match Analyzer::probe(&file_path) {
                             Ok(metadata) => {
-                                let (should_encode, reason) = Analyzer::should_transcode(&file_path, &metadata, &config);
-                                
+                                let (should_encode, reason) =
+                                    Analyzer::should_transcode(&file_path, &metadata, &config);
+
                                 if should_encode {
                                     info!("Decision: ENCODE Job {} - {}", job.id, reason);
                                     let _ = db.add_decision(job.id, "encode", &reason).await;
-                                    let _ = tx.send(AlchemistEvent::Decision { job_id: job.id, action: "encode".to_string(), reason: reason.clone() });
+                                    let _ = tx.send(AlchemistEvent::Decision {
+                                        job_id: job.id,
+                                        action: "encode".to_string(),
+                                        reason: reason.clone(),
+                                    });
                                     let _ = db.update_job_status(job.id, JobState::Encoding).await;
-                                    let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Encoding });
-                                    
-                                    match orchestrator.transcode_to_av1(&file_path, &output_path, hw_info.as_ref().as_ref(), false, &metadata, Some((job.id, tx.clone()))).await {
+                                    let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                        job_id: job.id,
+                                        status: JobState::Encoding,
+                                    });
+
+                                    match orchestrator
+                                        .transcode_to_av1(
+                                            &file_path,
+                                            &output_path,
+                                            hw_info.as_ref().as_ref(),
+                                            false,
+                                            &metadata,
+                                            Some((job.id, tx.clone())),
+                                        )
+                                        .await
+                                    {
                                         Ok(_) => {
                                             // Integrity & Size Reduction check
-                                            let input_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-                                            let output_size = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
-                                            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-                                            
-                                            if reduction < config.transcode.size_reduction_threshold {
-                                                warn!("Job {}: Size reduction gate failed ({:.2}%). Reverting.", job.id, reduction * 100.0);
+                                            let input_size = std::fs::metadata(&file_path)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            let output_size = std::fs::metadata(&output_path)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            let reduction =
+                                                1.0 - (output_size as f64 / input_size as f64);
+
+                                            if reduction < config.transcode.size_reduction_threshold
+                                            {
+                                                warn!(
+                                                    "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
+                                                    job.id,
+                                                    reduction * 100.0
+                                                );
                                                 std::fs::remove_file(&output_path).ok();
-                                                let _ = db.add_decision(job.id, "skip", "Inefficient reduction").await;
-                                                let _ = db.update_job_status(job.id, JobState::Skipped).await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Skipped });
+                                                let _ = db
+                                                    .add_decision(
+                                                        job.id,
+                                                        "skip",
+                                                        "Inefficient reduction",
+                                                    )
+                                                    .await;
+                                                let _ = db
+                                                    .update_job_status(job.id, JobState::Skipped)
+                                                    .await;
+                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                                    job_id: job.id,
+                                                    status: JobState::Skipped,
+                                                });
                                             } else {
-                                                let _ = db.update_job_status(job.id, JobState::Completed).await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Completed });
+                                                let _ = db
+                                                    .update_job_status(job.id, JobState::Completed)
+                                                    .await;
+                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                                    job_id: job.id,
+                                                    status: JobState::Completed,
+                                                });
                                             }
                                         }
                                         Err(e) => {
                                             if e.to_string() == "Cancelled" {
-                                                let _ = db.update_job_status(job.id, JobState::Cancelled).await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Cancelled });
+                                                let _ = db
+                                                    .update_job_status(job.id, JobState::Cancelled)
+                                                    .await;
+                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                                    job_id: job.id,
+                                                    status: JobState::Cancelled,
+                                                });
                                             } else {
                                                 error!("Job {}: Transcode failed: {}", job.id, e);
-                                                let _ = db.update_job_status(job.id, JobState::Failed).await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Failed });
+                                                let _ = db
+                                                    .update_job_status(job.id, JobState::Failed)
+                                                    .await;
+                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                                    job_id: job.id,
+                                                    status: JobState::Failed,
+                                                });
                                             }
                                         }
                                     }
@@ -122,13 +191,19 @@ impl Processor {
                                     info!("Decision: SKIP Job {} - {}", job.id, reason);
                                     let _ = db.add_decision(job.id, "skip", &reason).await;
                                     let _ = db.update_job_status(job.id, JobState::Skipped).await;
-                                    let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Skipped });
+                                    let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                        job_id: job.id,
+                                        status: JobState::Skipped,
+                                    });
                                 }
                             }
                             Err(e) => {
                                 error!("Job {}: Probing failed: {}", job.id, e);
                                 let _ = db.update_job_status(job.id, JobState::Failed).await;
-                                let _ = tx.send(AlchemistEvent::JobStateChanged { job_id: job.id, status: JobState::Failed });
+                                let _ = tx.send(AlchemistEvent::JobStateChanged {
+                                    job_id: job.id,
+                                    status: JobState::Failed,
+                                });
                             }
                         }
                     });
