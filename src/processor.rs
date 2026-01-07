@@ -1,13 +1,13 @@
-use crate::Orchestrator;
 use crate::analyzer::Analyzer;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::Result;
 use crate::hardware::HardwareInfo;
 use crate::scanner::Scanner;
+use crate::Orchestrator;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{broadcast, Semaphore};
 use tracing::{error, info, warn};
 
 pub struct Processor {
@@ -80,21 +80,43 @@ impl Processor {
                         let file_path = PathBuf::from(&job.input_path);
                         let output_path = PathBuf::from(&job.output_path);
 
-                        info!(
-                            "--- Processing Job {}: {:?} ---",
-                            job.id,
-                            file_path.file_name().unwrap_or_default()
-                        );
+                        let file_name = file_path.file_name().unwrap_or_default();
+                        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        info!("📹 Processing Job #{}: {:?}", job.id, file_name);
+                        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                        let start_time = std::time::Instant::now();
 
                         // 1. ANALYZING
+                        info!("[Job {}] Phase 1: Analyzing media...", job.id);
                         let _ = db.update_job_status(job.id, JobState::Analyzing).await;
                         let _ = tx.send(AlchemistEvent::JobStateChanged {
                             job_id: job.id,
                             status: JobState::Analyzing,
                         });
 
+                        let analyze_start = std::time::Instant::now();
                         match Analyzer::probe(&file_path) {
                             Ok(metadata) => {
+                                let analyze_duration = analyze_start.elapsed();
+                                info!(
+                                    "[Job {}] Analysis complete in {:.2}s",
+                                    job.id,
+                                    analyze_duration.as_secs_f64()
+                                );
+
+                                // Get video stream info
+                                if let Some(video_stream) =
+                                    metadata.streams.iter().find(|s| s.codec_type == "video")
+                                {
+                                    if let (Some(width), Some(height)) =
+                                        (video_stream.width, video_stream.height)
+                                    {
+                                        info!("[Job {}] Resolution: {}x{}", job.id, width, height);
+                                    }
+                                    info!("[Job {}] Codec: {}", job.id, video_stream.codec_name);
+                                }
+
                                 let (should_encode, reason) =
                                     Analyzer::should_transcode(&file_path, &metadata, &config);
 
@@ -157,6 +179,24 @@ impl Processor {
                                                     status: JobState::Skipped,
                                                 });
                                             } else {
+                                                let encode_duration = start_time.elapsed();
+                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                                                info!("✅ Job #{} COMPLETED", job.id);
+                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                                                info!(
+                                                    "  Input Size:  {} MB",
+                                                    input_size / 1_048_576
+                                                );
+                                                info!(
+                                                    "  Output Size: {} MB",
+                                                    output_size / 1_048_576
+                                                );
+                                                info!("  Reduction:   {:.1}%", reduction * 100.0);
+                                                info!(
+                                                    "  Duration:    {:.2}s",
+                                                    encode_duration.as_secs_f64()
+                                                );
+                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                                                 let _ = db
                                                     .update_job_status(job.id, JobState::Completed)
                                                     .await;

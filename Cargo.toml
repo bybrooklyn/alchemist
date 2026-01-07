@@ -18,10 +18,11 @@ anyhow = "1.0"
 subprocess = { version = "=0.2.9", optional = true }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
+num_cpus = "1.16"
 futures = { version = "0.3" }
 toml = "0.8"
-leptos = { version = "0.6", features = ["ssr"] }
-leptos_axum = { version = "0.6", optional = true }
+leptos = { version = "=0.6.14", features = ["ssr"] }
+leptos_axum = { version = "=0.6.14", optional = true }
 axum = { version = "0.7", features = ["macros"], optional = true }
 tower = { version = "0.4", optional = true }
 tower-http = { version = "0.5", features = ["fs"], optional = true }
@@ -31,9 +32,12 @@ log = "0.4"
 rayon = "1.10"
 tokio-stream = { version = "0.1", features = ["sync"] }
 gloo-net = { version = "0.5", optional = true }
-leptos_meta = "0.6"
-leptos_router = "0.6"
+leptos_meta = "=0.6.14"
+leptos_router = "=0.6.14"
+leptos_dom = "=0.6.14"
+
 thiserror = "2.0.17"
+wasm-bindgen = "0.2"
 
 [features]
 default = ["ssr"]

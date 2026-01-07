@@ -1,8 +1,8 @@
-# Using rustlang/rust:nightly for edition2024 support
 FROM rustlang/rust:nightly AS chef
 WORKDIR /app
+RUN rustup toolchain install nightly-2025-08-01 --profile minimal --component rust-std --target wasm32-unknown-unknown
+RUN rustup default nightly-2025-08-01
 RUN cargo install cargo-chef
-RUN rustup target add wasm32-unknown-unknown
 
 # Install cargo-binstall, then use it to get cargo-leptos (faster than compiling)
 RUN curl -L https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-musl.tgz | tar -xz && \
@@ -28,16 +28,14 @@ COPY . .
 RUN cargo leptos build --release
 
 # Stage 4: Runtime
-FROM debian:bookworm-slim AS runtime
+FROM debian:testing-slim AS runtime
 
 WORKDIR /app
 
 # Install runtime dependencies: FFmpeg and HW drivers
 # non-free and non-free-firmware are required for intel-media-va-driver-non-free
-RUN apt-get update && apt-get install -y debian-archive-keyring && \
-    echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-    echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-    echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
+RUN apt-get update && \
+    sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y \
     ffmpeg \
     intel-media-va-driver-non-free \
@@ -50,13 +48,15 @@ RUN apt-get update && apt-get install -y debian-archive-keyring && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary and assets
-# cargo-leptos usually places the binary in target/server/release/
-COPY --from=builder /app/target/server/release/alchemist /usr/local/bin/alchemist
+# cargo-leptos usually places the binary in target/server/release/ but manual build puts it in target/release/
+COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 COPY --from=builder /app/target/site /app/site
 
 # Set environment variables
 ENV LIBVA_DRIVER_NAME=iHD
 ENV LEPTOS_SITE_ROOT=/app/site
+ENV LEPTOS_SITE_ADDR="0.0.0.0:3000"
+EXPOSE 3000
 
 # Entrypoint
 ENTRYPOINT ["alchemist"]

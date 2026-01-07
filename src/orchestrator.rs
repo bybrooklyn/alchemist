@@ -48,30 +48,60 @@ impl Orchestrator {
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-hide_banner").arg("-y").arg("-i").arg(input);
 
-        // Map HardwareInfo to FFmpeg arguments
+        let total_duration = metadata.format.duration.parse::<f64>().unwrap_or(0.0);
+
+        // Select encoder based on hardware
         if let Some(info) = hw_info {
+            info!("Encoder selection: Hardware acceleration ({})", info.vendor);
             match info.vendor {
                 Vendor::Intel => {
+                    info!("  Using: av1_qsv (Intel Quick Sync)");
+                    if let Some(ref device_path) = info.device_path {
+                        cmd.arg("-init_hw_device")
+                            .arg(format!("qsv=qsv:{}", device_path));
+                        cmd.arg("-filter_hw_device").arg("qsv");
+                    }
                     cmd.arg("-c:v").arg("av1_qsv");
                     cmd.arg("-global_quality").arg("25");
                     cmd.arg("-look_ahead").arg("1");
                 }
                 Vendor::Nvidia => {
+                    info!("  Using: av1_nvenc (NVIDIA NVENC)");
                     cmd.arg("-c:v").arg("av1_nvenc");
                     cmd.arg("-preset").arg("p4");
                     cmd.arg("-cq").arg("25");
                 }
                 Vendor::Apple => {
+                    info!("  Using: av1_videotoolbox (Apple VideoToolbox)");
                     cmd.arg("-c:v").arg("av1_videotoolbox");
                 }
                 Vendor::Amd => {
+                    info!("  Using: av1_vaapi (AMD VAAPI)");
+                    if let Some(ref device_path) = info.device_path {
+                        cmd.arg("-vaapi_device").arg(device_path);
+                    }
                     cmd.arg("-c:v").arg("av1_vaapi");
+                }
+                Vendor::Cpu => {
+                    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    warn!("  SOFTWARE ENCODING (CPU) - SLOW PERFORMANCE");
+                    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    info!("  Using: libsvtav1 (Software AV1 encoder)");
+                    info!("  Preset: 8 (fast, lower quality)");
+                    info!("  This will be significantly slower than GPU encoding.");
+
+                    cmd.arg("-c:v").arg("libsvtav1");
+                    cmd.arg("-preset").arg("8"); // 0=slowest/best, 13=fastest/worst
+                    cmd.arg("-crf").arg("32"); // Slightly higher CRF for CPU to save time
+                    cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
                 }
             }
         } else {
-            cmd.arg("-c:v").arg("libaom-av1");
-            cmd.arg("-crf").arg("30");
-            cmd.arg("-cpu-used").arg("6");
+            // Fallback if no hardware info (shouldn't happen now)
+            warn!("No hardware info provided, using legacy fallback");
+            cmd.arg("-c:v").arg("libsvtav1");
+            cmd.arg("-preset").arg("8");
+            cmd.arg("-crf").arg("32");
         }
 
         cmd.arg("-c:a").arg("copy");
@@ -80,7 +110,12 @@ impl Orchestrator {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        info!("Executing FFmpeg: {:?}", cmd);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("Starting transcode:");
+        info!("  Input:  {:?}", input);
+        info!("  Output: {:?}", output);
+        info!("  Duration: {:.2}s", total_duration);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         let mut child = cmd
             .spawn()

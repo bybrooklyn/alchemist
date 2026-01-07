@@ -1,5 +1,5 @@
 use alchemist::error::Result;
-use alchemist::{Orchestrator, Processor, config, db, hardware};
+use alchemist::{config, db, hardware, Orchestrator, Processor};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +35,24 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .init();
 
-    info!("Alchemist starting...");
+    // Startup Banner
+    info!("╔═══════════════════════════════════════════════════════════════╗");
+    info!("║                        ALCHEMIST                             ║");
+    info!("║              Video Transcoding Automation                     ║");
+    info!(
+        "║                   Version {}                            ║",
+        env!("CARGO_PKG_VERSION")
+    );
+    info!("╚═══════════════════════════════════════════════════════════════╝");
+    info!("");
+    info!("System Information:");
+    info!(
+        "  OS: {} ({})",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    info!("  CPUs: {}", num_cpus::get());
+    info!("");
 
     let args = Args::parse();
 
@@ -46,22 +63,53 @@ async fn main() -> Result<()> {
         config::Config::default()
     });
 
+    // Log Configuration
+    info!("Configuration:");
+    info!("  Concurrent Jobs: {}", config.transcode.concurrent_jobs);
+    info!(
+        "  Size Reduction Threshold: {:.1}%",
+        config.transcode.size_reduction_threshold * 100.0
+    );
+    info!("  Min File Size: {} MB", config.transcode.min_file_size_mb);
+    info!(
+        "  CPU Fallback: {}",
+        if config.hardware.allow_cpu_fallback {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    );
+    info!(
+        "  CPU Encoding: {}",
+        if config.hardware.allow_cpu_encoding {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    );
+    info!("  CPU Preset: {}", config.hardware.cpu_preset);
+    info!("");
+
     // 1. Hardware Detection
-    let hw_info = match hardware::detect_hardware() {
-        Ok(info) => {
-            info!("Hardware detected: {}", info.vendor);
-            Some(info)
+    let hw_info = hardware::detect_hardware()?;
+    info!("");
+    info!("Selected Hardware: {}", hw_info.vendor);
+    if let Some(ref path) = hw_info.device_path {
+        info!("  Device Path: {}", path);
+    }
+
+    // Check CPU encoding policy
+    if hw_info.vendor == hardware::Vendor::Cpu {
+        if !config.hardware.allow_cpu_encoding {
+            error!("CPU encoding is disabled in configuration.");
+            error!("Set hardware.allow_cpu_encoding = true in config.toml to enable CPU fallback.");
+            return Err(alchemist::error::AlchemistError::Config(
+                "CPU encoding disabled".into(),
+            ));
         }
-        Err(e) => {
-            error!("{}", e);
-            if !config.hardware.allow_cpu_fallback && !args.dry_run {
-                error!("GPU unavailable. CPU fallback: disabled. Exiting.");
-                return Err(e);
-            }
-            warn!("GPU unavailable. CPU fallback: enabled.");
-            None
-        }
-    };
+        warn!("Running in CPU-only mode. Transcoding will be slower.");
+    }
+    info!("");
 
     // 2. Initialize Database, Broadcast Channel, Orchestrator, and Processor
     let db = Arc::new(db::Db::new("alchemist.db").await?);
@@ -72,7 +120,7 @@ async fn main() -> Result<()> {
         db.clone(),
         orchestrator.clone(),
         config.clone(),
-        hw_info,
+        Some(hw_info),
         tx.clone(),
     ));
 
