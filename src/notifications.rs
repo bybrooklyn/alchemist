@@ -3,10 +3,10 @@
 //! Supports generic webhooks and Discord webhooks.
 
 use crate::config::NotificationsConfig;
-use crate::db::{Job, JobState};
+use crate::db::Job;
 use crate::error::{AlchemistError, Result};
 use serde::Serialize;
-use tracing::{debug, error, info};
+use tracing::debug;
 
 /// Notification service for sending alerts
 pub struct NotificationService {
