@@ -11,11 +11,15 @@ use tracing::debug;
 /// Notification service for sending alerts
 pub struct NotificationService {
     config: NotificationsConfig,
+    client: reqwest::Client,
 }
 
 impl NotificationService {
     pub fn new(config: NotificationsConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: reqwest::Client::new(),
+        }
     }
 
     /// Check if notifications are enabled
@@ -94,8 +98,8 @@ impl NotificationService {
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
 
-        let client = reqwest::Client::new();
-        let response = client
+        let response = self
+            .client
             .post(url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))
@@ -138,8 +142,8 @@ impl NotificationService {
             }],
         };
 
-        let client = reqwest::Client::new();
-        let response = client
+        let response = self
+            .client
             .post(url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))

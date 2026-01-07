@@ -199,14 +199,28 @@ impl Agent {
         start_time: std::time::Instant,
     ) -> Result<()> {
         // Integrity & Size Reduction check
-        let input_size = std::fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
-        let output_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+        let input_metadata = match std::fs::metadata(input_path) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Job {}: Failed to get input metadata: {}", job_id, e);
+                self.update_job_state(job_id, JobState::Failed).await?;
+                return Err(e.into());
+            }
+        };
+        let input_size = input_metadata.len();
+
+        let output_metadata = match std::fs::metadata(output_path) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Job {}: Failed to get output metadata: {}", job_id, e);
+                self.update_job_state(job_id, JobState::Failed).await?;
+                return Err(e.into());
+            }
+        };
+        let output_size = output_metadata.len();
 
         if input_size == 0 {
-            error!(
-                "Job {}: Input file is empty or missing. Finalizing as failed.",
-                job_id
-            );
+            error!("Job {}: Input file is empty. Finalizing as failed.", job_id);
             self.update_job_state(job_id, JobState::Failed).await?;
             return Ok(());
         }
@@ -219,13 +233,17 @@ impl Agent {
                 job_id,
                 reduction * 100.0
             );
-            std::fs::remove_file(output_path).ok();
+            if let Err(e) = std::fs::remove_file(output_path) {
+                error!("Job {}: Failed to remove inefficient output: {}", job_id, e);
+            }
             let reason = if output_size == 0 {
                 "Empty output"
             } else {
                 "Inefficient reduction"
             };
-            let _ = self.db.add_decision(job_id, "skip", reason).await;
+            if let Err(e) = self.db.add_decision(job_id, "skip", reason).await {
+                error!("Job {}: Failed to add decision to DB: {}", job_id, e);
+            }
             self.update_job_state(job_id, JobState::Skipped).await?;
         } else {
             let encode_duration = start_time.elapsed();
