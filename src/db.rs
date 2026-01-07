@@ -16,6 +16,7 @@ pub enum JobState {
     Skipped,
     Failed,
     Cancelled,
+    Resuming,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,7 @@ impl std::fmt::Display for JobState {
             JobState::Skipped => "skipped",
             JobState::Failed => "failed",
             JobState::Cancelled => "cancelled",
+            JobState::Resuming => "resuming",
         };
         write!(f, "{}", s)
     }
@@ -66,6 +68,7 @@ pub struct Job {
     pub decision_reason: Option<String>,
     pub priority: i32,
     pub progress: f64,
+    pub attempt_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -112,6 +115,7 @@ impl Db {
                 mtime_hash TEXT NOT NULL,
                 priority INTEGER DEFAULT 0,
                 progress REAL DEFAULT 0.0,
+                attempt_count INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
@@ -124,6 +128,9 @@ impl Db {
             .execute(&self.pool)
             .await;
         let _ = sqlx::query("ALTER TABLE jobs ADD COLUMN progress REAL DEFAULT 0.0")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER DEFAULT 0")
             .execute(&self.pool)
             .await;
 
@@ -207,8 +214,8 @@ impl Db {
 
     pub async fn get_next_job(&self) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
-            "SELECT id, input_path, output_path, status, NULL as decision_reason, 
                     COALESCE(priority, 0) as priority, COALESCE(progress, 0.0) as progress,
+                    COALESCE(attempt_count, 0) as attempt_count,
                     created_at, updated_at 
              FROM jobs WHERE status = 'queued' 
              ORDER BY priority DESC, created_at ASC LIMIT 1",
@@ -246,6 +253,7 @@ impl Db {
                     d.reason as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
              LEFT JOIN decisions d ON j.id = d.job_id
@@ -354,6 +362,7 @@ impl Db {
                     d.reason as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
              LEFT JOIN decisions d ON j.id = d.job_id
@@ -373,6 +382,7 @@ impl Db {
                     d.reason as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
              LEFT JOIN decisions d ON j.id = d.job_id
@@ -396,5 +406,14 @@ impl Db {
             .await?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Increment attempt count
+    pub async fn increment_attempt_count(&self, id: i64) -> Result<()> {
+        sqlx::query("UPDATE jobs SET attempt_count = attempt_count + 1 WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

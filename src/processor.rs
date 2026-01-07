@@ -66,190 +66,18 @@ impl Agent {
         Ok(())
     }
 
-    pub async fn run_loop(&self) {
+    pub async fn run_loop(self: Arc<Self>) {
         info!("Agent loop started.");
         loop {
             match self.db.get_next_job().await {
                 Ok(Some(job)) => {
                     let permit = self.semaphore.clone().acquire_owned().await.unwrap();
-                    let db = self.db.clone();
-                    let orchestrator = self.orchestrator.clone();
-                    let config = self.config.clone();
-                    let hw_info = self.hw_info.clone();
-                    let tx = self.tx.clone();
-                    let dry_run = self.dry_run;
+                    let agent = self.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit;
-                        let file_path = PathBuf::from(&job.input_path);
-                        let output_path = PathBuf::from(&job.output_path);
-
-                        let file_name = file_path.file_name().unwrap_or_default();
-                        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        info!("📹 Processing Job #{}: {:?}", job.id, file_name);
-                        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-                        let start_time = std::time::Instant::now();
-
-                        // 1. ANALYZING
-                        info!("[Job {}] Phase 1: Analyzing media...", job.id);
-                        let _ = db.update_job_status(job.id, JobState::Analyzing).await;
-                        let _ = tx.send(AlchemistEvent::JobStateChanged {
-                            job_id: job.id,
-                            status: JobState::Analyzing,
-                        });
-
-                        let analyze_start = std::time::Instant::now();
-                        match Analyzer::probe(&file_path) {
-                            Ok(metadata) => {
-                                let analyze_duration = analyze_start.elapsed();
-                                info!(
-                                    "[Job {}] Analysis complete in {:.2}s",
-                                    job.id,
-                                    analyze_duration.as_secs_f64()
-                                );
-
-                                // Get video stream info
-                                if let Some(video_stream) =
-                                    metadata.streams.iter().find(|s| s.codec_type == "video")
-                                {
-                                    if let (Some(width), Some(height)) =
-                                        (video_stream.width, video_stream.height)
-                                    {
-                                        info!("[Job {}] Resolution: {}x{}", job.id, width, height);
-                                    }
-                                    info!("[Job {}] Codec: {}", job.id, video_stream.codec_name);
-                                }
-
-                                let (should_encode, reason) =
-                                    Analyzer::should_transcode(&file_path, &metadata, &config);
-
-                                if should_encode {
-                                    info!("Decision: ENCODE Job {} - {}", job.id, reason);
-                                    let _ = db.add_decision(job.id, "encode", &reason).await;
-                                    let _ = tx.send(AlchemistEvent::Decision {
-                                        job_id: job.id,
-                                        action: "encode".to_string(),
-                                        reason: reason.clone(),
-                                    });
-                                    let _ = db.update_job_status(job.id, JobState::Encoding).await;
-                                    let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                        job_id: job.id,
-                                        status: JobState::Encoding,
-                                    });
-
-                                    match orchestrator
-                                        .transcode_to_av1(
-                                            &file_path,
-                                            &output_path,
-                                            hw_info.as_ref().as_ref(),
-                                            &config.hardware.cpu_preset,
-                                            dry_run,
-                                            &metadata,
-                                            Some((job.id, tx.clone())),
-                                        )
-                                        .await
-                                    {
-                                        Ok(_) => {
-                                            // Integrity & Size Reduction check
-                                            let input_size = std::fs::metadata(&file_path)
-                                                .map(|m| m.len())
-                                                .unwrap_or(0);
-                                            let output_size = std::fs::metadata(&output_path)
-                                                .map(|m| m.len())
-                                                .unwrap_or(0);
-                                            let reduction =
-                                                1.0 - (output_size as f64 / input_size as f64);
-
-                                            if reduction < config.transcode.size_reduction_threshold
-                                            {
-                                                warn!(
-                                                    "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
-                                                    job.id,
-                                                    reduction * 100.0
-                                                );
-                                                std::fs::remove_file(&output_path).ok();
-                                                let _ = db
-                                                    .add_decision(
-                                                        job.id,
-                                                        "skip",
-                                                        "Inefficient reduction",
-                                                    )
-                                                    .await;
-                                                let _ = db
-                                                    .update_job_status(job.id, JobState::Skipped)
-                                                    .await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                                    job_id: job.id,
-                                                    status: JobState::Skipped,
-                                                });
-                                            } else {
-                                                let encode_duration = start_time.elapsed();
-                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                                                info!("✅ Job #{} COMPLETED", job.id);
-                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                                                info!(
-                                                    "  Input Size:  {} MB",
-                                                    input_size / 1_048_576
-                                                );
-                                                info!(
-                                                    "  Output Size: {} MB",
-                                                    output_size / 1_048_576
-                                                );
-                                                info!("  Reduction:   {:.1}%", reduction * 100.0);
-                                                info!(
-                                                    "  Duration:    {:.2}s",
-                                                    encode_duration.as_secs_f64()
-                                                );
-                                                info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                                                let _ = db
-                                                    .update_job_status(job.id, JobState::Completed)
-                                                    .await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                                    job_id: job.id,
-                                                    status: JobState::Completed,
-                                                });
-                                            }
-                                        }
-                                        Err(e) => {
-                                            if e.to_string() == "Cancelled" {
-                                                let _ = db
-                                                    .update_job_status(job.id, JobState::Cancelled)
-                                                    .await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                                    job_id: job.id,
-                                                    status: JobState::Cancelled,
-                                                });
-                                            } else {
-                                                error!("Job {}: Transcode failed: {}", job.id, e);
-                                                let _ = db
-                                                    .update_job_status(job.id, JobState::Failed)
-                                                    .await;
-                                                let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                                    job_id: job.id,
-                                                    status: JobState::Failed,
-                                                });
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    info!("Decision: SKIP Job {} - {}", job.id, reason);
-                                    let _ = db.add_decision(job.id, "skip", &reason).await;
-                                    let _ = db.update_job_status(job.id, JobState::Skipped).await;
-                                    let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                        job_id: job.id,
-                                        status: JobState::Skipped,
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                error!("Job {}: Probing failed: {}", job.id, e);
-                                let _ = db.update_job_status(job.id, JobState::Failed).await;
-                                let _ = tx.send(AlchemistEvent::JobStateChanged {
-                                    job_id: job.id,
-                                    status: JobState::Failed,
-                                });
-                            }
+                        if let Err(e) = agent.process_job(job).await {
+                            error!("Job processing error: {}", e);
                         }
                     });
                 }
@@ -262,5 +90,138 @@ impl Agent {
                 }
             }
         }
+    }
+
+    pub async fn process_job(&self, job: crate::db::Job) -> Result<()> {
+        let file_path = PathBuf::from(&job.input_path);
+        let output_path = PathBuf::from(&job.output_path);
+
+        let file_name = file_path.file_name().unwrap_or_default();
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("📹 Processing Job #{}: {:?}", job.id, file_name);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        let start_time = std::time::Instant::now();
+
+        // 1. ANALYZING
+        info!("[Job {}] Phase 1: Analyzing media...", job.id);
+        self.db.increment_attempt_count(job.id).await?;
+        self.update_job_state(job.id, JobState::Analyzing).await?;
+
+        let analyze_start = std::time::Instant::now();
+        let metadata = match Analyzer::probe(&file_path) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Job {}: Probing failed: {}", job.id, e);
+                self.update_job_state(job.id, JobState::Failed).await?;
+                return Err(e);
+            }
+        };
+
+        let analyze_duration = analyze_start.elapsed();
+        info!(
+            "[Job {}] Analysis complete in {:.2}s",
+            job.id,
+            analyze_duration.as_secs_f64()
+        );
+
+        // Get video stream info
+        if let Some(video_stream) = metadata.streams.iter().find(|s| s.codec_type == "video") {
+            if let (Some(width), Some(height)) = (video_stream.width, video_stream.height) {
+                info!("[Job {}] Resolution: {}x{}", job.id, width, height);
+            }
+            info!("[Job {}] Codec: {}", job.id, video_stream.codec_name);
+        }
+
+        let (should_encode, reason) = Analyzer::should_transcode(&file_path, &metadata, &self.config);
+
+        if !should_encode {
+            info!("Decision: SKIP Job {} - {}", job.id, reason);
+            let _ = self.db.add_decision(job.id, "skip", &reason).await;
+            self.update_job_state(job.id, JobState::Skipped).await?;
+            return Ok(());
+        }
+
+        info!("Decision: ENCODE Job {} - {}", job.id, reason);
+        let _ = self.db.add_decision(job.id, "encode", &reason).await;
+        let _ = self.tx.send(AlchemistEvent::Decision {
+            job_id: job.id,
+            action: "encode".to_string(),
+            reason: reason.clone(),
+        });
+        
+        self.update_job_state(job.id, JobState::Encoding).await?;
+
+        match self.orchestrator
+            .transcode_to_av1(
+                &file_path,
+                &output_path,
+                self.hw_info.as_ref().as_ref(),
+                self.config.transcode.quality_profile,
+                self.config.hardware.cpu_preset,
+                self.dry_run,
+                &metadata,
+                Some((job.id, self.tx.clone())),
+            )
+            .await
+        {
+            Ok(_) => {
+                self.finalize_job(job.id, &file_path, &output_path, start_time).await
+            }
+            Err(e) => {
+                if let crate::error::AlchemistError::Cancelled = e {
+                    self.update_job_state(job.id, JobState::Cancelled).await
+                } else {
+                    error!("Job {}: Transcode failed: {}", job.id, e);
+                    self.update_job_state(job.id, JobState::Failed).await?;
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    async fn update_job_state(&self, job_id: i64, status: JobState) -> Result<()> {
+        let _ = self.db.update_job_status(job_id, status).await;
+        let _ = self.tx.send(AlchemistEvent::JobStateChanged {
+            job_id,
+            status,
+        });
+        Ok(())
+    }
+
+    async fn finalize_job(
+        &self,
+        job_id: i64,
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+        start_time: std::time::Instant,
+    ) -> Result<()> {
+        // Integrity & Size Reduction check
+        let input_size = std::fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
+        let output_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+        let reduction = 1.0 - (output_size as f64 / input_size as f64);
+
+        if reduction < self.config.transcode.size_reduction_threshold {
+            warn!(
+                "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
+                job_id,
+                reduction * 100.0
+            );
+            std::fs::remove_file(output_path).ok();
+            let _ = self.db.add_decision(job_id, "skip", "Inefficient reduction").await;
+            self.update_job_state(job_id, JobState::Skipped).await?;
+        } else {
+            let encode_duration = start_time.elapsed();
+            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            info!("✅ Job #{} COMPLETED", job_id);
+            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            info!("  Input Size:  {} MB", input_size / 1_048_576);
+            info!("  Output Size: {} MB", output_size / 1_048_576);
+            info!("  Reduction:   {:.1}%", reduction * 100.0);
+            info!("  Duration:    {:.2}s", encode_duration.as_secs_f64());
+            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            self.update_job_state(job_id, JobState::Completed).await?;
+        }
+        Ok(())
     }
 }

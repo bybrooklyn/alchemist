@@ -21,6 +21,7 @@ pub struct Stream {
     pub bits_per_raw_sample: Option<String>,
     pub channel_layout: Option<String>,
     pub channels: Option<u32>,
+    pub r_frame_rate: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,7 +104,13 @@ impl Analyzer {
             );
         }
 
-        let bpp = bitrate / (width * height);
+        let bpp = if let Some(fps_str) = video_stream.r_frame_rate.as_ref() {
+            let fps = Self::parse_fps(fps_str).unwrap_or(24.0);
+            bitrate / (width * height * fps)
+        } else {
+            // Fallback if fps is missing
+            bitrate / (width * height * 24.0)
+        };
 
         // Heuristic: If BPP is already very low, don't murder it further.
         if bpp < config.transcode.min_bpp_threshold {
@@ -137,6 +144,21 @@ impl Analyzer {
                 video_stream.codec_name, bpp
             ),
         )
+    }
+
+    fn parse_fps(s: &str) -> Option<f64> {
+        if s.contains('/') {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() == 2 {
+                let num: f64 = parts[0].parse().ok()?;
+                let den: f64 = parts[1].parse().ok()?;
+                if den == 0.0 {
+                    return None;
+                }
+                return Some(num / den);
+            }
+        }
+        s.parse().ok()
     }
 
     pub fn should_transcode_audio(stream: &Stream) -> bool {
