@@ -214,6 +214,7 @@ impl Db {
 
     pub async fn get_next_job(&self) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
+            "SELECT id, input_path, output_path, status, NULL as decision_reason,
                     COALESCE(priority, 0) as priority, COALESCE(progress, 0.0) as progress,
                     COALESCE(attempt_count, 0) as attempt_count,
                     created_at, updated_at 
@@ -258,7 +259,7 @@ impl Db {
              FROM jobs j
              LEFT JOIN decisions d ON j.id = d.job_id
              GROUP BY j.id
-             ORDER BY j.updated_at DESC"
+             ORDER BY j.updated_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -398,12 +399,18 @@ impl Db {
     }
 
     /// Batch update job statuses (for batch operations)
-    pub async fn batch_update_status(&self, status_from: JobState, status_to: JobState) -> Result<u64> {
-        let result = sqlx::query("UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE status = ?")
-            .bind(status_to)
-            .bind(status_from)
-            .execute(&self.pool)
-            .await?;
+    pub async fn batch_update_status(
+        &self,
+        status_from: JobState,
+        status_to: JobState,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE status = ?",
+        )
+        .bind(status_to)
+        .bind(status_from)
+        .execute(&self.pool)
+        .await?;
 
         Ok(result.rows_affected())
     }

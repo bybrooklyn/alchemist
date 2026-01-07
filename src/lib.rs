@@ -24,9 +24,10 @@ pub mod wizard;
 
 pub mod app;
 
+pub use config::QualityProfile;
 pub use db::AlchemistEvent;
 #[cfg(feature = "ssr")]
-pub use ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators, QualityProfile};
+pub use ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators};
 #[cfg(feature = "ssr")]
 pub use notifications::NotificationService;
 #[cfg(feature = "ssr")]

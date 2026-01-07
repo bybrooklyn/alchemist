@@ -56,6 +56,8 @@ impl Transcoder {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+        let total_duration = metadata.format.duration.parse::<f64>().unwrap_or(0.0);
+
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         info!("Starting transcode:");
         info!("  Input:  {:?}", input);
@@ -78,7 +80,6 @@ impl Transcoder {
             self.cancel_channels.lock().unwrap().insert(id, kill_tx);
         }
 
-        let total_duration = metadata.format.duration.parse::<f64>().unwrap_or(0.0);
         let mut reader = BufReader::new(stderr).lines();
         let event_target_clone = event_target.clone();
 
@@ -95,10 +96,10 @@ impl Transcoder {
 
                                 if let Some(progress) = FFmpegProgress::parse_line(&line) {
                                     let percentage = progress.percentage(total_duration);
-                                    let _ = tx.send(crate::db::AlchemistEvent::Progress { 
-                                        job_id, 
-                                        percentage, 
-                                        time: progress.time 
+                                    let _ = tx.send(crate::db::AlchemistEvent::Progress {
+                                        job_id,
+                                        percentage,
+                                        time: progress.time
                                     });
                                 }
                             }
@@ -144,5 +145,5 @@ impl Transcoder {
         }
     }
 
-// Redundant parse_duration removed, use FFmpegProgress instead.
+    // Redundant parse_duration removed, use FFmpegProgress instead.
 }

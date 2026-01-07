@@ -16,7 +16,7 @@ pub struct ScannedFile {
 
 #[cfg(feature = "ssr")]
 pub struct Scanner {
-    extensions: Vec<String>,
+    pub extensions: Vec<String>,
 }
 
 #[cfg(feature = "ssr")]

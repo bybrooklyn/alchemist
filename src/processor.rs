@@ -133,7 +133,8 @@ impl Agent {
             info!("[Job {}] Codec: {}", job.id, video_stream.codec_name);
         }
 
-        let (should_encode, reason) = Analyzer::should_transcode(&file_path, &metadata, &self.config);
+        let (should_encode, reason) =
+            Analyzer::should_transcode(&file_path, &metadata, &self.config);
 
         if !should_encode {
             info!("Decision: SKIP Job {} - {}", job.id, reason);
@@ -149,10 +150,11 @@ impl Agent {
             action: "encode".to_string(),
             reason: reason.clone(),
         });
-        
+
         self.update_job_state(job.id, JobState::Encoding).await?;
 
-        match self.orchestrator
+        match self
+            .orchestrator
             .transcode_to_av1(
                 &file_path,
                 &output_path,
@@ -166,7 +168,8 @@ impl Agent {
             .await
         {
             Ok(_) => {
-                self.finalize_job(job.id, &file_path, &output_path, start_time).await
+                self.finalize_job(job.id, &file_path, &output_path, start_time)
+                    .await
             }
             Err(e) => {
                 if let crate::error::AlchemistError::Cancelled = e {
@@ -182,10 +185,9 @@ impl Agent {
 
     async fn update_job_state(&self, job_id: i64, status: JobState) -> Result<()> {
         let _ = self.db.update_job_status(job_id, status).await;
-        let _ = self.tx.send(AlchemistEvent::JobStateChanged {
-            job_id,
-            status,
-        });
+        let _ = self
+            .tx
+            .send(AlchemistEvent::JobStateChanged { job_id, status });
         Ok(())
     }
 
@@ -199,16 +201,31 @@ impl Agent {
         // Integrity & Size Reduction check
         let input_size = std::fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
         let output_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+
+        if input_size == 0 {
+            error!(
+                "Job {}: Input file is empty or missing. Finalizing as failed.",
+                job_id
+            );
+            self.update_job_state(job_id, JobState::Failed).await?;
+            return Ok(());
+        }
+
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
-        if reduction < self.config.transcode.size_reduction_threshold {
+        if output_size == 0 || reduction < self.config.transcode.size_reduction_threshold {
             warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
                 job_id,
                 reduction * 100.0
             );
             std::fs::remove_file(output_path).ok();
-            let _ = self.db.add_decision(job_id, "skip", "Inefficient reduction").await;
+            let reason = if output_size == 0 {
+                "Empty output"
+            } else {
+                "Inefficient reduction"
+            };
+            let _ = self.db.add_decision(job_id, "skip", reason).await;
             self.update_job_state(job_id, JobState::Skipped).await?;
         } else {
             let encode_duration = start_time.elapsed();

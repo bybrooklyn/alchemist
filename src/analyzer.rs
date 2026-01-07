@@ -186,3 +186,59 @@ impl Analyzer {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_fps() {
+        assert_eq!(Analyzer::parse_fps("24/1"), Some(24.0));
+        assert_eq!(Analyzer::parse_fps("23.976"), Some(23.976));
+        assert_eq!(Analyzer::parse_fps("60000/1001"), Some(60000.0 / 1001.0));
+        assert_eq!(Analyzer::parse_fps("invalid"), None);
+        assert_eq!(Analyzer::parse_fps("24/0"), None);
+    }
+
+    #[test]
+    fn test_should_transcode_audio() {
+        let heavy = Stream {
+            codec_name: "truehd".into(),
+            codec_type: "audio".into(),
+            width: None,
+            height: None,
+            bit_rate: None,
+            bits_per_raw_sample: None,
+            channel_layout: None,
+            channels: None,
+            r_frame_rate: None,
+        };
+        assert!(Analyzer::should_transcode_audio(&heavy));
+
+        let standard = Stream {
+            codec_name: "ac3".into(),
+            codec_type: "audio".into(),
+            width: None,
+            height: None,
+            bit_rate: Some("384000".into()),
+            bits_per_raw_sample: None,
+            channel_layout: None,
+            channels: None,
+            r_frame_rate: None,
+        };
+        assert!(!Analyzer::should_transcode_audio(&standard));
+
+        let high_bitrate_ac3 = Stream {
+            codec_name: "ac3".into(),
+            codec_type: "audio".into(),
+            width: None,
+            height: None,
+            bit_rate: Some("1000000".into()),
+            bits_per_raw_sample: None,
+            channel_layout: None,
+            channels: None,
+            r_frame_rate: None,
+        };
+        assert!(Analyzer::should_transcode_audio(&high_bitrate_ac3));
+    }
+}
