@@ -36,6 +36,24 @@ cargo build --release
 ./target/release/alchemist --server
 ```
 
+### First-Boot Configuration
+
+When you start Alchemist server for the first time, an interactive configuration wizard will run automatically:
+
+```bash
+# First time running the server
+./target/release/alchemist --server
+
+# The wizard runs automatically and guides you through:
+# - Transcoding settings (quality thresholds, concurrency)
+# - Hardware configuration (GPU/CPU encoding preferences)
+# - Auto-scan directories (media library paths)
+#
+# After completion, config.toml is created and the server starts
+```
+
+On subsequent runs, the server loads your saved configuration.
+
 ### Docker Deployment
 
 ```bash

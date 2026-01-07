@@ -1,0 +1,12 @@
+# Linguist overrides for GitHub language statistics
+
+# Exclude Dockerfile from language stats
+Dockerfile linguist-vendored
+
+# Exclude generated/build files
+target/** linguist-generated
+*.lock linguist-generated
+Cargo.lock linguist-generated
+
+# Mark as documentation (optional)
+*.md linguist-documentation
