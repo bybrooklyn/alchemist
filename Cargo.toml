@@ -19,6 +19,7 @@ subprocess = { version = "=0.2.9", optional = true }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
+inquire = { version = "0.7", optional = true }
 futures = { version = "0.3" }
 toml = "0.8"
 leptos = { version = "=0.6.14", features = ["ssr"] }
@@ -53,6 +54,7 @@ ssr = [
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
+    "dep:inquire",
 ]
 
 [package.metadata.leptos]

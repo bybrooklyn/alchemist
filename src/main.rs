@@ -56,12 +56,36 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // 0. Load Configuration
+    // 0. Load Configuration (with first-boot wizard)
     let config_path = std::path::Path::new("config.toml");
-    let config = config::Config::load(config_path).unwrap_or_else(|e| {
-        warn!("Failed to load config.toml: {}. Using defaults.", e);
-        config::Config::default()
-    });
+    let config = if !config_path.exists() && args.server {
+        // First boot: Run configuration wizard
+        info!("No configuration file found. Starting configuration wizard...");
+        info!("");
+
+        match alchemist::wizard::ConfigWizard::run(config_path) {
+            Ok(cfg) => {
+                info!("");
+                info!("Configuration complete! Continuing with server startup...");
+                info!("");
+                cfg
+            }
+            Err(e) => {
+                error!("Configuration wizard failed: {}", e);
+                error!("You can:");
+                error!("  1. Run the wizard again: alchemist --server");
+                error!("  2. Create config.toml manually");
+                error!("  3. Use Python wizard: python setup/configure.py");
+                return Err(e);
+            }
+        }
+    } else {
+        // Normal boot or CLI mode: Load config or use defaults
+        config::Config::load(config_path).unwrap_or_else(|e| {
+            warn!("Failed to load config.toml: {}. Using defaults.", e);
+            config::Config::default()
+        })
+    };
 
     // Log Configuration
     info!("Configuration:");

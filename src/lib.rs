@@ -13,6 +13,8 @@ pub mod orchestrator;
 pub mod processor;
 #[cfg(feature = "ssr")]
 pub mod server;
+#[cfg(feature = "ssr")]
+pub mod wizard;
 
 pub mod app;
 
