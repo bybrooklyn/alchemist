@@ -13,6 +13,106 @@ pub struct Config {
     pub quality: QualityConfig,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum QualityProfile {
+    Quality,
+    Balanced,
+    Speed,
+}
+
+impl Default for QualityProfile {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl QualityProfile {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Quality => "quality",
+            Self::Balanced => "balanced",
+            Self::Speed => "speed",
+        }
+    }
+}
+
+impl std::fmt::Display for QualityProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl QualityProfile {
+    /// Get FFmpeg preset/CRF values for CPU encoding (libsvtav1)
+    pub fn cpu_params(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Quality => ("4", "24"),
+            Self::Balanced => ("8", "28"),
+            Self::Speed => ("12", "32"),
+        }
+    }
+
+    /// Get FFmpeg quality value for Intel QSV
+    pub fn qsv_quality(&self) -> &'static str {
+        match self {
+            Self::Quality => "20",
+            Self::Balanced => "25",
+            Self::Speed => "30",
+        }
+    }
+
+    /// Get FFmpeg preset for NVIDIA NVENC
+    pub fn nvenc_preset(&self) -> &'static str {
+        match self {
+            Self::Quality => "p7",
+            Self::Balanced => "p4",
+            Self::Speed => "p1",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CpuPreset {
+    Slow,
+    Medium,
+    Fast,
+    Faster,
+}
+
+impl CpuPreset {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Slow => "slow",
+            Self::Medium => "medium",
+            Self::Fast => "fast",
+            Self::Faster => "faster",
+        }
+    }
+
+    pub fn params(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Slow => ("4", "28"),
+            Self::Medium => ("8", "32"),
+            Self::Fast => ("12", "35"),
+            Self::Faster => ("13", "38"),
+        }
+    }
+}
+
+impl std::fmt::Display for CpuPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Default for CpuPreset {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScannerConfig {
     pub directories: Vec<String>,
@@ -26,28 +126,24 @@ pub struct TranscodeConfig {
     pub min_bpp_threshold: f64,        // e.g., 0.1
     pub min_file_size_mb: u64,         // e.g., 50
     pub concurrent_jobs: usize,
-    #[serde(default = "default_quality_profile")]
-    pub quality_profile: String, // "quality", "balanced", "speed"
+    #[serde(default)]
+    pub quality_profile: QualityProfile,
 }
 
-fn default_quality_profile() -> String {
-    "balanced".to_string()
-}
+// Removed default_quality_profile helper as Default trait on enum handles it now.
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HardwareConfig {
     pub preferred_vendor: Option<String>,
     pub device_path: Option<String>,
     pub allow_cpu_fallback: bool,
-    #[serde(default = "default_cpu_preset")]
-    pub cpu_preset: String, // "slow", "medium", "fast", "faster" for libsvtav1
+    #[serde(default)]
+    pub cpu_preset: CpuPreset,
     #[serde(default = "default_allow_cpu_encoding")]
     pub allow_cpu_encoding: bool,
 }
 
-fn default_cpu_preset() -> String {
-    "medium".to_string()
-}
+// Removed default_cpu_preset helper as Default trait on enum handles it now.
 
 fn default_allow_cpu_encoding() -> bool {
     true
@@ -87,13 +183,13 @@ impl Default for Config {
                 min_bpp_threshold: 0.1,
                 min_file_size_mb: 50,
                 concurrent_jobs: 1,
-                quality_profile: "balanced".to_string(),
+                quality_profile: QualityProfile::Balanced,
             },
             hardware: HardwareConfig {
                 preferred_vendor: None,
                 device_path: None,
                 allow_cpu_fallback: true,
-                cpu_preset: "medium".to_string(),
+                cpu_preset: CpuPreset::Medium,
                 allow_cpu_encoding: true,
             },
             scanner: ScannerConfig {
@@ -119,25 +215,8 @@ impl Config {
 
     /// Validate configuration values
     pub fn validate(&self) -> Result<()> {
-        // Validate CPU preset
-        let valid_presets = ["slow", "medium", "fast", "faster"];
-        if !valid_presets.contains(&self.hardware.cpu_preset.as_str()) {
-            anyhow::bail!(
-                "Invalid cpu_preset '{}'. Valid values: {:?}",
-                self.hardware.cpu_preset,
-                valid_presets
-            );
-        }
-
-        // Validate quality profile
-        let valid_profiles = ["quality", "balanced", "speed"];
-        if !valid_profiles.contains(&self.transcode.quality_profile.as_str()) {
-            anyhow::bail!(
-                "Invalid quality_profile '{}'. Valid values: {:?}",
-                self.transcode.quality_profile,
-                valid_profiles
-            );
-        }
+        // Enums automatically handle valid values via Serde, 
+        // so we don't need manual string checks for presets/profiles anymore.
 
         // Validate thresholds
         if self.transcode.size_reduction_threshold < 0.0

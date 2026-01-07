@@ -1,7 +1,9 @@
 //! FFmpeg wrapper module for Alchemist
 //! Provides typed FFmpeg commands, encoder detection, and structured progress parsing.
 
+use crate::config::{CpuPreset, QualityProfile};
 use crate::error::{AlchemistError, Result};
+use crate::hardware::{HardwareInfo, Vendor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -131,47 +133,99 @@ impl EncoderCapabilities {
     }
 }
 
-/// Quality profile presets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum QualityProfile {
-    Quality,   // Slower, better quality
-    Balanced,  // Default balance
-    Speed,     // Faster, acceptable quality
+// QualityProfile moved to config.rs
+
+pub struct FFmpegCommandBuilder<'a> {
+    input: &'a Path,
+    output: &'a Path,
+    hw_info: Option<&'a HardwareInfo>,
+    profile: QualityProfile,
+    cpu_preset: CpuPreset,
 }
 
-impl Default for QualityProfile {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
-
-impl QualityProfile {
-    /// Get FFmpeg preset/CRF values for CPU encoding (libsvtav1)
-    pub fn cpu_params(&self) -> (&'static str, &'static str) {
-        match self {
-            Self::Quality => ("4", "24"),
-            Self::Balanced => ("8", "28"),
-            Self::Speed => ("12", "32"),
+impl<'a> FFmpegCommandBuilder<'a> {
+    pub fn new(input: &'a Path, output: &'a Path) -> Self {
+        Self {
+            input,
+            output,
+            hw_info: None,
+            profile: QualityProfile::Balanced,
+            cpu_preset: CpuPreset::Medium,
         }
     }
 
-    /// Get FFmpeg quality value for Intel QSV
-    pub fn qsv_quality(&self) -> &'static str {
-        match self {
-            Self::Quality => "20",
-            Self::Balanced => "25",
-            Self::Speed => "30",
+    pub fn with_hardware(mut self, hw_info: Option<&'a HardwareInfo>) -> Self {
+        self.hw_info = hw_info;
+        self
+    }
+
+    pub fn with_profile(mut self, profile: QualityProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn with_cpu_preset(mut self, preset: CpuPreset) -> Self {
+        self.cpu_preset = preset;
+        self
+    }
+
+    pub fn build(self) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("ffmpeg");
+        cmd.arg("-hide_banner").arg("-y").arg("-i").arg(self.input);
+
+        match self.hw_info {
+            Some(hw) => self.apply_hardware_params(&mut cmd, hw),
+            None => self.apply_cpu_params(&mut cmd),
+        }
+
+        // Standard AV1 10-bit target (for Intel Arc/GPU where supported)
+        // For CPU, libsvtav1 handles 10-bit well.
+
+        cmd.arg("-c:a").arg("copy");
+        cmd.arg("-c:s").arg("copy");
+        cmd.arg(self.output);
+
+        cmd
+    }
+
+    fn apply_hardware_params(&self, cmd: &mut tokio::process::Command, hw: &HardwareInfo) {
+        match hw.vendor {
+            Vendor::Intel => {
+                if let Some(ref device_path) = hw.device_path {
+                    cmd.arg("-init_hw_device")
+                        .arg(format!("qsv=qsv:{}", device_path));
+                    cmd.arg("-filter_hw_device").arg("qsv");
+                }
+                cmd.arg("-c:v").arg("av1_qsv");
+                cmd.arg("-global_quality").arg(self.profile.qsv_quality());
+                cmd.arg("-look_ahead").arg("1");
+            }
+            Vendor::Nvidia => {
+                cmd.arg("-c:v").arg("av1_nvenc");
+                cmd.arg("-preset").arg(self.profile.nvenc_preset());
+                cmd.arg("-cq").arg("25"); // Could be profile-based too
+            }
+            Vendor::Apple => {
+                cmd.arg("-c:v").arg("av1_videotoolbox");
+                // VideoToolbox has fewer knobs for AV1 currently in FFmpeg
+            }
+            Vendor::Amd => {
+                if let Some(ref device_path) = hw.device_path {
+                    cmd.arg("-vaapi_device").arg(device_path);
+                }
+                cmd.arg("-c:v").arg("av1_vaapi");
+                // VAAPI parameters often need complex filter chains or specific flags
+            }
+            Vendor::Cpu => self.apply_cpu_params(cmd),
         }
     }
 
-    /// Get FFmpeg preset for NVIDIA NVENC
-    pub fn nvenc_preset(&self) -> &'static str {
-        match self {
-            Self::Quality => "p7",
-            Self::Balanced => "p4",
-            Self::Speed => "p1",
-        }
+    fn apply_cpu_params(&self, cmd: &mut tokio::process::Command) {
+        let (preset_str, crf_str) = self.cpu_preset.params();
+        cmd.arg("-c:v").arg("libsvtav1");
+        cmd.arg("-preset").arg(preset_str);
+        cmd.arg("-crf").arg(crf_str);
+        cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
     }
 }
 
@@ -190,30 +244,60 @@ pub struct FFmpegProgress {
 impl FFmpegProgress {
     /// Parse a line of FFmpeg stderr for progress info
     pub fn parse_line(line: &str) -> Option<Self> {
-        if !line.contains("time=") {
+        // FFmpeg progress can come in multiple formats. 
+        // We look for the standard "frame=... fps=... time=..." format.
+        if !line.contains("time=") && !line.contains("out_time=") {
             return None;
         }
 
         let mut progress = Self::default();
-
-        for part in line.split_whitespace() {
-            if let Some((key, value)) = part.split_once('=') {
-                match key {
-                    "frame" => progress.frame = value.parse().unwrap_or(0),
-                    "fps" => progress.fps = value.parse().unwrap_or(0.0),
-                    "bitrate" => progress.bitrate = value.to_string(),
-                    "total_size" => progress.total_size = value.parse().unwrap_or(0),
-                    "time" => {
-                        progress.time = value.to_string();
-                        progress.time_seconds = Self::parse_time(value);
+        
+        // Clean up the line (remove extra spaces)
+        let line = line.replace('=', "= ");
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        
+        for i in 0..parts.len() {
+            match parts[i] {
+                "frame=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.frame = val.parse().unwrap_or(0);
                     }
-                    "speed" => progress.speed = value.to_string(),
-                    _ => {}
                 }
+                "fps=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.fps = val.parse().unwrap_or(0.0);
+                    }
+                }
+                "bitrate=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.bitrate = val.to_string();
+                    }
+                }
+                "total_size=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.total_size = val.parse().unwrap_or(0);
+                    }
+                }
+                "time=" | "out_time=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.time = val.to_string();
+                        progress.time_seconds = Self::parse_time(val);
+                    }
+                }
+                "speed=" => {
+                    if let Some(val) = parts.get(i + 1) {
+                        progress.speed = val.to_string();
+                    }
+                }
+                _ => {}
             }
         }
 
-        Some(progress)
+        if progress.time_seconds > 0.0 || progress.frame > 0 {
+            Some(progress)
+        } else {
+            None
+        }
     }
 
     /// Parse time string (HH:MM:SS.ms) to seconds
