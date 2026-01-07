@@ -3,7 +3,7 @@ use leptos_meta::*;
 use leptos_router::*;
 use crate::db::{Job, JobState};
 #[cfg(feature = "hydrate")]
-use crate::server::AlchemistEvent;
+use crate::db::AlchemistEvent;
 
 #[server(GetJobs, "/api")]
 pub async fn get_jobs() -> Result<Vec<Job>, ServerFnError> {
@@ -33,9 +33,66 @@ pub async fn get_stats() -> Result<serde_json::Value, ServerFnError> {
 
 #[server(RunScan, "/api")]
 pub async fn run_scan() -> Result<(), ServerFnError> {
-    // This is a placeholder for triggering a scan
-    tracing::info!("Scan triggered via Web UI");
-    Ok(())
+    #[cfg(feature = "ssr")]
+    {
+        use axum::Extension;
+        use crate::Processor;
+        use crate::config::Config;
+        use std::sync::Arc;
+
+        let processor = use_context::<Extension<Arc<Processor>>>()
+            .ok_or_else(|| ServerFnError::new("Processor not found"))?
+            .0.clone();
+        let config = use_context::<Extension<Arc<Config>>>()
+            .ok_or_else(|| ServerFnError::new("Config not found"))?
+            .0.clone();
+
+        let dirs = config.scanner.directories.iter().map(std::path::PathBuf::from).collect();
+        processor.scan_and_enqueue(dirs).await.map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        unreachable!()
+    }
+}
+
+#[server(CancelJob, "/api")]
+pub async fn cancel_job(job_id: i64) -> Result<(), ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        use axum::Extension;
+        use crate::Orchestrator;
+        use std::sync::Arc;
+
+        let orchestrator = use_context::<Extension<Arc<Orchestrator>>>()
+            .ok_or_else(|| ServerFnError::new("Orchestrator not found"))?
+            .0.clone();
+
+        if orchestrator.cancel_job(job_id) {
+            Ok(())
+        } else {
+            Err(ServerFnError::new("Job not running or not found"))
+        }
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = job_id;
+        unreachable!()
+    }
+}
+
+#[server(RestartJob, "/api")]
+pub async fn restart_job(job_id: i64) -> Result<(), ServerFnError> {
+    use axum::Extension;
+    use crate::db::{Db, JobState};
+    use std::sync::Arc;
+
+    let db = use_context::<Extension<Arc<Db>>>()
+        .ok_or_else(|| ServerFnError::new("DB not found"))?
+        .0.clone();
+
+    db.update_job_status(job_id, JobState::Queued).await
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[component]
@@ -60,6 +117,11 @@ pub fn App() -> impl IntoView {
 fn Dashboard() -> impl IntoView {
     let jobs = create_resource(|| (), |_| async move { get_jobs().await.unwrap_or_default() });
     let stats = create_resource(|| (), |_| async move { get_stats().await.ok() });
+    
+    // In-memory progress tracking
+    let (progress_map, _set_progress_map) = create_signal(std::collections::HashMap::<i64, f64>::new());
+    
+    let (active_log, set_active_log) = create_signal(Option::<(i64, String)>::None);
 
     // SSE Effect for real-time updates
     #[cfg(feature = "hydrate")]
@@ -78,7 +140,24 @@ fn Dashboard() -> impl IntoView {
                             jobs.refetch();
                             stats.refetch();
                         }
-                        _ => {}
+                        AlchemistEvent::Progress { job_id, percentage, .. } => {
+                            _set_progress_map.update(|m| {
+                                m.insert(job_id, percentage);
+                            });
+                        }
+                        AlchemistEvent::Log { job_id, message } => {
+                            set_active_log.update(|l| {
+                                if let Some((id, logs)) = l {
+                                    if *id == job_id {
+                                        let mut new_logs = logs.clone();
+                                        new_logs.push_str(&message);
+                                        new_logs.push('\n');
+                                        let lines: Vec<&str> = new_logs.lines().rev().take(20).collect();
+                                        *l = Some((job_id, lines.into_iter().rev().collect::<Vec<_>>().join("\n")));
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -88,6 +167,8 @@ fn Dashboard() -> impl IntoView {
     });
 
     let scan_action = create_server_action::<RunScan>();
+    let cancel_action = create_server_action::<CancelJob>();
+    let restart_action = create_server_action::<RestartJob>();
 
     view! {
         <div class="max-w-6xl mx-auto">
@@ -101,7 +182,7 @@ fn Dashboard() -> impl IntoView {
                 <div class="flex gap-4">
                     <button 
                         on:click=move |_| scan_action.dispatch(RunScan {})
-                        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-all shadow-lg shadow-blue-900/20 active:scale-95"
                     >
                         {move || if scan_action.pending().get() { "Scanning..." } else { "Scan Now" }}
                     </button>
@@ -113,57 +194,104 @@ fn Dashboard() -> impl IntoView {
                      let s = stats.get().flatten().unwrap_or_else(|| serde_json::json!({}));
                      let total = s.as_object().map(|m| m.values().filter_map(|v| v.as_i64()).sum::<i64>()).unwrap_or(0);
                      let completed = s.get("completed").and_then(|v| v.as_i64()).unwrap_or(0);
-                     let processing = s.get("processing").and_then(|v| v.as_i64()).unwrap_or(0);
+                     let processing = s.as_object().map(|m| m.iter().filter(|(k, _)| ["encoding", "analyzing"].contains(&k.as_str())).map(|(_, v)| v.as_i64().unwrap_or(0)).sum::<i64>()).unwrap_or(0);
                      let failed = s.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
                      
                      view! {
                          <StatCard label="Total Jobs" value=total.to_string() color="blue" />
                          <StatCard label="Completed" value=completed.to_string() color="emerald" />
-                         <StatCard label="Processing" value=processing.to_string() color="amber" />
+                         <StatCard label="Active" value=processing.to_string() color="amber" />
                          <StatCard label="Failed" value=failed.to_string() color="rose" />
                      }
                  }}
             </div>
 
-            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div class="px-6 py-4 border-b border-slate-800 bg-slate-900/50">
-                    <h2 class="text-xl font-semibold">"Recent Jobs"</h2>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
+                <div class="px-6 py-4 border-b border-slate-800 bg-slate-900/50 flex justify-between items-center">
+                    <h2 class="text-xl font-semibold text-slate-200">"Recent Jobs"</h2>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left">
-                        <thead class="text-xs text-slate-400 uppercase bg-slate-800/50">
+                        <thead class="text-xs text-slate-500 uppercase bg-slate-800/30">
                             <tr>
-                                <th class="px-6 py-3">"ID"</th>
-                                <th class="px-6 py-3">"File"</th>
-                                <th class="px-6 py-3">"Status"</th>
-                                <th class="px-6 py-3">"Updated"</th>
+                                <th class="px-6 py-4">"ID"</th>
+                                <th class="px-6 py-4">"File & Progress"</th>
+                                <th class="px-6 py-4">"Status"</th>
+                                <th class="px-6 py-4">"Actions"</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-slate-800">
-                            <Transition fallback=move || view! { <tr><td colspan="4" class="px-6 py-8 text-center text-slate-500">"Loading jobs..."</td></tr> }>
+                        <tbody class="divide-y divide-slate-800/50">
+                            <Transition fallback=move || view! { <tr><td colspan="4" class="px-6 py-12 text-center text-slate-500">"Loading jobs..."</td></tr> }>
                                 {move || jobs.get().map(|all_jobs| {
                                     all_jobs.into_iter().map(|job| {
+                                        let id = job.id;
                                         let status_str = job.status.to_string();
                                         let status_cls = match job.status {
                                             JobState::Completed => "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-                                            JobState::Encoding | JobState::Analyzing => "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse",
-                                            JobState::Failed => "bg-rose-500/10 text-rose-400 border-rose-500/20",
+                                            JobState::Encoding | JobState::Analyzing => "bg-amber-500/10 text-amber-400 border-amber-500/20",
+                                            JobState::Failed | JobState::Cancelled => "bg-rose-500/10 text-rose-400 border-rose-500/20",
                                             _ => "bg-slate-500/10 text-slate-400 border-slate-500/20",
                                         };
+                                        
+                                        let prog = move || progress_map.with(|m| *m.get(&id).unwrap_or(&0.0));
+                                        let is_active = job.status == JobState::Encoding || job.status == JobState::Analyzing;
+
                                         view! {
-                                            <tr class="hover:bg-slate-800/50 transition-colors">
-                                                <td class="px-6 py-4 font-mono text-xs text-slate-500">"#" {job.id}</td>
+                                            <tr class="hover:bg-slate-800/30 transition-colors group">
+                                                <td class="px-6 py-4 font-mono text-xs text-slate-600">"#" {id}</td>
                                                 <td class="px-6 py-4">
-                                                    <div class="font-medium truncate max-w-xs">{job.input_path}</div>
-                                                    <div class="text-xs text-slate-500 truncate mt-0.5">{job.decision_reason.unwrap_or_default()}</div>
+                                                    <div class="font-medium truncate max-w-sm text-slate-200">{job.input_path}</div>
+                                                    <div class="text-xs text-slate-500 truncate mt-1">{job.decision_reason.unwrap_or_default()}</div>
+                                                    
+                                                    {move || if is_active {
+                                                        view! {
+                                                            <div class="mt-3 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                                <div 
+                                                                    class="bg-blue-500 h-full transition-all duration-500 ease-out"
+                                                                    style=format!("width: {}%", prog())
+                                                                ></div>
+                                                            </div>
+                                                            <div class="text-[10px] text-blue-400 mt-1 font-mono uppercase tracking-wider">
+                                                                {move || format!("{:.1}%", prog())}
+                                                            </div>
+                                                        }.into_view()
+                                                    } else {
+                                                        view! {}.into_view()
+                                                    }}
                                                 </td>
                                                 <td class="px-6 py-4">
-                                                    <span class=format!("px-2.5 py-1 rounded-full text-xs font-semibold border {}", status_cls)>
+                                                    <span class=format!("px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-tight {}", status_cls)>
                                                         {status_str}
                                                     </span>
                                                 </td>
-                                                <td class="px-6 py-4 text-sm text-slate-500">
-                                                    {job.updated_at.to_rfc3339()}
+                                                <td class="px-6 py-4">
+                                                    <div class="flex gap-2">
+                                                        {move || if is_active {
+                                                            view! {
+                                                                <button 
+                                                                    on:click=move |_| cancel_action.dispatch(CancelJob { job_id: id })
+                                                                    class="text-xs text-rose-400 hover:text-rose-300 font-medium px-2 py-1 rounded hover:bg-rose-500/10 transition-colors"
+                                                                >
+                                                                    "Cancel"
+                                                                </button>
+                                                                <button 
+                                                                    on:click=move |_| set_active_log.set(Some((id, String::new())))
+                                                                    class="text-xs text-slate-400 hover:text-slate-200 font-medium px-2 py-1 rounded hover:bg-slate-500/10 transition-colors"
+                                                                >
+                                                                    "Logs"
+                                                                </button>
+                                                            }.into_view()
+                                                        } else {
+                                                            view! {
+                                                                <button 
+                                                                    on:click=move |_| restart_action.dispatch(RestartJob { job_id: id })
+                                                                    class="text-xs text-blue-400 hover:text-blue-300 font-medium px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                                                                >
+                                                                    "Restart"
+                                                                </button>
+                                                            }.into_view()
+                                                        }}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         }
@@ -174,6 +302,28 @@ fn Dashboard() -> impl IntoView {
                     </table>
                 </div>
             </div>
+            
+            // Log Viewer Modal
+            {move || active_log.get().map(|(id, logs)| {
+                view! {
+                    <div class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[80vh] flex flex-col shadow-2xl">
+                            <div class="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+                                <h3 class="font-semibold text-lg text-slate-200">"Live Logs - Job #" {id}</h3>
+                                <button 
+                                    on:click=move |_| set_active_log.set(None)
+                                    class="text-slate-500 hover:text-slate-300"
+                                >
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                </button>
+                            </div>
+                            <div class="p-6 overflow-y-auto flex-1 font-mono text-sm text-slate-400 bg-black/40">
+                                <pre class="whitespace-pre-wrap">{logs}</pre>
+                            </div>
+                        </div>
+                    </div>
+                }
+            })}
         </div>
     }
 }
@@ -181,16 +331,16 @@ fn Dashboard() -> impl IntoView {
 #[component]
 fn StatCard(label: &'static str, value: String, color: &'static str) -> impl IntoView {
     let accent = match color {
-        "blue" => "from-blue-500 to-indigo-600",
-        "emerald" => "from-emerald-500 to-teal-600",
-        "amber" => "from-amber-500 to-orange-600",
-        "rose" => "from-rose-500 to-pink-600",
-        _ => "from-slate-500 to-slate-600",
+        "blue" => "from-blue-400 to-indigo-500",
+        "emerald" => "from-emerald-400 to-teal-500",
+        "amber" => "from-amber-400 to-orange-500",
+        "rose" => "from-rose-400 to-pink-500",
+        _ => "from-slate-400 to-slate-500",
     };
     view! {
-        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl hover:border-slate-700 transition-colors">
-            <div class="text-slate-500 text-sm font-medium mb-2">{label}</div>
-            <div class=format!("text-3xl font-bold bg-gradient-to-br {} bg-clip-text text-transparent", accent)>
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl transition-all group hover:bg-slate-800/50 shadow-lg">
+            <div class="text-slate-500 text-xs font-bold uppercase tracking-widest mb-2">{label}</div>
+            <div class=format!("text-4xl font-black bg-gradient-to-br {} bg-clip-text text-transparent", accent)>
                 {value}
             </div>
         </div>

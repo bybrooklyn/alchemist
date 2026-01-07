@@ -1,155 +1,173 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use tokio::process::Command;
+use std::process::Stdio;
 use anyhow::{anyhow, Result};
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use crate::hardware::{Vendor, HardwareInfo};
-use crate::server::AlchemistEvent;
-use tokio::sync::broadcast;
-use std::sync::Arc;
+use crate::db::AlchemistEvent;
+use tokio::sync::{broadcast, oneshot};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 pub struct Orchestrator {
-    ffmpeg_path: String,
+    cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
 }
 
 impl Orchestrator {
     pub fn new() -> Self {
         Self {
-            ffmpeg_path: "ffmpeg".to_string(),
+            cancel_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub fn transcode_to_av1(&self, input: &Path, output: &Path, hw_info: Option<&HardwareInfo>, dry_run: bool, metadata: &crate::analyzer::MediaMetadata, event_target: Option<(i64, Arc<broadcast::Sender<AlchemistEvent>>)>) -> Result<()> {
-        let mut args = vec![
-            "-hide_banner".to_string(),
-            "-y".to_string(),
-        ];
-
-        // Vendor-specific setup
-        if let Some(hw) = hw_info {
-            match hw.vendor {
-                Vendor::Intel => {
-                    args.extend_from_slice(&[
-                        "-hwaccel".to_string(), "qsv".to_string(),
-                        "-qsv_device".to_string(), hw.device_path.as_ref().cloned().unwrap_or_else(|| "/dev/dri/renderD128".to_string()),
-                        "-i".to_string(), input.to_str().ok_or_else(|| anyhow!("Invalid input path"))?.to_string(),
-                        "-c:v".to_string(), "av1_qsv".to_string(),
-                        "-preset".to_string(), "medium".to_string(),
-                        "-global_quality".to_string(), "25".to_string(),
-                        "-pix_fmt".to_string(), "p010le".to_string(),
-                    ]);
-                }
-                Vendor::Nvidia => {
-                    args.extend_from_slice(&[
-                        "-hwaccel".to_string(), "cuda".to_string(),
-                        "-i".to_string(), input.to_str().ok_or_else(|| anyhow!("Invalid input path"))?.to_string(),
-                        "-c:v".to_string(), "av1_nvenc".to_string(),
-                        "-preset".to_string(), "p4".to_string(),
-                        "-cq".to_string(), "24".to_string(),
-                        "-pix_fmt".to_string(), "p010le".to_string(),
-                    ]);
-                }
-                Vendor::Amd => {
-                    args.extend_from_slice(&[
-                        "-hwaccel".to_string(), "vaapi".to_string(),
-                        "-vaapi_device".to_string(), hw.device_path.as_ref().cloned().unwrap_or_else(|| "/dev/dri/renderD128".to_string()),
-                        "-hwaccel_output_format".to_string(), "vaapi".to_string(),
-                        "-i".to_string(), input.to_str().ok_or_else(|| anyhow!("Invalid input path"))?.to_string(),
-                        "-vf".to_string(), "format=nv12|vaapi,hwupload".to_string(),
-                        "-c:v".to_string(), "av1_vaapi".to_string(),
-                        "-qp".to_string(), "25".to_string(),
-                    ]);
-                }
-                Vendor::Apple => {
-                    args.extend_from_slice(&[
-                        "-i".to_string(), input.to_str().ok_or_else(|| anyhow!("Invalid input path"))?.to_string(),
-                        "-c:v".to_string(), "av1_videotoolbox".to_string(),
-                        "-bitrate".to_string(), "6M".to_string(),
-                        "-pix_fmt".to_string(), "p010le".to_string(),
-                    ]);
-                }
-            }
+    pub fn cancel_job(&self, job_id: i64) -> bool {
+        let mut channels = self.cancel_channels.lock().unwrap();
+        if let Some(tx) = channels.remove(&job_id) {
+            let _ = tx.send(());
+            true
         } else {
-            // CPU fallback (libaom-av1) - VERY SLOW, but requested via allow_cpu_fallback
-            args.extend_from_slice(&[
-                "-i".to_string(), input.to_str().ok_or_else(|| anyhow!("Invalid input path"))?.to_string(),
-                "-c:v".to_string(), "libaom-av1".to_string(),
-                "-crf".to_string(), "30".to_string(),
-                "-cpu-used".to_string(), "8".to_string(), // Faster preset for CPU
-                "-pix_fmt".to_string(), "yuv420p10le".to_string(),
-            ]);
+            false
         }
+    }
 
-        // Audio and Subtitle Mapping
-        args.extend_from_slice(&["-map".to_string(), "0:v:0".to_string()]);
-
-        let mut audio_count = 0;
-        for (i, stream) in metadata.streams.iter().enumerate() {
-            if stream.codec_type == "audio" {
-                args.extend_from_slice(&["-map".to_string(), format!("0:a:{}", audio_count)]);
-                if crate::analyzer::Analyzer::should_transcode_audio(stream) {
-                    args.extend_from_slice(&[format!("-c:a:{}", audio_count), "libopus".to_string(), format!("-b:a:{}", audio_count), "192k".to_string()]);
-                } else {
-                    args.extend_from_slice(&[format!("-c:a:{}", audio_count), "copy".to_string()]);
-                }
-                audio_count += 1;
-            } else if stream.codec_type == "subtitle" {
-                args.extend_from_slice(&["-map".to_string(), format!("0:s:{}", i - audio_count - 1)]); // Simplified mapping
-                args.extend_from_slice(&["-c:s".to_string(), "copy".to_string()]);
-            }
-        }
-
-        // If no subtitles were found or mapping is complex, fallback to a simpler copy all if needed
-        // But for now, let's just map all and copy.
-        
-        args.push(output.to_str().ok_or_else(|| anyhow!("Invalid output path"))?.to_string());
-
-        info!("Command: {} {}", self.ffmpeg_path, args.join(" "));
-
+    pub async fn transcode_to_av1(
+        &self, 
+        input: &Path, 
+        output: &Path, 
+        hw_info: Option<&HardwareInfo>, 
+        dry_run: bool,
+        metadata: &crate::analyzer::MediaMetadata,
+        event_target: Option<(i64, Arc<broadcast::Sender<AlchemistEvent>>)>
+    ) -> Result<()> {
         if dry_run {
-            info!("Dry run: Skipping actual execution.");
+            info!("[DRY RUN] Transcoding {:?} to {:?}", input, output);
             return Ok(());
         }
 
-        let mut child = Command::new(&self.ffmpeg_path)
-            .args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-hide_banner").arg("-y").arg("-i").arg(input);
 
+        // Map HardwareInfo to FFmpeg arguments
+        if let Some(info) = hw_info {
+            match info.vendor {
+                Vendor::Intel => {
+                    cmd.arg("-c:v").arg("av1_qsv");
+                    cmd.arg("-global_quality").arg("25");
+                    cmd.arg("-look_ahead").arg("1");
+                }
+                Vendor::Nvidia => {
+                    cmd.arg("-c:v").arg("av1_nvenc");
+                    cmd.arg("-preset").arg("p4");
+                    cmd.arg("-cq").arg("25");
+                }
+                Vendor::Apple => {
+                    cmd.arg("-c:v").arg("av1_videotoolbox");
+                }
+                Vendor::Amd => {
+                    cmd.arg("-c:v").arg("av1_vaapi");
+                }
+            }
+        } else {
+            cmd.arg("-c:v").arg("libaom-av1");
+            cmd.arg("-crf").arg("30");
+            cmd.arg("-cpu-used").arg("6");
+        }
+
+        cmd.arg("-c:a").arg("copy");
+        cmd.arg("-c:s").arg("copy");
+        cmd.arg(output);
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        info!("Executing FFmpeg: {:?}", cmd);
+        
+        let mut child = cmd.spawn().map_err(|e| anyhow!("Failed to spawn FFmpeg: {}", e))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to capture stderr"))?;
-        let reader = std::io::BufReader::new(stderr);
-        use std::io::BufRead;
+        
+        let (kill_tx, kill_rx) = oneshot::channel();
+        let job_id = event_target.as_ref().map(|(id, _)| *id);
+        
+        if let Some(id) = job_id {
+            self.cancel_channels.lock().unwrap().insert(id, kill_tx);
+        }
 
-        for line in reader.lines() {
-            let line = line?;
-            if let Some((job_id, ref tx)) = event_target {
-                let _ = tx.send(AlchemistEvent::Log { job_id, message: line.clone() });
-                
-                if line.contains("time=") {
-                    // simple parse for time=00:00:00.00
-                    if let Some(time_part) = line.split("time=").nth(1) {
-                        let time_str = time_part.split_whitespace().next().unwrap_or("");
-                        info!("Progress: time={}", time_str);
-                        let _ = tx.send(AlchemistEvent::Progress { job_id, percentage: 0.0, time: time_str.to_string() });
+        let total_duration = metadata.format.duration.parse::<f64>().unwrap_or(0.0);
+        let mut reader = BufReader::new(stderr).lines();
+        let event_target_clone = event_target.clone();
+
+        let mut kill_rx = kill_rx;
+        let mut killed = false;
+        
+        loop {
+            tokio::select! {
+                line_res = reader.next_line() => {
+                    match line_res {
+                        Ok(Some(line)) => {
+                            if let Some((job_id, ref tx)) = event_target_clone {
+                                let _ = tx.send(AlchemistEvent::Log { job_id, message: line.clone() });
+                                
+                                if line.contains("time=") {
+                                    if let Some(time_part) = line.split("time=").nth(1) {
+                                        let time_str = time_part.split_whitespace().next().unwrap_or("");
+                                        let current_time = Self::parse_duration(time_str);
+                                        let percentage = if total_duration > 0.0 {
+                                            (current_time / total_duration * 100.0).min(100.0)
+                                        } else {
+                                            0.0
+                                        };
+                                        let _ = tx.send(AlchemistEvent::Progress { job_id, percentage, time: time_str.to_string() });
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            error!("Error reading FFmpeg stderr: {}", e);
+                            break;
+                        }
                     }
                 }
-            } else if line.contains("time=") {
-                // simple parse for time=00:00:00.00
-                if let Some(time_part) = line.split("time=").nth(1) {
-                    let time_str = time_part.split_whitespace().next().unwrap_or("");
-                    info!("Progress: time={}", time_str);
+                _ = &mut kill_rx => {
+                    warn!("Job {:?} cancelled. Killing FFmpeg process...", job_id);
+                    let _ = child.kill().await;
+                    killed = true;
+                    if let Some(id) = job_id {
+                        self.cancel_channels.lock().unwrap().remove(&id);
+                    }
+                    break;
                 }
             }
         }
 
-        let status = child.wait()?;
+        let status = child.wait().await?;
+        
+        if let Some(id) = job_id {
+            self.cancel_channels.lock().unwrap().remove(&id);
+        }
+
+        if killed {
+            return Err(anyhow!("Cancelled"));
+        }
 
         if status.success() {
             info!("Transcode successful: {:?}", output);
             Ok(())
         } else {
-            error!("FFmpeg failed with exit code: {:?}", status.code());
-            Err(anyhow!("FFmpeg execution failed"))
+            error!("FFmpeg failed with status: {}", status);
+            Err(anyhow!("FFmpeg failed"))
         }
+    }
+
+    fn parse_duration(s: &str) -> f64 {
+        // HH:MM:SS.ms
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 3 { return 0.0; }
+        
+        let hours = parts[0].parse::<f64>().unwrap_or(0.0);
+        let minutes = parts[1].parse::<f64>().unwrap_or(0.0);
+        let seconds = parts[2].parse::<f64>().unwrap_or(0.0);
+        
+        hours * 3600.0 + minutes * 60.0 + seconds
     }
 }

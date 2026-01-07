@@ -6,6 +6,12 @@ use anyhow::Result;
 pub struct Config {
     pub transcode: TranscodeConfig,
     pub hardware: HardwareConfig,
+    pub scanner: ScannerConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScannerConfig {
+    pub directories: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -36,6 +42,9 @@ impl Default for Config {
                 preferred_vendor: None,
                 device_path: None,
                 allow_cpu_fallback: false,
+            },
+            scanner: ScannerConfig {
+                directories: Vec::new(),
             },
         }
     }

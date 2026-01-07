@@ -13,6 +13,16 @@ pub enum JobState {
     Completed,
     Skipped,
     Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum AlchemistEvent {
+    JobStateChanged { job_id: i64, status: JobState },
+    Progress { job_id: i64, percentage: f64, time: String },
+    Decision { job_id: i64, action: String, reason: String },
+    Log { job_id: i64, message: String },
 }
 
 impl std::fmt::Display for JobState {
@@ -24,6 +34,7 @@ impl std::fmt::Display for JobState {
             JobState::Completed => "completed",
             JobState::Skipped => "skipped",
             JobState::Failed => "failed",
+            JobState::Cancelled => "cancelled",
         };
         write!(f, "{}", s)
     }
