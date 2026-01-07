@@ -1,6 +1,6 @@
 #![cfg(feature = "ssr")]
-use crate::Orchestrator;
-use crate::Processor;
+use crate::Transcoder;
+use crate::Agent;
 use crate::app::*;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db};
@@ -23,8 +23,8 @@ use tracing::info;
 pub async fn run_server(
     db: Arc<Db>,
     config: Arc<Config>,
-    processor: Arc<Processor>,
-    orchestrator: Arc<Orchestrator>,
+    agent: Arc<Agent>,
+    transcoder: Arc<Transcoder>,
     tx: broadcast::Sender<AlchemistEvent>,
 ) -> Result<()> {
     let conf = get_configuration(Some("Cargo.toml")).await.unwrap();
@@ -43,8 +43,8 @@ pub async fn run_server(
         .with_state(leptos_options)
         .layer(axum::Extension(db))
         .layer(axum::Extension(config))
-        .layer(axum::Extension(processor))
-        .layer(axum::Extension(orchestrator))
+        .layer(axum::Extension(agent))
+        .layer(axum::Extension(transcoder))
         .layer(axum::Extension(tx));
 
     info!("listening on http://{}", addr);

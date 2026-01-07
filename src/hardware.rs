@@ -2,7 +2,7 @@ use crate::error::Result;
 use std::path::Path;
 #[cfg(feature = "ssr")]
 use std::process::Command;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vendor {
@@ -31,7 +31,7 @@ pub struct HardwareInfo {
 }
 
 #[cfg(feature = "ssr")]
-pub fn detect_hardware() -> Result<HardwareInfo> {
+pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
     info!("=== Hardware Detection Starting ===");
     info!("OS: {}", std::env::consts::OS);
     info!("Architecture: {}", std::env::consts::ARCH);
@@ -134,6 +134,13 @@ pub fn detect_hardware() -> Result<HardwareInfo> {
     info!("✗ No GPU render nodes found");
 
     // 4. CPU Fallback
+    if !allow_cpu_fallback {
+        error!("✗ No supported GPU detected and CPU fallback is disabled.");
+        return Err(crate::error::AlchemistError::Config(
+            "No GPU detected and CPU fallback disabled".into(),
+        ));
+    }
+
     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     warn!("⚠  NO GPU DETECTED - FALLING BACK TO CPU ENCODING");
     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

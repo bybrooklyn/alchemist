@@ -10,11 +10,11 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, oneshot};
 use tracing::{error, info, warn};
 
-pub struct Orchestrator {
+pub struct Transcoder {
     cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
 }
 
-impl Orchestrator {
+impl Transcoder {
     pub fn new() -> Self {
         Self {
             cancel_channels: Arc::new(Mutex::new(HashMap::new())),
@@ -36,6 +36,7 @@ impl Orchestrator {
         input: &Path,
         output: &Path,
         hw_info: Option<&HardwareInfo>,
+        cpu_preset: &str,
         dry_run: bool,
         metadata: &crate::analyzer::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<AlchemistEvent>>)>,
@@ -87,12 +88,22 @@ impl Orchestrator {
                     warn!("  SOFTWARE ENCODING (CPU) - SLOW PERFORMANCE");
                     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     info!("  Using: libsvtav1 (Software AV1 encoder)");
-                    info!("  Preset: 8 (fast, lower quality)");
+                    
+                    let (preset_val, crf_val) = match cpu_preset {
+                        "slow" => ("4", "28"),
+                        "medium" => ("8", "32"),
+                        "fast" => ("12", "35"),
+                        "faster" => ("13", "38"),
+                        _ => ("8", "32"), // Default to medium
+                    };
+
+                    info!("  Preset: {} ({})", preset_val, cpu_preset);
+                    info!("  CRF:    {}", crf_val);
                     info!("  This will be significantly slower than GPU encoding.");
 
                     cmd.arg("-c:v").arg("libsvtav1");
-                    cmd.arg("-preset").arg("8"); // 0=slowest/best, 13=fastest/worst
-                    cmd.arg("-crf").arg("32"); // Slightly higher CRF for CPU to save time
+                    cmd.arg("-preset").arg(preset_val);
+                    cmd.arg("-crf").arg(crf_val);
                     cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
                 }
             }

@@ -4,28 +4,30 @@ use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::Result;
 use crate::hardware::HardwareInfo;
 use crate::scanner::Scanner;
-use crate::Orchestrator;
+use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Semaphore};
 use tracing::{error, info, warn};
 
-pub struct Processor {
+pub struct Agent {
     db: Arc<Db>,
-    orchestrator: Arc<Orchestrator>,
+    orchestrator: Arc<Transcoder>,
     config: Arc<Config>,
     hw_info: Arc<Option<HardwareInfo>>,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
+    dry_run: bool,
 }
 
-impl Processor {
+impl Agent {
     pub fn new(
         db: Arc<Db>,
-        orchestrator: Arc<Orchestrator>,
+        orchestrator: Arc<Transcoder>,
         config: Arc<Config>,
         hw_info: Option<HardwareInfo>,
         tx: broadcast::Sender<AlchemistEvent>,
+        dry_run: bool,
     ) -> Self {
         let concurrent_jobs = config.transcode.concurrent_jobs;
         Self {
@@ -35,6 +37,7 @@ impl Processor {
             hw_info: Arc::new(hw_info),
             tx: Arc::new(tx),
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
+            dry_run,
         }
     }
 
@@ -64,7 +67,7 @@ impl Processor {
     }
 
     pub async fn run_loop(&self) {
-        info!("Processor loop started.");
+        info!("Agent loop started.");
         loop {
             match self.db.get_next_job().await {
                 Ok(Some(job)) => {
@@ -74,6 +77,7 @@ impl Processor {
                     let config = self.config.clone();
                     let hw_info = self.hw_info.clone();
                     let tx = self.tx.clone();
+                    let dry_run = self.dry_run;
 
                     tokio::spawn(async move {
                         let _permit = permit;
@@ -139,7 +143,8 @@ impl Processor {
                                             &file_path,
                                             &output_path,
                                             hw_info.as_ref().as_ref(),
-                                            false,
+                                            &config.hardware.cpu_preset,
+                                            dry_run,
                                             &metadata,
                                             Some((job.id, tx.clone())),
                                         )

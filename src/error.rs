@@ -15,6 +15,21 @@ pub enum AlchemistError {
     #[error("FFmpeg execution failed: {0}")]
     FFmpeg(String),
 
+    #[error("FFmpeg not found or not executable")]
+    FFmpegNotFound,
+
+    #[error("Encoder not available: {0}")]
+    EncoderUnavailable(String),
+
+    #[error("Quality check failed: {0}")]
+    QualityCheckFailed(String),
+
+    #[error("Notification failed: {0}")]
+    Notification(String),
+
+    #[error("Watch error: {0}")]
+    Watch(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -23,6 +38,9 @@ pub enum AlchemistError {
 
     #[error("Job cancelled")]
     Cancelled,
+
+    #[error("Job paused")]
+    Paused,
 
     #[error("Unknown error: {0}")]
     Unknown(String),

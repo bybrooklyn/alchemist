@@ -1,5 +1,5 @@
 use alchemist::error::Result;
-use alchemist::{config, db, hardware, Orchestrator, Processor};
+use alchemist::{config, db, hardware, Transcoder, Agent};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
     info!("");
 
     // 1. Hardware Detection
-    let hw_info = hardware::detect_hardware()?;
+    let hw_info = hardware::detect_hardware(config.hardware.allow_cpu_fallback)?;
     info!("");
     info!("Selected Hardware: {}", hw_info.vendor);
     if let Some(ref path) = hw_info.device_path {
@@ -138,27 +138,28 @@ async fn main() -> Result<()> {
     // 2. Initialize Database, Broadcast Channel, Orchestrator, and Processor
     let db = Arc::new(db::Db::new("alchemist.db").await?);
     let (tx, _rx) = broadcast::channel(100);
-    let orchestrator = Arc::new(Orchestrator::new());
+    let transcoder = Arc::new(Transcoder::new());
     let config = Arc::new(config);
-    let processor = Arc::new(Processor::new(
+    let agent = Arc::new(Agent::new(
         db.clone(),
-        orchestrator.clone(),
+        transcoder.clone(),
         config.clone(),
         Some(hw_info),
         tx.clone(),
+        args.dry_run,
     ));
 
     info!("Database and services initialized.");
 
     // 3. Start Background Processor Loop
-    let proc = processor.clone();
+    let proc = agent.clone();
     tokio::spawn(async move {
         proc.run_loop().await;
     });
 
     if args.server {
         info!("Starting web server...");
-        alchemist::server::run_server(db, config, processor, orchestrator, tx).await?;
+        alchemist::server::run_server(db, config, agent, transcoder, tx).await?;
     } else {
         // CLI Mode
         if args.directories.is_empty() {
@@ -169,7 +170,7 @@ async fn main() -> Result<()> {
                 "Missing directories for CLI mode".into(),
             ));
         }
-        processor.scan_and_enqueue(args.directories).await?;
+        agent.scan_and_enqueue(args.directories).await?;
 
         // Wait until all jobs are processed
         info!("Waiting for jobs to complete...");

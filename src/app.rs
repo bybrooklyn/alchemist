@@ -56,12 +56,12 @@ pub async fn run_scan() -> Result<(), ServerFnError> {
     #[cfg(feature = "ssr")]
     {
         use crate::config::Config;
-        use crate::Processor;
+        use crate::Agent;
         use axum::Extension;
         use std::sync::Arc;
 
-        let processor = use_context::<Extension<Arc<Processor>>>()
-            .ok_or_else(|| ServerFnError::new("Processor not found"))?
+        let agent = use_context::<Extension<Arc<Agent>>>()
+            .ok_or_else(|| ServerFnError::new("Agent not found"))?
             .0
             .clone();
         let config = use_context::<Extension<Arc<Config>>>()
@@ -75,7 +75,7 @@ pub async fn run_scan() -> Result<(), ServerFnError> {
             .iter()
             .map(std::path::PathBuf::from)
             .collect();
-        processor
+        agent
             .scan_and_enqueue(dirs)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))
@@ -90,16 +90,16 @@ pub async fn run_scan() -> Result<(), ServerFnError> {
 pub async fn cancel_job(job_id: i64) -> Result<(), ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        use crate::Orchestrator;
+        use crate::Transcoder;
         use axum::Extension;
         use std::sync::Arc;
 
-        let orchestrator = use_context::<Extension<Arc<Orchestrator>>>()
-            .ok_or_else(|| ServerFnError::new("Orchestrator not found"))?
+        let transcoder = use_context::<Extension<Arc<Transcoder>>>()
+            .ok_or_else(|| ServerFnError::new("Transcoder not found"))?
             .0
             .clone();
 
-        if orchestrator.cancel_job(job_id) {
+        if transcoder.cancel_job(job_id) {
             Ok(())
         } else {
             Err(ServerFnError::new("Job not running or not found"))
@@ -132,6 +132,74 @@ pub async fn restart_job(job_id: i64) -> Result<(), ServerFnError> {
     #[cfg(not(feature = "ssr"))]
     {
         let _ = job_id;
+        unreachable!()
+    }
+}
+
+#[server(RestartAllFailed, "/api")]
+pub async fn restart_all_failed() -> Result<u64, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::{Db, JobState};
+        use axum::Extension;
+        use std::sync::Arc;
+
+        let db = use_context::<Extension<Arc<Db>>>()
+            .ok_or_else(|| ServerFnError::new("DB not found"))?
+            .0
+            .clone();
+
+        db.batch_update_status(JobState::Failed, JobState::Queued)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        unreachable!()
+    }
+}
+
+#[server(SetJobPriority, "/api")]
+pub async fn set_job_priority(job_id: i64, priority: i32) -> Result<(), ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::Db;
+        use axum::Extension;
+        use std::sync::Arc;
+
+        let db = use_context::<Extension<Arc<Db>>>()
+            .ok_or_else(|| ServerFnError::new("DB not found"))?
+            .0
+            .clone();
+
+        db.set_job_priority(job_id, priority)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = (job_id, priority);
+        unreachable!()
+    }
+}
+
+#[server(GetConfig, "/api")]
+pub async fn get_config() -> Result<crate::config::Config, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        use crate::config::Config;
+        use axum::Extension;
+        use std::sync::Arc;
+
+        let config = use_context::<Extension<Arc<Config>>>()
+            .ok_or_else(|| ServerFnError::new("Config not found"))?
+            .0
+            .clone();
+
+        Ok((*config).clone())
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
         unreachable!()
     }
 }
