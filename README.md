@@ -59,8 +59,8 @@ Access the web interface at `http://localhost:3000`
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Web Interface (Leptos)                  │
-│                    http://localhost:3000                     │
+│                      Web Interface (Leptos)                 │
+│                    http://localhost:3000                    │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────┴─────────────────────────────────┐
@@ -78,19 +78,19 @@ Access the web interface at `http://localhost:3000`
             ┌───────────────────────────────┘
             │
 ┌───────────▼────────────────────────────────────────┐
-│              Processor (Job Queue)                  │
-│          • Concurrent job execution                 │
-│          • State management                         │
+│              Processor (Job Queue)                 │
+│          • Concurrent job execution                │
+│          • State management                        │
 └───────────┬────────────────────────────────────────┘
             │
 ┌───────────▼────────────────────────────────────────┐
-│           Orchestrator (FFmpeg Wrapper)             │
-│                                                     │
+│           Orchestrator (FFmpeg Wrapper)            │
+│                                                    │
 │  GPU Mode:           CPU Mode:                     │
 │  • av1_qsv  (Intel)  • libsvtav1 (software)        │
 │  • av1_nvenc (NVIDIA)                              │
 │  • av1_vaapi (AMD)                                 │
-└─────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
 ```
 
 ### Database Location
