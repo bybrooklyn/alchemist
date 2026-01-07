@@ -2,6 +2,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum AlchemistError {
+    #[cfg(feature = "ssr")]
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 

@@ -1,6 +1,6 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use anyhow::Result;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -27,6 +27,18 @@ pub struct HardwareConfig {
     pub preferred_vendor: Option<String>,
     pub device_path: Option<String>,
     pub allow_cpu_fallback: bool,
+    #[serde(default = "default_cpu_preset")]
+    pub cpu_preset: String, // "slow", "medium", "fast", "faster" for libsvtav1
+    #[serde(default = "default_allow_cpu_encoding")]
+    pub allow_cpu_encoding: bool,
+}
+
+fn default_cpu_preset() -> String {
+    "medium".to_string()
+}
+
+fn default_allow_cpu_encoding() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -41,7 +53,9 @@ impl Default for Config {
             hardware: HardwareConfig {
                 preferred_vendor: None,
                 device_path: None,
-                allow_cpu_fallback: false,
+                allow_cpu_fallback: true, // Enable CPU fallback by default
+                cpu_preset: "medium".to_string(),
+                allow_cpu_encoding: true,
             },
             scanner: ScannerConfig {
                 directories: Vec::new(),

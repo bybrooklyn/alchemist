@@ -7,42 +7,56 @@ use leptos_router::*;
 
 #[server(GetJobs, "/api")]
 pub async fn get_jobs() -> Result<Vec<Job>, ServerFnError> {
-    use crate::db::Db;
-    use axum::Extension;
-    use std::sync::Arc;
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::Db;
+        use axum::Extension;
+        use std::sync::Arc;
 
-    let db = use_context::<Extension<Arc<Db>>>()
-        .ok_or_else(|| ServerFnError::new("DB not found"))?
-        .0
-        .clone();
+        let db = use_context::<Extension<Arc<Db>>>()
+            .ok_or_else(|| ServerFnError::new("DB not found"))?
+            .0
+            .clone();
 
-    db.get_all_jobs()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        db.get_all_jobs()
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        unreachable!()
+    }
 }
 
 #[server(GetStats, "/api")]
 pub async fn get_stats() -> Result<serde_json::Value, ServerFnError> {
-    use crate::db::Db;
-    use axum::Extension;
-    use std::sync::Arc;
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::Db;
+        use axum::Extension;
+        use std::sync::Arc;
 
-    let db = use_context::<Extension<Arc<Db>>>()
-        .ok_or_else(|| ServerFnError::new("DB not found"))?
-        .0
-        .clone();
+        let db = use_context::<Extension<Arc<Db>>>()
+            .ok_or_else(|| ServerFnError::new("DB not found"))?
+            .0
+            .clone();
 
-    db.get_stats()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        db.get_stats()
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        unreachable!()
+    }
 }
 
 #[server(RunScan, "/api")]
 pub async fn run_scan() -> Result<(), ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        use crate::Processor;
         use crate::config::Config;
+        use crate::Processor;
         use axum::Extension;
         use std::sync::Arc;
 
@@ -100,18 +114,26 @@ pub async fn cancel_job(job_id: i64) -> Result<(), ServerFnError> {
 
 #[server(RestartJob, "/api")]
 pub async fn restart_job(job_id: i64) -> Result<(), ServerFnError> {
-    use crate::db::{Db, JobState};
-    use axum::Extension;
-    use std::sync::Arc;
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::{Db, JobState};
+        use axum::Extension;
+        use std::sync::Arc;
 
-    let db = use_context::<Extension<Arc<Db>>>()
-        .ok_or_else(|| ServerFnError::new("DB not found"))?
-        .0
-        .clone();
+        let db = use_context::<Extension<Arc<Db>>>()
+            .ok_or_else(|| ServerFnError::new("DB not found"))?
+            .0
+            .clone();
 
-    db.update_job_status(job_id, JobState::Queued)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        db.update_job_status(job_id, JobState::Queued)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = job_id;
+        unreachable!()
+    }
 }
 
 #[component]
