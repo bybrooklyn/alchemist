@@ -2,7 +2,7 @@ use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "ssr")]
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -123,16 +123,32 @@ impl Db {
         .execute(&self.pool)
         .await?;
 
-        // Add columns if they don't exist (migrations for existing DBs)
-        let _ = sqlx::query("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE jobs ADD COLUMN progress REAL DEFAULT 0.0")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER DEFAULT 0")
-            .execute(&self.pool)
-            .await;
+        // Helper to check and add columns
+        let columns = sqlx::query("PRAGMA table_info(jobs)")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let has_column = |name: &str| {
+            columns
+                .iter()
+                .any(|row| row.get::<String, _>("name") == name)
+        };
+
+        if !has_column("priority") {
+            sqlx::query("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+        }
+        if !has_column("progress") {
+            sqlx::query("ALTER TABLE jobs ADD COLUMN progress REAL DEFAULT 0.0")
+                .execute(&self.pool)
+                .await?;
+        }
+        if !has_column("attempt_count") {
+            sqlx::query("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+        }
 
         // Decisions table
         sqlx::query(
@@ -191,8 +207,11 @@ impl Db {
             .to_str()
             .ok_or_else(|| crate::error::AlchemistError::Config("Invalid output path".into()))?;
 
-        // simple mtime hash
-        let mtime_hash = format!("{:?}", mtime);
+        // Stable mtime representation (seconds + nanos)
+        let mtime_hash = match mtime.duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
+            Err(_) => format!("0.0"), // Fallback for very old files/clocks
+        };
 
         sqlx::query(
             "INSERT INTO jobs (input_path, output_path, status, mtime_hash, updated_at) 
@@ -251,14 +270,12 @@ impl Db {
     pub async fn get_all_jobs(&self) -> Result<Vec<Job>> {
         let jobs = sqlx::query_as::<_, Job>(
             "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    d.reason as decision_reason,
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
-             LEFT JOIN decisions d ON j.id = d.job_id
-             GROUP BY j.id
              ORDER BY j.updated_at DESC",
         )
         .fetch_all(&self.pool)
@@ -360,13 +377,12 @@ impl Db {
     pub async fn get_job(&self, id: i64) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
             "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    d.reason as decision_reason,
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
-             LEFT JOIN decisions d ON j.id = d.job_id
              WHERE j.id = ?",
         )
         .bind(id)
@@ -380,15 +396,13 @@ impl Db {
     pub async fn get_jobs_by_status(&self, status: JobState) -> Result<Vec<Job>> {
         let jobs = sqlx::query_as::<_, Job>(
             "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    d.reason as decision_reason,
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     j.created_at, j.updated_at
              FROM jobs j
-             LEFT JOIN decisions d ON j.id = d.job_id
              WHERE j.status = ?
-             GROUP BY j.id
              ORDER BY j.priority DESC, j.created_at ASC",
         )
         .bind(status)
