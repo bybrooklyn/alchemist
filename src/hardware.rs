@@ -1,5 +1,6 @@
-use anyhow::{anyhow, Result};
+use crate::error::{AlchemistError, Result};
 use std::path::Path;
+#[cfg(feature = "ssr")]
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -27,6 +28,7 @@ pub struct HardwareInfo {
     pub device_path: Option<String>,
 }
 
+#[cfg(feature = "ssr")]
 pub fn detect_hardware() -> Result<HardwareInfo> {
     // 0. Check for Apple (macOS)
     if cfg!(target_os = "macos") {
@@ -77,10 +79,13 @@ pub fn detect_hardware() -> Result<HardwareInfo> {
                 device_path: Some("/dev/dri/renderD128".to_string()),
             });
         }
-        
+
         // Fallback for VAAPI if we can't be sure but the node exists
-        warn!("Found /dev/dri/renderD128 but couldn't verify vendor id ({}). Assuming VAAPI compatible.", vendor_id);
+        warn!(
+            "Found /dev/dri/renderD128 but couldn't verify vendor id ({}). Assuming VAAPI compatible.",
+            vendor_id
+        );
     }
 
-    Err(anyhow!("No supported hardware accelerator (NVIDIA, AMD, or Intel) found. Alchemist requires hardware acceleration."))
+    Err(AlchemistError::Hardware("No supported hardware accelerator (NVIDIA, AMD, or Intel) found. Alchemist requires hardware acceleration.".into()))
 }

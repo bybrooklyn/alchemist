@@ -1,10 +1,13 @@
 [package]
 name = "alchemist"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"], optional = true }
 clap = { version = "4.4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -12,16 +15,16 @@ walkdir = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-subprocess = "0.2.9" 
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+subprocess = { version = "=0.2.9", optional = true }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 futures = { version = "0.3" }
 toml = "0.8"
 leptos = { version = "0.6", features = ["ssr"] }
-leptos_axum = "0.6"
-axum = { version = "0.7", features = ["macros"] }
-tower = { version = "0.4" }
-tower-http = { version = "0.5", features = ["fs"] }
+leptos_axum = { version = "0.6", optional = true }
+axum = { version = "0.7", features = ["macros"], optional = true }
+tower = { version = "0.4", optional = true }
+tower-http = { version = "0.5", features = ["fs"], optional = true }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 log = "0.4"
@@ -30,11 +33,19 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 gloo-net = { version = "0.5", optional = true }
 leptos_meta = "0.6"
 leptos_router = "0.6"
+thiserror = "2.0.17"
 
 [features]
 default = ["ssr"]
 hydrate = ["leptos/hydrate", "leptos_meta/hydrate", "leptos_router/hydrate", "dep:gloo-net"]
 ssr = [
+    "dep:tokio",
+    "dep:subprocess",
+    "dep:sqlx",
+    "dep:leptos_axum",
+    "dep:axum",
+    "dep:tower",
+    "dep:tower-http",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
@@ -43,6 +54,7 @@ ssr = [
 [package.metadata.leptos]
 # The name used by wasm-bindgen/cargo-leptos for the JS/WASM bundle. Defaults to the crate name
 bin-package = "alchemist"
+output-name = "alchemist"
 
 # The package where the secondary binary (include-path) is located
 # If the secondary binary is in the same package, this should be the same as the bin-package
@@ -59,6 +71,16 @@ site-pkg-dir = "pkg"
 
 # [Optional] The source CSS file. If it ends with .sass or .scss then it will be compiled by dart-sass into main.css
 style-file = "style/main.css"
+
+# [Optional] The tailwind input file.
+#
+# Optional, defaults to "tailwind.config.js" if tailwind is enabled.
+tailwind-input-file = "style/main.css"
+
+# [Optional] The tailwind config file.
+#
+# Optional, defaults to "tailwind.config.js" if tailwind is enabled.
+tailwind-config-file = "tailwind.config.js"
 
 # [Optional] Assets source directory. All files found here will be copied and synchronized to site-root.
 # The assets-dir cannot have a sub directory with the same name/path as site-pkg-dir.
@@ -103,4 +125,10 @@ lib-features = ["hydrate"]
 #
 # Optional. Defaults to "release".
 lib-profile-release = "wasm-release"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
 

@@ -1,14 +1,14 @@
-use std::path::Path;
-use tokio::process::Command;
-use std::process::Stdio;
-use anyhow::{anyhow, Result};
-use tracing::{info, error, warn};
-use crate::hardware::{Vendor, HardwareInfo};
 use crate::db::AlchemistEvent;
-use tokio::sync::{broadcast, oneshot};
-use std::sync::{Arc, Mutex};
+use crate::error::{AlchemistError, Result};
+use crate::hardware::{HardwareInfo, Vendor};
 use std::collections::HashMap;
+use std::path::Path;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::{broadcast, oneshot};
+use tracing::{error, info, warn};
 
 pub struct Orchestrator {
     cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
@@ -32,13 +32,13 @@ impl Orchestrator {
     }
 
     pub async fn transcode_to_av1(
-        &self, 
-        input: &Path, 
-        output: &Path, 
-        hw_info: Option<&HardwareInfo>, 
+        &self,
+        input: &Path,
+        output: &Path,
+        hw_info: Option<&HardwareInfo>,
         dry_run: bool,
         metadata: &crate::analyzer::MediaMetadata,
-        event_target: Option<(i64, Arc<broadcast::Sender<AlchemistEvent>>)>
+        event_target: Option<(i64, Arc<broadcast::Sender<AlchemistEvent>>)>,
     ) -> Result<()> {
         if dry_run {
             info!("[DRY RUN] Transcoding {:?} to {:?}", input, output);
@@ -81,13 +81,18 @@ impl Orchestrator {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         info!("Executing FFmpeg: {:?}", cmd);
-        
-        let mut child = cmd.spawn().map_err(|e| anyhow!("Failed to spawn FFmpeg: {}", e))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to capture stderr"))?;
-        
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AlchemistError::FFmpeg(format!("Failed to spawn FFmpeg: {}", e)))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AlchemistError::FFmpeg("Failed to capture stderr".into()))?;
+
         let (kill_tx, kill_rx) = oneshot::channel();
         let job_id = event_target.as_ref().map(|(id, _)| *id);
-        
+
         if let Some(id) = job_id {
             self.cancel_channels.lock().unwrap().insert(id, kill_tx);
         }
@@ -98,7 +103,7 @@ impl Orchestrator {
 
         let mut kill_rx = kill_rx;
         let mut killed = false;
-        
+
         loop {
             tokio::select! {
                 line_res = reader.next_line() => {
@@ -106,7 +111,7 @@ impl Orchestrator {
                         Ok(Some(line)) => {
                             if let Some((job_id, ref tx)) = event_target_clone {
                                 let _ = tx.send(AlchemistEvent::Log { job_id, message: line.clone() });
-                                
+
                                 if line.contains("time=") {
                                     if let Some(time_part) = line.split("time=").nth(1) {
                                         let time_str = time_part.split_whitespace().next().unwrap_or("");
@@ -141,13 +146,13 @@ impl Orchestrator {
         }
 
         let status = child.wait().await?;
-        
+
         if let Some(id) = job_id {
             self.cancel_channels.lock().unwrap().remove(&id);
         }
 
         if killed {
-            return Err(anyhow!("Cancelled"));
+            return Err(AlchemistError::Cancelled);
         }
 
         if status.success() {
@@ -155,19 +160,24 @@ impl Orchestrator {
             Ok(())
         } else {
             error!("FFmpeg failed with status: {}", status);
-            Err(anyhow!("FFmpeg failed"))
+            Err(AlchemistError::FFmpeg(format!(
+                "FFmpeg failed with status: {}",
+                status
+            )))
         }
     }
 
     fn parse_duration(s: &str) -> f64 {
         // HH:MM:SS.ms
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 3 { return 0.0; }
-        
+        if parts.len() != 3 {
+            return 0.0;
+        }
+
         let hours = parts[0].parse::<f64>().unwrap_or(0.0);
         let minutes = parts[1].parse::<f64>().unwrap_or(0.0);
         let seconds = parts[2].parse::<f64>().unwrap_or(0.0);
-        
+
         hours * 3600.0 + minutes * 60.0 + seconds
     }
 }

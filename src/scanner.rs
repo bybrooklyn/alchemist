@@ -1,9 +1,12 @@
-use std::path::PathBuf;
-use std::time::SystemTime;
-use walkdir::WalkDir;
-use tracing::{info, debug};
+#[cfg(feature = "ssr")]
 use rayon::prelude::*;
+use std::path::PathBuf;
+#[cfg(feature = "ssr")]
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+use tracing::{debug, info};
+#[cfg(feature = "ssr")]
+use walkdir::WalkDir;
 
 #[derive(Clone)]
 pub struct ScannedFile {
@@ -11,10 +14,12 @@ pub struct ScannedFile {
     pub mtime: SystemTime,
 }
 
+#[cfg(feature = "ssr")]
 pub struct Scanner {
     extensions: Vec<String>,
 }
 
+#[cfg(feature = "ssr")]
 impl Scanner {
     pub fn new() -> Self {
         Self {
@@ -30,7 +35,7 @@ impl Scanner {
 
     pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<ScannedFile> {
         let files = Arc::new(Mutex::new(Vec::new()));
-        
+
         directories.into_par_iter().for_each(|dir| {
             info!("Scanning directory: {:?}", dir);
             let mut local_files = Vec::new();
@@ -39,7 +44,10 @@ impl Scanner {
                     if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                         if self.extensions.contains(&ext.to_lowercase()) {
                             debug!("Found media file: {:?}", entry.path());
-                            let mtime = entry.metadata().map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH)).unwrap_or(SystemTime::UNIX_EPOCH);
+                            let mtime = entry
+                                .metadata()
+                                .map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                                .unwrap_or(SystemTime::UNIX_EPOCH);
                             local_files.push(ScannedFile {
                                 path: entry.path().to_path_buf(),
                                 mtime,
@@ -54,7 +62,7 @@ impl Scanner {
         let mut final_files = files.lock().unwrap().clone();
         // Deterministic ordering
         final_files.sort_by(|a, b| a.path.cmp(&b.path));
-        
+
         info!("Found {} candidate media files", final_files.len());
         final_files
     }
