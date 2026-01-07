@@ -1,3 +1,4 @@
+#![cfg(feature = "ssr")]
 use axum::{
     routing::{get, post},
     Router,
@@ -6,26 +7,25 @@ use axum::{
 use futures::stream::Stream;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 use std::convert::Infallible;
 use leptos::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use std::sync::Arc;
 use crate::app::*;
-use crate::db::{Db, JobState};
+use crate::db::{Db, AlchemistEvent};
 use crate::config::Config;
-use serde::{Serialize, Deserialize};
 use tracing::info;
+use crate::Processor;
+use crate::Orchestrator;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
-pub enum AlchemistEvent {
-    JobStateChanged { job_id: i64, status: JobState },
-    Progress { job_id: i64, percentage: f64, time: String },
-    Decision { job_id: i64, action: String, reason: String },
-    Log { job_id: i64, message: String },
-}
-
-pub async fn run_server(db: Arc<Db>, config: Arc<Config>, tx: broadcast::Sender<AlchemistEvent>) -> anyhow::Result<()> {
+pub async fn run_server(
+    db: Arc<Db>, 
+    config: Arc<Config>, 
+    processor: Arc<Processor>,
+    orchestrator: Arc<Orchestrator>,
+    tx: broadcast::Sender<AlchemistEvent>
+) -> anyhow::Result<()> {
     let conf = get_configuration(None).await.unwrap();
     let leptos_options = conf.leptos_options;
     let addr = leptos_options.site_addr;
@@ -39,6 +39,8 @@ pub async fn run_server(db: Arc<Db>, config: Arc<Config>, tx: broadcast::Sender<
         .with_state(leptos_options)
         .layer(axum::Extension(db))
         .layer(axum::Extension(config))
+        .layer(axum::Extension(processor))
+        .layer(axum::Extension(orchestrator))
         .layer(axum::Extension(tx));
 
     info!("listening on http://{}", addr);
