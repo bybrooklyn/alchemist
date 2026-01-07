@@ -1,229 +1,12 @@
+use crate::app::components::*;
+use crate::app::server_fns::*;
 #[cfg(feature = "hydrate")]
 use crate::db::AlchemistEvent;
-use crate::db::{Job, JobState};
+use crate::db::JobState;
 use leptos::*;
-use leptos_meta::*;
-use leptos_router::*;
-
-#[server(GetJobs, "/api")]
-pub async fn get_jobs() -> Result<Vec<Job>, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::db::Db;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let db = use_context::<Extension<Arc<Db>>>()
-            .ok_or_else(|| ServerFnError::new("DB not found"))?
-            .0
-            .clone();
-
-        db.get_all_jobs()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        unreachable!()
-    }
-}
-
-#[server(GetStats, "/api")]
-pub async fn get_stats() -> Result<serde_json::Value, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::db::Db;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let db = use_context::<Extension<Arc<Db>>>()
-            .ok_or_else(|| ServerFnError::new("DB not found"))?
-            .0
-            .clone();
-
-        db.get_stats()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        unreachable!()
-    }
-}
-
-#[server(RunScan, "/api")]
-pub async fn run_scan() -> Result<(), ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::config::Config;
-        use crate::Agent;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let agent = use_context::<Extension<Arc<Agent>>>()
-            .ok_or_else(|| ServerFnError::new("Agent not found"))?
-            .0
-            .clone();
-        let config = use_context::<Extension<Arc<Config>>>()
-            .ok_or_else(|| ServerFnError::new("Config not found"))?
-            .0
-            .clone();
-
-        let dirs = config
-            .scanner
-            .directories
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        agent
-            .scan_and_enqueue(dirs)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        unreachable!()
-    }
-}
-
-#[server(CancelJob, "/api")]
-pub async fn cancel_job(job_id: i64) -> Result<(), ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::Transcoder;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let transcoder = use_context::<Extension<Arc<Transcoder>>>()
-            .ok_or_else(|| ServerFnError::new("Transcoder not found"))?
-            .0
-            .clone();
-
-        if transcoder.cancel_job(job_id) {
-            Ok(())
-        } else {
-            Err(ServerFnError::new("Job not running or not found"))
-        }
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = job_id;
-        unreachable!()
-    }
-}
-
-#[server(RestartJob, "/api")]
-pub async fn restart_job(job_id: i64) -> Result<(), ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::db::{Db, JobState};
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let db = use_context::<Extension<Arc<Db>>>()
-            .ok_or_else(|| ServerFnError::new("DB not found"))?
-            .0
-            .clone();
-
-        db.update_job_status(job_id, JobState::Queued)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = job_id;
-        unreachable!()
-    }
-}
-
-#[server(RestartAllFailed, "/api")]
-pub async fn restart_all_failed() -> Result<u64, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::db::{Db, JobState};
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let db = use_context::<Extension<Arc<Db>>>()
-            .ok_or_else(|| ServerFnError::new("DB not found"))?
-            .0
-            .clone();
-
-        db.batch_update_status(JobState::Failed, JobState::Queued)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        unreachable!()
-    }
-}
-
-#[server(SetJobPriority, "/api")]
-pub async fn set_job_priority(job_id: i64, priority: i32) -> Result<(), ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::db::Db;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let db = use_context::<Extension<Arc<Db>>>()
-            .ok_or_else(|| ServerFnError::new("DB not found"))?
-            .0
-            .clone();
-
-        db.set_job_priority(job_id, priority)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = (job_id, priority);
-        unreachable!()
-    }
-}
-
-#[server(GetConfig, "/api")]
-pub async fn get_config() -> Result<crate::config::Config, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use crate::config::Config;
-        use axum::Extension;
-        use std::sync::Arc;
-
-        let config = use_context::<Extension<Arc<Config>>>()
-            .ok_or_else(|| ServerFnError::new("Config not found"))?
-            .0
-            .clone();
-
-        Ok((*config).clone())
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        unreachable!()
-    }
-}
 
 #[component]
-pub fn App() -> impl IntoView {
-    provide_meta_context();
-
-    view! {
-        <Stylesheet id="leptos" href="/pkg/alchemist.css"/>
-        <Title text="Alchemist - Transcoding Engine"/>
-
-        <Router>
-            <main class="min-h-screen bg-[#020617] text-slate-100 font-sans p-4 md:p-12">
-                <Routes>
-                    <Route path="" view=Dashboard/>
-                </Routes>
-            </main>
-        </Router>
-    }
-}
-
-#[component]
-fn Dashboard() -> impl IntoView {
+pub fn Dashboard() -> impl IntoView {
     let jobs = create_resource(
         || (),
         |_| async move { get_jobs().await.unwrap_or_default() },
@@ -339,6 +122,7 @@ fn Dashboard() -> impl IntoView {
                             <tr>
                                 <th class="px-6 py-4">"ID"</th>
                                 <th class="px-6 py-4">"File & Progress"</th>
+                                <th class="px-6 py-4">"Priority"</th>
                                 <th class="px-6 py-4">"Status"</th>
                                 <th class="px-6 py-4">"Actions"</th>
                             </tr>
@@ -381,6 +165,11 @@ fn Dashboard() -> impl IntoView {
                                                     } else {
                                                         view! {}.into_view()
                                                     }}
+                                                </td>
+                                                <td class="px-6 py-4">
+                                                    <span class="text-xs font-mono text-slate-400">
+                                                        "P" {job.priority}
+                                                    </span>
                                                 </td>
                                                 <td class="px-6 py-4">
                                                     <span class=format!("px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-tight {}", status_cls)>
@@ -447,47 +236,6 @@ fn Dashboard() -> impl IntoView {
                     </div>
                 }
             })}
-        </div>
-    }
-}
-
-#[component]
-fn StatCard(label: &'static str, value: String, color: &'static str) -> impl IntoView {
-    let (gradient, icon_color, glow) = match color {
-        "blue" => (
-            "from-blue-500 to-indigo-600",
-            "text-blue-400",
-            "shadow-blue-500/10",
-        ),
-        "emerald" => (
-            "from-emerald-500 to-teal-600",
-            "text-emerald-400",
-            "shadow-emerald-500/10",
-        ),
-        "amber" => (
-            "from-amber-500 to-orange-600",
-            "text-amber-400",
-            "shadow-amber-500/10",
-        ),
-        "rose" => (
-            "from-rose-500 to-pink-600",
-            "text-rose-400",
-            "shadow-rose-500/10",
-        ),
-        _ => (
-            "from-slate-500 to-slate-600",
-            "text-slate-400",
-            "shadow-slate-500/10",
-        ),
-    };
-
-    view! {
-        <div class=format!("bg-slate-900/40 backdrop-blur-sm border border-slate-800/60 p-7 rounded-2xl transition-all duration-300 group hover:bg-slate-800/60 hover:-translate-y-1 shadow-xl {}", glow)>
-            <div class=format!("{} text-[10px] font-black uppercase tracking-[0.2em] mb-4 opacity-80", icon_color)>{label}</div>
-            <div class=format!("text-5xl font-black bg-gradient-to-br {} bg-clip-text text-transparent drop-shadow-sm", gradient)>
-                {value}
-            </div>
-            <div class="mt-4 h-1 w-0 group-hover:w-full bg-gradient-to-r from-transparent via-slate-700/50 to-transparent transition-all duration-500"></div>
         </div>
     }
 }
