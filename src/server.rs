@@ -1,23 +1,24 @@
 #![cfg(feature = "ssr")]
-use crate::Transcoder;
-use crate::Agent;
 use crate::app::*;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db};
 use crate::error::Result;
+use crate::Agent;
+use crate::Transcoder;
 use axum::{
-    Router,
     response::sse::{Event as AxumEvent, Sse},
     routing::{get, post},
+    Router,
 };
 use futures::stream::Stream;
 use leptos::*;
-use leptos_axum::{LeptosRoutes, generate_route_list};
+use leptos_axum::{generate_route_list, LeptosRoutes};
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+use tower_http::services::ServeDir;
 use tracing::info;
 
 pub async fn run_server(
@@ -32,7 +33,13 @@ pub async fn run_server(
     let addr = leptos_options.site_addr;
     let routes = generate_route_list(App);
 
+    let pkg_path = format!(
+        "{}/{}",
+        leptos_options.site_root, leptos_options.site_pkg_dir
+    );
     let app = Router::new()
+        .nest_service("/pkg", ServeDir::new(pkg_path))
+        .nest_service("/public", ServeDir::new("public"))
         .route("/api/events", get(sse_handler))
         .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
         .leptos_routes(&leptos_options, routes, App)
