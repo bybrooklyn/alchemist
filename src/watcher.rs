@@ -34,7 +34,7 @@ impl FileWatcher {
         let (tx, mut rx) = mpsc::channel::<PathBuf>(100);
         let scanner = Scanner::new();
         let extensions: HashSet<_> = scanner
-            .extensions()
+            .extensions
             .iter()
             .map(|s| s.to_lowercase())
             .collect();
