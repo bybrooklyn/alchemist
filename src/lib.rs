@@ -3,9 +3,15 @@ pub mod analyzer;
 pub mod config;
 pub mod db;
 pub mod error;
+#[cfg(feature = "ssr")]
+pub mod ffmpeg;
 pub mod hardware;
 #[cfg(feature = "ssr")]
+pub mod notifications;
+#[cfg(feature = "ssr")]
 pub mod scanner;
+#[cfg(feature = "ssr")]
+pub mod watcher;
 
 #[cfg(feature = "ssr")]
 pub mod orchestrator;
@@ -20,9 +26,15 @@ pub mod app;
 
 pub use db::AlchemistEvent;
 #[cfg(feature = "ssr")]
-pub use orchestrator::Orchestrator;
+pub use ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators, QualityProfile};
 #[cfg(feature = "ssr")]
-pub use processor::Processor;
+pub use notifications::NotificationService;
+#[cfg(feature = "ssr")]
+pub use orchestrator::Transcoder;
+#[cfg(feature = "ssr")]
+pub use processor::Agent;
+#[cfg(feature = "ssr")]
+pub use watcher::FileWatcher;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
