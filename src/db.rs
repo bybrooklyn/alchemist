@@ -1,13 +1,11 @@
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "ssr")]
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "ssr", derive(sqlx::Type))]
-#[cfg_attr(feature = "ssr", sqlx(rename_all = "lowercase"))]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(rename_all = "lowercase")]
 pub enum JobState {
     Queued,
     Analyzing,
@@ -58,8 +56,7 @@ impl std::fmt::Display for JobState {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Job {
     pub id: i64,
     pub input_path: String,
@@ -73,8 +70,26 @@ pub struct Job {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
+impl Job {
+    pub fn is_active(&self) -> bool {
+        matches!(self.status, JobState::Encoding | JobState::Analyzing | JobState::Resuming)
+    }
+
+    pub fn status_class(&self) -> &'static str {
+        match self.status {
+            JobState::Completed => "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+            JobState::Encoding | JobState::Analyzing | JobState::Resuming => "text-[rgb(var(--brand-primary))] border-[rgb(var(--brand-primary))/0.2] bg-[rgb(var(--brand-primary))/0.1]",
+            JobState::Failed | JobState::Cancelled => "bg-rose-500/10 text-rose-400 border-rose-500/20",
+            _ => "bg-slate-500/10 text-slate-400 border-slate-500/20",
+        }
+    }
+
+    pub fn progress_fixed(&self) -> String {
+        format!("{:.1}", self.progress)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Decision {
     pub id: i64,
     pub job_id: i64,
@@ -83,12 +98,10 @@ pub struct Decision {
     pub created_at: DateTime<Utc>,
 }
 
-#[cfg(feature = "ssr")]
 pub struct Db {
     pool: SqlitePool,
 }
 
-#[cfg(feature = "ssr")]
 impl Db {
     pub async fn new(db_path: &str) -> Result<Self> {
         let options = SqliteConnectOptions::new()
@@ -105,6 +118,7 @@ impl Db {
     }
 
     async fn init(&self) -> Result<()> {
+// ... existing code ...
         // Jobs table with priority and progress
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS jobs (

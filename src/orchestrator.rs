@@ -101,7 +101,7 @@ impl Transcoder {
                                 let _ = tx.send(crate::db::AlchemistEvent::Log { job_id, message: line.clone() });
 
                                 if let Some(progress) = FFmpegProgress::parse_line(&line) {
-                                    let percentage = progress.percentage(total_duration);
+                                    let percentage: f64 = progress.percentage(total_duration);
                                     let _ = tx.send(crate::db::AlchemistEvent::Progress {
                                         job_id,
                                         percentage,

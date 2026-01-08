@@ -1,7 +1,6 @@
 use crate::error::{AlchemistError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-#[cfg(feature = "ssr")]
 use std::process::Command;
 // use tracing::info; // Removed unused import
 
@@ -31,10 +30,8 @@ pub struct Format {
     pub bit_rate: String,
 }
 
-#[cfg(feature = "ssr")]
 pub struct Analyzer;
 
-#[cfg(feature = "ssr")]
 impl Analyzer {
     pub fn probe(path: &Path) -> Result<MediaMetadata> {
         let output = Command::new("ffprobe")

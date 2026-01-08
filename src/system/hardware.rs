@@ -1,6 +1,5 @@
 use crate::error::Result;
 use std::path::Path;
-#[cfg(feature = "ssr")]
 use std::process::Command;
 use tracing::{error, info, warn};
 
@@ -30,7 +29,6 @@ pub struct HardwareInfo {
     pub device_path: Option<String>,
 }
 
-#[cfg(feature = "ssr")]
 pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
     info!("=== Hardware Detection Starting ===");
     info!("OS: {}", std::env::consts::OS);

@@ -177,15 +177,10 @@ async fn main() -> Result<()> {
         info!("Waiting for jobs to complete...");
         loop {
             let stats = db.get_stats().await?;
-            let processing = stats
-                .get("processing")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let active = stats.as_object().map(|m| m.iter().filter(|(k, _)| ["encoding", "analyzing", "resuming"].contains(&k.as_str())).map(|(_, v)| v.as_i64().unwrap_or(0)).sum::<i64>()).unwrap_or(0);
             let queued = stats.get("queued").and_then(|v| v.as_i64()).unwrap_or(0);
-            let analyzing = stats.get("analyzing").and_then(|v| v.as_i64()).unwrap_or(0);
-            let encoding = stats.get("encoding").and_then(|v| v.as_i64()).unwrap_or(0);
 
-            if processing + queued + analyzing + encoding == 0 {
+            if active + queued == 0 {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

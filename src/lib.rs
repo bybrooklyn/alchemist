@@ -1,41 +1,16 @@
-#[cfg(feature = "ssr")]
 pub mod media;
 pub mod system;
-
 pub mod config;
 pub mod db;
 pub mod error;
-
-#[cfg(feature = "ssr")]
 pub mod orchestrator;
-#[cfg(feature = "ssr")]
 pub mod server;
-#[cfg(feature = "ssr")]
 pub mod wizard;
-
-pub mod app;
 
 pub use config::QualityProfile;
 pub use db::AlchemistEvent;
-#[cfg(feature = "ssr")]
 pub use media::ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators};
-#[cfg(feature = "ssr")]
 pub use media::processor::Agent;
-#[cfg(feature = "ssr")]
 pub use orchestrator::Transcoder;
-#[cfg(feature = "ssr")]
 pub use system::notifications::NotificationService;
-#[cfg(feature = "ssr")]
 pub use system::watcher::FileWatcher;
-
-#[cfg(feature = "hydrate")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn hydrate() {
-    use crate::app::*;
-    use leptos::*;
-
-    _ = console_log::init_with_level(log::Level::Debug);
-    console_error_panic_hook::set_once();
-
-    mount_to_body(App);
-}
