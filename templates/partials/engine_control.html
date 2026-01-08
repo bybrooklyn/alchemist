@@ -1,0 +1,13 @@
+<div id="engine-control">
+    {% if engine_paused %}
+    <button hx-post="/api/engine/resume" hx-target="#engine-control" hx-swap="outerHTML"
+        class="btn border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10">
+        ▶ Resume Engine
+    </button>
+    {% else %}
+    <button hx-post="/api/engine/pause" hx-target="#engine-control" hx-swap="outerHTML"
+        class="btn border border-amber-500/50 text-amber-400 hover:bg-amber-500/10">
+        ⏸ Pause Engine
+    </button>
+    {% endif %}
+</div>
