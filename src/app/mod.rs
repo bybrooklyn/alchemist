@@ -18,32 +18,28 @@ pub fn App() -> impl IntoView {
         <Title text="Alchemist - Transcoding Engine"/>
 
         <Router>
-            <div class="flex min-h-screen bg-[#020617] text-slate-100 font-sans">
-                <aside class="w-64 border-r border-slate-800/60 bg-slate-900/30 backdrop-blur-xl hidden md:flex flex-col sticky top-0 h-screen">
-                    <div class="p-8">
-                        <div class="flex items-center gap-3 mb-12">
-                            <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-                                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.644.322a6 6 0 01-3.86.517l-2.387-.477a2 2 0 00-1.022.547l-1.168 1.168a2 2 0 001.61 3.412h13.44a2 2 0 001.61-3.412l-1.168-1.168zM12 5a3 3 0 100 6 3 3 0 000-6z"></path></svg>
-                            </div>
-                            <span class="text-xl font-bold tracking-tight text-slate-100">"Alchemist"</span>
+            <div class="app-container">
+                <aside class="sidebar">
+                    <div class="logo-container">
+                        <div class="logo-icon">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.644.322a6 6 0 01-3.86.517l-2.387-.477a2 2 0 00-1.022.547l-1.168 1.168a2 2 0 001.61 3.412h13.44a2 2 0 001.61-3.412l-1.168-1.168zM12 5a3 3 0 100 6 3 3 0 000-6z"></path></svg>
                         </div>
-
-                        <nav class="space-y-1">
-                            <SidebarLink href="/" icon="dashboard" label="Dashboard" />
-                            <SidebarLink href="/settings" icon="settings" label="Settings" />
-                        </nav>
+                        <span class="logo-text">"Alchemist"</span>
                     </div>
 
-                    <div class="mt-auto p-8 border-t border-slate-800/60">
-                         <div class="flex items-center gap-3">
-                             <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                             <span class="text-xs font-medium text-slate-400">"Engine Online"</span>
-                         </div>
+                    <nav class="nav-links">
+                        <SidebarLink href="/" icon="dashboard" label="Dashboard" />
+                        <SidebarLink href="/settings" icon="settings" label="Settings" />
+                    </nav>
+
+                    <div class="engine-status">
+                         <div class="pulse"></div>
+                         <span class="text-xs font-medium text-slate-400">"Engine Online"</span>
                     </div>
                 </aside>
 
                 // Main Content
-                <main class="flex-1 p-4 md:p-12 overflow-y-auto">
+                <main class="main-content">
                     <Routes>
                         <Route path="" view=Dashboard/>
                         <Route path="/settings" view=Settings/>
@@ -65,10 +61,10 @@ fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> i
     view! {
         <A
             href=href
-            class="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 text-slate-400 hover:text-white hover:bg-slate-800/50 group"
-            active_class="bg-blue-600/10 !text-blue-400 font-semibold border border-blue-500/20 shadow-inner"
+            class="nav-link"
+            active_class="active"
         >
-            <svg class="w-5 h-5 opacity-70 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {icon_svg}
             </svg>
             {label}

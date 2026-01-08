@@ -76,25 +76,23 @@ pub fn Dashboard() -> impl IntoView {
     let restart_action = create_server_action::<RestartJob>();
 
     view! {
-        <div class="max-w-6xl mx-auto">
+        <div class="dashboard-container">
             <header class="flex justify-between items-center mb-12">
                 <div>
-                    <h1 class="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
-                        "Alchemist"
-                    </h1>
+                    <h1 class="text-4xl">"Dashboard"</h1>
                     <p class="text-slate-400 mt-1">"Next-Gen Transcoding Engine"</p>
                 </div>
                 <div class="flex gap-4">
                     <button
                         on:click=move |_| scan_action.dispatch(RunScan {})
-                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-all shadow-lg shadow-blue-900/20 active:scale-95"
+                        class="btn btn-primary"
                     >
                         {move || if scan_action.pending().get() { "Scanning..." } else { "Scan Now" }}
                     </button>
                 </div>
             </header>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+            <div class="grid-stats">
                  {move || {
                      let s = stats.get().flatten().unwrap_or_else(|| serde_json::json!({}));
                      let total = s.as_object().map(|m| m.values().filter_map(|v| v.as_i64()).sum::<i64>()).unwrap_or(0);
@@ -111,10 +109,10 @@ pub fn Dashboard() -> impl IntoView {
                  }}
             </div>
 
-            <div class="bg-slate-900/40 backdrop-blur-md border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl">
-                <div class="px-8 py-5 border-b border-slate-800/60 bg-slate-900/50 flex justify-between items-center">
-                    <h2 class="text-xl font-bold text-slate-100 tracking-tight">"Engine Activity"</h2>
-                    <span class="text-xs font-medium text-slate-500 bg-slate-800/50 px-3 py-1 rounded-full border border-slate-700/50">"v0.1.0"</span>
+            <div class="glass-card" style="padding: 0; overflow: hidden;">
+                <div class="px-8 py-5 border-b border-slate-800 flex justify-between items-center">
+                    <h2 class="text-xl">"Engine Activity"</h2>
+                    <span class="text-xs font-medium text-slate-500 bg-slate-800 px-3 py-1 rounded-full">"v0.1.0"</span>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left">

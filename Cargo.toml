@@ -82,16 +82,6 @@ site-pkg-dir = "pkg"
 # [Optional] The source CSS file. If it ends with .sass or .scss then it will be compiled by dart-sass into main.css
 style-file = "style/main.css"
 
-# [Optional] The tailwind input file.
-#
-# Optional, defaults to "tailwind.config.js" if tailwind is enabled.
-tailwind-input-file = "style/main.css"
-
-# [Optional] The tailwind config file.
-#
-# Optional, defaults to "tailwind.config.js" if tailwind is enabled.
-tailwind-config-file = "tailwind.config.js"
-
 # [Optional] Assets source directory. All files found here will be copied and synchronized to site-root.
 # The assets-dir cannot have a sub directory with the same name/path as site-pkg-dir.
 assets-dir = "public"
