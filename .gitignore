@@ -1,3 +1,5 @@
 /target
 config.toml
 error.txt
+/node_modules
+public/pkg/alchemist.css

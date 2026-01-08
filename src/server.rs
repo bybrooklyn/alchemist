@@ -37,9 +37,11 @@ pub async fn run_server(
         "{}/{}",
         leptos_options.site_root, leptos_options.site_pkg_dir
     );
+    let assets_path = leptos_options.site_root.clone();
+
     let app = Router::new()
         .nest_service("/pkg", ServeDir::new(pkg_path))
-        .nest_service("/public", ServeDir::new("public"))
+        .nest_service("/public", ServeDir::new(assets_path))
         .route("/api/events", get(sse_handler))
         .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
         .leptos_routes(&leptos_options, routes, App)
