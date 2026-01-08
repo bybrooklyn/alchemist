@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard-container">
+    <header class="flex justify-between items-center mb-12">
+        <div>
+            <h1 class="text-4xl">Dashboard</h1>
+            <p class="text-slate-400 mt-1">Next-Gen Transcoding Engine</p>
+        </div>
+        <div class="flex gap-4">
+            <button hx-post="/api/scan" hx-swap="none" class="btn btn-primary">
+                Scan Now
+            </button>
+        </div>
+    </header>
+
+    <div class="grid-stats" id="stats-container" hx-get="/api/stats" hx-trigger="every 5s">
+        {% include "partials/stats.html" %}
+    </div>
+
+    <div class="glass-card" style="padding: 0; overflow: hidden;">
+        <div class="px-8 py-5 border-b border-slate-800 flex justify-between items-center">
+            <h2 class="text-xl">Engine Activity</h2>
+            <span class="text-xs font-medium text-slate-500 bg-slate-800 px-3 py-1 rounded-full">v0.1.0</span>
+        </div>
+        <div class="overflow-x-auto" id="jobs-table-container" hx-get="/api/jobs/table" hx-trigger="every 2s">
+            {% include "partials/jobs_table.html" %}
+        </div>
+    </div>
+</div>
+{% endblock %}

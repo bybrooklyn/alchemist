@@ -1,11 +1,8 @@
-#[cfg(feature = "ssr")]
 use rayon::prelude::*;
 use std::path::PathBuf;
-#[cfg(feature = "ssr")]
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tracing::{debug, info};
-#[cfg(feature = "ssr")]
 use walkdir::WalkDir;
 
 #[derive(Clone)]
@@ -14,12 +11,10 @@ pub struct ScannedFile {
     pub mtime: SystemTime,
 }
 
-#[cfg(feature = "ssr")]
 pub struct Scanner {
     pub extensions: Vec<String>,
 }
 
-#[cfg(feature = "ssr")]
 impl Default for Scanner {
     fn default() -> Self {
         Self::new()

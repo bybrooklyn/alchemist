@@ -1,0 +1,16 @@
+<div class="stat-card">
+    <div class="stat-label">Total Jobs</div>
+    <div class="stat-value" style="color: rgb(86, 152, 225)">{{ stats.total }}</div>
+</div>
+<div class="stat-card">
+    <div class="stat-label">Completed</div>
+    <div class="stat-value" style="color: rgb(var(--status-success))">{{ stats.completed }}</div>
+</div>
+<div class="stat-card">
+    <div class="stat-label">Active</div>
+    <div class="stat-value" style="color: rgb(var(--status-warning))">{{ stats.active }}</div>
+</div>
+<div class="stat-card">
+    <div class="stat-label">Failed</div>
+    <div class="stat-value" style="color: rgb(var(--status-error))">{{ stats.failed }}</div>
+</div>
