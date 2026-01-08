@@ -1,9 +1,9 @@
-use crate::analyzer::Analyzer;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::Result;
-use crate::hardware::HardwareInfo;
-use crate::scanner::Scanner;
+use crate::media::analyzer::Analyzer;
+use crate::media::scanner::Scanner;
+use crate::system::hardware::HardwareInfo;
 use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,13 +137,13 @@ impl Agent {
             Analyzer::should_transcode(&file_path, &metadata, &self.config);
 
         if !should_encode {
-            info!("Decision: SKIP Job {} - {}", job.id, reason);
+            info!("Decision: SKIP Job {} - {}", job.id, &reason);
             let _ = self.db.add_decision(job.id, "skip", &reason).await;
             self.update_job_state(job.id, JobState::Skipped).await?;
             return Ok(());
         }
 
-        info!("Decision: ENCODE Job {} - {}", job.id, reason);
+        info!("Decision: ENCODE Job {} - {}", job.id, &reason);
         let _ = self.db.add_decision(job.id, "encode", &reason).await;
         let _ = self.tx.send(AlchemistEvent::Decision {
             job_id: job.id,

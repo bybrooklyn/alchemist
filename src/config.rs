@@ -15,17 +15,14 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum QualityProfile {
     Quality,
+    #[default]
     Balanced,
     Speed,
 }
 
-impl Default for QualityProfile {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 impl QualityProfile {
     pub fn as_str(&self) -> &'static str {
@@ -74,8 +71,10 @@ impl QualityProfile {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum CpuPreset {
     Slow,
+    #[default]
     Medium,
     Fast,
     Faster,
@@ -107,11 +106,6 @@ impl std::fmt::Display for CpuPreset {
     }
 }
 
-impl Default for CpuPreset {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScannerConfig {
@@ -215,7 +209,7 @@ impl Config {
 
     /// Validate configuration values
     pub fn validate(&self) -> Result<()> {
-        // Enums automatically handle valid values via Serde, 
+        // Enums automatically handle valid values via Serde,
         // so we don't need manual string checks for presets/profiles anymore.
 
         // Validate thresholds

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "alchemist_lib"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -68,7 +69,7 @@ output-name = "alchemist"
 
 # The package where the secondary binary (include-path) is located
 # If the secondary binary is in the same package, this should be the same as the bin-package
-lib-package = "alchemist"
+lib-package = "alchemist_lib"
 
 # The site root folder is where cargo-leptos generate all output. 
 # WARNING: all content of this folder will be erased on a rebuild. 

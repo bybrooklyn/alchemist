@@ -1,5 +1,6 @@
-use alchemist::error::Result;
-use alchemist::{config, db, hardware, Transcoder, Agent};
+use alchemist_lib::error::Result;
+use alchemist_lib::system::hardware;
+use alchemist_lib::{config, db, Agent, Transcoder};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ async fn main() -> Result<()> {
         info!("No configuration file found. Starting configuration wizard...");
         info!("");
 
-        match alchemist::wizard::ConfigWizard::run(config_path) {
+        match alchemist_lib::wizard::ConfigWizard::run(config_path) {
             Ok(cfg) => {
                 info!("");
                 info!("Configuration complete! Continuing with server startup...");
@@ -127,7 +128,7 @@ async fn main() -> Result<()> {
         if !config.hardware.allow_cpu_encoding {
             error!("CPU encoding is disabled in configuration.");
             error!("Set hardware.allow_cpu_encoding = true in config.toml to enable CPU fallback.");
-            return Err(alchemist::error::AlchemistError::Config(
+            return Err(alchemist_lib::error::AlchemistError::Config(
                 "CPU encoding disabled".into(),
             ));
         }
@@ -159,14 +160,14 @@ async fn main() -> Result<()> {
 
     if args.server {
         info!("Starting web server...");
-        alchemist::server::run_server(db, config, agent, transcoder, tx).await?;
+        alchemist_lib::server::run_server(db, config, agent, transcoder, tx).await?;
     } else {
         // CLI Mode
         if args.directories.is_empty() {
             error!(
                 "No directories provided. Usage: alchemist <DIRECTORIES>... or alchemist --server"
             );
-            return Err(alchemist::error::AlchemistError::Config(
+            return Err(alchemist_lib::error::AlchemistError::Config(
                 "Missing directories for CLI mode".into(),
             ));
         }
