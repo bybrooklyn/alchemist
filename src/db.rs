@@ -210,7 +210,7 @@ impl Db {
         // Stable mtime representation (seconds + nanos)
         let mtime_hash = match mtime.duration_since(std::time::UNIX_EPOCH) {
             Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
-            Err(_) => format!("0.0"), // Fallback for very old files/clocks
+            Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
         };
 
         sqlx::query(

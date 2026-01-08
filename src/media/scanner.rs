@@ -20,6 +20,12 @@ pub struct Scanner {
 }
 
 #[cfg(feature = "ssr")]
+impl Default for Scanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Scanner {
     pub fn new() -> Self {
         Self {

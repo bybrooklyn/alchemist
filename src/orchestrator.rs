@@ -1,7 +1,7 @@
 use crate::config::{CpuPreset, QualityProfile};
 use crate::error::{AlchemistError, Result};
-use crate::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress};
-use crate::hardware::HardwareInfo;
+use crate::media::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress};
+use crate::system::hardware::HardwareInfo;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -12,6 +12,12 @@ use tracing::{error, info, warn};
 
 pub struct Transcoder {
     cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
+}
+
+impl Default for Transcoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Transcoder {
@@ -39,7 +45,7 @@ impl Transcoder {
         quality_profile: QualityProfile,
         cpu_preset: CpuPreset,
         dry_run: bool,
-        metadata: &crate::analyzer::MediaMetadata,
+        metadata: &crate::media::analyzer::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
     ) -> Result<()> {
         if dry_run {
@@ -123,7 +129,7 @@ impl Transcoder {
             }
         }
 
-        let status = child.wait().await?;
+        let status: std::process::ExitStatus = child.wait().await?;
 
         if let Some(id) = job_id {
             self.cancel_channels.lock().unwrap().remove(&id);

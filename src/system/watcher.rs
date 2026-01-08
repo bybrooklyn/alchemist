@@ -4,7 +4,7 @@
 
 use crate::db::Db;
 use crate::error::{AlchemistError, Result};
-use crate::scanner::Scanner;
+use crate::media::scanner::Scanner;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -33,7 +33,7 @@ impl FileWatcher {
     pub async fn start(&self) -> Result<()> {
         let (tx, mut rx) = mpsc::channel::<PathBuf>(100);
         let scanner = Scanner::new();
-        let extensions: HashSet<_> = scanner
+        let extensions: HashSet<String> = scanner
             .extensions
             .iter()
             .map(|s| s.to_lowercase())

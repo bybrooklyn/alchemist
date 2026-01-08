@@ -3,7 +3,7 @@
 
 use crate::config::{CpuPreset, QualityProfile};
 use crate::error::{AlchemistError, Result};
-use crate::hardware::{HardwareInfo, Vendor};
+use crate::system::hardware::{HardwareInfo, Vendor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,7 +22,9 @@ impl HardwareAccelerators {
         let output = Command::new("ffmpeg")
             .args(["-hide_banner", "-hwaccels"])
             .output()
-            .map_err(|e| AlchemistError::FFmpeg(format!("Failed to run ffmpeg -hwaccels: {}", e)))?;
+            .map_err(|e| {
+                AlchemistError::FFmpeg(format!("Failed to run ffmpeg -hwaccels: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut available = HashSet::new();
@@ -72,7 +74,9 @@ impl EncoderCapabilities {
         let output = Command::new("ffmpeg")
             .args(["-hide_banner", "-encoders"])
             .output()
-            .map_err(|e| AlchemistError::FFmpeg(format!("Failed to run ffmpeg -encoders: {}", e)))?;
+            .map_err(|e| {
+                AlchemistError::FFmpeg(format!("Failed to run ffmpeg -encoders: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut video_encoders = HashSet::new();
@@ -244,18 +248,18 @@ pub struct FFmpegProgress {
 impl FFmpegProgress {
     /// Parse a line of FFmpeg stderr for progress info
     pub fn parse_line(line: &str) -> Option<Self> {
-        // FFmpeg progress can come in multiple formats. 
+        // FFmpeg progress can come in multiple formats.
         // We look for the standard "frame=... fps=... time=..." format.
         if !line.contains("time=") && !line.contains("out_time=") {
             return None;
         }
 
         let mut progress = Self::default();
-        
+
         // Clean up the line (remove extra spaces)
         let line = line.replace('=', "= ");
         let parts: Vec<&str> = line.split_whitespace().collect();
-        
+
         for i in 0..parts.len() {
             match parts[i] {
                 "frame=" => {
@@ -340,11 +344,15 @@ impl QualityScore {
         let output = Command::new("ffmpeg")
             .args([
                 "-hide_banner",
-                "-i", encoded.to_str().unwrap_or(""),
-                "-i", original.to_str().unwrap_or(""),
-                "-lavfi", "libvmaf=log_fmt=json:log_path=-",
-                "-f", "null",
-                "-"
+                "-i",
+                encoded.to_str().unwrap_or(""),
+                "-i",
+                original.to_str().unwrap_or(""),
+                "-lavfi",
+                "libvmaf=log_fmt=json:log_path=-",
+                "-f",
+                "null",
+                "-",
             ])
             .output()
             .map_err(|e| AlchemistError::FFmpeg(format!("Failed to run VMAF: {}", e)))?;
@@ -450,7 +458,7 @@ pub fn verify_ffmpeg() -> Result<String> {
 
     let version = String::from_utf8_lossy(&output.stdout);
     let first_line = version.lines().next().unwrap_or("unknown");
-    
+
     info!("FFmpeg version: {}", first_line);
     Ok(first_line.to_string())
 }
@@ -461,9 +469,10 @@ mod tests {
 
     #[test]
     fn test_progress_parsing() {
-        let line = "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x";
+        let line =
+            "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x";
         let progress = FFmpegProgress::parse_line(line).unwrap();
-        
+
         assert_eq!(progress.frame, 100);
         assert_eq!(progress.fps, 25.0);
         assert_eq!(progress.time, "00:00:04.00");

@@ -38,7 +38,7 @@ pub struct Analyzer;
 impl Analyzer {
     pub fn probe(path: &Path) -> Result<MediaMetadata> {
         let output = Command::new("ffprobe")
-            .args(&[
+            .args([
                 "-v",
                 "quiet",
                 "-print_format",

@@ -133,7 +133,7 @@ pub fn Dashboard() -> impl IntoView {
                                         let status_str = job.status.to_string();
                                         let status_cls = match job.status {
                                             JobState::Completed => "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-                                            JobState::Encoding | JobState::Analyzing => "bg-amber-500/10 text-amber-400 border-amber-500/20",
+                                            JobState::Encoding | JobState::Analyzing => "text-[rgb(var(--brand-primary))] border-[rgb(var(--brand-primary))/0.2] bg-[rgb(var(--brand-primary))/0.1]",
                                             JobState::Failed | JobState::Cancelled => "bg-rose-500/10 text-rose-400 border-rose-500/20",
                                             _ => "bg-slate-500/10 text-slate-400 border-slate-500/20",
                                         };
@@ -142,7 +142,7 @@ pub fn Dashboard() -> impl IntoView {
                                         let is_active = job.status == JobState::Encoding || job.status == JobState::Analyzing;
 
                                         view! {
-                                            <tr class="hover:bg-slate-800/30 transition-colors group">
+                                            <tr class="transition-colors group border-b border-slate-800/30">
                                                 <td class="px-6 py-4 font-mono text-xs text-slate-600">"#" {id}</td>
                                                 <td class="px-6 py-4">
                                                     <div class="font-medium truncate max-w-sm text-slate-200">{job.input_path}</div>
@@ -152,11 +152,11 @@ pub fn Dashboard() -> impl IntoView {
                                                         view! {
                                                             <div class="mt-3 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
                                                                 <div
-                                                                    class="bg-blue-500 h-full transition-all duration-500 ease-out"
-                                                                    style=format!("width: {}%", prog())
+                                                                    class="h-full transition-all duration-500 ease-out"
+                                                                    style=format!("width: {}%; background-color: rgb(var(--brand-primary))", prog())
                                                                 ></div>
                                                             </div>
-                                                            <div class="text-[10px] text-blue-400 mt-1 font-mono uppercase tracking-wider">
+                                                            <div class="text-[10px] mt-1 font-mono uppercase tracking-wider" style="color: rgb(var(--brand-primary))">
                                                                 {move || format!("{:.1}%", prog())}
                                                             </div>
                                                         }.into_view()
@@ -180,13 +180,15 @@ pub fn Dashboard() -> impl IntoView {
                                                             view! {
                                                                 <button
                                                                     on:click=move |_| cancel_action.dispatch(CancelJob { job_id: id })
-                                                                    class="text-xs text-rose-400 hover:text-rose-300 font-medium px-2 py-1 rounded hover:bg-rose-500/10 transition-colors"
+                                                                    class="text-xs font-medium px-2 py-1 rounded transition-colors"
+                                                                    style="color: rgb(var(--status-error));"
                                                                 >
                                                                     "Cancel"
                                                                 </button>
                                                                 <button
                                                                     on:click=move |_| set_active_log.set(Some((id, String::new())))
-                                                                    class="text-xs text-slate-400 hover:text-slate-200 font-medium px-2 py-1 rounded hover:bg-slate-500/10 transition-colors"
+                                                                    class="text-xs font-medium px-2 py-1 rounded transition-colors"
+                                                                    style="color: rgb(var(--text-secondary));"
                                                                 >
                                                                     "Logs"
                                                                 </button>
@@ -195,7 +197,8 @@ pub fn Dashboard() -> impl IntoView {
                                                             view! {
                                                                 <button
                                                                     on:click=move |_| restart_action.dispatch(RestartJob { job_id: id })
-                                                                    class="text-xs text-blue-400 hover:text-blue-300 font-medium px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                                                                    class="text-xs font-medium px-2 py-1 rounded transition-colors"
+                                                                    style="color: rgb(var(--brand-primary));"
                                                                 >
                                                                     "Restart"
                                                                 </button>

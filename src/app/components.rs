@@ -2,21 +2,20 @@ use leptos::*;
 
 #[component]
 pub fn StatCard(label: &'static str, value: String, color: &'static str) -> impl IntoView {
-    let color_class = match color {
-        "blue" => "text-blue-400",
-        "emerald" => "text-emerald-400",
-        "amber" => "text-amber-400",
-        "rose" => "text-rose-400",
-        _ => "text-slate-400",
+    let color_style = match color {
+        "blue" => "color: rgb(var(--brand-primary))",
+        "emerald" => "color: rgb(var(--status-success))",
+        "amber" => "color: rgb(var(--status-warning))",
+        "rose" => "color: rgb(var(--status-error))",
+        _ => "color: rgb(var(--text-secondary))",
     };
 
     view! {
-        <div class="glass-card stat-card group">
-            <div class=format!("stat-label {}", color_class)>{label}</div>
+        <div class="stat-card">
+            <div class="stat-label" style=color_style>{label}</div>
             <div class="stat-value">
                 {value}
             </div>
-            <div class="mt-4 h-1 w-0 group-hover:w-full bg-gradient-to-r from-transparent via-slate-700/50 to-transparent transition-all duration-500"></div>
         </div>
     }
 }
