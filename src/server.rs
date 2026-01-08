@@ -7,7 +7,9 @@ use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
     extract::{Path, State},
-    response::sse::{Event as AxumEvent, Sse},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{sse::{Event as AxumEvent, Sse}, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -50,6 +52,7 @@ pub async fn run_server(
     let app = Router::new()
         .route("/", get(dashboard_handler))
         .route("/settings", get(settings_handler))
+        .route("/analytics", get(analytics_handler))
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
@@ -62,6 +65,7 @@ pub async fn run_server(
         .route("/api/engine/resume", post(resume_engine_handler))
         .route("/api/engine/status", get(engine_status_handler))
         .route("/assets/*file", get(static_handler))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state);
 
     let addr = "127.0.0.1:3000";
@@ -79,6 +83,13 @@ struct DashboardTemplate {
     stats: StatsData,
     jobs: Vec<Job>,
     engine_paused: bool,
+}
+
+#[derive(Template)]
+#[template(path = "analytics.html")]
+struct AnalyticsTemplate {
+    active_page: &'static str,
+    stats: crate::db::AggregatedStats,
 }
 
 #[derive(Template)]
@@ -138,6 +149,18 @@ async fn settings_handler(State(state): State<Arc<AppState>>) -> impl IntoRespon
     SettingsTemplate {
         active_page: "settings",
         config: state.config.clone(),
+    }
+}
+
+async fn analytics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let stats = match state.db.get_aggregated_stats().await {
+        Ok(s) => s,
+        Err(_) => crate::db::AggregatedStats::default(),
+    };
+
+    AnalyticsTemplate {
+        active_page: "analytics",
+        stats,
     }
 }
 
@@ -202,6 +225,27 @@ async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoR
     } else {
         "running"
     }
+}
+
+async fn auth_middleware(
+    State(_state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Ok(password) = std::env::var("ALCHEMIST_PASSWORD") {
+        if !password.is_empty() {
+            let authorized = req.headers()
+                .get("Authorization")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s == format!("Bearer {}", password))
+                .unwrap_or(false);
+
+            if !authorized {
+                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            }
+        }
+    }
+    next.run(req).await
 }
 
 async fn sse_handler(

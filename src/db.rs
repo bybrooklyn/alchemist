@@ -94,6 +94,38 @@ impl Job {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AggregatedStats {
+    pub total_jobs: i64,
+    pub completed_jobs: i64,
+    pub total_input_size: i64,
+    pub total_output_size: i64,
+    pub avg_vmaf: Option<f64>,
+    pub total_encode_time_seconds: f64,
+}
+
+impl AggregatedStats {
+    pub fn total_savings_gb(&self) -> f64 {
+        (self.total_input_size - self.total_output_size).max(0) as f64 / 1_073_741_824.0
+    }
+
+    pub fn total_input_gb(&self) -> f64 {
+        self.total_input_size as f64 / 1_073_741_824.0
+    }
+
+    pub fn avg_reduction_percentage(&self) -> f64 {
+        if self.total_input_size == 0 {
+            0.0
+        } else {
+            (1.0 - (self.total_output_size as f64 / self.total_input_size as f64)) * 100.0
+        }
+    }
+
+    pub fn total_time_hours(&self) -> f64 {
+        self.total_encode_time_seconds / 3600.0
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Decision {
     pub id: i64,
@@ -433,6 +465,30 @@ impl Db {
         .await?;
 
         Ok(jobs)
+    }
+
+    pub async fn get_aggregated_stats(&self) -> Result<AggregatedStats> {
+        let row = sqlx::query(
+            "SELECT 
+                (SELECT COUNT(*) FROM jobs) as total_jobs,
+                (SELECT COUNT(*) FROM jobs WHERE status = 'completed') as completed_jobs,
+                COALESCE(SUM(input_size_bytes), 0) as total_input_size,
+                COALESCE(SUM(output_size_bytes), 0) as total_output_size,
+                AVG(vmaf_score) as avg_vmaf,
+                COALESCE(SUM(encode_time_seconds), 0) as total_encode_time
+             FROM encode_stats"
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(AggregatedStats {
+            total_jobs: row.get("total_jobs"),
+            completed_jobs: row.get("completed_jobs"),
+            total_input_size: row.get("total_input_size"),
+            total_output_size: row.get("total_output_size"),
+            avg_vmaf: row.get("avg_vmaf"),
+            total_encode_time_seconds: row.get("total_encode_time"),
+        })
     }
 
     /// Batch update job statuses (for batch operations)

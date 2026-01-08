@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="analytics-container max-w-6xl mx-auto px-6 py-12">
+    <header class="flex justify-between items-center mb-12">
+        <div>
+            <h1 class="text-4xl">Analytics</h1>
+            <p class="text-slate-400 mt-1">Longitudinal Library Insights</p>
+        </div>
+        <div class="flex gap-4">
+            <a href="/" class="btn border border-slate-800 text-slate-400 hover:text-slate-200">
+                Dashboard
+            </a>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+        <!-- Big Savings Card -->
+        <div class="glass-card p-8 md:col-span-2 flex flex-col justify-center">
+            <span class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-2">Total Space Liberated</span>
+            <div class="flex items-baseline gap-3">
+                <span class="text-6xl font-bold text-emerald-400">{{ stats.total_savings_gb()|format!("{:.1}") }}</span>
+                <span class="text-2xl text-slate-500 font-medium">Gigabytes</span>
+            </div>
+            <div class="mt-6 flex gap-8">
+                <div>
+                    <span class="block text-slate-500 text-xs">Total In</span>
+                    <span class="text-lg font-mono">{{ stats.total_input_gb()|format!("{:.1}") }} GB</span>
+                </div>
+                <div>
+                    <span class="block text-slate-500 text-xs">Efficiency</span>
+                    <span class="text-lg font-mono text-emerald-400">{{
+                        stats.avg_reduction_percentage()|format!("{:.1}") }}%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quality Card -->
+        <div class="glass-card p-8 flex flex-col justify-center text-center">
+            <span class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-4">Average Quality (VMAF)</span>
+            <div
+                class="text-5xl font-bold {% if stats.avg_vmaf.unwrap_or(0.0) > 90.0 %}text-emerald-400{% else %}text-amber-400{% endif %}">
+                {{ stats.avg_vmaf.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "N/A".to_string()) }}
+            </div>
+            <p class="text-slate-500 text-xs mt-4 px-4">Based on {{ stats.completed_jobs }} completed transcodes</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Operational Efficiency -->
+        <div class="glass-card">
+            <div class="px-8 py-5 border-b border-slate-800">
+                <h2 class="text-xl">Engine Utilization</h2>
+            </div>
+            <div class="p-8 space-y-6">
+                <div>
+                    <div class="flex justify-between mb-2">
+                        <span class="text-slate-400">Total Processing Time</span>
+                        <span class="font-mono">{{ stats.total_time_hours()|format!("{:.1}") }} Hours</span>
+                    </div>
+                    <div class="w-full bg-slate-800 rounded-full h-1.5">
+                        <div class="bg-indigo-500 h-1.5 rounded-full" style="width: 100%"></div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
+                    <div class="p-4 bg-slate-900/50 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 text-xs block mb-1">Total Jobs</span>
+                        <span class="text-xl font-bold">{{ stats.total_jobs }}</span>
+                    </div>
+                    <div class="p-4 bg-slate-900/50 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 text-xs block mb-1">Completed</span>
+                        <span class="text-xl font-bold text-emerald-400">{{ stats.completed_jobs }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recommendation -->
+        <div class="glass-card border-brand-primary/20 bg-brand-primary/5 p-8 flex flex-col justify-center">
+            <h3 class="text-lg font-bold mb-3">AI Recommendation</h3>
+            <p class="text-slate-400 text-sm leading-relaxed">
+                {% if stats.avg_reduction_percentage() > 40.0 %}
+                Your library is highly compressible. You might consider an even more aggressive
+                quality profile to maximize space savings without human-perceptible loss.
+                {% elif stats.avg_reduction_percentage() < 15.0 %} Savings are currently low. You may want to check if
+                    your source files are already efficiently encoded (HEVC/AV1) to avoid unnecessary processing. {%
+                    else %} Your current settings provide a healthy balance between quality and storage efficiency. No
+                    changes recommended at this time. {% endif %} </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

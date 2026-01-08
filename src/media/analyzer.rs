@@ -105,17 +105,26 @@ impl Analyzer {
             let fps = Self::parse_fps(fps_str).unwrap_or(24.0);
             bitrate / (width * height * fps)
         } else {
-            // Fallback if fps is missing
             bitrate / (width * height * 24.0)
         };
 
+        // Normalize BPP based on resolution (4K needs less BPP than 1080p for same quality)
+        let res_correction = if width >= 3840.0 {
+            0.6 // 4K
+        } else if width >= 1920.0 {
+            0.8 // 1080p
+        } else {
+            1.0 // 720p and below
+        };
+        let normalized_bpp = bpp * res_correction;
+
         // Heuristic: If BPP is already very low, don't murder it further.
-        if bpp < config.transcode.min_bpp_threshold {
+        if normalized_bpp < config.transcode.min_bpp_threshold {
             return (
                 false,
                 format!(
-                    "BPP too low ({:.4} < {:.2}), avoiding quality murder",
-                    bpp, config.transcode.min_bpp_threshold
+                    "BPP too low ({:.4} normalized < {:.2}), avoiding quality murder",
+                    normalized_bpp, config.transcode.min_bpp_threshold
                 ),
             );
         }
