@@ -1,14 +1,16 @@
 use crate::config::Config;
-use crate::db::{AlchemistEvent, Db, JobState};
+use crate::db::{AlchemistEvent, Db, Job, JobState};
 use crate::error::Result;
 use crate::media::analyzer::Analyzer;
 use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareInfo;
+use crate::system::notifications::NotificationService;
 use crate::Transcoder;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Semaphore};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct Agent {
     db: Arc<Db>,
@@ -17,6 +19,8 @@ pub struct Agent {
     hw_info: Arc<Option<HardwareInfo>>,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
+    notifications: NotificationService,
+    paused: Arc<AtomicBool>,
     dry_run: bool,
 }
 
@@ -30,6 +34,7 @@ impl Agent {
         dry_run: bool,
     ) -> Self {
         let concurrent_jobs = config.transcode.concurrent_jobs;
+        let notifications = NotificationService::new(config.notifications.clone());
         Self {
             db,
             orchestrator,
@@ -37,6 +42,8 @@ impl Agent {
             hw_info: Arc::new(hw_info),
             tx: Arc::new(tx),
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
+            notifications,
+            paused: Arc::new(AtomicBool::new(false)),
             dry_run,
         }
     }
@@ -65,10 +72,29 @@ impl Agent {
         }); // Trigger UI refresh
         Ok(())
     }
+    
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        info!("Engine paused.");
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+        info!("Engine resumed.");
+    }
 
     pub async fn run_loop(self: Arc<Self>) {
         info!("Agent loop started.");
         loop {
+            if self.is_paused() {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+
             match self.db.get_next_job().await {
                 Ok(Some(job)) => {
                     let permit = self.semaphore.clone().acquire_owned().await.unwrap();
@@ -168,7 +194,7 @@ impl Agent {
             .await
         {
             Ok(_) => {
-                self.finalize_job(job.id, &file_path, &output_path, start_time)
+                self.finalize_job(job, &file_path, &output_path, start_time)
                     .await
             }
             Err(e) => {
@@ -176,6 +202,7 @@ impl Agent {
                     self.update_job_state(job.id, JobState::Cancelled).await
                 } else {
                     error!("Job {}: Transcode failed: {}", job.id, e);
+                    let _ = self.notifications.notify_job_failed(&job, &e.to_string()).await;
                     self.update_job_state(job.id, JobState::Failed).await?;
                     Err(e)
                 }
@@ -193,11 +220,12 @@ impl Agent {
 
     async fn finalize_job(
         &self,
-        job_id: i64,
+        job: Job,
         input_path: &std::path::Path,
         output_path: &std::path::Path,
         start_time: std::time::Instant,
     ) -> Result<()> {
+        let job_id = job.id;
         // Integrity & Size Reduction check
         let input_metadata = match std::fs::metadata(input_path) {
             Ok(m) => m,
@@ -226,37 +254,83 @@ impl Agent {
         }
 
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
+        let encode_duration = start_time.elapsed().as_secs_f64();
 
+        // Check reduction threshold
         if output_size == 0 || reduction < self.config.transcode.size_reduction_threshold {
             warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
                 job_id,
                 reduction * 100.0
             );
-            if let Err(e) = std::fs::remove_file(output_path) {
-                error!("Job {}: Failed to remove inefficient output: {}", job_id, e);
-            }
-            let reason = if output_size == 0 {
-                "Empty output"
-            } else {
-                "Inefficient reduction"
-            };
-            if let Err(e) = self.db.add_decision(job_id, "skip", reason).await {
-                error!("Job {}: Failed to add decision to DB: {}", job_id, e);
-            }
+            let _ = std::fs::remove_file(output_path);
+            let reason = if output_size == 0 { "Empty output" } else { "Inefficient reduction" };
+            let _ = self.db.add_decision(job_id, "skip", reason).await;
             self.update_job_state(job_id, JobState::Skipped).await?;
-        } else {
-            let encode_duration = start_time.elapsed();
-            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            info!("✅ Job #{} COMPLETED", job_id);
-            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            info!("  Input Size:  {} MB", input_size / 1_048_576);
-            info!("  Output Size: {} MB", output_size / 1_048_576);
-            info!("  Reduction:   {:.1}%", reduction * 100.0);
-            info!("  Duration:    {:.2}s", encode_duration.as_secs_f64());
-            info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            self.update_job_state(job_id, JobState::Completed).await?;
+            return Ok(());
         }
+
+        // 2. QUALITY GATE (VMAF)
+        let mut vmaf_score = None;
+        if self.config.quality.enable_vmaf {
+            info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
+            match crate::media::ffmpeg::QualityScore::compute(input_path, output_path) {
+                Ok(score) => {
+                    vmaf_score = score.vmaf;
+                    if let Some(s) = vmaf_score {
+                        info!("[Job {}] VMAF Score: {:.2}", job_id, s);
+                        if s < self.config.quality.min_vmaf_score && self.config.quality.revert_on_low_quality {
+                            warn!("Job {}: Quality gate failed ({:.2} < {}). Reverting.", job_id, s, self.config.quality.min_vmaf_score);
+                            let _ = std::fs::remove_file(output_path);
+                            let _ = self.db.add_decision(job_id, "skip", "Low quality (VMAF)").await;
+                            self.update_job_state(job_id, JobState::Skipped).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("[Job {}] VMAF computation failed: {}", job_id, e);
+                }
+            }
+        }
+
+        // Finalize results
+        let bitrate = (output_size as f64 * 8.0) / (encode_duration * 1000.0); // Rough estimate
+        let _ = self.db.save_encode_stats(
+            job_id,
+            input_size,
+            output_size,
+            reduction,
+            encode_duration,
+            1.0, // Speed calculation could be refined
+            bitrate,
+            vmaf_score,
+        ).await;
+
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("✅ Job #{} COMPLETED", job_id);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("  Input Size:  {} MB", input_size / 1_048_576);
+        info!("  Output Size: {} MB", output_size / 1_048_576);
+        info!("  Reduction:   {:.1}%", reduction * 100.0);
+        if let Some(s) = vmaf_score {
+            info!("  VMAF Score:  {:.2}", s);
+        }
+        info!("  Duration:    {:.2}s", encode_duration);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        self.update_job_state(job_id, JobState::Completed).await?;
+
+        // Notifications
+        let stats_msg = format!(
+            "📊 {} MB -> {} MB ({:.1}% reduction), VMAF: {}",
+            input_size / 1_048_576,
+            output_size / 1_048_576,
+            reduction * 100.0,
+            vmaf_score.map(|s| format!("{:.2}", s)).unwrap_or_else(|| "N/A".to_string())
+        );
+        let _ = self.notifications.notify_job_complete(&job, Some(&stats_msg)).await;
+
         Ok(())
     }
 }

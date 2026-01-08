@@ -160,6 +160,23 @@ async fn main() -> Result<()> {
 
     if args.server {
         info!("Starting web server...");
+
+        // Start File Watcher if directories are configured
+        if !config.scanner.directories.is_empty() {
+            let watcher_dirs: Vec<PathBuf> = config
+                .scanner.directories
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+            let watcher = alchemist::system::watcher::FileWatcher::new(watcher_dirs, db.clone());
+            let watcher_handle = watcher.clone();
+            tokio::spawn(async move {
+                if let Err(e) = watcher_handle.start().await {
+                    error!("File watcher failed: {}", e);
+                }
+            });
+        }
+
         alchemist::server::run_server(db, config, agent, transcoder, tx).await?;
     } else {
         // CLI Mode

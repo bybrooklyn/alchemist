@@ -66,6 +66,7 @@ pub struct Job {
     pub priority: i32,
     pub progress: f64,
     pub attempt_count: i32,
+    pub vmaf_score: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -86,6 +87,10 @@ impl Job {
 
     pub fn progress_fixed(&self) -> String {
         format!("{:.1}", self.progress)
+    }
+
+    pub fn vmaf_fixed(&self) -> String {
+        self.vmaf_score.map(|s| format!("{:.1}", s)).unwrap_or_else(|| "N/A".to_string())
     }
 }
 
@@ -250,6 +255,7 @@ impl Db {
             "SELECT id, input_path, output_path, status, NULL as decision_reason,
                     COALESCE(priority, 0) as priority, COALESCE(progress, 0.0) as progress,
                     COALESCE(attempt_count, 0) as attempt_count,
+                    NULL as vmaf_score,
                     created_at, updated_at 
              FROM jobs WHERE status = 'queued' 
              ORDER BY priority DESC, created_at ASC LIMIT 1",
@@ -288,6 +294,7 @@ impl Db {
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
              ORDER BY j.updated_at DESC",
@@ -395,6 +402,7 @@ impl Db {
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
              WHERE j.id = ?",
@@ -414,6 +422,7 @@ impl Db {
                     COALESCE(j.priority, 0) as priority, 
                     COALESCE(j.progress, 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
              WHERE j.status = ?
@@ -450,5 +459,19 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn restart_failed_jobs(&self) -> Result<u64> {
+        let result = sqlx::query("UPDATE jobs SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE status IN ('failed', 'cancelled')")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn clear_completed_jobs(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM jobs WHERE status = 'completed'")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }

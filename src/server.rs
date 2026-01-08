@@ -53,9 +53,14 @@ pub async fn run_server(
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
+        .route("/api/jobs/restart-failed", post(restart_failed_handler))
+        .route("/api/jobs/clear-completed", post(clear_completed_handler))
         .route("/api/jobs/:id/cancel", post(cancel_job_handler))
         .route("/api/jobs/:id/restart", post(restart_job_handler))
         .route("/api/events", get(sse_handler))
+        .route("/api/engine/pause", post(pause_engine_handler))
+        .route("/api/engine/resume", post(resume_engine_handler))
+        .route("/api/engine/status", get(engine_status_handler))
         .route("/assets/*file", get(static_handler))
         .with_state(state);
 
@@ -73,6 +78,7 @@ struct DashboardTemplate {
     active_page: &'static str,
     stats: StatsData,
     jobs: Vec<Job>,
+    engine_paused: bool,
 }
 
 #[derive(Template)]
@@ -92,6 +98,12 @@ struct StatsPartialTemplate {
 #[template(path = "partials/jobs_table.html")]
 struct JobsTablePartialTemplate {
     jobs: Vec<Job>,
+}
+
+#[derive(Template)]
+#[template(path = "partials/engine_control.html")]
+struct EngineControlPartialTemplate {
+    engine_paused: bool,
 }
 
 struct StatsData {
@@ -118,6 +130,7 @@ async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
         active_page: "dashboard",
         stats,
         jobs,
+        engine_paused: state.agent.is_paused(),
     }
 }
 
@@ -163,14 +176,50 @@ async fn restart_job_handler(
     axum::http::StatusCode::OK
 }
 
+async fn restart_failed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let _ = state.db.restart_failed_jobs().await;
+    axum::http::StatusCode::OK
+}
+
+async fn clear_completed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let _ = state.db.clear_completed_jobs().await;
+    axum::http::StatusCode::OK
+}
+
+async fn pause_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.pause();
+    EngineControlPartialTemplate { engine_paused: true }
+}
+
+async fn resume_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.resume();
+    EngineControlPartialTemplate { engine_paused: false }
+}
+
+async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state.agent.is_paused() {
+        "paused"
+    } else {
+        "running"
+    }
+}
+
 async fn sse_handler(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>> {
     let rx = state.tx.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
         Ok(event) => {
-            let json = serde_json::to_string(&event).ok()?;
-            Some(Ok(AxumEvent::default().data(json)))
+            let (event_name, data) = match &event {
+                AlchemistEvent::Log { message, .. } => ("log", message.clone()),
+                AlchemistEvent::Progress { job_id, percentage, time } => {
+                    ( "progress", format!("{{\"job_id\": {}, \"percentage\": {:.1}, \"time\": \"{}\"}}", job_id, percentage, time))
+                }
+                AlchemistEvent::JobStateChanged { job_id, status } => {
+                    ("status", format!("{{\"job_id\": {}, \"status\": \"{:?}\"}}", job_id, status))
+                }
+            };
+            Some(Ok(AxumEvent::default().event(event_name).data(data)))
         }
         Err(_) => None,
     });
