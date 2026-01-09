@@ -12,3 +12,15 @@ import SetupWizard from "../components/SetupWizard";
         </div>
     </div>
 </Layout>
+
+<script>
+    // If setup is already done, redirect to dashboard
+    fetch("/api/setup/status")
+        .then((res) => res.json())
+        .then((data) => {
+            if (!data.setup_required) {
+                window.location.href = "/";
+            }
+        })
+        .catch((err) => console.error("Failed to check setup status", err));
+</script>

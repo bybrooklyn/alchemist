@@ -1,0 +1,37 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Sidebar from "../components/Sidebar.astro";
+import AppearanceSettings from "../components/AppearanceSettings.tsx";
+import { Settings } from "lucide-react";
+---
+
+<Layout title="Alchemist | Settings">
+    <div class="app-shell">
+        <Sidebar />
+        <main class="app-main">
+            <header
+                class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
+            >
+                <div class="flex items-center gap-3">
+                    <Settings class="text-helios-solar" />
+                    <h1 class="text-lg font-semibold text-helios-ink">
+                        Settings
+                    </h1>
+                </div>
+            </header>
+            <div class="p-6">
+                <!-- Theme Settings -->
+                <div class="mb-8">
+                    <AppearanceSettings client:load />
+                </div>
+
+                <!-- Coming Soon Placeholder for other settings -->
+                <div
+                    class="p-8 text-center border-2 border-dashed border-helios-line/40 rounded-2xl bg-helios-surface/50"
+                >
+                    <p class="text-helios-slate">More settings coming soon.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+</Layout>

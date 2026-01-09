@@ -7,7 +7,9 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use notify::{RecursiveMode, Watcher};
 use tokio::sync::broadcast;
+use tokio::sync::RwLock;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -135,15 +137,18 @@ async fn main() -> Result<()> {
     let db = Arc::new(db::Db::new("alchemist.db").await?);
     let (tx, _rx) = broadcast::channel(100);
     let transcoder = Arc::new(Transcoder::new());
-    let config = Arc::new(config);
-    let agent = Arc::new(Agent::new(
-        db.clone(),
-        transcoder.clone(),
-        config.clone(),
-        Some(hw_info),
-        tx.clone(),
-        args.dry_run,
-    ));
+    let config = Arc::new(RwLock::new(config));
+    let agent = Arc::new(
+        Agent::new(
+            db.clone(),
+            transcoder.clone(),
+            config.clone(),
+            Some(hw_info),
+            tx.clone(),
+            args.dry_run,
+        )
+        .await,
+    );
 
     info!("Database and services initialized.");
 
@@ -165,13 +170,23 @@ async fn main() -> Result<()> {
         info!("Starting web server...");
 
         // Start File Watcher if directories are configured and not in setup mode
-        if !setup_mode && !config.scanner.directories.is_empty() {
-            let watcher_dirs: Vec<PathBuf> = config
-                .scanner
-                .directories
-                .iter()
-                .map(PathBuf::from)
-                .collect();
+        let watcher_dirs_opt = {
+            let config_read = config.read().await;
+            if !setup_mode && !config_read.scanner.directories.is_empty() {
+                Some(
+                    config_read
+                        .scanner
+                        .directories
+                        .iter()
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            }
+        };
+
+        if let Some(watcher_dirs) = watcher_dirs_opt {
             let watcher = alchemist::system::watcher::FileWatcher::new(watcher_dirs, db.clone());
             let watcher_handle = watcher.clone();
             tokio::spawn(async move {
@@ -180,6 +195,67 @@ async fn main() -> Result<()> {
                 }
             });
         }
+
+        // Config Watcher
+        let config_watcher_arc = config.clone();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            // We use recommended_watcher (usually Create/Write/Modify/Remove events)
+            let mut watcher = match notify::recommended_watcher(tx) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("Failed to create config watcher: {}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = watcher.watch(
+                std::path::Path::new("config.toml"),
+                RecursiveMode::NonRecursive,
+            ) {
+                error!("Failed to watch config.toml: {}", e);
+                return;
+            }
+
+            // Simple debounce by waiting for events
+            for res in rx {
+                match res {
+                    Ok(event) => {
+                        // Reload on any event for simplicity, usually Write/Modify
+                        // We can filter for event.kind.
+                        if let notify::EventKind::Modify(_) = event.kind {
+                            info!("Config file changed. Reloading...");
+                            // Brief sleep to ensure write complete?
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            match alchemist::config::Config::load(std::path::Path::new(
+                                "config.toml",
+                            )) {
+                                Ok(new_config) => {
+                                    // We need to write to the async RwLock from this blocking thread.
+                                    // We can use blocking_write() if available or block_on.
+                                    // tokio::sync::RwLock can contain a blocking_write feature?
+                                    // No, tokio RwLock is async.
+                                    // We can spawn a handle back to async world?
+                                    // Or just use std::sync::RwLock for config?
+                                    // Using `blocking_write` requires `tokio` feature `sync`?
+                                    // Actually `config_watcher_arc` is `Arc<tokio::sync::RwLock<Config>>`.
+                                    // We can use `futures::executor::block_on` or create a new runtime?
+                                    // BETTER: Spawn the loop as a `tokio::spawn`, but use `notify::Event` stream (async config)?
+                                    // OR: Use `tokio::sync::RwLock::blocking_write()` method? It exists!
+                                    let mut w = config_watcher_arc.blocking_write();
+                                    *w = new_config;
+                                    info!("Configuration reloaded successfully.");
+                                }
+                                Err(e) => {
+                                    error!("Failed to reload config: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => error!("Config watch error: {:?}", e),
+                }
+            }
+        });
 
         alchemist::server::run_server(db, config, agent, transcoder, tx, setup_mode).await?;
     } else {

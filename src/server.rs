@@ -18,7 +18,7 @@ use futures::stream::Stream;
 use rust_embed::RustEmbed;
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::info;
@@ -29,7 +29,7 @@ struct Assets;
 
 pub struct AppState {
     pub db: Arc<Db>,
-    pub config: Arc<Config>,
+    pub config: Arc<RwLock<Config>>,
     pub agent: Arc<Agent>,
     pub transcoder: Arc<Transcoder>,
     pub tx: broadcast::Sender<AlchemistEvent>,
@@ -38,7 +38,7 @@ pub struct AppState {
 
 pub async fn run_server(
     db: Arc<Db>,
-    config: Arc<Config>,
+    config: Arc<RwLock<Config>>,
     agent: Arc<Agent>,
     transcoder: Arc<Transcoder>,
     tx: broadcast::Sender<AlchemistEvent>,
@@ -69,6 +69,10 @@ pub async fn run_server(
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
+        .route(
+            "/api/ui/preferences",
+            get(get_preferences_handler).post(update_preferences_handler),
+        )
         // Static Asset Routes
         .route("/", get(index_handler))
         .route("/*file", get(static_handler))
@@ -143,6 +147,36 @@ async fn setup_complete_handler(
     axum::Json(serde_json::json!({ "status": "saved" })).into_response()
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct UiPreferences {
+    active_theme_id: Option<String>,
+}
+
+async fn get_preferences_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let active_theme_id = state
+        .db
+        .get_preference("active_theme_id")
+        .await
+        .unwrap_or(None);
+    axum::Json(UiPreferences { active_theme_id })
+}
+
+async fn update_preferences_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<UiPreferences>,
+) -> impl IntoResponse {
+    if let Some(theme_id) = payload.active_theme_id {
+        if let Err(e) = state.db.set_preference("active_theme_id", &theme_id).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save preference: {}", e),
+            )
+                .into_response();
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
 async fn index_handler() -> impl IntoResponse {
     static_handler(Uri::from_static("/index.html")).await
 }
@@ -153,28 +187,23 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         path = "index.html".to_string();
     }
 
-    match Assets::get(&path) {
-        Some(content) => {
-            let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
-        }
-        None => {
-            if path.contains('.') {
-                StatusCode::NOT_FOUND.into_response()
-            } else {
-                // Fallback to index.html for client-side routing if we add it later
-                // For now, it might be better to 404 if we are strict MPA
-                // But let's try to serve index.html if it's a route
-                match Assets::get("index.html") {
-                    Some(content) => {
-                        let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-                        ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
-                    }
-                    None => StatusCode::NOT_FOUND.into_response(),
-                }
-            }
+    if let Some(content) = Assets::get(&path) {
+        let mime = mime_guess::from_path(&path).first_or_octet_stream();
+        return ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response();
+    }
+
+    // Attempt to serve index.html for directory paths (e.g. /jobs -> jobs/index.html)
+    if !path.contains('.') {
+        let index_path = format!("{}/index.html", path);
+        if let Some(content) = Assets::get(&index_path) {
+            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
+            return ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response();
         }
     }
+
+    // Default fallback to 404 for missing files, except for the SPA root fallback if intended.
+    // Given we are using Astro as SSG for these pages, if it's not found, it's a 404.
+    StatusCode::NOT_FOUND.into_response()
 }
 
 struct StatsData {
@@ -229,13 +258,19 @@ async fn jobs_table_handler(State(state): State<Arc<AppState>>) -> impl IntoResp
 }
 
 async fn scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let dirs = state
-        .config
+    let config = state.config.read().await;
+    let dirs = config
         .scanner
         .directories
         .iter()
         .map(std::path::PathBuf::from)
         .collect();
+    drop(config); // Release lock before awaiting scan (though scan might take long time? no scan_and_enqueue is async but returns quickly? Let's check Agent::scan_and_enqueue)
+                  // Agent::scan_and_enqueue is async. We should probably release lock before calling it if it takes long time.
+                  // It does 'Scanner::new().scan()' which IS synchronous and blocking?
+                  // Looking at Agent::scan_and_enqueue: `let files = scanner.scan(directories);`
+                  // If scanner.scan is slow, we are holding the config lock? No, I dropped it.
+
     let _ = state.agent.scan_and_enqueue(dirs).await;
     StatusCode::OK
 }
