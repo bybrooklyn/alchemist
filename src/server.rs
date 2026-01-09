@@ -23,6 +23,14 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::info;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use rand::rngs::OsRng;
+use rand::Rng;
+use std::sync::atomic::{AtomicBool, Ordering};
+use chrono::Utc;
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -34,7 +42,7 @@ pub struct AppState {
     pub agent: Arc<Agent>,
     pub transcoder: Arc<Transcoder>,
     pub tx: broadcast::Sender<AlchemistEvent>,
-    pub setup_required: bool,
+    pub setup_required: Arc<AtomicBool>,
     pub start_time: Instant,
 }
 
@@ -52,7 +60,7 @@ pub async fn run_server(
         agent,
         transcoder,
         tx,
-        setup_required,
+        setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: std::time::Instant::now(),
     });
 
@@ -80,6 +88,7 @@ pub async fn run_server(
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
+        .route("/api/auth/login", post(login_handler))
         .route(
             "/api/ui/preferences",
             get(get_preferences_handler).post(update_preferences_handler),
@@ -103,7 +112,7 @@ pub async fn run_server(
 
 async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     axum::Json(serde_json::json!({
-        "setup_required": state.setup_required
+        "setup_required": state.setup_required.load(Ordering::Relaxed)
     }))
 }
 
@@ -163,6 +172,8 @@ async fn update_transcode_settings_handler(
 
 #[derive(serde::Deserialize)]
 struct SetupConfig {
+    username: String,
+    password: String,
     size_reduction_threshold: f64,
     min_file_size_mb: u64,
     concurrent_jobs: usize,
@@ -174,42 +185,64 @@ async fn setup_complete_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<SetupConfig>,
 ) -> impl IntoResponse {
-    if !state.setup_required {
+    if !state.setup_required.load(Ordering::Relaxed) {
         return (StatusCode::FORBIDDEN, "Setup already completed").into_response();
     }
 
-    // Create config object
-    let mut config = Config::default();
-    config.transcode.concurrent_jobs = payload.concurrent_jobs;
-    config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
-    config.transcode.min_file_size_mb = payload.min_file_size_mb;
-    config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    config.scanner.directories = payload.directories;
+    // Create User
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
+        Ok(h) => h.to_string(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Hashing failed: {}", e)).into_response(),
+    };
+
+    let user_id = match state.db.create_user(&payload.username, &password_hash).await {
+         Ok(id) => id,
+         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create user: {}", e)).into_response(),
+    };
+
+    // Create Initial Session
+    let token: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let expires_at = Utc::now() + chrono::Duration::days(30);
+    
+    if let Err(e) = state.db.create_session(user_id, &token, expires_at).await {
+         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create session: {}", e)).into_response();
+    }
+
+    // Save Config
+    let mut config_lock = state.config.write().await;
+    config_lock.transcode.concurrent_jobs = payload.concurrent_jobs;
+    config_lock.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+    config_lock.transcode.min_file_size_mb = payload.min_file_size_mb;
+    config_lock.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+    config_lock.scanner.directories = payload.directories;
 
     // Serialize to TOML
-    let toml_string = match toml::to_string_pretty(&config) {
+    let toml_string = match toml::to_string_pretty(&*config_lock) {
         Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize config: {}", e),
-            )
-                .into_response()
-        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize config: {}", e)).into_response(),
     };
 
     // Write to file
     if let Err(e) = std::fs::write("config.toml", toml_string) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write config.toml: {}", e),
-        )
-            .into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write config.toml: {}", e)).into_response();
     }
+    
+    // Update Setup State (Hot Reload)
+    state.setup_required.store(false, Ordering::Relaxed);
+    
+    // Start Scan (optional, but good for UX)
+    let dirs = config_lock.scanner.directories.iter().map(std::path::PathBuf::from).collect();
+    let _ = state.agent.scan_and_enqueue(dirs).await;
 
-    info!("Configuration saved via web setup. Restarting recommended.");
+    info!("Configuration saved via web setup. Auth info created.");
 
-    axum::Json(serde_json::json!({ "status": "saved" })).into_response()
+    axum::Json(serde_json::json!({ "status": "saved", "token": token })).into_response()
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -444,41 +477,80 @@ async fn ready_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     }
 }
 
+#[derive(serde::Deserialize)]
+struct LoginPayload {
+    username: String,
+    password: String,
+}
+
+async fn login_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<LoginPayload>,
+) -> impl IntoResponse {
+    let user = match state.db.get_user_by_username(&payload.username).await {
+        Ok(Some(u)) => u,
+        _ => return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
+    };
+
+    let parsed_hash = match PasswordHash::new(&user.password_hash) {
+        Ok(h) => h,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response(),
+    };
+
+    if Argon2::default()
+        .verify_password(payload.password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
+    }
+
+    // Create session
+    let token: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+
+    let expires_at = Utc::now() + chrono::Duration::days(30);
+
+    if let Err(e) = state.db.create_session(user.id, &token, expires_at).await {
+         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create session: {}", e)).into_response();
+    }
+
+    axum::Json(serde_json::json!({ "token": token })).into_response()
+}
+
 async fn auth_middleware(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Response {
     let path = req.uri().path();
-    // Allow setup routes without auth
-    if path.starts_with("/api/setup") {
+    // Allow setup, login, and static assets without auth (simplified check)
+    if path.starts_with("/api/setup") || path.starts_with("/api/auth/login") || path.starts_with("/login") || path == "/" || path == "/index.html" || path.starts_with("/assets") {
         return next.run(req).await;
     }
 
-    if let Ok(password) = std::env::var("ALCHEMIST_PASSWORD") {
-        if !password.is_empty() {
-            // For static assets, we might want to bypass auth or require cookie auth
-            // For now, implementing simple bearer token check from original code
-            // NOTE: Browser won't send Bearer token for initial page load naturally.
-            // We might need to move to Cookie auth or allow basic auth.
-            // But for now, let's keep it as is or allow "/" to be public if needed?
-            // The user didn't specify auth changes. I'll leave the middleware applied globally.
+    // Check for Bearer token
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok());
 
-            let authorized = req
-                .headers()
-                .get("Authorization")
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s == format!("Bearer {}", password))
-                .unwrap_or(false);
-
-            if !authorized {
-                // If requesting HTML, maybe return 401 asking for auth?
-                // Or just 401.
-                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(auth_str) = auth_header {
+        if auth_str.starts_with("Bearer ") {
+            let token = &auth_str[7..];
+            if let Ok(Some(_session)) = state.db.get_session(token).await {
+                return next.run(req).await;
             }
         }
     }
-    next.run(req).await
+
+    // Attempt to verify if any users exist. If not, maybe allow access or force setup?
+    // Actually, if we are in setup mode, setup routes are allowed. 
+    // If setup is done but no users? That shouldn't happen if setup creates a user.
+    // If we are strictly enforcing auth:
+    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
 
 async fn sse_handler(

@@ -509,4 +509,71 @@ impl Db {
                 .await?;
         Ok(row.map(|r| r.0))
     }
+
+    pub async fn create_user(&self, username: &str, password_hash: &str) -> Result<i64> {
+        let id = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+            .bind(username)
+            .bind(password_hash)
+            .execute(&self.pool)
+            .await?
+            .last_insert_rowid();
+        Ok(id)
+    }
+
+    pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
+        let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(user)
+    }
+
+    pub async fn has_users(&self) -> Result<bool> {
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count.0 > 0)
+    }
+
+    pub async fn create_session(&self, user_id: i64, token: &str, expires_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+            .bind(token)
+            .bind(user_id)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_session(&self, token: &str) -> Result<Option<Session>> {
+        let session = sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(session)
+    }
+
+    pub async fn cleanup_sessions(&self) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+// Auth related structs
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct Session {
+    pub token: String,
+    pub user_id: i64,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
