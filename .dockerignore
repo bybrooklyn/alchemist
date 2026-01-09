@@ -3,3 +3,6 @@ alchemist.db
 .git
 .github
 *.log
+web/node_modules
+web/dist
+web/.astro

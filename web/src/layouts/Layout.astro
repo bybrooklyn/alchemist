@@ -1,0 +1,39 @@
+---
+import "../styles/global.css";
+
+interface Props {
+    title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="description" content="Alchemist Media Transcoder" />
+        <meta name="viewport" content="width=device-width" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <meta name="generator" content={Astro.generator} />
+        <title>{title}</title>
+    </head>
+    <body>
+        <slot />
+        <script>
+            // Check setup status on load
+            if (window.location.pathname !== "/setup") {
+                fetch("/api/setup/status")
+                    .then((res) => res.json())
+                    .then((data) => {
+                        if (data.setup_required) {
+                            window.location.href = "/setup";
+                        }
+                    })
+                    .catch((err) =>
+                        console.error("Failed to check setup status", err),
+                    );
+            }
+        </script>
+    </body>
+</html>

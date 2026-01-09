@@ -85,10 +85,11 @@ impl Job {
 
     pub fn status_class(&self) -> &'static str {
         match self.status {
-            JobState::Completed => "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-            JobState::Encoding | JobState::Analyzing | JobState::Resuming => "text-[rgb(var(--brand-primary))] border-[rgb(var(--brand-primary))/0.2] bg-[rgb(var(--brand-primary))/0.1]",
-            JobState::Failed | JobState::Cancelled => "bg-rose-500/10 text-rose-400 border-rose-500/20",
-            _ => "bg-slate-500/10 text-slate-400 border-slate-500/20",
+            JobState::Completed => "badge-green",
+            JobState::Encoding | JobState::Resuming => "badge-yellow",
+            JobState::Analyzing => "badge-blue",
+            JobState::Failed | JobState::Cancelled => "badge-red",
+            _ => "badge-gray",
         }
     }
 
