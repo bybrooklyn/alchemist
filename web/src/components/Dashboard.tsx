@@ -8,6 +8,7 @@ import {
     Database,
     Zap
 } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 interface Stats {
     total: number;
@@ -32,8 +33,8 @@ export default function Dashboard() {
         const fetchData = async () => {
             try {
                 const [statsRes, jobsRes] = await Promise.all([
-                    fetch("/api/stats"),
-                    fetch("/api/jobs/table")
+                    apiFetch("/api/stats"),
+                    apiFetch("/api/jobs/table")
                 ]);
 
                 if (statsRes.ok) {
@@ -119,9 +120,9 @@ export default function Dashboard() {
                                 <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft hover:bg-white/5 transition-colors border border-transparent hover:border-helios-line/20">
                                     <div className="flex items-center gap-3 min-w-0">
                                         <div className={`w-2 h-2 rounded-full shrink-0 ${job.status === 'Completed' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' :
-                                                job.status === 'Failed' ? 'bg-red-500' :
-                                                    job.status === 'Encoding' ? 'bg-amber-500 animate-pulse' :
-                                                        'bg-helios-slate'
+                                            job.status === 'Failed' ? 'bg-red-500' :
+                                                job.status === 'Encoding' ? 'bg-amber-500 animate-pulse' :
+                                                    'bg-helios-slate'
                                             }`} />
                                         <div className="flex flex-col min-w-0">
                                             <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>

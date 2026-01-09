@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
-import { 
-    Cpu, 
-    Save, 
-    Video, 
-    Gauge, 
-    Zap, 
-    Scale, 
-    Film 
+import {
+    Cpu,
+    Save,
+    Video,
+    Gauge,
+    Zap,
+    Scale,
+    Film
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { apiFetch } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -37,7 +38,7 @@ export default function TranscodeSettings() {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch("/api/settings/transcode");
+            const res = await apiFetch("/api/settings/transcode");
             if (!res.ok) throw new Error("Failed to load settings");
             const data = await res.json();
             setSettings(data);
@@ -56,9 +57,8 @@ export default function TranscodeSettings() {
         setSuccess(false);
 
         try {
-            const res = await fetch("/api/settings/transcode", {
+            const res = await apiFetch("/api/settings/transcode", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings),
             });
             if (!res.ok) throw new Error("Failed to save settings");
@@ -81,7 +81,7 @@ export default function TranscodeSettings() {
 
     return (
         <div className="flex flex-col gap-6">
-             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
+            <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
                     <h3 className="text-base font-bold text-helios-ink tracking-tight uppercase tracking-[0.1em]">Transcoding Engine</h3>
                     <p className="text-xs text-helios-slate mt-0.5">Configure encoder behavior and performance limits.</p>
@@ -96,7 +96,7 @@ export default function TranscodeSettings() {
                     {error}
                 </div>
             )}
-            
+
             {success && (
                 <div className="p-4 bg-green-500/10 border border-green-500/20 text-green-500 rounded-xl text-sm font-semibold">
                     Settings saved successfully.
@@ -165,7 +165,7 @@ export default function TranscodeSettings() {
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
                         <Zap size={14} /> Concurrent Jobs
                     </label>
-                     <input
+                    <input
                         type="number"
                         min="1"
                         max="8"
@@ -180,7 +180,7 @@ export default function TranscodeSettings() {
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
                         <Scale size={14} /> Min. Reduction (%)
                     </label>
-                     <input
+                    <input
                         type="number"
                         min="0"
                         max="100"
@@ -189,14 +189,14 @@ export default function TranscodeSettings() {
                         onChange={(e) => setSettings({ ...settings, size_reduction_threshold: (parseInt(e.target.value) || 0) / 100 })}
                         className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     />
-                     <p className="text-[10px] text-helios-slate ml-1">Files must shrink by at least this percentage or they are reverted.</p>
+                    <p className="text-[10px] text-helios-slate ml-1">Files must shrink by at least this percentage or they are reverted.</p>
                 </div>
 
                 <div className="space-y-3">
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
                         <Film size={14} /> Min. File Size (MB)
                     </label>
-                     <input
+                    <input
                         type="number"
                         min="0"
                         value={settings.min_file_size_mb}
