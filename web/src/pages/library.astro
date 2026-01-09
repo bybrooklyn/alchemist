@@ -1,0 +1,32 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Sidebar from "../components/Sidebar.astro";
+import { Server } from "lucide-react";
+---
+
+<Layout title="Alchemist | Library">
+    <div class="app-shell">
+        <Sidebar />
+        <main class="app-main">
+            <header
+                class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
+            >
+                <div class="flex items-center gap-3">
+                    <Server class="text-helios-solar" />
+                    <h1 class="text-lg font-semibold text-helios-ink">
+                        Media Library
+                    </h1>
+                </div>
+            </header>
+            <div class="p-6">
+                <div
+                    class="p-8 text-center border-2 border-dashed border-helios-line/40 rounded-2xl bg-helios-surface/50"
+                >
+                    <p class="text-helios-slate">
+                        Library browser interface coming soon.
+                    </p>
+                </div>
+            </div>
+        </main>
+    </div>
+</Layout>

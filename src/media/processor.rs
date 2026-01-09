@@ -14,13 +14,13 @@ use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Semaphore};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 use tracing::{error, info, warn};
 
 pub struct Agent {
     db: Arc<Db>,
     orchestrator: Arc<Transcoder>,
-    config: Arc<Config>,
+    config: Arc<RwLock<Config>>,
     hw_info: Arc<Option<HardwareInfo>>,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
@@ -30,16 +30,20 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(
+    pub async fn new(
         db: Arc<Db>,
         orchestrator: Arc<Transcoder>,
-        config: Arc<Config>,
+        config: Arc<RwLock<Config>>,
         hw_info: Option<HardwareInfo>,
         tx: broadcast::Sender<AlchemistEvent>,
         dry_run: bool,
     ) -> Self {
-        let concurrent_jobs = config.transcode.concurrent_jobs;
-        let notifications = NotificationService::new(config.notifications.clone());
+        // Read config asynchronously to avoid blocking atomic in async runtime
+        let config_read = config.read().await;
+        let concurrent_jobs = config_read.transcode.concurrent_jobs;
+        let notifications = NotificationService::new(config_read.notifications.clone());
+        drop(config_read);
+
         Self {
             db,
             orchestrator,
@@ -164,7 +168,11 @@ impl Agent {
         );
         info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
-        let planner = BasicPlanner::new(self.config.clone(), self.hw_info.as_ref().clone());
+        let config_snapshot = self.config.read().await.clone();
+        let planner = BasicPlanner::new(
+            Arc::new(config_snapshot.clone()),
+            self.hw_info.as_ref().clone(),
+        );
         let decision = planner.plan(&metadata).await?;
         let should_encode = decision.action == "encode";
         let reason = decision.reason.clone();
@@ -188,8 +196,8 @@ impl Agent {
 
         let executor = FfmpegExecutor::new(
             self.orchestrator.clone(),
-            self.config.clone(),
-            self.hw_info.as_ref().clone(), // Option<HardwareInfo>
+            Arc::new(config_snapshot.clone()), // Use snapshot
+            self.hw_info.as_ref().clone(),     // Option<HardwareInfo>
             self.tx.clone(),
             self.dry_run,
         );
@@ -274,8 +282,10 @@ impl Agent {
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
         let encode_duration = start_time.elapsed().as_secs_f64();
 
+        let config = self.config.read().await;
+
         // Check reduction threshold
-        if output_size == 0 || reduction < self.config.transcode.size_reduction_threshold {
+        if output_size == 0 || reduction < config.transcode.size_reduction_threshold {
             warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
                 job_id,
@@ -294,19 +304,18 @@ impl Agent {
 
         // 2. QUALITY GATE (VMAF)
         let mut vmaf_score = None;
-        if self.config.quality.enable_vmaf {
+        if config.quality.enable_vmaf {
             info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
             match crate::media::ffmpeg::QualityScore::compute(input_path, output_path) {
                 Ok(score) => {
                     vmaf_score = score.vmaf;
                     if let Some(s) = vmaf_score {
                         info!("[Job {}] VMAF Score: {:.2}", job_id, s);
-                        if s < self.config.quality.min_vmaf_score
-                            && self.config.quality.revert_on_low_quality
+                        if s < config.quality.min_vmaf_score && config.quality.revert_on_low_quality
                         {
                             warn!(
                                 "Job {}: Quality gate failed ({:.2} < {}). Reverting.",
-                                job_id, s, self.config.quality.min_vmaf_score
+                                job_id, s, config.quality.min_vmaf_score
                             );
                             let _ = std::fs::remove_file(output_path);
                             let _ = self

@@ -1,0 +1,27 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Sidebar from "../components/Sidebar.astro";
+import LogViewer from "../components/LogViewer.tsx";
+import { Terminal } from "lucide-react";
+---
+
+<Layout title="Alchemist | System Logs">
+    <div class="app-shell">
+        <Sidebar />
+        <main class="app-main flex flex-col h-screen overflow-hidden">
+            <header
+                class="h-16 flex-shrink-0 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
+            >
+                <div class="flex items-center gap-3">
+                    <Terminal class="text-helios-solar" />
+                    <h1 class="text-lg font-semibold text-helios-ink">
+                        System Logs
+                    </h1>
+                </div>
+            </header>
+            <div class="flex-1 p-6 min-h-0">
+                <LogViewer client:load /> // Hydrate immediately
+            </div>
+        </main>
+    </div>
+</Layout>

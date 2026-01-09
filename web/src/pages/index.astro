@@ -1,163 +1,28 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import Sidebar from "../components/Sidebar.astro";
+import Dashboard from "../components/Dashboard.tsx";
 import { Activity, Server, Settings, Video } from "lucide-react";
 ---
 
 <Layout title="Alchemist | Dashboard">
     <div class="app-shell">
-        <!-- Sidebar -->
-        <aside
-            class="w-64 bg-helios-surface border-r border-helios-line/60 flex flex-col p-4 gap-4"
-        >
-            <div
-                class="flex items-center gap-3 px-2 pb-4 border-b border-helios-line/40"
-            >
-                <div
-                    class="w-8 h-8 rounded-lg bg-helios-solar text-helios-main flex items-center justify-center font-bold"
-                >
-                    A
-                </div>
-                <span class="font-bold text-lg text-helios-ink">Alchemist</span>
-            </div>
-
-            <nav class="flex flex-col gap-2 flex-1">
-                <a
-                    href="/"
-                    class="flex items-center gap-3 px-3 py-2 rounded-xl bg-helios-solar text-helios-main font-bold"
-                >
-                    <Activity size={18} />
-                    <span>Dashboard</span>
-                </a>
-                <a
-                    href="/jobs"
-                    class="flex items-center gap-3 px-3 py-2 rounded-xl text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
-                >
-                    <Video size={18} />
-                    <span>Jobs</span>
-                </a>
-                <a
-                    href="/library"
-                    class="flex items-center gap-3 px-3 py-2 rounded-xl text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
-                >
-                    <Server size={18} />
-                    <span>Library</span>
-                </a>
-                <a
-                    href="/settings"
-                    class="flex items-center gap-3 px-3 py-2 rounded-xl text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
-                >
-                    <Settings size={18} />
-                    <span>Settings</span>
-                </a>
-            </nav>
-
-            <div
-                class="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40"
-            >
-                <div class="flex items-center justify-between mb-2">
-                    <span
-                        class="text-xs font-bold text-helios-slate uppercase tracking-wider"
-                        >System Status</span
+        <Sidebar />
+        <main class="app-main p-8 overflow-y-auto">
+            <header class="flex items-center justify-between mb-8">
+                <div>
+                    <h1
+                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
                     >
-                    <span class="w-2 h-2 rounded-full bg-status-success"></span>
-                </div>
-                <div class="text-sm text-helios-ink font-mono">
-                    Active: <span class="text-helios-solar">1/4</span>
-                </div>
-            </div>
-        </aside>
-
-        <!-- Main Content -->
-        <main class="app-main">
-            <header
-                class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
-            >
-                <h1 class="text-lg font-semibold text-helios-ink">Overview</h1>
-                <div class="flex items-center gap-4">
-                    <div
-                        class="px-3 py-1 rounded-full border border-helios-line/60 bg-helios-surface-soft text-xs font-mono text-helios-slate uppercase tracking-wider"
-                    >
-                        v0.1.0
-                    </div>
+                        Dashboard
+                    </h1>
+                    <p class="text-helios-slate mt-2 text-sm">
+                        System Overview & Performance
+                    </p>
                 </div>
             </header>
 
-            <div class="p-6 overflow-auto">
-                <div
-                    class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8"
-                >
-                    <!-- Stat Card -->
-                    <div
-                        class="bg-helios-surface/90 border border-helios-line/50 rounded-2xl p-6 shadow-xl"
-                    >
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-helios-slate font-medium"
-                                >Queue Size</span
-                            >
-                            <Activity size={20} class="text-helios-solar" />
-                        </div>
-                        <div
-                            class="text-3xl font-bold text-helios-ink font-mono"
-                        >
-                            12
-                        </div>
-                        <div class="mt-2 text-xs text-status-warning">
-                            +3 pending
-                        </div>
-                    </div>
-
-                    <!-- Stat Card -->
-                    <div
-                        class="bg-helios-surface/90 border border-helios-line/50 rounded-2xl p-6 shadow-xl"
-                    >
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-helios-slate font-medium"
-                                >Processed</span
-                            >
-                            <Video size={20} class="text-helios-cyan" />
-                        </div>
-                        <div
-                            class="text-3xl font-bold text-helios-ink font-mono"
-                        >
-                            1,024
-                        </div>
-                        <div class="mt-2 text-xs text-status-success">
-                            1TB saved
-                        </div>
-                    </div>
-                </div>
-
-                <div
-                    class="bg-helios-surface/90 border border-helios-line/50 rounded-2xl p-6 shadow-xl"
-                >
-                    <h3 class="text-lg font-semibold text-helios-ink mb-6">
-                        Recent Activity
-                    </h3>
-
-                    <div class="space-y-4">
-                        {
-                            [1, 2, 3].map((i) => (
-                                <div class="flex items-center gap-4 p-4 rounded-xl bg-helios-main border border-helios-line/40">
-                                    <div class="w-10 h-10 rounded-lg bg-helios-surface-soft flex items-center justify-center text-helios-slate">
-                                        <Video size={18} />
-                                    </div>
-                                    <div class="flex-1">
-                                        <div class="text-sm font-medium text-helios-ink">
-                                            Movie_Title_{i}.mkv
-                                        </div>
-                                        <div class="text-xs text-helios-slate">
-                                            Transcoding to AV1 • 45%
-                                        </div>
-                                    </div>
-                                    <div class="text-xs font-mono text-helios-solar">
-                                        Processing...
-                                    </div>
-                                </div>
-                            ))
-                        }
-                    </div>
-                </div>
-            </div>
+            <Dashboard client:load />
         </main>
     </div>
 </Layout>

@@ -1,0 +1,67 @@
+---
+import { Activity, Server, Settings, Video, Terminal } from "lucide-react";
+
+const currentPath = Astro.url.pathname;
+
+const navItems = [
+    { href: "/", label: "Dashboard", Icon: Activity },
+    { href: "/jobs", label: "Jobs", Icon: Video },
+    { href: "/library", label: "Library", Icon: Server },
+    { href: "/logs", label: "Logs", Icon: Terminal },
+    { href: "/settings", label: "Settings", Icon: Settings },
+];
+---
+
+<aside
+    class="w-64 bg-helios-surface border-r border-helios-line/60 flex flex-col p-4 gap-4"
+>
+    <div
+        class="flex items-center gap-3 px-2 pb-4 border-b border-helios-line/40"
+    >
+        <div
+            class="w-8 h-8 rounded-lg bg-helios-solar text-helios-main flex items-center justify-center font-bold"
+        >
+            A
+        </div>
+        <span class="font-bold text-lg text-helios-ink">Alchemist</span>
+    </div>
+
+    <nav class="flex flex-col gap-2 flex-1">
+        {
+            navItems.map(({ href, label, Icon }) => {
+                const isActive =
+                    currentPath === href ||
+                    (href !== "/" && currentPath.startsWith(href));
+                return (
+                    <a
+                        href={href}
+                        class:list={[
+                            "flex items-center gap-3 px-3 py-2 rounded-xl transition-colors",
+                            isActive
+                                ? "bg-helios-solar text-helios-main font-bold"
+                                : "text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink",
+                        ]}
+                    >
+                        <Icon size={18} />
+                        <span>{label}</span>
+                    </a>
+                );
+            })
+        }
+    </nav>
+
+    <div
+        class="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40"
+    >
+        <div class="flex items-center justify-between mb-2">
+            <span
+                class="text-xs font-bold text-helios-slate uppercase tracking-wider"
+                >System Status</span
+            >
+            <span class="w-2 h-2 rounded-full bg-status-success"></span>
+        </div>
+        <div class="text-sm text-helios-ink font-mono">
+            Active: <span class="text-helios-solar">1/4</span>
+        </div>
+    </div>
+</aside>

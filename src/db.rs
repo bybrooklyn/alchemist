@@ -486,4 +486,27 @@ impl Db {
             .await?;
         Ok(result.rows_affected())
     }
+
+    /// Set UI preference
+    pub async fn set_preference(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ui_preferences (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get UI preference
+    pub async fn get_preference(&self, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT value FROM ui_preferences WHERE key = ?")
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| r.0))
+    }
 }
