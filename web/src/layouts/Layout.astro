@@ -32,11 +32,38 @@ const { title } = Astro.props;
                 }
             }
             
+            function checkAuth() {
+                const isAuthPage = window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/setup');
+                const token = localStorage.getItem('alchemist_token');
+                
+                if (!isAuthPage && !token) {
+                    // Check if setup is needed
+                    fetch('/api/setup/status')
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.setup_required) {
+                                window.location.href = '/setup';
+                            } else {
+                                window.location.href = '/login';
+                            }
+                        })
+                        .catch(() => {
+                            // If API fails (server down?), maybe just stay? Or go to login?
+                            // Safest to go to login
+                            window.location.href = '/login';
+                        });
+                }
+            }
+            
             // Run on initial load
             initTheme();
+            checkAuth();
             
             // Run on view transition navigation
-            document.addEventListener('astro:after-swap', initTheme);
+            document.addEventListener('astro:after-swap', () => {
+                initTheme();
+                checkAuth();
+            });
         </script>
         <script>
             // Check setup status on load

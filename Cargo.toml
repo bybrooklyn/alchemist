@@ -1,6 +1,6 @@
 [package]
 name = "alchemist"
-version = "0.1.1"
+version = "0.2.2"
 edition = "2021"
 license = "GPL-3.0"
 
@@ -39,3 +39,5 @@ reqwest = { version = "0.12", features = ["json"] }
 rust-embed = { version = "8", features = ["axum"] }
 mime_guess = "2.0"
 async-trait = "0.1"
+argon2 = "0.5.3"
+rand = "0.8"
