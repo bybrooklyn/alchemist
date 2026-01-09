@@ -38,10 +38,10 @@ async fn main() -> Result<()> {
 
     // Startup Banner
     info!("╔═══════════════════════════════════════════════════════════════╗");
-    info!("║                        ALCHEMIST                             ║");
-    info!("║              Video Transcoding Automation                     ║");
+    info!("║                          ALCHEMIST                            ║");
+    info!("║                Video Transcoding Automation                   ║");
     info!(
-        "║                   Version {}                            ║",
+        "║                     Version {}                             ║",
         env!("CARGO_PKG_VERSION")
     );
     info!("╚═══════════════════════════════════════════════════════════════╝");
@@ -57,62 +57,56 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // 0. Load Configuration (with first-boot wizard)
+    // 0. Load Configuration
     let config_path = std::path::Path::new("config.toml");
-    let config = if !config_path.exists() && args.server {
-        // First boot: Run configuration wizard
-        info!("No configuration file found. Starting configuration wizard...");
-        info!("");
-
-        match alchemist::wizard::ConfigWizard::run(config_path) {
-            Ok(cfg) => {
-                info!("");
-                info!("Configuration complete! Continuing with server startup...");
-                info!("");
-                cfg
-            }
-            Err(e) => {
-                error!("Configuration wizard failed: {}", e);
-                error!("You can:");
-                error!("  1. Run the wizard again: alchemist --server");
-                error!("  2. Create config.toml manually");
-                error!("  3. Use Python wizard: python setup/configure.py");
-                return Err(e);
-            }
+    let (config, setup_mode) = if !config_path.exists() {
+        if args.server {
+            info!("No configuration file found. Entering Setup Mode (Web UI).");
+            (config::Config::default(), true)
+        } else {
+            // CLI mode requires config or explicit args (which are not fully implemented for all settings)
+            // For now, let's just warn and use defaults, or error out.
+            // But the user specific request is about Docker/Server.
+            warn!("No configuration file found. Using defaults.");
+            (config::Config::default(), false) // Assuming defaults are safe or dry-run
         }
     } else {
-        // Normal boot or CLI mode: Load config or use defaults
-        config::Config::load(config_path).unwrap_or_else(|e| {
-            warn!("Failed to load config.toml: {}. Using defaults.", e);
-            config::Config::default()
-        })
+        match config::Config::load(config_path) {
+            Ok(c) => (c, false),
+            Err(e) => {
+                warn!("Failed to load config.toml: {}. Using defaults.", e);
+                (config::Config::default(), false)
+            }
+        }
     };
 
-    // Log Configuration
-    info!("Configuration:");
-    info!("  Concurrent Jobs: {}", config.transcode.concurrent_jobs);
-    info!(
-        "  Size Reduction Threshold: {:.1}%",
-        config.transcode.size_reduction_threshold * 100.0
-    );
-    info!("  Min File Size: {} MB", config.transcode.min_file_size_mb);
-    info!(
-        "  CPU Fallback: {}",
-        if config.hardware.allow_cpu_fallback {
-            "Enabled"
-        } else {
-            "Disabled"
-        }
-    );
-    info!(
-        "  CPU Encoding: {}",
-        if config.hardware.allow_cpu_encoding {
-            "Enabled"
-        } else {
-            "Disabled"
-        }
-    );
-    info!("  CPU Preset: {}", config.hardware.cpu_preset);
+    if !setup_mode {
+        // Log Configuration only if not in setup mode
+        info!("Configuration:");
+        info!("  Concurrent Jobs: {}", config.transcode.concurrent_jobs);
+        info!(
+            "  Size Reduction Threshold: {:.1}%",
+            config.transcode.size_reduction_threshold * 100.0
+        );
+        info!("  Min File Size: {} MB", config.transcode.min_file_size_mb);
+        info!(
+            "  CPU Fallback: {}",
+            if config.hardware.allow_cpu_fallback {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
+        info!(
+            "  CPU Encoding: {}",
+            if config.hardware.allow_cpu_encoding {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
+        info!("  CPU Preset: {}", config.hardware.cpu_preset);
+    }
     info!("");
 
     // 1. Hardware Detection
@@ -124,8 +118,9 @@ async fn main() -> Result<()> {
     }
 
     // Check CPU encoding policy
-    if hw_info.vendor == hardware::Vendor::Cpu {
+    if !setup_mode && hw_info.vendor == hardware::Vendor::Cpu {
         if !config.hardware.allow_cpu_encoding {
+            // In setup mode, we might not have set this yet, so don't error out.
             error!("CPU encoding is disabled in configuration.");
             error!("Set hardware.allow_cpu_encoding = true in config.toml to enable CPU fallback.");
             return Err(alchemist::error::AlchemistError::Config(
@@ -153,18 +148,27 @@ async fn main() -> Result<()> {
     info!("Database and services initialized.");
 
     // 3. Start Background Processor Loop
-    let proc = agent.clone();
-    tokio::spawn(async move {
-        proc.run_loop().await;
-    });
+    // Only start if NOT in setup mode. If in setup mode, the agent should effectively be paused or idle/empty
+    // But since we pass agent to server, we can start it. It just won't have any jobs or directories to scan yet.
+    // However, if we want to be strict, we can pause it.
+    if setup_mode {
+        info!("Setup mode active. Background processor paused.");
+        agent.pause();
+    } else {
+        let proc = agent.clone();
+        tokio::spawn(async move {
+            proc.run_loop().await;
+        });
+    }
 
     if args.server {
         info!("Starting web server...");
 
-        // Start File Watcher if directories are configured
-        if !config.scanner.directories.is_empty() {
+        // Start File Watcher if directories are configured and not in setup mode
+        if !setup_mode && !config.scanner.directories.is_empty() {
             let watcher_dirs: Vec<PathBuf> = config
-                .scanner.directories
+                .scanner
+                .directories
                 .iter()
                 .map(PathBuf::from)
                 .collect();
@@ -177,9 +181,16 @@ async fn main() -> Result<()> {
             });
         }
 
-        alchemist::server::run_server(db, config, agent, transcoder, tx).await?;
+        alchemist::server::run_server(db, config, agent, transcoder, tx, setup_mode).await?;
     } else {
         // CLI Mode
+        if setup_mode {
+            error!("Configuration required. Run with --server to use the web-based setup wizard, or create config.toml manually.");
+            return Err(alchemist::error::AlchemistError::Config(
+                "Missing configuration".into(),
+            ));
+        }
+
         if args.directories.is_empty() {
             error!(
                 "No directories provided. Usage: alchemist <DIRECTORIES>... or alchemist --server"
@@ -194,7 +205,17 @@ async fn main() -> Result<()> {
         info!("Waiting for jobs to complete...");
         loop {
             let stats = db.get_stats().await?;
-            let active = stats.as_object().map(|m| m.iter().filter(|(k, _)| ["encoding", "analyzing", "resuming"].contains(&k.as_str())).map(|(_, v)| v.as_i64().unwrap_or(0)).sum::<i64>()).unwrap_or(0);
+            let active = stats
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter(|(k, _)| {
+                            ["encoding", "analyzing", "resuming"].contains(&k.as_str())
+                        })
+                        .map(|(_, v)| v.as_i64().unwrap_or(0))
+                        .sum::<i64>()
+                })
+                .unwrap_or(0);
             let queued = stats.get("queued").and_then(|v| v.as_i64()).unwrap_or(0);
 
             if active + queued == 0 {

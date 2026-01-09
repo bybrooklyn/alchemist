@@ -1,0 +1,59 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        color-scheme: dark;
+        /* Default to Crimson as user showed interest before, or Helios Orange? 
+       Using Helios Orange as default for now to match reference exactly, can switch later. */
+        --bg-main: 12 10 8;
+        --bg-panel: 20 17 14;
+        --bg-elevated: 28 24 20;
+        --accent-primary: 245 140 35;
+        --accent-secondary: 255 187 92;
+        --text-primary: 240 234 225;
+        --text-muted: 176 164 148;
+        --border-subtle: 66 58 48;
+        --status-success: 70 185 118;
+        --status-warning: 239 169 57;
+        --status-error: 232 92 90;
+    }
+
+    [data-theme="crimson"] {
+        --bg-main: 14 7 10;
+        --bg-panel: 22 12 16;
+        --bg-elevated: 30 18 24;
+        --accent-primary: 225 82 94;
+        --accent-secondary: 236 136 146;
+        --text-primary: 244 232 235;
+        --text-muted: 189 160 168;
+        --border-subtle: 74 50 58;
+        --status-success: 86 192 135;
+        --status-warning: 242 176 78;
+        --status-error: 225 82 94;
+    }
+
+    body {
+        @apply font-display text-helios-ink bg-helios-main min-h-screen;
+        background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.05), transparent 65%),
+            linear-gradient(180deg, rgb(var(--bg-main)), rgb(var(--bg-panel)));
+    }
+}
+
+@layer components {
+    .app-shell {
+        @apply flex h-full min-h-screen w-full;
+    }
+
+    .app-main {
+        @apply flex-1 flex flex-col h-full bg-helios-main min-w-0;
+    }
+
+    /* Add other utility classes from Helios as needed */
+    .btn {
+        @apply px-4 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity;
+    }
+}

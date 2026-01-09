@@ -1,7 +1,9 @@
 /target
 config.toml
 error.txt
-/node_modules
 public/pkg/alchemist.css
 build_log_2.txt
 alchemist.db
+web/node_modules
+web/dist
+web/.astro

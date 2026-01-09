@@ -1,0 +1,14 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SetupWizard from "../components/SetupWizard";
+---
+
+<Layout title="Alchemist | Setup">
+    <div
+        class="min-h-screen bg-helios-main flex items-center justify-center p-4"
+    >
+        <div class="w-full max-w-3xl">
+            <SetupWizard client:only="react" />
+        </div>
+    </div>
+</Layout>
