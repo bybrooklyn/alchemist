@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { apiFetch } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -165,9 +166,8 @@ export default function AppearanceSettings() {
                 // Since we don't have the full Helios API, we'll implement a simple one or just use local storage for now if backend isn't ready.
                 // But the plan says "Implement PUT /api/ui/preferences".
                 // We'll try to fetch it.
-                const response = await fetch("/api/ui/preferences", {
-                    method: "POST", // Using POST for simplicity if PUT is tricky in backend routing without full REST
-                    headers: { "Content-Type": "application/json" },
+                const response = await apiFetch("/api/ui/preferences", {
+                    method: "POST",
                     body: JSON.stringify({ active_theme_id: themeId }),
                 });
 

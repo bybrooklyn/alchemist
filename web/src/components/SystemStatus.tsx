@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Activity, X, Zap, CheckCircle2, AlertTriangle, Database } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { apiFetch } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -23,7 +24,7 @@ export default function SystemStatus() {
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const res = await fetch("/api/stats");
+                const res = await apiFetch("/api/stats");
                 if (res.ok) {
                     const data = await res.json();
                     setStats({

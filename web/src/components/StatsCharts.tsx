@@ -10,6 +10,7 @@ import {
     FileVideo,
     Timer
 } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 interface AggregatedStats {
     total_input_bytes: number;
@@ -54,9 +55,9 @@ export default function StatsCharts() {
     const fetchAllStats = async () => {
         try {
             const [aggRes, dailyRes, detailedRes] = await Promise.all([
-                fetch("/api/stats/aggregated"),
-                fetch("/api/stats/daily"),
-                fetch("/api/stats/detailed")
+                apiFetch("/api/stats/aggregated"),
+                apiFetch("/api/stats/daily"),
+                apiFetch("/api/stats/detailed")
             ]);
 
             if (aggRes.ok) setStats(await aggRes.json());
@@ -305,7 +306,7 @@ export default function StatsCharts() {
                                             </td>
                                             <td className="py-3 px-2 text-right">
                                                 <span className={`font-bold text-xs ${job.vmaf_score && job.vmaf_score > 90 ? 'text-emerald-500' :
-                                                        job.vmaf_score && job.vmaf_score > 80 ? 'text-amber-500' : 'text-helios-slate'
+                                                    job.vmaf_score && job.vmaf_score > 80 ? 'text-amber-500' : 'text-helios-slate'
                                                     }`}>
                                                     {job.vmaf_score ? job.vmaf_score.toFixed(1) : 'N/A'}
                                                 </span>
