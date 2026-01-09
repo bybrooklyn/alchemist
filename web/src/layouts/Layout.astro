@@ -49,8 +49,10 @@ const { title } = Astro.props;
                         })
                         .catch(() => {
                             // If API fails (server down?), maybe just stay? Or go to login?
-                            // Safest to go to login
-                            window.location.href = '/login';
+                            // Safest to go to login, but only if not already there
+                            if (!window.location.pathname.startsWith('/login')) {
+                                window.location.href = '/login';
+                            }
                         });
                 }
             }
