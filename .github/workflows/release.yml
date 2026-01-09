@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-release:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -16,14 +16,25 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             artifact_name: alchemist
             asset_name: alchemist-linux-x86_64
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: alchemist
+            asset_name: alchemist-linux-aarch64
+            use_cross: true
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             artifact_name: alchemist.exe
             asset_name: alchemist-windows-x86_64.exe
+            use_cross: false
           - os: macos-latest
+            target: universal-apple-darwin
             artifact_name: alchemist
             asset_name: alchemist-macos
+            use_cross: false
 
     steps:
       - name: Checkout code
@@ -31,20 +42,19 @@ jobs:
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      # Dependencies for Linux (if needed for typical Rust builds, usually yes)
-      - name: Install Linux Dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+      - name: Install Cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-      # Build Frontend
+      # Build Frontend (Runs on host, embedded into binary)
       - name: Build Frontend
         shell: bash
         run: |
@@ -53,17 +63,23 @@ jobs:
           bun run build
 
       # Build Backend
-      - name: Build Backend (Release)
-        run: cargo build --release --locked
+      - name: Build Backend
+        shell: bash
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       # Prepare Asset
       - name: Prepare Asset
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            mv target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+            mv target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
           else
-            mv target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+            mv target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
           fi
 
       # Upload Release Asset
