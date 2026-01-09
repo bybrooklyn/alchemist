@@ -102,7 +102,8 @@ export default function LogViewer() {
     useEffect(() => {
         let eventSource: EventSource | null = null;
         const connect = () => {
-            eventSource = new EventSource("/api/events");
+            const token = localStorage.getItem('alchemist_token') || '';
+            eventSource = new EventSource(`/api/events?token=${token}`);
             const handleMsg = (msg: string, level: "info" | "warn" | "error" = "info") => {
                 if (pausedRef.current) return;
                 setLogs(prev => {
