@@ -1,0 +1,74 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: alchemist
+            asset_name: alchemist-linux-x86_64
+          - os: windows-latest
+            artifact_name: alchemist.exe
+            asset_name: alchemist-windows-x86_64.exe
+          - os: macos-latest
+            artifact_name: alchemist
+            asset_name: alchemist-macos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      # Dependencies for Linux (if needed for typical Rust builds, usually yes)
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      # Build Frontend
+      - name: Build Frontend
+        shell: bash
+        run: |
+          cd web
+          bun install --frozen-lockfile
+          bun run build
+
+      # Build Backend
+      - name: Build Backend (Release)
+        run: cargo build --release --locked
+
+      # Prepare Asset
+      - name: Prepare Asset
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          else
+            mv target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          fi
+
+      # Upload Release Asset
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
