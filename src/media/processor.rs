@@ -1,7 +1,12 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, Job, JobState};
 use crate::error::Result;
-use crate::media::analyzer::Analyzer;
+use crate::media::analyzer::{Analyzer, FfmpegAnalyzer};
+use crate::media::executor::FfmpegExecutor;
+use crate::media::pipeline::{
+    Analyzer as AnalyzerTrait, Executor as ExecutorTrait, Planner as PlannerTrait,
+};
+use crate::media::planner::BasicPlanner;
 use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareInfo;
 use crate::system::notifications::NotificationService;
@@ -10,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Semaphore};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub struct Agent {
     db: Arc<Db>,
@@ -72,7 +77,7 @@ impl Agent {
         }); // Trigger UI refresh
         Ok(())
     }
-    
+
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
     }
@@ -134,8 +139,9 @@ impl Agent {
         self.db.increment_attempt_count(job.id).await?;
         self.update_job_state(job.id, JobState::Analyzing).await?;
 
+        let analyzer = FfmpegAnalyzer;
         let analyze_start = std::time::Instant::now();
-        let metadata = match Analyzer::probe(&file_path) {
+        let metadata = match analyzer.analyze(&file_path).await {
             Ok(m) => m,
             Err(e) => {
                 error!("Job {}: Probing failed: {}", job.id, e);
@@ -152,15 +158,16 @@ impl Agent {
         );
 
         // Get video stream info
-        if let Some(video_stream) = metadata.streams.iter().find(|s| s.codec_type == "video") {
-            if let (Some(width), Some(height)) = (video_stream.width, video_stream.height) {
-                info!("[Job {}] Resolution: {}x{}", job.id, width, height);
-            }
-            info!("[Job {}] Codec: {}", job.id, video_stream.codec_name);
-        }
+        info!(
+            "[Job {}] Resolution: {}x{}",
+            job.id, metadata.width, metadata.height
+        );
+        info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
-        let (should_encode, reason) =
-            Analyzer::should_transcode(&file_path, &metadata, &self.config);
+        let planner = BasicPlanner::new(self.config.clone());
+        let decision = planner.plan(&metadata).await?;
+        let should_encode = decision.action == "encode";
+        let reason = decision.reason.clone();
 
         if !should_encode {
             info!("Decision: SKIP Job {} - {}", job.id, &reason);
@@ -179,17 +186,25 @@ impl Agent {
 
         self.update_job_state(job.id, JobState::Encoding).await?;
 
-        match self
-            .orchestrator
-            .transcode_to_av1(
-                &file_path,
-                &output_path,
-                self.hw_info.as_ref().as_ref(),
-                self.config.transcode.quality_profile,
-                self.config.hardware.cpu_preset,
-                self.dry_run,
+        let executor = FfmpegExecutor::new(
+            self.orchestrator.clone(),
+            self.config.clone(),
+            self.hw_info.as_ref().clone(), // Option<HardwareInfo>
+            self.tx.clone(),
+            self.dry_run,
+        );
+
+        match executor
+            .execute(
+                &job,
+                &crate::db::Decision {
+                    id: 0, // Mock decision for now, relying on job
+                    job_id: job.id,
+                    action: "encode".to_string(),
+                    reason: reason.clone(),
+                    created_at: chrono::Utc::now(),
+                },
                 &metadata,
-                Some((job.id, self.tx.clone())),
             )
             .await
         {
@@ -202,7 +217,10 @@ impl Agent {
                     self.update_job_state(job.id, JobState::Cancelled).await
                 } else {
                     error!("Job {}: Transcode failed: {}", job.id, e);
-                    let _ = self.notifications.notify_job_failed(&job, &e.to_string()).await;
+                    let _ = self
+                        .notifications
+                        .notify_job_failed(&job, &e.to_string())
+                        .await;
                     self.update_job_state(job.id, JobState::Failed).await?;
                     Err(e)
                 }
@@ -264,7 +282,11 @@ impl Agent {
                 reduction * 100.0
             );
             let _ = std::fs::remove_file(output_path);
-            let reason = if output_size == 0 { "Empty output" } else { "Inefficient reduction" };
+            let reason = if output_size == 0 {
+                "Empty output"
+            } else {
+                "Inefficient reduction"
+            };
             let _ = self.db.add_decision(job_id, "skip", reason).await;
             self.update_job_state(job_id, JobState::Skipped).await?;
             return Ok(());
@@ -279,10 +301,18 @@ impl Agent {
                     vmaf_score = score.vmaf;
                     if let Some(s) = vmaf_score {
                         info!("[Job {}] VMAF Score: {:.2}", job_id, s);
-                        if s < self.config.quality.min_vmaf_score && self.config.quality.revert_on_low_quality {
-                            warn!("Job {}: Quality gate failed ({:.2} < {}). Reverting.", job_id, s, self.config.quality.min_vmaf_score);
+                        if s < self.config.quality.min_vmaf_score
+                            && self.config.quality.revert_on_low_quality
+                        {
+                            warn!(
+                                "Job {}: Quality gate failed ({:.2} < {}). Reverting.",
+                                job_id, s, self.config.quality.min_vmaf_score
+                            );
                             let _ = std::fs::remove_file(output_path);
-                            let _ = self.db.add_decision(job_id, "skip", "Low quality (VMAF)").await;
+                            let _ = self
+                                .db
+                                .add_decision(job_id, "skip", "Low quality (VMAF)")
+                                .await;
                             self.update_job_state(job_id, JobState::Skipped).await?;
                             return Ok(());
                         }
@@ -296,16 +326,19 @@ impl Agent {
 
         // Finalize results
         let bitrate = (output_size as f64 * 8.0) / (encode_duration * 1000.0); // Rough estimate
-        let _ = self.db.save_encode_stats(
-            job_id,
-            input_size,
-            output_size,
-            reduction,
-            encode_duration,
-            1.0, // Speed calculation could be refined
-            bitrate,
-            vmaf_score,
-        ).await;
+        let _ = self
+            .db
+            .save_encode_stats(
+                job_id,
+                input_size,
+                output_size,
+                reduction,
+                encode_duration,
+                1.0, // Speed calculation could be refined
+                bitrate,
+                vmaf_score,
+            )
+            .await;
 
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         info!("✅ Job #{} COMPLETED", job_id);
@@ -327,9 +360,14 @@ impl Agent {
             input_size / 1_048_576,
             output_size / 1_048_576,
             reduction * 100.0,
-            vmaf_score.map(|s| format!("{:.2}", s)).unwrap_or_else(|| "N/A".to_string())
+            vmaf_score
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "N/A".to_string())
         );
-        let _ = self.notifications.notify_job_complete(&job, Some(&stats_msg)).await;
+        let _ = self
+            .notifications
+            .notify_job_complete(&job, Some(&stats_msg))
+            .await;
 
         Ok(())
     }

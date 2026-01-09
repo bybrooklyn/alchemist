@@ -73,7 +73,14 @@ pub struct Job {
 
 impl Job {
     pub fn is_active(&self) -> bool {
-        matches!(self.status, JobState::Encoding | JobState::Analyzing | JobState::Resuming)
+        matches!(
+            self.status,
+            JobState::Encoding | JobState::Analyzing | JobState::Resuming
+        )
+    }
+
+    pub fn can_retry(&self) -> bool {
+        matches!(self.status, JobState::Failed | JobState::Cancelled)
     }
 
     pub fn status_class(&self) -> &'static str {
@@ -90,7 +97,9 @@ impl Job {
     }
 
     pub fn vmaf_fixed(&self) -> String {
-        self.vmaf_score.map(|s| format!("{:.1}", s)).unwrap_or_else(|| "N/A".to_string())
+        self.vmaf_score
+            .map(|s| format!("{:.1}", s))
+            .unwrap_or_else(|| "N/A".to_string())
     }
 }
 
@@ -124,6 +133,28 @@ impl AggregatedStats {
     pub fn total_time_hours(&self) -> f64 {
         self.total_encode_time_seconds / 3600.0
     }
+
+    pub fn total_savings_fixed(&self) -> String {
+        format!("{:.1}", self.total_savings_gb())
+    }
+
+    pub fn total_input_fixed(&self) -> String {
+        format!("{:.1}", self.total_input_gb())
+    }
+
+    pub fn efficiency_fixed(&self) -> String {
+        format!("{:.1}", self.avg_reduction_percentage())
+    }
+
+    pub fn time_fixed(&self) -> String {
+        format!("{:.1}", self.total_time_hours())
+    }
+
+    pub fn avg_vmaf_fixed(&self) -> String {
+        self.avg_vmaf
+            .map(|v| format!("{:.1}", v))
+            .unwrap_or_else(|| "N/A".to_string())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -147,95 +178,19 @@ impl Db {
 
         let pool = SqlitePool::connect_with(options).await?;
 
+        // Run migrations
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|e| crate::error::AlchemistError::Database(e.into()))?;
+
         let db = Self { pool };
-        db.init().await?;
-        db.reset_interrupted_jobs().await?;
+        // db.reset_interrupted_jobs().await?; // Optional: keep or remove based on preference, but good for safety
 
         Ok(db)
     }
 
-    async fn init(&self) -> Result<()> {
-// ... existing code ...
-        // Jobs table with priority and progress
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                input_path TEXT NOT NULL UNIQUE,
-                output_path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                mtime_hash TEXT NOT NULL,
-                priority INTEGER DEFAULT 0,
-                progress REAL DEFAULT 0.0,
-                attempt_count INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Helper to check and add columns
-        let columns = sqlx::query("PRAGMA table_info(jobs)")
-            .fetch_all(&self.pool)
-            .await?;
-
-        let has_column = |name: &str| {
-            columns
-                .iter()
-                .any(|row| row.get::<String, _>("name") == name)
-        };
-
-        if !has_column("priority") {
-            sqlx::query("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
-                .execute(&self.pool)
-                .await?;
-        }
-        if !has_column("progress") {
-            sqlx::query("ALTER TABLE jobs ADD COLUMN progress REAL DEFAULT 0.0")
-                .execute(&self.pool)
-                .await?;
-        }
-        if !has_column("attempt_count") {
-            sqlx::query("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER DEFAULT 0")
-                .execute(&self.pool)
-                .await?;
-        }
-
-        // Decisions table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS decisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL,
-                action TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(job_id) REFERENCES jobs(id)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Encode stats table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS encode_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL UNIQUE,
-                input_size_bytes INTEGER NOT NULL,
-                output_size_bytes INTEGER NOT NULL,
-                compression_ratio REAL NOT NULL,
-                encode_time_seconds REAL NOT NULL,
-                encode_speed REAL NOT NULL,
-                avg_bitrate_kbps REAL NOT NULL,
-                vmaf_score REAL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(job_id) REFERENCES jobs(id)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
+    // init method removed as it is replaced by migrations
 
     pub async fn reset_interrupted_jobs(&self) -> Result<()> {
         sqlx::query("UPDATE jobs SET status = 'queued' WHERE status IN ('analyzing', 'encoding')")
@@ -476,7 +431,7 @@ impl Db {
                 COALESCE(SUM(output_size_bytes), 0) as total_output_size,
                 AVG(vmaf_score) as avg_vmaf,
                 COALESCE(SUM(encode_time_seconds), 0) as total_encode_time
-             FROM encode_stats"
+             FROM encode_stats",
         )
         .fetch_one(&self.pool)
         .await?;

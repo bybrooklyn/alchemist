@@ -45,7 +45,7 @@ impl Transcoder {
         quality_profile: QualityProfile,
         cpu_preset: CpuPreset,
         dry_run: bool,
-        metadata: &crate::media::analyzer::MediaMetadata,
+        metadata: &crate::media::pipeline::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
     ) -> Result<()> {
         if dry_run {
@@ -62,7 +62,7 @@ impl Transcoder {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let total_duration = metadata.format.duration.parse::<f64>().unwrap_or(0.0);
+        let total_duration = metadata.duration_secs;
 
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         info!("Starting transcode:");
