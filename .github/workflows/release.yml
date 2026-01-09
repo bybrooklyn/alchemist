@@ -19,7 +19,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: alchemist
             asset_name: alchemist-linux-x86_64
-            use_cross: true
+            use_cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact_name: alchemist
@@ -30,11 +30,11 @@ jobs:
             artifact_name: alchemist.exe
             asset_name: alchemist-windows-x86_64.exe
             use_cross: false
-          - os: macos-latest
-            target: universal-apple-darwin
-            artifact_name: alchemist
-            asset_name: alchemist-macos
-            use_cross: false
+          # - os: macos-latest
+          #   target: universal-apple-darwin
+          #   artifact_name: alchemist
+          #   asset_name: alchemist-macos
+          #   use_cross: false
 
     steps:
       - name: Checkout code
@@ -61,6 +61,9 @@ jobs:
           cd web
           bun install --frozen-lockfile
           bun run build
+          echo "Listing web/dist:"
+          ls -R dist
+
 
       # Build Backend
       - name: Build Backend
