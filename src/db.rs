@@ -158,6 +158,31 @@ impl AggregatedStats {
     }
 }
 
+/// Daily aggregated statistics for time-series charts
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailyStats {
+    pub date: String,
+    pub jobs_completed: i64,
+    pub bytes_saved: i64,
+    pub total_input_bytes: i64,
+    pub total_output_bytes: i64,
+}
+
+/// Detailed per-job encoding statistics
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct DetailedEncodeStats {
+    pub job_id: i64,
+    pub input_path: String,
+    pub input_size_bytes: i64,
+    pub output_size_bytes: i64,
+    pub compression_ratio: f64,
+    pub encode_time_seconds: f64,
+    pub encode_speed: f64,
+    pub avg_bitrate_kbps: f64,
+    pub vmaf_score: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Decision {
     pub id: i64,
@@ -447,7 +472,66 @@ impl Db {
         })
     }
 
+    /// Get daily statistics for the last N days (for time-series charts)
+    pub async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>> {
+        let rows = sqlx::query(
+            "SELECT 
+                DATE(e.created_at) as date,
+                COUNT(*) as jobs_completed,
+                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved,
+                COALESCE(SUM(e.input_size_bytes), 0) as total_input_bytes,
+                COALESCE(SUM(e.output_size_bytes), 0) as total_output_bytes
+             FROM encode_stats e
+             WHERE e.created_at >= DATE('now', ? || ' days')
+             GROUP BY DATE(e.created_at)
+             ORDER BY date ASC",
+        )
+        .bind(format!("-{}", days))
+        .fetch_all(&self.pool)
+        .await?;
+
+        let stats = rows
+            .iter()
+            .map(|row| DailyStats {
+                date: row.get("date"),
+                jobs_completed: row.get("jobs_completed"),
+                bytes_saved: row.get("bytes_saved"),
+                total_input_bytes: row.get("total_input_bytes"),
+                total_output_bytes: row.get("total_output_bytes"),
+            })
+            .collect();
+
+        Ok(stats)
+    }
+
+    /// Get detailed per-job encoding statistics (most recent first)
+    pub async fn get_detailed_encode_stats(&self, limit: i32) -> Result<Vec<DetailedEncodeStats>> {
+        let stats = sqlx::query_as::<_, DetailedEncodeStats>(
+            "SELECT 
+                e.job_id,
+                j.input_path,
+                e.input_size_bytes,
+                e.output_size_bytes,
+                e.compression_ratio,
+                e.encode_time_seconds,
+                e.encode_speed,
+                e.avg_bitrate_kbps,
+                e.vmaf_score,
+                e.created_at
+             FROM encode_stats e
+             JOIN jobs j ON e.job_id = j.id
+             ORDER BY e.created_at DESC
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(stats)
+    }
+
     /// Batch update job statuses (for batch operations)
+
     pub async fn batch_update_status(
         &self,
         status_from: JobState,
@@ -535,7 +619,12 @@ impl Db {
         Ok(count.0 > 0)
     }
 
-    pub async fn create_session(&self, user_id: i64, token: &str, expires_at: DateTime<Utc>) -> Result<()> {
+    pub async fn create_session(
+        &self,
+        user_id: i64,
+        token: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
         sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
             .bind(token)
             .bind(user_id)
@@ -546,10 +635,12 @@ impl Db {
     }
 
     pub async fn get_session(&self, token: &str) -> Result<Option<Session>> {
-        let session = sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP")
-            .bind(token)
-            .fetch_optional(&self.pool)
-            .await?;
+        let session = sqlx::query_as::<_, Session>(
+            "SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(session)
     }
 

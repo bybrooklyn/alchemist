@@ -1,13 +1,28 @@
 ---
 import Layout from "../layouts/Layout.astro";
-import StatsCharts from "../components/StatsCharts";
+import Sidebar from "../components/Sidebar.astro";
+import StatsCharts from "../components/StatsCharts.tsx";
+import { BarChart3 } from "lucide-react";
 ---
 
 <Layout title="Statistics | Alchemist">
-    <div class="content-header">
-        <h1 class="page-title">Statistics</h1>
-        <p class="page-subtitle">Encoding performance and space savings</p>
-    </div>
+    <div class="app-shell">
+        <Sidebar />
+        <main class="app-main p-8 overflow-y-auto">
+            <header class="flex items-center justify-between mb-8">
+                <div>
+                    <h1
+                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
+                    >
+                        Statistics
+                    </h1>
+                    <p class="text-helios-slate mt-2 text-sm">
+                        Encoding performance and space savings
+                    </p>
+                </div>
+            </header>
 
-    <StatsCharts client:load />
+            <StatsCharts client:load />
+        </main>
+    </div>
 </Layout>
