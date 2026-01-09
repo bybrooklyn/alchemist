@@ -18,6 +18,7 @@ use futures::stream::Stream;
 use rust_embed::RustEmbed;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -34,6 +35,7 @@ pub struct AppState {
     pub transcoder: Arc<Transcoder>,
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: bool,
+    pub start_time: Instant,
 }
 
 pub async fn run_server(
@@ -51,12 +53,14 @@ pub async fn run_server(
         transcoder,
         tx,
         setup_required,
+        start_time: std::time::Instant::now(),
     });
 
     let app = Router::new()
         // API Routes
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
+        .route("/api/stats/aggregated", get(aggregated_stats_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
@@ -66,6 +70,9 @@ pub async fn run_server(
         .route("/api/engine/pause", post(pause_engine_handler))
         .route("/api/engine/resume", post(resume_engine_handler))
         .route("/api/engine/status", get(engine_status_handler))
+        // Health Check Routes
+        .route("/api/health", get(health_handler))
+        .route("/api/ready", get(ready_handler))
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
@@ -252,6 +259,30 @@ async fn stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     }))
 }
 
+async fn aggregated_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_aggregated_stats().await {
+        Ok(stats) => {
+            let savings = stats.total_input_size - stats.total_output_size;
+            axum::Json(serde_json::json!({
+                "total_input_bytes": stats.total_input_size,
+                "total_output_bytes": stats.total_output_size,
+                "total_savings_bytes": savings,
+                "total_time_seconds": stats.total_encode_time_seconds,
+                "total_jobs": stats.completed_jobs,
+                "avg_vmaf": stats.avg_vmaf.unwrap_or(0.0)
+            }))
+        }
+        Err(_) => axum::Json(serde_json::json!({
+            "total_input_bytes": 0,
+            "total_output_bytes": 0,
+            "total_savings_bytes": 0,
+            "total_time_seconds": 0,
+            "total_jobs": 0,
+            "avg_vmaf": 0.0
+        })),
+    }
+}
+
 async fn jobs_table_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let jobs = state.db.get_all_jobs().await.unwrap_or_default();
     axum::Json(jobs)
@@ -318,6 +349,37 @@ async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoR
     axum::Json(serde_json::json!({
         "status": if state.agent.is_paused() { "paused" } else { "running" }
     }))
+}
+
+async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let uptime = state.start_time.elapsed();
+    let hours = uptime.as_secs() / 3600;
+    let minutes = (uptime.as_secs() % 3600) / 60;
+    let seconds = uptime.as_secs() % 60;
+
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime": format!("{}h {}m {}s", hours, minutes, seconds),
+        "uptime_seconds": uptime.as_secs()
+    }))
+}
+
+async fn ready_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Check if database is accessible
+    let db_ok = state.db.get_stats().await.is_ok();
+
+    if db_ok {
+        (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "ready": true })),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({ "ready": false, "reason": "database unavailable" })),
+        )
+    }
 }
 
 async fn auth_middleware(

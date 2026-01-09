@@ -1,3 +1,4 @@
+use crate::scheduler::ScheduleConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -11,6 +12,8 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     #[serde(default)]
     pub quality: QualityConfig,
+    #[serde(default)]
+    pub schedule: ScheduleConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +25,6 @@ pub enum QualityProfile {
     Balanced,
     Speed,
 }
-
 
 impl QualityProfile {
     pub fn as_str(&self) -> &'static str {
@@ -106,6 +108,45 @@ impl std::fmt::Display for CpuPreset {
     }
 }
 
+/// Output codec selection
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputCodec {
+    #[default]
+    Av1,
+    Hevc,
+}
+
+impl OutputCodec {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Av1 => "av1",
+            Self::Hevc => "hevc",
+        }
+    }
+}
+
+/// Subtitle handling mode
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtitleMode {
+    #[default]
+    Copy,
+    Burn,
+    Extract,
+    None,
+}
+
+impl SubtitleMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Burn => "burn",
+            Self::Extract => "extract",
+            Self::None => "none",
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScannerConfig {
@@ -122,6 +163,10 @@ pub struct TranscodeConfig {
     pub concurrent_jobs: usize,
     #[serde(default)]
     pub quality_profile: QualityProfile,
+    #[serde(default)]
+    pub output_codec: OutputCodec,
+    #[serde(default)]
+    pub subtitle_mode: SubtitleMode,
 }
 
 // Removed default_quality_profile helper as Default trait on enum handles it now.
@@ -178,6 +223,8 @@ impl Default for Config {
                 min_file_size_mb: 50,
                 concurrent_jobs: 1,
                 quality_profile: QualityProfile::Balanced,
+                output_codec: OutputCodec::Av1,
+                subtitle_mode: SubtitleMode::Copy,
             },
             hardware: HardwareConfig {
                 preferred_vendor: None,
@@ -192,6 +239,7 @@ impl Default for Config {
             },
             notifications: NotificationsConfig::default(),
             quality: QualityConfig::default(),
+            schedule: ScheduleConfig::default(),
         }
     }
 }

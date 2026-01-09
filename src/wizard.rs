@@ -62,6 +62,8 @@ impl ConfigWizard {
                 min_file_size_mb: min_file_size,
                 concurrent_jobs,
                 quality_profile: crate::config::QualityProfile::Balanced,
+                output_codec: crate::config::OutputCodec::Av1,
+                subtitle_mode: crate::config::SubtitleMode::Copy,
             },
             hardware: crate::config::HardwareConfig {
                 preferred_vendor,
@@ -76,6 +78,7 @@ impl ConfigWizard {
             },
             notifications: crate::config::NotificationsConfig::default(),
             quality: crate::config::QualityConfig::default(),
+            schedule: crate::scheduler::ScheduleConfig::default(),
         };
 
         // Show summary

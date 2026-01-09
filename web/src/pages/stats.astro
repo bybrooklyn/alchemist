@@ -1,0 +1,13 @@
+---
+import Layout from "../layouts/Layout.astro";
+import StatsCharts from "../components/StatsCharts";
+---
+
+<Layout title="Statistics | Alchemist">
+    <div class="content-header">
+        <h1 class="page-title">Statistics</h1>
+        <p class="page-subtitle">Encoding performance and space savings</p>
+    </div>
+
+    <StatsCharts client:load />
+</Layout>

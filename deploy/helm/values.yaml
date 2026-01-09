@@ -1,0 +1,87 @@
+# Default values for alchemist
+replicaCount: 1
+
+image:
+  repository: ghcr.io/brooklynloveszelda/alchemist
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: alchemist.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources:
+  limits:
+    cpu: 4000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# GPU Configuration
+gpu:
+  enabled: false
+  # For NVIDIA:
+  # nvidia.com/gpu: 1
+  # For Intel QSV, use node selector and device mounts
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  # Existing claim to use
+  existingClaim: ""
+
+# Media volume mounts
+media:
+  enabled: true
+  # Path on the host
+  hostPath: /media
+  # Mount path in container
+  mountPath: /media
+
+# Configuration
+config:
+  # Inline config.toml content
+  content: |
+    [transcode]
+    size_reduction_threshold = 0.3
+    min_bpp_threshold = 0.1
+    min_file_size_mb = 50
+    concurrent_jobs = 1
+    
+    [hardware]
+    allow_cpu_fallback = true
+    allow_cpu_encoding = true
+    
+    [scanner]
+    directories = ["/media"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

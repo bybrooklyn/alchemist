@@ -1,10 +1,11 @@
-pub mod media;
-pub mod system;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod media;
 pub mod orchestrator;
+pub mod scheduler;
 pub mod server;
+pub mod system;
 pub mod wizard;
 
 pub use config::QualityProfile;

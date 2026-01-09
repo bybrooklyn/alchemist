@@ -1,0 +1,32 @@
+services:
+  alchemist:
+    image: ghcr.io/brooklynloveszelda/alchemist:latest
+    container_name: alchemist
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Configuration file
+      - ./config.toml:/app/config.toml:ro
+      # Media directories (adjust paths as needed)
+      - /path/to/media:/media
+      - /path/to/output:/output
+      # Persistent database
+      - alchemist_data:/app/data
+    environment:
+      - RUST_LOG=info
+      - TZ=America/New_York
+    # For Intel QuickSync (uncomment if needed)
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # For NVIDIA GPU (uncomment if needed)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  alchemist_data:
