@@ -3,3 +3,4 @@ config.toml
 error.txt
 /node_modules
 public/pkg/alchemist.css
+build_log_2.txt
