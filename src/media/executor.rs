@@ -54,12 +54,13 @@ impl Executor for FfmpegExecutor {
         let output_path = PathBuf::from(&job.output_path); // Use job's output path
 
         self.transcoder
-            .transcode_to_av1(
+            .transcode_media(
                 &input_path,
                 &output_path,
                 self.hw_info.as_ref(),
                 self.config.transcode.quality_profile,
                 self.config.hardware.cpu_preset,
+                self.config.transcode.output_codec,
                 self.dry_run,
                 metadata,
                 Some((job.id, self.event_tx.clone())),

@@ -59,57 +59,32 @@ fn should_transcode(
     hw_info: Option<&HardwareInfo>,
 ) -> (bool, String) {
     // 0. Hardware Capability Check
-    // If hardware encoding is preferred but not available for AV1, and CPU fallback is disabled -> SKIP
-    // Assuming target is AV1 for now (can be configurable later)
-    let target_codec = "av1";
+    let target_codec = config.transcode.output_codec;
+    let target_codec_str = target_codec.as_str();
 
     if let Some(hw) = hw_info {
         // If we have hardware, check if it supports the target codec
-        // Note: nvidia-smi check in hardware.rs might return true for "vendor: Nvidia" but supported_codecs might be empty if check failed?
-        // Let's assume supported_codecs is populated.
+        let supports_codec = hw.supported_codecs.iter().any(|c| c == target_codec_str);
 
-        let supports_av1 = hw.supported_codecs.iter().any(|c| c == target_codec);
-
-        if !supports_av1 {
+        if !supports_codec {
             // Hardware doesn't support it. Check policy.
             // If fallback is DISABLED, then we must skip.
-            // config.hardware.cpu_fallback (assuming this field exists? user logs said "CPU Fallback: Enabled")
-            // Let's assume config.hardware.allow_cpu_fallback or similar.
-            // Checking config structure might be needed. I'll guess `enable_cpu_fallback` based on `hardware.rs` usage?
-            // Wait, hardware.rs `detect_hardware(allow_cpu_fallback)` matches log.
-            // Let's check config struct if I can. But for now I will assume user wants to process anyway if fallback enabled.
-
-            // Actually, if detect_hardware returned a GPU vendor but that GPU doesn't support AV1,
-            // we should probably fallback to CPU *if allowed*.
-            // But if detect_hardware returned Vendor::Cpu, then we are already on CPU.
-
-            // If Vendor != Cpu, and supports_av1 is false:
-            if hw.vendor != crate::system::hardware::Vendor::Cpu {
-                // Check config for fallback
-                // Warning: I don't see `config` usage for cpu fallback here, it was used in detection.
-                // But wait, if detection was called with `true`, and it found a GPU, it returns GPU.
-                // Does it mean we can't use CPU?
-                // No, usually "Fallback" means "If GPU can't do it, use CPU".
-
-                // If we strictly require GPU for AV1 (e.g. speed), we'd return false here.
-                // But for now, let's just Log a warning in reason string?
-                // Or better:
-                // if !supports_av1 { return (false, "GPU does not support AV1".to_string()); }
-
-                // However, "CPU Fallback: Enabled" implies we should proceed.
-                // So I won't block it here, assuming Executor handles the fallback to libsvtav1?
-                // But Executor *always* calls `transcode_to_av1`.
-                // We need to know if FfmpegExecutor will try to use `av1_nvenc` and fail.
-
-                // If Executor is smart, it might fallback.
-                // But Planner is where we should probably say "Skip" if we absolutely can't do it.
+            if !config.hardware.allow_cpu_fallback {
+                 return (
+                    false,
+                    format!(
+                        "Hardware {:?} does not support {}, and CPU fallback is disabled",
+                        hw.vendor, target_codec_str
+                    ),
+                );
             }
+            // If fallback is enabled, we proceed (will be slow!)
         }
     }
 
-    // 1. Codec Check (skip if already AV1 + 10-bit)
-    if metadata.codec_name == "av1" && metadata.bit_depth == 10 {
-        return (false, "Already AV1 10-bit".to_string());
+    // 1. Codec Check (skip if already target codec + 10-bit)
+    if metadata.codec_name == target_codec_str && metadata.bit_depth == 10 {
+        return (false, format!("Already {} 10-bit", target_codec_str));
     }
 
     // 2. Efficiency Rules (BPP)
@@ -165,8 +140,8 @@ fn should_transcode(
     (
         true,
         format!(
-            "Ready for AV1 transcode (Current codec: {}, BPP: {:.4})",
-            metadata.codec_name, bpp
+            "Ready for {} transcode (Current codec: {}, BPP: {:.4})",
+            target_codec_str, metadata.codec_name, bpp
         ),
     )
 }

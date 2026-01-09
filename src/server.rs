@@ -70,6 +70,10 @@ pub async fn run_server(
         .route("/api/engine/pause", post(pause_engine_handler))
         .route("/api/engine/resume", post(resume_engine_handler))
         .route("/api/engine/status", get(engine_status_handler))
+        .route(
+            "/api/settings/transcode",
+            get(get_transcode_settings_handler).post(update_transcode_settings_handler),
+        )
         // Health Check Routes
         .route("/api/health", get(health_handler))
         .route("/api/ready", get(ready_handler))
@@ -101,6 +105,60 @@ async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoRe
     axum::Json(serde_json::json!({
         "setup_required": state.setup_required
     }))
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct TranscodeSettingsPayload {
+    concurrent_jobs: usize,
+    size_reduction_threshold: f64,
+    min_bpp_threshold: f64,
+    min_file_size_mb: u64,
+    output_codec: crate::config::OutputCodec,
+    quality_profile: crate::config::QualityProfile,
+}
+
+async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    axum::Json(TranscodeSettingsPayload {
+        concurrent_jobs: config.transcode.concurrent_jobs,
+        size_reduction_threshold: config.transcode.size_reduction_threshold,
+        min_bpp_threshold: config.transcode.min_bpp_threshold,
+        min_file_size_mb: config.transcode.min_file_size_mb,
+        output_codec: config.transcode.output_codec,
+        quality_profile: config.transcode.quality_profile,
+    })
+}
+
+async fn update_transcode_settings_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<TranscodeSettingsPayload>,
+) -> impl IntoResponse {
+    let mut config = state.config.write().await;
+    
+    // Validate
+    if payload.concurrent_jobs == 0 {
+         return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
+    }
+    if payload.size_reduction_threshold < 0.0 || payload.size_reduction_threshold > 1.0 {
+         return (StatusCode::BAD_REQUEST, "size_reduction_threshold must be 0.0-1.0").into_response();
+    }
+
+    config.transcode.concurrent_jobs = payload.concurrent_jobs;
+    config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+    config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
+    config.transcode.min_file_size_mb = payload.min_file_size_mb;
+    config.transcode.output_codec = payload.output_codec;
+    config.transcode.quality_profile = payload.quality_profile;
+
+    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
+         return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save config: {}", e),
+        )
+            .into_response();
+    }
+
+    StatusCode::OK.into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -218,9 +276,10 @@ struct StatsData {
     completed: i64,
     active: i64,
     failed: i64,
+    concurrent_limit: usize,
 }
 
-async fn get_stats_data(db: &Db) -> StatsData {
+async fn get_stats_data(db: &Db, config: &Config) -> StatsData {
     let s = db
         .get_stats()
         .await
@@ -246,16 +305,19 @@ async fn get_stats_data(db: &Db) -> StatsData {
         completed,
         active,
         failed,
+        concurrent_limit: config.transcode.concurrent_jobs,
     }
 }
 
 async fn stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let stats = get_stats_data(&state.db).await;
+    let config = state.config.read().await;
+    let stats = get_stats_data(&state.db, &config).await;
     axum::Json(serde_json::json!({
         "total": stats.total,
         "completed": stats.completed,
         "active": stats.active,
-        "failed": stats.failed
+        "failed": stats.failed,
+        "concurrent_limit": stats.concurrent_limit
     }))
 }
 

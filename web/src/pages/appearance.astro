@@ -1,11 +1,11 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
-import TranscodeSettings from "../components/TranscodeSettings.tsx";
-import { Settings } from "lucide-react";
+import AppearanceSettings from "../components/AppearanceSettings.tsx";
+import { Palette } from "lucide-react";
 ---
 
-<Layout title="Alchemist | Settings">
+<Layout title="Alchemist | Appearance">
     <div class="app-shell">
         <Sidebar />
         <main class="app-main">
@@ -13,17 +13,14 @@ import { Settings } from "lucide-react";
                 class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
             >
                 <div class="flex items-center gap-3">
-                    <Settings class="text-helios-solar" />
+                    <Palette class="text-helios-solar" />
                     <h1 class="text-lg font-semibold text-helios-ink">
-                        Settings
+                        Appearance
                     </h1>
                 </div>
             </header>
             <div class="p-6">
-                <!-- Transcode Settings -->
-                <div class="mb-8">
-                    <TranscodeSettings client:load />
-                </div>
+                <AppearanceSettings client:load />
             </div>
         </main>
     </div>
