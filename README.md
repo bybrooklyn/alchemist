@@ -78,9 +78,9 @@ directories = [                  # Auto-scan directories
 
 ## Supported Platforms
 
-- **Linux**: x86_64, aarch64 (Docker & Binary)
+- **Linux**: x86_64 (Docker & Binary)
 - **Windows**: x86_64
-- **macOS**: Currently unsupported / Experimental
+- **macOS**: x86_64 (Experimental)
 
 ## Usage
 
