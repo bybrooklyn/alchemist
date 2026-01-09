@@ -3,6 +3,10 @@ use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::Result;
 use crate::Agent;
 use crate::Transcoder;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use axum::{
     extract::{Path, Request, State},
     http::{header, StatusCode, Uri},
@@ -14,23 +18,19 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::Utc;
 use futures::stream::Stream;
+use rand::rngs::OsRng;
+use rand::Rng;
 use rust_embed::RustEmbed;
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::info;
-use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
-use rand::rngs::OsRng;
-use rand::Rng;
-use std::sync::atomic::{AtomicBool, Ordering};
-use chrono::Utc;
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -69,6 +69,8 @@ pub async fn run_server(
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/stats/aggregated", get(aggregated_stats_handler))
+        .route("/api/stats/daily", get(daily_stats_handler))
+        .route("/api/stats/detailed", get(detailed_stats_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
@@ -143,13 +145,17 @@ async fn update_transcode_settings_handler(
     axum::Json(payload): axum::Json<TranscodeSettingsPayload>,
 ) -> impl IntoResponse {
     let mut config = state.config.write().await;
-    
+
     // Validate
     if payload.concurrent_jobs == 0 {
-         return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
+        return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
     }
     if payload.size_reduction_threshold < 0.0 || payload.size_reduction_threshold > 1.0 {
-         return (StatusCode::BAD_REQUEST, "size_reduction_threshold must be 0.0-1.0").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "size_reduction_threshold must be 0.0-1.0",
+        )
+            .into_response();
     }
 
     config.transcode.concurrent_jobs = payload.concurrent_jobs;
@@ -160,7 +166,7 @@ async fn update_transcode_settings_handler(
     config.transcode.quality_profile = payload.quality_profile;
 
     if let Err(e) = config.save(std::path::Path::new("config.toml")) {
-         return (
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to save config: {}", e),
         )
@@ -194,12 +200,28 @@ async fn setup_complete_handler(
     let argon2 = Argon2::default();
     let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
         Ok(h) => h.to_string(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Hashing failed: {}", e)).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Hashing failed: {}", e),
+            )
+                .into_response()
+        }
     };
 
-    let user_id = match state.db.create_user(&payload.username, &password_hash).await {
-         Ok(id) => id,
-         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create user: {}", e)).into_response(),
+    let user_id = match state
+        .db
+        .create_user(&payload.username, &password_hash)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create user: {}", e),
+            )
+                .into_response()
+        }
     };
 
     // Create Initial Session
@@ -209,9 +231,13 @@ async fn setup_complete_handler(
         .map(char::from)
         .collect();
     let expires_at = Utc::now() + chrono::Duration::days(30);
-    
+
     if let Err(e) = state.db.create_session(user_id, &token, expires_at).await {
-         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create session: {}", e)).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create session: {}", e),
+        )
+            .into_response();
     }
 
     // Save Config
@@ -225,19 +251,34 @@ async fn setup_complete_handler(
     // Serialize to TOML
     let toml_string = match toml::to_string_pretty(&*config_lock) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize config: {}", e)).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize config: {}", e),
+            )
+                .into_response()
+        }
     };
 
     // Write to file
     if let Err(e) = std::fs::write("config.toml", toml_string) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write config.toml: {}", e)).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to write config.toml: {}", e),
+        )
+            .into_response();
     }
-    
+
     // Update Setup State (Hot Reload)
     state.setup_required.store(false, Ordering::Relaxed);
-    
+
     // Start Scan (optional, but good for UX)
-    let dirs = config_lock.scanner.directories.iter().map(std::path::PathBuf::from).collect();
+    let dirs = config_lock
+        .scanner
+        .directories
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
     let _ = state.agent.scan_and_enqueue(dirs).await;
 
     info!("Configuration saved via web setup. Auth info created.");
@@ -378,6 +419,20 @@ async fn aggregated_stats_handler(State(state): State<Arc<AppState>>) -> impl In
     }
 }
 
+async fn daily_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_daily_stats(30).await {
+        Ok(stats) => axum::Json(serde_json::json!(stats)).into_response(),
+        Err(_) => axum::Json(serde_json::json!([])).into_response(),
+    }
+}
+
+async fn detailed_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_detailed_encode_stats(50).await {
+        Ok(stats) => axum::Json(serde_json::json!(stats)).into_response(),
+        Err(_) => axum::Json(serde_json::json!([])).into_response(),
+    }
+}
+
 async fn jobs_table_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let jobs = state.db.get_all_jobs().await.unwrap_or_default();
     axum::Json(jobs)
@@ -494,7 +549,9 @@ async fn login_handler(
 
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
         Ok(h) => h,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response()
+        }
     };
 
     if Argon2::default()
@@ -514,20 +571,26 @@ async fn login_handler(
     let expires_at = Utc::now() + chrono::Duration::days(30);
 
     if let Err(e) = state.db.create_session(user.id, &token, expires_at).await {
-         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create session: {}", e)).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create session: {}", e),
+        )
+            .into_response();
     }
 
     axum::Json(serde_json::json!({ "token": token })).into_response()
 }
 
-async fn auth_middleware(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
     // Allow setup, login, and static assets without auth (simplified check)
-    if path.starts_with("/api/setup") || path.starts_with("/api/auth/login") || path.starts_with("/login") || path == "/" || path == "/index.html" || path.starts_with("/assets") {
+    if path.starts_with("/api/setup")
+        || path.starts_with("/api/auth/login")
+        || path.starts_with("/login")
+        || path == "/"
+        || path == "/index.html"
+        || path.starts_with("/assets")
+    {
         return next.run(req).await;
     }
 
@@ -547,7 +610,7 @@ async fn auth_middleware(
     }
 
     // Attempt to verify if any users exist. If not, maybe allow access or force setup?
-    // Actually, if we are in setup mode, setup routes are allowed. 
+    // Actually, if we are in setup mode, setup routes are allowed.
     // If setup is done but no users? That shouldn't happen if setup creates a user.
     // If we are strictly enforcing auth:
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
