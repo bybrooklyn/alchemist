@@ -31,17 +31,22 @@ RUN cargo build --release
 FROM debian:testing-slim AS runtime
 WORKDIR /app
 
+# Enable non-free repositories and install packages
+# Note: Intel VA drivers are x86-only, we install them conditionally
 RUN apt-get update && \
     sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
-    apt-get update && apt-get install -y \
+    apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    intel-media-va-driver-non-free \
     libva-drm2 \
     libva2 \
-    i965-va-driver \
     va-driver-all \
     libsqlite3-0 \
     ca-certificates \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+    apt-get install -y --no-install-recommends \
+    intel-media-va-driver-non-free \
+    i965-va-driver || true; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist

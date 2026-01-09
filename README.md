@@ -6,7 +6,7 @@ Alchemist is a Rust-based video transcoding system that automatically converts y
 
 ## Features
 
-- **Hardware Acceleration**: Supports NVIDIA (NVENC), Intel (QSV), AMD (VAAPI), and Apple (VideoToolbox)
+- **Hardware Acceleration**: Supports NVIDIA (NVENC), Intel (QSV), AMD (VAAPI) (macOS VideoToolbox is experimental/unsupported)
 - **CPU Fallback**: Automatic software encoding with libsvtav1 when GPU is unavailable
 - **Intelligent Analysis**: Only transcodes files that will benefit from AV1 encoding
 - **Web Dashboard**: Real-time monitoring and control via Axum/Askama/HTMX-based UI
@@ -75,6 +75,12 @@ directories = [                  # Auto-scan directories
     "/media/tvshows"
 ]
 ```
+
+## Supported Platforms
+
+- **Linux**: x86_64, aarch64 (Docker & Binary)
+- **Windows**: x86_64
+- **macOS**: Currently unsupported / Experimental
 
 ## Usage
 
