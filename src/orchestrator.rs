@@ -37,13 +37,14 @@ impl Transcoder {
         }
     }
 
-    pub async fn transcode_to_av1(
+    pub async fn transcode_media(
         &self,
         input: &Path,
         output: &Path,
         hw_info: Option<&HardwareInfo>,
         quality_profile: QualityProfile,
         cpu_preset: CpuPreset,
+        target_codec: crate::config::OutputCodec,
         dry_run: bool,
         metadata: &crate::media::pipeline::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
@@ -57,6 +58,7 @@ impl Transcoder {
             .with_hardware(hw_info)
             .with_profile(quality_profile)
             .with_cpu_preset(cpu_preset)
+            .with_codec(target_codec)
             .build();
         cmd.arg(output);
 

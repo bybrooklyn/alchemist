@@ -145,6 +145,7 @@ pub struct FFmpegCommandBuilder<'a> {
     hw_info: Option<&'a HardwareInfo>,
     profile: QualityProfile,
     cpu_preset: CpuPreset,
+    target_codec: crate::config::OutputCodec,
 }
 
 impl<'a> FFmpegCommandBuilder<'a> {
@@ -155,6 +156,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
             hw_info: None,
             profile: QualityProfile::Balanced,
             cpu_preset: CpuPreset::Medium,
+            target_codec: crate::config::OutputCodec::Av1,
         }
     }
 
@@ -173,6 +175,11 @@ impl<'a> FFmpegCommandBuilder<'a> {
         self
     }
 
+    pub fn with_codec(mut self, codec: crate::config::OutputCodec) -> Self {
+        self.target_codec = codec;
+        self
+    }
+
     pub fn build(self) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new("ffmpeg");
         cmd.arg("-hide_banner").arg("-y").arg("-i").arg(self.input);
@@ -182,9 +189,6 @@ impl<'a> FFmpegCommandBuilder<'a> {
             None => self.apply_cpu_params(&mut cmd),
         }
 
-        // Standard AV1 10-bit target (for Intel Arc/GPU where supported)
-        // For CPU, libsvtav1 handles 10-bit well.
-
         cmd.arg("-c:a").arg("copy");
         cmd.arg("-c:s").arg("copy");
         cmd.arg(self.output);
@@ -193,20 +197,22 @@ impl<'a> FFmpegCommandBuilder<'a> {
     }
 
     fn apply_hardware_params(&self, cmd: &mut tokio::process::Command, hw: &HardwareInfo) {
-        // Check if AV1 is supported by hardware
-        let supports_av1 = hw.supported_codecs.iter().any(|c| c == "av1");
+        let codec_str = self.target_codec.as_str();
+        
+        // Check if target codec is supported by hardware
+        let supports_codec = hw.supported_codecs.iter().any(|c| c == codec_str);
 
-        if !supports_av1 {
+        if !supports_codec {
             warn!(
-                "Hardware {:?} does not support AV1. Falling back to CPU encoding.",
-                hw.vendor
+                "Hardware {:?} does not support {}. Falling back to CPU encoding.",
+                hw.vendor, codec_str
             );
             self.apply_cpu_params(cmd);
             return;
         }
 
-        match hw.vendor {
-            Vendor::Intel => {
+        match (hw.vendor, self.target_codec) {
+            (Vendor::Intel, crate::config::OutputCodec::Av1) => {
                 if let Some(ref device_path) = hw.device_path {
                     cmd.arg("-init_hw_device")
                         .arg(format!("qsv=qsv:{}", device_path));
@@ -216,38 +222,90 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 cmd.arg("-global_quality").arg(self.profile.qsv_quality());
                 cmd.arg("-look_ahead").arg("1");
             }
-            Vendor::Nvidia => {
+            (Vendor::Intel, crate::config::OutputCodec::Hevc) => {
+                if let Some(ref device_path) = hw.device_path {
+                    cmd.arg("-init_hw_device")
+                        .arg(format!("qsv=qsv:{}", device_path));
+                    cmd.arg("-filter_hw_device").arg("qsv");
+                }
+                cmd.arg("-c:v").arg("hevc_qsv");
+                cmd.arg("-global_quality").arg(self.profile.qsv_quality());
+                cmd.arg("-look_ahead").arg("1");
+            }
+            (Vendor::Nvidia, crate::config::OutputCodec::Av1) => {
                 cmd.arg("-c:v").arg("av1_nvenc");
                 cmd.arg("-preset").arg(self.profile.nvenc_preset());
-                cmd.arg("-cq").arg("25"); // Could be profile-based too
+                cmd.arg("-cq").arg("25"); 
             }
-            Vendor::Apple => {
-                cmd.arg("-c:v").arg("av1_videotoolbox");
-                // VideoToolbox has fewer knobs for AV1 currently in FFmpeg
+            (Vendor::Nvidia, crate::config::OutputCodec::Hevc) => {
+                cmd.arg("-c:v").arg("hevc_nvenc");
+                cmd.arg("-preset").arg(self.profile.nvenc_preset());
+                cmd.arg("-cq").arg("25");
             }
-            Vendor::Amd => {
-                if let Some(ref device_path) = hw.device_path {
+            (Vendor::Apple, crate::config::OutputCodec::Av1) => {
+                 cmd.arg("-c:v").arg("av1_videotoolbox");
+            }
+            (Vendor::Apple, crate::config::OutputCodec::Hevc) => {
+                cmd.arg("-c:v").arg("hevc_videotoolbox");
+                // Allow hardware to choose profile, generally reliable
+                cmd.arg("-q:v").arg("60"); // Quality factor
+            }
+            (Vendor::Amd, crate::config::OutputCodec::Av1) => {
+                // Ensure VAAPI device is set if needed
+                 if let Some(ref device_path) = hw.device_path {
                     cmd.arg("-vaapi_device").arg(device_path);
                 }
-                // Prefer AMF if Windows, VAAPI if Linux usually.
-                // But here we rely on what ffmpeg supports.
-                // Assuming av1_vaapi for Linux.
                 if cfg!(target_os = "windows") {
                     cmd.arg("-c:v").arg("av1_amf");
                 } else {
                     cmd.arg("-c:v").arg("av1_vaapi");
                 }
             }
-            Vendor::Cpu => self.apply_cpu_params(cmd),
+            (Vendor::Amd, crate::config::OutputCodec::Hevc) => {
+                 if let Some(ref device_path) = hw.device_path {
+                    cmd.arg("-vaapi_device").arg(device_path);
+                }
+                if cfg!(target_os = "windows") {
+                    cmd.arg("-c:v").arg("hevc_amf");
+                } else {
+                    cmd.arg("-c:v").arg("hevc_vaapi");
+                }
+            }
+            (Vendor::Cpu, _) => self.apply_cpu_params(cmd),
         }
     }
 
     fn apply_cpu_params(&self, cmd: &mut tokio::process::Command) {
-        let (preset_str, crf_str) = self.cpu_preset.params();
-        cmd.arg("-c:v").arg("libsvtav1");
-        cmd.arg("-preset").arg(preset_str);
-        cmd.arg("-crf").arg(crf_str);
-        cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
+        match self.target_codec {
+            crate::config::OutputCodec::Av1 => {
+                let (preset_str, crf_str) = self.cpu_preset.params();
+                cmd.arg("-c:v").arg("libsvtav1");
+                cmd.arg("-preset").arg(preset_str);
+                cmd.arg("-crf").arg(crf_str);
+                cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
+            }
+            crate::config::OutputCodec::Hevc => {
+                 // For HEVC CPU, we use libx265
+                 // Map presets roughly:
+                 // slow -> slow
+                 // medium -> medium
+                 // fast -> fast
+                 // faster -> faster
+                 let preset = self.cpu_preset.as_str(); 
+                 // CRF mapping: libsvtav1 24-32 is roughly equivalent to x265 20-28
+                 // Let's use a simple offset or strict mapping
+                 let crf = match self.cpu_preset {
+                     CpuPreset::Slow => "20",
+                     CpuPreset::Medium => "24", 
+                     CpuPreset::Fast => "26",
+                     CpuPreset::Faster => "28",
+                 };
+                cmd.arg("-c:v").arg("libx265");
+                cmd.arg("-preset").arg(preset);
+                cmd.arg("-crf").arg(crf);
+                cmd.arg("-tag:v").arg("hvc1"); // Apple compatibility
+            }
+        }
     }
 }
 

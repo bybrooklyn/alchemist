@@ -1,5 +1,6 @@
 ---
-import { Activity, Server, Settings, Video, Terminal } from "lucide-react";
+import { Activity, Server, Settings, Video, Terminal, Palette } from "lucide-react";
+import SystemStatus from "./SystemStatus.tsx";
 
 const currentPath = Astro.url.pathname;
 
@@ -8,6 +9,7 @@ const navItems = [
     { href: "/jobs", label: "Jobs", Icon: Video },
     { href: "/library", label: "Library", Icon: Server },
     { href: "/logs", label: "Logs", Icon: Terminal },
+    { href: "/appearance", label: "Appearance", Icon: Palette },
     { href: "/settings", label: "Settings", Icon: Settings },
 ];
 ---
@@ -53,15 +55,6 @@ const navItems = [
     <div
         class="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40"
     >
-        <div class="flex items-center justify-between mb-2">
-            <span
-                class="text-xs font-bold text-helios-slate uppercase tracking-wider"
-                >System Status</span
-            >
-            <span class="w-2 h-2 rounded-full bg-status-success"></span>
-        </div>
-        <div class="text-sm text-helios-ink font-mono">
-            Active: <span class="text-helios-solar">1/4</span>
-        </div>
+        <SystemStatus client:load />
     </div>
 </aside>
