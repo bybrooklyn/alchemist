@@ -583,37 +583,53 @@ async fn login_handler(
 
 async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    // Allow setup, login, and static assets without auth (simplified check)
-    if path.starts_with("/api/setup")
-        || path.starts_with("/api/auth/login")
-        || path.starts_with("/login")
-        || path == "/"
-        || path == "/index.html"
-        || path.starts_with("/assets")
-    {
-        return next.run(req).await;
-    }
 
-    // Check for Bearer token
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok());
+    // 1. API Protection: Only lock down /api routes
+    if path.starts_with("/api") {
+        // Public API endpoints
+        if path.starts_with("/api/setup") || path.starts_with("/api/auth/login") {
+            return next.run(req).await;
+        }
 
-    if let Some(auth_str) = auth_header {
-        if auth_str.starts_with("Bearer ") {
-            let token = &auth_str[7..];
-            if let Ok(Some(_session)) = state.db.get_session(token).await {
+        // Protected API endpoints -> Require Token
+        let mut token = req
+            .headers()
+            .get("Authorization")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|auth_str| {
+                if auth_str.starts_with("Bearer ") {
+                    Some(auth_str[7..].to_string())
+                } else {
+                    None
+                }
+            });
+
+        // Fallback: Check query param "token" (for EventSource which can't set headers)
+        if token.is_none() {
+            if let Some(query) = req.uri().query() {
+                if let Ok(params) =
+                    serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
+                {
+                    if let Some(t) = params.get("token") {
+                        token = Some(t.clone());
+                    }
+                }
+            }
+        }
+
+        if let Some(t) = token {
+            if let Ok(Some(_session)) = state.db.get_session(&t).await {
                 return next.run(req).await;
             }
         }
+
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    // Attempt to verify if any users exist. If not, maybe allow access or force setup?
-    // Actually, if we are in setup mode, setup routes are allowed.
-    // If setup is done but no users? That shouldn't happen if setup creates a user.
-    // If we are strictly enforcing auth:
-    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+    // 2. Static Assets / Frontend Pages
+    // Allow everything else. The frontend app (Layout.astro) handles client-side redirects
+    // if the user isn't authenticated, and the backend API protects the actual data.
+    next.run(req).await
 }
 
 async fn sse_handler(
