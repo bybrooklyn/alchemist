@@ -19,18 +19,18 @@
         <div class="glass-card p-8 md:col-span-2 flex flex-col justify-center">
             <span class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-2">Total Space Liberated</span>
             <div class="flex items-baseline gap-3">
-                <span class="text-6xl font-bold text-emerald-400">{{ stats.total_savings_gb()|format!("{:.1}") }}</span>
+                <span class="text-6xl font-bold text-emerald-400">{{ stats.total_savings_fixed() }}</span>
                 <span class="text-2xl text-slate-500 font-medium">Gigabytes</span>
             </div>
             <div class="mt-6 flex gap-8">
                 <div>
                     <span class="block text-slate-500 text-xs">Total In</span>
-                    <span class="text-lg font-mono">{{ stats.total_input_gb()|format!("{:.1}") }} GB</span>
+                    <span class="text-lg font-mono">{{ stats.total_input_fixed() }} GB</span>
                 </div>
                 <div>
                     <span class="block text-slate-500 text-xs">Efficiency</span>
                     <span class="text-lg font-mono text-emerald-400">{{
-                        stats.avg_reduction_percentage()|format!("{:.1}") }}%</span>
+                        stats.efficiency_fixed() }}%</span>
                 </div>
             </div>
         </div>
@@ -40,7 +40,7 @@
             <span class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-4">Average Quality (VMAF)</span>
             <div
                 class="text-5xl font-bold {% if stats.avg_vmaf.unwrap_or(0.0) > 90.0 %}text-emerald-400{% else %}text-amber-400{% endif %}">
-                {{ stats.avg_vmaf.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "N/A".to_string()) }}
+                {{ stats.avg_vmaf_fixed() }}
             </div>
             <p class="text-slate-500 text-xs mt-4 px-4">Based on {{ stats.completed_jobs }} completed transcodes</p>
         </div>
@@ -56,7 +56,7 @@
                 <div>
                     <div class="flex justify-between mb-2">
                         <span class="text-slate-400">Total Processing Time</span>
-                        <span class="font-mono">{{ stats.total_time_hours()|format!("{:.1}") }} Hours</span>
+                        <span class="font-mono">{{ stats.time_fixed() }} Hours</span>
                     </div>
                     <div class="w-full bg-slate-800 rounded-full h-1.5">
                         <div class="bg-indigo-500 h-1.5 rounded-full" style="width: 100%"></div>
@@ -82,8 +82,8 @@
                 {% if stats.avg_reduction_percentage() > 40.0 %}
                 Your library is highly compressible. You might consider an even more aggressive
                 quality profile to maximize space savings without human-perceptible loss.
-                {% elif stats.avg_reduction_percentage() < 15.0 %} Savings are currently low. You may want to check if
-                    your source files are already efficiently encoded (HEVC/AV1) to avoid unnecessary processing. {%
+                {% else if stats.avg_reduction_percentage() < 15.0 %} Savings are currently low. You may want to check
+                    if your source files are already efficiently encoded (HEVC/AV1) to avoid unnecessary processing. {%
                     else %} Your current settings provide a healthy balance between quality and storage efficiency. No
                     changes recommended at this time. {% endif %} </p>
         </div>

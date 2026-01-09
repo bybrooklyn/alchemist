@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Filesystem watcher that auto-enqueues new media files
+#[derive(Clone)]
 pub struct FileWatcher {
     directories: Vec<PathBuf>,
     db: Arc<Db>,

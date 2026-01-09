@@ -1,11 +1,12 @@
 use crate::error::{AlchemistError, Result};
+use crate::media::pipeline::{Analyzer as AnalyzerTrait, MediaMetadata};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-// use tracing::info; // Removed unused import
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MediaMetadata {
+pub struct FfprobeMetadata {
     pub streams: Vec<Stream>,
     pub format: Format,
 }
@@ -30,10 +31,11 @@ pub struct Format {
     pub bit_rate: String,
 }
 
-pub struct Analyzer;
+pub struct FfmpegAnalyzer;
 
-impl Analyzer {
-    pub fn probe(path: &Path) -> Result<MediaMetadata> {
+#[async_trait]
+impl AnalyzerTrait for FfmpegAnalyzer {
+    async fn analyze(&self, path: &Path) -> Result<MediaMetadata> {
         let output = Command::new("ffprobe")
             .args([
                 "-v",
@@ -52,12 +54,75 @@ impl Analyzer {
             return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
         }
 
-        let metadata: MediaMetadata = serde_json::from_slice(&output.stdout).map_err(|e| {
+        let metadata: FfprobeMetadata = serde_json::from_slice(&output.stdout).map_err(|e| {
+            AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+        })?;
+
+        let video_stream = metadata
+            .streams
+            .iter()
+            .find(|s| s.codec_type == "video")
+            .ok_or_else(|| AlchemistError::Analyzer("No video stream found".to_string()))?;
+
+        Ok(MediaMetadata {
+            path: path.to_path_buf(),
+            duration_secs: metadata.format.duration.parse().unwrap_or(0.0),
+            codec_name: video_stream.codec_name.clone(),
+            width: video_stream.width.unwrap_or(0),
+            height: video_stream.height.unwrap_or(0),
+            bit_depth: video_stream
+                .bits_per_raw_sample
+                .as_deref()
+                .unwrap_or("8")
+                .parse()
+                .unwrap_or(8),
+            size_bytes: metadata.format.size.parse().unwrap_or(0),
+            bit_rate: video_stream
+                .bit_rate
+                .as_deref()
+                .or(Some(&metadata.format.bit_rate))
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(0.0),
+            fps: video_stream
+                .r_frame_rate
+                .as_deref()
+                .and_then(Analyzer::parse_fps)
+                .unwrap_or(24.0),
+        })
+    }
+}
+
+pub struct Analyzer;
+
+impl Analyzer {
+    // Keep legacy probe for now to avoid breaking too much at once, or use it internally
+    pub fn probe(path: &Path) -> Result<FfprobeMetadata> {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+            ])
+            .arg(path)
+            .output()
+            .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
+        }
+
+        let metadata: FfprobeMetadata = serde_json::from_slice(&output.stdout).map_err(|e| {
             AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
         })?;
 
         Ok(metadata)
     }
+
+    // ... should_transcode adapted below ...
 
     pub fn should_transcode(
         _path: &Path,
@@ -65,34 +130,15 @@ impl Analyzer {
         config: &crate::config::Config,
     ) -> (bool, String) {
         // 1. Codec Check (skip if already AV1 + 10-bit)
-        let video_stream = metadata.streams.iter().find(|s| s.codec_type == "video");
-
-        let video_stream = match video_stream {
-            Some(v) => v,
-            None => return (false, "No video stream found".to_string()),
-        };
-
-        let bit_depth = video_stream.bits_per_raw_sample.as_deref().unwrap_or("8");
-        if video_stream.codec_name == "av1" && bit_depth == "10" {
+        if metadata.codec_name == "av1" && metadata.bit_depth == 10 {
             return (false, "Already AV1 10-bit".to_string());
         }
 
-        // 2. Resolution logic (don't upscale)
-        // For Phase 1, we target AV1 10-bit as the gold standard.
-
-        // 3. Efficiency Rules (BPP)
-        // BPP = Bitrate / (Width * Height * Framerate)
-        // We'll simplify for now as framerate is tricky from ffprobe without more flags.
-        // Let's use bits per pixel: Bitrate / (Width * Height)
-        let bitrate = video_stream
-            .bit_rate
-            .as_ref()
-            .and_then(|b| b.parse::<f64>().ok())
-            .or_else(|| metadata.format.bit_rate.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        let width = video_stream.width.unwrap_or(0) as f64;
-        let height = video_stream.height.unwrap_or(0) as f64;
+        // 2. Efficiency Rules (BPP)
+        let bitrate = metadata.bit_rate;
+        let width = metadata.width as f64;
+        let height = metadata.height as f64;
+        let fps = metadata.fps;
 
         if width == 0.0 || height == 0.0 || bitrate == 0.0 {
             return (
@@ -101,12 +147,7 @@ impl Analyzer {
             );
         }
 
-        let bpp = if let Some(fps_str) = video_stream.r_frame_rate.as_ref() {
-            let fps = Self::parse_fps(fps_str).unwrap_or(24.0);
-            bitrate / (width * height * fps)
-        } else {
-            bitrate / (width * height * 24.0)
-        };
+        let bpp = bitrate / (width * height * fps);
 
         // Normalize BPP based on resolution (4K needs less BPP than 1080p for same quality)
         let res_correction = if width >= 3840.0 {
@@ -130,7 +171,7 @@ impl Analyzer {
         }
 
         // 4. Projected Size Logic
-        let size_bytes = metadata.format.size.parse::<u64>().unwrap_or(0);
+        let size_bytes = metadata.size_bytes;
         let min_size_bytes = config.transcode.min_file_size_mb * 1024 * 1024;
         if size_bytes < min_size_bytes {
             return (
@@ -147,7 +188,7 @@ impl Analyzer {
             true,
             format!(
                 "Ready for AV1 transcode (Current codec: {}, BPP: {:.4})",
-                video_stream.codec_name, bpp
+                metadata.codec_name, bpp
             ),
         )
     }

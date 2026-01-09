@@ -6,10 +6,13 @@ use crate::Transcoder;
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
-    extract::{Path, State},
-    http::{Request, StatusCode},
+    extract::{Path, Request, State},
+    http::StatusCode,
     middleware::{self, Next},
-    response::{sse::{Event as AxumEvent, Sse}, IntoResponse, Response},
+    response::{
+        sse::{Event as AxumEvent, Sse},
+        Response,
+    },
     routing::{get, post},
     Router,
 };
@@ -65,7 +68,10 @@ pub async fn run_server(
         .route("/api/engine/resume", post(resume_engine_handler))
         .route("/api/engine/status", get(engine_status_handler))
         .route("/assets/*file", get(static_handler))
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .with_state(state);
 
     let addr = "127.0.0.1:3000";
@@ -125,13 +131,32 @@ struct StatsData {
 }
 
 async fn get_stats_data(db: &Db) -> StatsData {
-    let s = db.get_stats().await.unwrap_or_else(|_| serde_json::json!({}));
-    let total = s.as_object().map(|m| m.values().filter_map(|v| v.as_i64()).sum::<i64>()).unwrap_or(0);
+    let s = db
+        .get_stats()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let total = s
+        .as_object()
+        .map(|m| m.values().filter_map(|v| v.as_i64()).sum::<i64>())
+        .unwrap_or(0);
     let completed = s.get("completed").and_then(|v| v.as_i64()).unwrap_or(0);
-    let active = s.as_object().map(|m| m.iter().filter(|(k, _)| ["encoding", "analyzing", "resuming"].contains(&k.as_str())).map(|(_, v)| v.as_i64().unwrap_or(0)).sum::<i64>()).unwrap_or(0);
+    let active = s
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(k, _)| ["encoding", "analyzing", "resuming"].contains(&k.as_str()))
+                .map(|(_, v)| v.as_i64().unwrap_or(0))
+                .sum::<i64>()
+        })
+        .unwrap_or(0);
     let failed = s.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    StatsData { total, completed, active, failed }
+    StatsData {
+        total,
+        completed,
+        active,
+        failed,
+    }
 }
 
 async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -165,7 +190,13 @@ async fn analytics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
 }
 
 async fn scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let dirs = state.config.scanner.directories.iter().map(std::path::PathBuf::from).collect();
+    let dirs = state
+        .config
+        .scanner
+        .directories
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
     let _ = state.agent.scan_and_enqueue(dirs).await;
     axum::http::StatusCode::OK
 }
@@ -211,12 +242,16 @@ async fn clear_completed_handler(State(state): State<Arc<AppState>>) -> impl Int
 
 async fn pause_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.agent.pause();
-    EngineControlPartialTemplate { engine_paused: true }
+    EngineControlPartialTemplate {
+        engine_paused: true,
+    }
 }
 
 async fn resume_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.agent.resume();
-    EngineControlPartialTemplate { engine_paused: false }
+    EngineControlPartialTemplate {
+        engine_paused: false,
+    }
 }
 
 async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -234,7 +269,8 @@ async fn auth_middleware(
 ) -> Response {
     if let Ok(password) = std::env::var("ALCHEMIST_PASSWORD") {
         if !password.is_empty() {
-            let authorized = req.headers()
+            let authorized = req
+                .headers()
                 .get("Authorization")
                 .and_then(|h| h.to_str().ok())
                 .map(|s| s == format!("Bearer {}", password))
@@ -256,12 +292,32 @@ async fn sse_handler(
         Ok(event) => {
             let (event_name, data) = match &event {
                 AlchemistEvent::Log { message, .. } => ("log", message.clone()),
-                AlchemistEvent::Progress { job_id, percentage, time } => {
-                    ( "progress", format!("{{\"job_id\": {}, \"percentage\": {:.1}, \"time\": \"{}\"}}", job_id, percentage, time))
-                }
-                AlchemistEvent::JobStateChanged { job_id, status } => {
-                    ("status", format!("{{\"job_id\": {}, \"status\": \"{:?}\"}}", job_id, status))
-                }
+                AlchemistEvent::Progress {
+                    job_id,
+                    percentage,
+                    time,
+                } => (
+                    "progress",
+                    format!(
+                        "{{\"job_id\": {}, \"percentage\": {:.1}, \"time\": \"{}\"}}",
+                        job_id, percentage, time
+                    ),
+                ),
+                AlchemistEvent::JobStateChanged { job_id, status } => (
+                    "status",
+                    format!("{{\"job_id\": {}, \"status\": \"{:?}\"}}", job_id, status),
+                ),
+                AlchemistEvent::Decision {
+                    job_id,
+                    action,
+                    reason,
+                } => (
+                    "decision",
+                    format!(
+                        "{{\"job_id\": {}, \"action\": \"{}\", \"reason\": \"{}\"}}",
+                        job_id, action, reason
+                    ),
+                ),
             };
             Some(Ok(AxumEvent::default().event(event_name).data(data)))
         }
@@ -279,7 +335,8 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
             (
                 [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
                 content.data,
-            ).into_response()
+            )
+                .into_response()
         }
         None => axum::http::StatusCode::NOT_FOUND.into_response(),
     }

@@ -2,7 +2,7 @@
 name = "alchemist"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "GPL-3.0"
 
 [lib]
 name = "alchemist"
@@ -21,7 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 subprocess = { version = "=0.2.9" }
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
 inquire = { version = "0.7" }
@@ -40,3 +40,4 @@ askama = { version = "0.12", features = ["with-axum"] }
 askama_axum = "0.4"
 rust-embed = { version = "8", features = ["axum"] }
 mime_guess = "2.0"
+async-trait = "0.1"

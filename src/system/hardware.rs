@@ -24,6 +24,7 @@ impl std::fmt::Display for Vendor {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HardwareInfo {
     pub vendor: Vendor,
     pub device_path: Option<String>,
