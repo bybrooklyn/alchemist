@@ -193,6 +193,18 @@ impl<'a> FFmpegCommandBuilder<'a> {
     }
 
     fn apply_hardware_params(&self, cmd: &mut tokio::process::Command, hw: &HardwareInfo) {
+        // Check if AV1 is supported by hardware
+        let supports_av1 = hw.supported_codecs.iter().any(|c| c == "av1");
+
+        if !supports_av1 {
+            warn!(
+                "Hardware {:?} does not support AV1. Falling back to CPU encoding.",
+                hw.vendor
+            );
+            self.apply_cpu_params(cmd);
+            return;
+        }
+
         match hw.vendor {
             Vendor::Intel => {
                 if let Some(ref device_path) = hw.device_path {
@@ -217,8 +229,14 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 if let Some(ref device_path) = hw.device_path {
                     cmd.arg("-vaapi_device").arg(device_path);
                 }
-                cmd.arg("-c:v").arg("av1_vaapi");
-                // VAAPI parameters often need complex filter chains or specific flags
+                // Prefer AMF if Windows, VAAPI if Linux usually.
+                // But here we rely on what ffmpeg supports.
+                // Assuming av1_vaapi for Linux.
+                if cfg!(target_os = "windows") {
+                    cmd.arg("-c:v").arg("av1_amf");
+                } else {
+                    cmd.arg("-c:v").arg("av1_vaapi");
+                }
             }
             Vendor::Cpu => self.apply_cpu_params(cmd),
         }

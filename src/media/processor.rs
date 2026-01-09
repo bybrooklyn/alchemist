@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, Job, JobState};
 use crate::error::Result;
-use crate::media::analyzer::{Analyzer, FfmpegAnalyzer};
+use crate::media::analyzer::FfmpegAnalyzer;
 use crate::media::executor::FfmpegExecutor;
 use crate::media::pipeline::{
     Analyzer as AnalyzerTrait, Executor as ExecutorTrait, Planner as PlannerTrait,
@@ -164,7 +164,7 @@ impl Agent {
         );
         info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
-        let planner = BasicPlanner::new(self.config.clone());
+        let planner = BasicPlanner::new(self.config.clone(), self.hw_info.as_ref().clone());
         let decision = planner.plan(&metadata).await?;
         let should_encode = decision.action == "encode";
         let reason = decision.reason.clone();

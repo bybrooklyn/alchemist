@@ -430,7 +430,7 @@ impl Db {
                 COALESCE(SUM(input_size_bytes), 0) as total_input_size,
                 COALESCE(SUM(output_size_bytes), 0) as total_output_size,
                 AVG(vmaf_score) as avg_vmaf,
-                COALESCE(SUM(encode_time_seconds), 0) as total_encode_time
+                COALESCE(SUM(encode_time_seconds), 0.0) as total_encode_time
              FROM encode_stats",
         )
         .fetch_one(&self.pool)

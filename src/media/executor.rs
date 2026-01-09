@@ -5,9 +5,8 @@ use crate::media::pipeline::{ExecutionStats, Executor, MediaMetadata};
 use crate::orchestrator::Transcoder;
 use crate::system::hardware::HardwareInfo;
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::broadcast;
 
 pub struct FfmpegExecutor {
@@ -41,7 +40,7 @@ impl Executor for FfmpegExecutor {
     async fn execute(
         &self,
         job: &Job,
-        decision: &Decision,
+        _decision: &Decision,
         metadata: &MediaMetadata,
     ) -> Result<ExecutionStats> {
         let input_path = PathBuf::from(&job.input_path);

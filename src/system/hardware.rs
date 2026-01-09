@@ -28,6 +28,38 @@ impl std::fmt::Display for Vendor {
 pub struct HardwareInfo {
     pub vendor: Vendor,
     pub device_path: Option<String>,
+    pub supported_codecs: Vec<String>,
+}
+
+fn check_encoder_support(encoder: &str) -> bool {
+    let null_output = if cfg!(target_os = "windows") {
+        "NUL"
+    } else {
+        "/dev/null"
+    };
+
+    // Attempt a tiny 1-frame encode
+    let status = Command::new("ffmpeg")
+        .args(&[
+            "-v",
+            "quiet",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=0.1",
+            "-c:v",
+            encoder,
+            "-frames:v",
+            "1",
+            "-y",
+            null_output,
+        ])
+        .status();
+
+    match status {
+        Ok(s) => s.success(),
+        Err(_) => false,
+    }
 }
 
 pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
@@ -38,46 +70,85 @@ pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
     // 0. Check for Apple (macOS)
     if cfg!(target_os = "macos") {
         info!("✓ Detected macOS platform");
+        let mut codecs = Vec::new();
+        if check_encoder_support("hevc_videotoolbox") {
+            codecs.push("hevc".to_string());
+        }
+        if check_encoder_support("h264_videotoolbox") {
+            codecs.push("h264".to_string());
+        }
+        // AV1 VideoToolbox support is newer, check for it
+        if check_encoder_support("av1_videotoolbox") {
+            codecs.push("av1".to_string());
+        }
+
         info!("✓ Hardware acceleration: VideoToolbox (Apple Silicon/Intel)");
         return Ok(HardwareInfo {
             vendor: Vendor::Apple,
             device_path: None,
+            supported_codecs: codecs,
         });
     }
 
-    // 1. Check for NVIDIA (Simplest check via nvidia-smi or /dev/nvidiactl)
+    // 1. Check for NVIDIA
     info!("Checking for NVIDIA GPU...");
-    if Path::new("/dev/nvidiactl").exists() {
-        info!("✓ Found NVIDIA device: /dev/nvidiactl");
+    // Only check nvidia-smi on non-linux or if /dev/nvidiactl exists on linux
+    let nvidia_likely = if cfg!(target_os = "windows") {
+        true
+    } else {
+        Path::new("/dev/nvidiactl").exists()
+    };
+
+    if nvidia_likely {
         if let Ok(output) = Command::new("nvidia-smi").output() {
             if output.status.success() {
                 info!("✓ nvidia-smi command successful");
+
+                let mut codecs = Vec::new();
+                if check_encoder_support("av1_nvenc") {
+                    codecs.push("av1".to_string());
+                    info!("  ✓ AV1 (av1_nvenc) supported");
+                }
+                if check_encoder_support("hevc_nvenc") {
+                    codecs.push("hevc".to_string());
+                    info!("  ✓ HEVC (hevc_nvenc) supported");
+                }
+                if check_encoder_support("h264_nvenc") {
+                    codecs.push("h264".to_string());
+                    info!("  ✓ H.264 (h264_nvenc) supported");
+                }
+
                 info!("✓ Hardware acceleration: NVENC");
                 return Ok(HardwareInfo {
                     vendor: Vendor::Nvidia,
                     device_path: None,
+                    supported_codecs: codecs,
                 });
             }
         }
-    } else if Command::new("nvidia-smi").output().is_ok() {
-        info!("✓ nvidia-smi available");
-        info!("✓ Hardware acceleration: NVENC");
-        return Ok(HardwareInfo {
-            vendor: Vendor::Nvidia,
-            device_path: None,
-        });
     }
     info!("✗ No NVIDIA GPU detected");
 
     // 2. Check for Intel (Priority on renderD129 for dGPU Arc)
     info!("Checking for Intel GPU...");
     if Path::new("/dev/dri/renderD129").exists() {
+        // Linux specific path, mostly.
+        let mut codecs = Vec::new();
+        // QSV encoders: av1_qsv, hevc_qsv, h264_qsv
+        if check_encoder_support("av1_qsv") {
+            codecs.push("av1".to_string());
+        }
+        if check_encoder_support("hevc_qsv") {
+            codecs.push("hevc".to_string());
+        }
+
         info!("✓ Found render node: /dev/dri/renderD129");
         info!("✓ Detected Intel Arc/dGPU (discrete graphics)");
         info!("✓ Hardware acceleration: Intel Quick Sync Video (QSV)");
         return Ok(HardwareInfo {
             vendor: Vendor::Intel,
             device_path: Some("/dev/dri/renderD129".to_string()),
+            supported_codecs: codecs,
         });
     }
     info!("✗ No Intel dGPU at renderD129");
@@ -103,31 +174,49 @@ pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
             }
         );
 
+        let mut codecs = Vec::new();
+        let vendor;
+        let accel_name;
+
         if vendor_id.contains("0x8086") {
             info!("✓ Detected Intel iGPU (integrated graphics)");
-            info!("✓ Hardware acceleration: Intel Quick Sync Video (QSV)");
-            return Ok(HardwareInfo {
-                vendor: Vendor::Intel,
-                device_path: Some("/dev/dri/renderD128".to_string()),
-            });
+            accel_name = "Intel Quick Sync Video (QSV)";
+            vendor = Vendor::Intel;
+            if check_encoder_support("av1_qsv") {
+                codecs.push("av1".to_string());
+            }
+            if check_encoder_support("hevc_qsv") {
+                codecs.push("hevc".to_string());
+            }
         } else if vendor_id.contains("0x1002") {
             info!("✓ Detected AMD GPU");
-            info!("✓ Hardware acceleration: VAAPI/AMF");
-            return Ok(HardwareInfo {
-                vendor: Vendor::Amd,
-                device_path: Some("/dev/dri/renderD128".to_string()),
-            });
+            accel_name = "VAAPI/AMF";
+            vendor = Vendor::Amd;
+            if check_encoder_support("av1_amf") {
+                codecs.push("av1".to_string());
+            } else if check_encoder_support("av1_vaapi") {
+                codecs.push("av1".to_string());
+            }
+
+            if check_encoder_support("hevc_amf") {
+                codecs.push("hevc".to_string());
+            } else if check_encoder_support("hevc_vaapi") {
+                codecs.push("hevc".to_string());
+            }
+        } else {
+            // Generic fallback
+            vendor = Vendor::Intel;
+            accel_name = "Generic VAAPI";
+            if check_encoder_support("hevc_vaapi") {
+                codecs.push("hevc".to_string());
+            }
         }
 
-        // Fallback for VAAPI if we can't be sure but the node exists
-        warn!(
-            "Found /dev/dri/renderD128 but couldn't verify vendor ID ({}). Assuming generic VAAPI.",
-            vendor_id
-        );
-        info!("✓ Hardware acceleration: Generic VAAPI");
+        info!("✓ Hardware acceleration: {}", accel_name);
         return Ok(HardwareInfo {
-            vendor: Vendor::Intel, // Assume Intel for VAAPI
+            vendor,
             device_path: Some("/dev/dri/renderD128".to_string()),
+            supported_codecs: codecs, // Populated above
         });
     }
     info!("✗ No GPU render nodes found");
@@ -151,5 +240,6 @@ pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
     Ok(HardwareInfo {
         vendor: Vendor::Cpu,
         device_path: None,
+        supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()], // CPU supports all usually via software
     })
 }
