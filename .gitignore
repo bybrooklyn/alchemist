@@ -7,3 +7,5 @@ alchemist.db
 web/node_modules
 web/dist
 web/.astro
+web.zip
+.DS_Store
