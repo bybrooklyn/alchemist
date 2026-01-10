@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::db::Decision;
 use crate::error::Result;
 use crate::media::pipeline::{MediaMetadata, Planner};
-use crate::system::hardware::HardwareInfo;
+use crate::system::hardware::{HardwareInfo, Vendor};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::Arc;
@@ -63,6 +63,9 @@ fn should_transcode(
     let target_codec_str = target_codec.as_str();
 
     if let Some(hw) = hw_info {
+        if hw.vendor == Vendor::Cpu && !config.hardware.allow_cpu_encoding {
+            return (false, "CPU encoding disabled in configuration".to_string());
+        }
         // If we have hardware, check if it supports the target codec
         let supports_codec = hw.supported_codecs.iter().any(|c| c == target_codec_str);
 
@@ -70,7 +73,7 @@ fn should_transcode(
             // Hardware doesn't support it. Check policy.
             // If fallback is DISABLED, then we must skip.
             if !config.hardware.allow_cpu_fallback {
-                 return (
+                return (
                     false,
                     format!(
                         "Hardware {:?} does not support {}, and CPU fallback is disabled",
@@ -78,7 +81,23 @@ fn should_transcode(
                     ),
                 );
             }
+            if !config.hardware.allow_cpu_encoding {
+                return (false, "CPU encoding disabled in configuration".to_string());
+            }
             // If fallback is enabled, we proceed (will be slow!)
+        }
+    } else {
+        if !config.hardware.allow_cpu_fallback {
+            return (
+                false,
+                format!(
+                    "No hardware detected for {}, and CPU fallback is disabled",
+                    target_codec_str
+                ),
+            );
+        }
+        if !config.hardware.allow_cpu_encoding {
+            return (false, "CPU encoding disabled in configuration".to_string());
         }
     }
 

@@ -33,9 +33,20 @@ export default function SettingsPanel() {
     };
 
     const variants = {
-        enter: { opacity: 0 },
-        center: { zIndex: 1, opacity: 1 },
-        exit: { zIndex: 0, opacity: 0 }
+        enter: (direction: number) => ({
+            y: direction > 0 ? 20 : -20,
+            opacity: 0
+        }),
+        center: {
+            zIndex: 1,
+            y: 0,
+            opacity: 1
+        },
+        exit: (direction: number) => ({
+            zIndex: 0,
+            y: direction < 0 ? 20 : -20,
+            opacity: 0
+        })
     };
 
     return (

@@ -13,6 +13,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+#[derive(Clone, Debug)]
+pub struct WatchPath {
+    pub path: PathBuf,
+    pub recursive: bool,
+}
+
 /// Filesystem watcher that auto-enqueues new media files
 #[derive(Clone)]
 pub struct FileWatcher {
@@ -38,15 +44,29 @@ impl FileWatcher {
                     }
                     _ = tokio::time::sleep(Duration::from_millis(debounce_ms)) => {
                         if !pending.is_empty() && last_process.elapsed().as_millis() >= debounce_ms as u128 {
+                            let settings = match db_clone.get_file_settings().await {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    error!("Failed to fetch file settings, using defaults: {}", e);
+                                    crate::db::FileSettings {
+                                        id: 1,
+                                        delete_source: false,
+                                        output_extension: "mkv".to_string(),
+                                        output_suffix: "-alchemist".to_string(),
+                                        replace_strategy: "keep".to_string(),
+                                    }
+                                }
+                            };
                             for path in pending.drain() {
                                 if path.exists() {
                                     debug!("Auto-enqueuing new file: {:?}", path);
                                     let mtime = std::fs::metadata(&path)
                                         .and_then(|m| m.modified())
                                         .unwrap_or(std::time::SystemTime::now());
-
-                                    let mut output_path = path.clone();
-                                    output_path.set_extension("av1.mkv");
+                                    let output_path = settings.output_path_for(&path);
+                                    if output_path.exists() && !settings.should_replace_existing_output() {
+                                        continue;
+                                    }
 
                                     if let Err(e) = db_clone.enqueue_job(&path, &output_path, mtime).await {
                                         error!("Failed to auto-enqueue {:?}: {}", path, e);
@@ -69,7 +89,7 @@ impl FileWatcher {
     }
 
     /// Update watched directories
-    pub fn watch(&self, directories: &[PathBuf]) -> Result<()> {
+    pub fn watch(&self, directories: &[WatchPath]) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
 
         // Stop existing watcher implicitly by dropping it (if we replace it)
@@ -109,15 +129,23 @@ impl FileWatcher {
         .map_err(|e| AlchemistError::Watch(format!("Failed to create watcher: {}", e)))?;
 
         // Watch all directories
-        for dir in directories {
-            info!("Watching directory: {:?}", dir);
-            if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
-                error!("Failed to watch {:?}: {}", dir, e);
+        for watch_path in directories {
+            info!(
+                "Watching directory: {:?} (recursive: {})",
+                watch_path.path, watch_path.recursive
+            );
+            let mode = if watch_path.recursive {
+                RecursiveMode::Recursive
+            } else {
+                RecursiveMode::NonRecursive
+            };
+            if let Err(e) = watcher.watch(&watch_path.path, mode) {
+                error!("Failed to watch {:?}: {}", watch_path.path, e);
                 // Continue trying others? Or fail?
                 // Failing strictly is probably safer to alert user
                 return Err(AlchemistError::Watch(format!(
                     "Failed to watch {:?}: {}",
-                    dir, e
+                    watch_path.path, e
                 )));
             }
         }

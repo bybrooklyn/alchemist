@@ -5,6 +5,7 @@ use crate::config::{CpuPreset, QualityProfile};
 use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareInfo, Vendor};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
@@ -443,9 +444,21 @@ impl QualityScore {
             .output()
             .map_err(|e| AlchemistError::FFmpeg(format!("Failed to run VMAF: {}", e)))?;
 
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AlchemistError::QualityCheckFailed(format!(
+                "VMAF check failed: {}",
+                stderr
+            )));
+        }
+
         // Parse VMAF score from output
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let vmaf = Self::extract_vmaf_score(&stderr);
+        let vmaf = Self::extract_vmaf_score_json(&stdout)
+            .or_else(|| Self::extract_vmaf_score_text(&stdout))
+            .or_else(|| Self::extract_vmaf_score_text(&stderr))
+            .or_else(|| Self::extract_vmaf_score_json(&stderr));
 
         if vmaf.is_none() {
             warn!("Could not extract VMAF score from output");
@@ -458,7 +471,7 @@ impl QualityScore {
         })
     }
 
-    fn extract_vmaf_score(output: &str) -> Option<f64> {
+    fn extract_vmaf_score_text(output: &str) -> Option<f64> {
         // Look for "VMAF score:" in the output
         for line in output.lines() {
             if line.contains("VMAF score:") {
@@ -469,6 +482,28 @@ impl QualityScore {
             }
         }
         None
+    }
+
+    fn extract_vmaf_score_json(output: &str) -> Option<f64> {
+        let trimmed = output.trim();
+        let json_str = if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            trimmed
+        } else {
+            let start = trimmed.find('{')?;
+            let end = trimmed.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            &trimmed[start..=end]
+        };
+
+        let value: Value = serde_json::from_str(json_str).ok()?;
+        let pooled = value.get("pooled_metrics")?;
+        let vmaf = pooled.get("vmaf")?;
+        vmaf
+            .get("mean")
+            .and_then(|v| v.as_f64())
+            .or_else(|| vmaf.get("harmonic_mean").and_then(|v| v.as_f64()))
     }
 
     /// Check if quality is acceptable (VMAF >= threshold)
@@ -570,5 +605,26 @@ mod tests {
         let (preset, crf) = QualityProfile::Quality.cpu_params();
         assert_eq!(preset, "4");
         assert_eq!(crf, "24");
+    }
+
+    #[test]
+    fn test_vmaf_score_text_parse() {
+        let stderr = "Some log\nVMAF score: 93.2\nMore log";
+        let vmaf = QualityScore::extract_vmaf_score_text(stderr).unwrap();
+        assert!((vmaf - 93.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_vmaf_score_json_parse() {
+        let json = r#"{
+            "pooled_metrics": {
+                "vmaf": {
+                    "mean": 87.65,
+                    "harmonic_mean": 86.0
+                }
+            }
+        }"#;
+        let vmaf = QualityScore::extract_vmaf_score_json(json).unwrap();
+        assert!((vmaf - 87.65).abs() < 0.01);
     }
 }

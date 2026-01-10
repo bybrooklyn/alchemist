@@ -35,12 +35,22 @@ impl Scanner {
     }
 
     pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<ScannedFile> {
+        let entries = directories.into_iter().map(|dir| (dir, true)).collect();
+        self.scan_with_recursion(entries)
+    }
+
+    pub fn scan_with_recursion(&self, directories: Vec<(PathBuf, bool)>) -> Vec<ScannedFile> {
         let files = Arc::new(Mutex::new(Vec::new()));
 
-        directories.into_par_iter().for_each(|dir| {
-            info!("Scanning directory: {:?}", dir);
+        directories.into_par_iter().for_each(|(dir, recursive)| {
+            info!("Scanning directory: {:?} (recursive: {})", dir, recursive);
             let mut local_files = Vec::new();
-            for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let walker = if recursive {
+                WalkDir::new(dir)
+            } else {
+                WalkDir::new(dir).max_depth(1)
+            };
+            for entry in walker.into_iter().filter_map(|e| e.ok()) {
                 if entry.file_type().is_file() {
                     if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                         if self.extensions.contains(&ext.to_lowercase()) {

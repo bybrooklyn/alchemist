@@ -2,7 +2,7 @@ use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
@@ -126,6 +126,50 @@ pub struct FileSettings {
     pub output_extension: String,
     pub output_suffix: String,
     pub replace_strategy: String,
+}
+
+impl FileSettings {
+    pub fn output_path_for(&self, input_path: &Path) -> PathBuf {
+        let mut output_path = input_path.to_path_buf();
+        let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
+        let extension = self.output_extension.trim_start_matches('.');
+        let suffix = self.output_suffix.as_str();
+
+        let mut filename = String::new();
+        filename.push_str(&stem);
+        filename.push_str(suffix);
+        if !extension.is_empty() {
+            filename.push('.');
+            filename.push_str(extension);
+        }
+        if filename.is_empty() {
+            filename.push_str("output");
+        }
+        output_path.set_file_name(filename);
+
+        if output_path == input_path {
+            let safe_suffix = if suffix.is_empty() {
+                "-alchemist".to_string()
+            } else {
+                format!("{}-alchemist", suffix)
+            };
+            let mut safe_name = String::new();
+            safe_name.push_str(&stem);
+            safe_name.push_str(&safe_suffix);
+            if !extension.is_empty() {
+                safe_name.push('.');
+                safe_name.push_str(extension);
+            }
+            output_path.set_file_name(safe_name);
+        }
+
+        output_path
+    }
+
+    pub fn should_replace_existing_output(&self) -> bool {
+        let strategy = self.replace_strategy.trim();
+        strategy.eq_ignore_ascii_case("replace") || strategy.eq_ignore_ascii_case("overwrite")
+    }
 }
 
 impl Job {
@@ -269,7 +313,7 @@ impl Db {
             .map_err(|e| crate::error::AlchemistError::Database(e.into()))?;
 
         let db = Self { pool };
-        // db.reset_interrupted_jobs().await?; // Optional: keep or remove based on preference, but good for safety
+        db.reset_interrupted_jobs().await?;
 
         Ok(db)
     }
@@ -277,9 +321,12 @@ impl Db {
     // init method removed as it is replaced by migrations
 
     pub async fn reset_interrupted_jobs(&self) -> Result<()> {
-        sqlx::query("UPDATE jobs SET status = 'queued' WHERE status IN ('analyzing', 'encoding')")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE jobs SET status = 'queued', updated_at = CURRENT_TIMESTAMP
+             WHERE status IN ('analyzing', 'encoding', 'resuming')",
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -290,6 +337,11 @@ impl Db {
         output_path: &Path,
         mtime: std::time::SystemTime,
     ) -> Result<()> {
+        if input_path == output_path {
+            return Err(crate::error::AlchemistError::Config(
+                "Output path matches input path".into(),
+            ));
+        }
         let input_str = input_path
             .to_str()
             .ok_or_else(|| crate::error::AlchemistError::Config("Invalid input path".into()))?;
@@ -307,10 +359,11 @@ impl Db {
             "INSERT INTO jobs (input_path, output_path, status, mtime_hash, updated_at) 
              VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP)
              ON CONFLICT(input_path) DO UPDATE SET
+             output_path = excluded.output_path,
              status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
              mtime_hash = excluded.mtime_hash,
              updated_at = CURRENT_TIMESTAMP
-             WHERE mtime_hash != excluded.mtime_hash",
+             WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path",
         )
         .bind(input_str)
         .bind(output_str)
@@ -342,12 +395,32 @@ impl Db {
     pub async fn get_next_job(&self) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
             "SELECT id, input_path, output_path, status, NULL as decision_reason,
-                    COALESCE(priority, 0) as priority, COALESCE(progress, 0.0) as progress,
+                    COALESCE(priority, 0) as priority, COALESCE(CAST(progress AS REAL), 0.0) as progress,
                     COALESCE(attempt_count, 0) as attempt_count,
                     NULL as vmaf_score,
                     created_at, updated_at 
              FROM jobs WHERE status = 'queued' 
              ORDER BY priority DESC, created_at ASC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(job)
+    }
+
+    pub async fn claim_next_job(&self) -> Result<Option<Job>> {
+        let job = sqlx::query_as::<_, Job>(
+            "UPDATE jobs
+             SET status = 'analyzing', updated_at = CURRENT_TIMESTAMP
+             WHERE id = (
+                 SELECT id FROM jobs WHERE status = 'queued'
+                 ORDER BY priority DESC, created_at ASC LIMIT 1
+             )
+             RETURNING id, input_path, output_path, status, NULL as decision_reason,
+                       COALESCE(priority, 0) as priority, COALESCE(CAST(progress AS REAL), 0.0) as progress,
+                       COALESCE(attempt_count, 0) as attempt_count,
+                       NULL as vmaf_score,
+                       created_at, updated_at",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -381,7 +454,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -489,7 +562,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -509,7 +582,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -538,7 +611,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -636,7 +709,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -679,7 +752,7 @@ impl Db {
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority, 
-                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
@@ -1114,4 +1187,88 @@ pub struct Session {
     pub user_id: i64,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
+
+    #[test]
+    fn test_output_path_for_suffix() {
+        let settings = FileSettings {
+            id: 1,
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "-alchemist".to_string(),
+            replace_strategy: "keep".to_string(),
+        };
+        let input = Path::new("video.mp4");
+        let output = settings.output_path_for(input);
+        assert_eq!(output, PathBuf::from("video-alchemist.mkv"));
+    }
+
+    #[test]
+    fn test_output_path_avoids_inplace() {
+        let settings = FileSettings {
+            id: 1,
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "".to_string(),
+            replace_strategy: "keep".to_string(),
+        };
+        let input = Path::new("video.mkv");
+        let output = settings.output_path_for(input);
+        assert_ne!(output, input);
+    }
+
+    #[test]
+    fn test_replace_strategy() {
+        let mut settings = FileSettings {
+            id: 1,
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "-alchemist".to_string(),
+            replace_strategy: "keep".to_string(),
+        };
+        assert!(!settings.should_replace_existing_output());
+        settings.replace_strategy = "replace".to_string();
+        assert!(settings.should_replace_existing_output());
+    }
+
+    #[tokio::test]
+    async fn test_claim_next_job_marks_analyzing() {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref())
+            .await
+            .expect("db init");
+
+        let input1 = Path::new("input1.mkv");
+        let output1 = Path::new("output1.mkv");
+        db.enqueue_job(input1, output1, SystemTime::UNIX_EPOCH)
+            .await
+            .expect("enqueue job 1");
+
+        let input2 = Path::new("input2.mkv");
+        let output2 = Path::new("output2.mkv");
+        db.enqueue_job(input2, output2, SystemTime::UNIX_EPOCH)
+            .await
+            .expect("enqueue job 2");
+
+        let first = db.claim_next_job().await.expect("claim job 1").unwrap();
+        assert_eq!(first.status, JobState::Analyzing);
+
+        let second = db.claim_next_job().await.expect("claim job 2").unwrap();
+        assert_ne!(first.id, second.id);
+
+        let none = db.claim_next_job().await.expect("claim none");
+        assert!(none.is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+    }
 }

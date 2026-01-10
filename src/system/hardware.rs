@@ -246,3 +246,12 @@ pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
         supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()], // CPU supports all usually via software
     })
 }
+
+/// Async version of detect_hardware that doesn't block the runtime
+pub async fn detect_hardware_async(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
+    tokio::task::spawn_blocking(move || detect_hardware(allow_cpu_fallback))
+        .await
+        .map_err(|e| {
+            crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e))
+        })?
+}

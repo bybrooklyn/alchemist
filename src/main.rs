@@ -2,6 +2,7 @@ use alchemist::error::Result;
 use alchemist::system::hardware;
 use alchemist::{config, db, Agent, Transcoder};
 use clap::Parser;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -33,6 +34,32 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 0. Ensure CWD is set to executable directory (fixes double-click issues on Windows)
+    #[cfg(target_os = "windows")]
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            if let Err(e) = std::env::set_current_dir(exe_dir) {
+                eprintln!("Failed to set working directory: {}", e);
+            }
+        }
+    }
+
+    match run().await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            error!("Application error: {}", e);
+            // On error, if we are in a terminal that might close, pause
+            if std::env::var("ALCHEMIST_NO_PAUSE").is_err() {
+                println!("\nPress Enter to exit...");
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
@@ -57,22 +84,22 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // ... rest of logic remains largely the same, just inside run()
     // Default to server mode if no arguments are provided (e.g. double-click run)
     // or if explicit --server flag is used
     let is_server_mode = args.server || args.directories.is_empty();
 
     // 0. Load Configuration
     let config_path = std::path::Path::new("config.toml");
-    let (config, setup_mode) = if !config_path.exists() {
+    let config_exists = config_path.exists();
+    let (config, mut setup_mode) = if !config_exists {
         if is_server_mode {
             info!("No configuration file found. Entering Setup Mode (Web UI).");
             (config::Config::default(), true)
         } else {
-            // CLI mode requires config or explicit args (which are not fully implemented for all settings)
-            // For now, let's just warn and use defaults, or error out.
-            // But the user specific request is about Docker/Server.
+            // CLI mode requires config or explicit args
             warn!("No configuration file found. Using defaults.");
-            (config::Config::default(), false) // Assuming defaults are safe or dry-run
+            (config::Config::default(), false)
         }
     } else {
         match config::Config::load(config_path) {
@@ -83,6 +110,18 @@ async fn main() -> Result<()> {
             }
         }
     };
+
+    // 1. Initialize Database
+    let db = Arc::new(db::Db::new("alchemist.db").await?);
+    if is_server_mode {
+        let has_users = db.has_users().await?;
+        if !has_users {
+            if !setup_mode {
+                info!("No users found. Entering Setup Mode (Web UI).");
+            }
+            setup_mode = true;
+        }
+    }
 
     if !setup_mode {
         // Log Configuration only if not in setup mode
@@ -113,8 +152,13 @@ async fn main() -> Result<()> {
     }
     info!("");
 
-    // 1. Hardware Detection
-    let hw_info = hardware::detect_hardware(config.hardware.allow_cpu_fallback)?;
+    // 2. Hardware Detection (using async version to avoid blocking runtime)
+    let allow_cpu_fallback = if setup_mode {
+        true
+    } else {
+        config.hardware.allow_cpu_fallback
+    };
+    let hw_info = hardware::detect_hardware_async(allow_cpu_fallback).await?;
     info!("");
     info!("Selected Hardware: {}", hw_info.vendor);
     if let Some(ref path) = hw_info.device_path {
@@ -135,8 +179,7 @@ async fn main() -> Result<()> {
     }
     info!("");
 
-    // 2. Initialize Database, Broadcast Channel, Orchestrator, and Processor
-    let db = Arc::new(db::Db::new("alchemist.db").await?);
+    // 3. Initialize Broadcast Channel, Orchestrator, and Processor
     let (tx, _rx) = broadcast::channel(100);
 
     // Initialize Notification Manager
@@ -209,14 +252,15 @@ async fn main() -> Result<()> {
                 let db = db.clone();
                 let file_watcher = file_watcher.clone();
                 async move {
-                    let mut all_dirs = Vec::new();
+                    let mut watch_dirs: HashMap<PathBuf, bool> = HashMap::new();
 
                     // 1. Config Dirs
                     {
                         let config_read = config.read().await;
-                        if !setup_mode {
-                            all_dirs
-                                .extend(config_read.scanner.directories.iter().map(PathBuf::from));
+                        if !setup_mode && config_read.scanner.watch_enabled {
+                            for dir in &config_read.scanner.directories {
+                                watch_dirs.insert(PathBuf::from(dir), true);
+                            }
                         }
                     }
 
@@ -224,15 +268,25 @@ async fn main() -> Result<()> {
                     if !setup_mode {
                         match db.get_watch_dirs().await {
                             Ok(dirs) => {
-                                all_dirs.extend(dirs.into_iter().map(|d| PathBuf::from(d.path)));
+                                for dir in dirs {
+                                    watch_dirs
+                                        .entry(PathBuf::from(dir.path))
+                                        .and_modify(|recursive| *recursive |= dir.is_recursive)
+                                        .or_insert(dir.is_recursive);
+                                }
                             }
                             Err(e) => error!("Failed to fetch watch dirs from DB: {}", e),
                         }
                     }
 
-                    // Deduplicate
-                    all_dirs.sort();
-                    all_dirs.dedup();
+                    let mut all_dirs: Vec<alchemist::system::watcher::WatchPath> = watch_dirs
+                        .into_iter()
+                        .map(|(path, recursive)| alchemist::system::watcher::WatchPath {
+                            path,
+                            recursive,
+                        })
+                        .collect();
+                    all_dirs.sort_by(|a, b| a.path.cmp(&b.path));
 
                     if !all_dirs.is_empty() {
                         info!("Updating file watcher with {} directories", all_dirs.len());
@@ -260,6 +314,7 @@ async fn main() -> Result<()> {
         // Async Config Watcher
         let config_watcher_arc = config.clone();
         let reload_watcher_clone = reload_watcher.clone();
+        let agent_for_config = agent.clone();
 
         // Channel for file events
         let (tx_notify, mut rx_notify) = tokio::sync::mpsc::unbounded_channel();
@@ -299,11 +354,14 @@ async fn main() -> Result<()> {
                                     "config.toml",
                                 )) {
                                     Ok(new_config) => {
+                                        let new_limit = new_config.transcode.concurrent_jobs;
                                         {
                                             let mut w = config_watcher_arc.write().await;
                                             *w = new_config;
                                         }
                                         info!("Configuration reloaded successfully.");
+
+                                        agent_for_config.set_concurrent_jobs(new_limit).await;
 
                                         // Trigger watcher update (merges DB + New Config)
                                         reload_watcher_clone(false).await;
@@ -333,6 +391,9 @@ async fn main() -> Result<()> {
         // CLI Mode
         if setup_mode {
             error!("Configuration required. Run with --server to use the web-based setup wizard, or create config.toml manually.");
+
+            // CLI early exit - error
+            // (Caller will handle pause-on-exit if needed)
             return Err(alchemist::error::AlchemistError::Config(
                 "Missing configuration".into(),
             ));

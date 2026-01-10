@@ -11,9 +11,9 @@ use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareInfo;
 use crate::Transcoder;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock, Semaphore};
+use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{error, info, warn};
 
 pub struct Agent {
@@ -23,6 +23,8 @@ pub struct Agent {
     hw_info: Arc<Option<HardwareInfo>>,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
+    semaphore_limit: Arc<AtomicUsize>,
+    held_permits: Arc<Mutex<Vec<OwnedSemaphorePermit>>>,
     paused: Arc<AtomicBool>,
     scheduler_paused: Arc<AtomicBool>,
     dry_run: bool,
@@ -49,6 +51,8 @@ impl Agent {
             hw_info: Arc::new(hw_info),
             tx: Arc::new(tx),
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
+            semaphore_limit: Arc::new(AtomicUsize::new(concurrent_jobs)),
+            held_permits: Arc::new(Mutex::new(Vec::new())),
             paused: Arc::new(AtomicBool::new(false)),
             scheduler_paused: Arc::new(AtomicBool::new(false)),
             dry_run,
@@ -76,16 +80,15 @@ impl Agent {
         };
 
         for scanned_file in files {
-            let mut output_path = scanned_file.path.clone();
-            let stem = output_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
-            let new_filename = format!(
-                "{}{}.{}",
-                stem, settings.output_suffix, settings.output_extension
-            );
-            output_path.set_file_name(new_filename);
+            let output_path = settings.output_path_for(&scanned_file.path);
+
+            if output_path.exists() && !settings.should_replace_existing_output() {
+                info!(
+                    "Skipping {:?} (output exists, replace_strategy = keep)",
+                    scanned_file.path
+                );
+                continue;
+            }
 
             if let Err(e) = self
                 .db
@@ -137,6 +140,63 @@ impl Agent {
         info!("Engine resumed.");
     }
 
+    pub async fn set_concurrent_jobs(&self, new_limit: usize) {
+        if new_limit == 0 {
+            return;
+        }
+
+        let current = self.semaphore_limit.load(Ordering::SeqCst);
+        if new_limit == current {
+            return;
+        }
+
+        if new_limit > current {
+            let mut held = self.held_permits.lock().await;
+            let mut increase = new_limit - current;
+
+            if !held.is_empty() {
+                let release = increase.min(held.len());
+                held.drain(0..release);
+                increase -= release;
+            }
+
+            if increase > 0 {
+                self.semaphore.add_permits(increase);
+            }
+
+            self.semaphore_limit.store(new_limit, Ordering::SeqCst);
+            return;
+        }
+
+        let reduce_by = current - new_limit;
+        self.semaphore_limit.store(new_limit, Ordering::SeqCst);
+
+        let semaphore = self.semaphore.clone();
+        let held = self.held_permits.clone();
+        let limit = self.semaphore_limit.clone();
+        let target_limit = new_limit;
+        tokio::spawn(async move {
+            let mut acquired = Vec::with_capacity(reduce_by);
+            for _ in 0..reduce_by {
+                match semaphore.clone().acquire_owned().await {
+                    Ok(permit) => {
+                        if limit.load(Ordering::SeqCst) > target_limit {
+                            drop(permit);
+                            break;
+                        }
+                        acquired.push(permit);
+                    }
+                    Err(_) => break,
+                }
+            }
+            if acquired.is_empty() || limit.load(Ordering::SeqCst) > target_limit {
+                return;
+            }
+            let mut held_guard = held.lock().await;
+            held_guard.extend(acquired);
+        });
+    }
+
     pub async fn run_loop(self: Arc<Self>) {
         info!("Agent loop started.");
         loop {
@@ -145,7 +205,7 @@ impl Agent {
                 continue;
             }
 
-            match self.db.get_next_job().await {
+            match self.db.claim_next_job().await {
                 Ok(Some(job)) => {
                     let permit = self.semaphore.clone().acquire_owned().await.unwrap();
                     let agent = self.clone();
@@ -171,6 +231,34 @@ impl Agent {
     pub async fn process_job(&self, job: crate::db::Job) -> Result<()> {
         let file_path = PathBuf::from(&job.input_path);
         let output_path = PathBuf::from(&job.output_path);
+
+        if file_path == output_path {
+            error!(
+                "Job {}: Output path matches input path; refusing to overwrite source.",
+                job.id
+            );
+            let _ = self
+                .db
+                .add_decision(job.id, "skip", "Output path matches input path")
+                .await;
+            self.update_job_state(job.id, JobState::Skipped).await?;
+            return Ok(());
+        }
+
+        if let Ok(settings) = self.db.get_file_settings().await {
+            if output_path.exists() && !settings.should_replace_existing_output() {
+                info!(
+                    "Job {}: Output exists and replace_strategy is keep. Skipping.",
+                    job.id
+                );
+                let _ = self
+                    .db
+                    .add_decision(job.id, "skip", "Output already exists")
+                    .await;
+                self.update_job_state(job.id, JobState::Skipped).await?;
+                return Ok(());
+            }
+        }
 
         let file_name = file_path.file_name().unwrap_or_default();
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -262,6 +350,16 @@ impl Agent {
                     .await
             }
             Err(e) => {
+                if output_path.exists() {
+                    if let Err(err) = tokio::fs::remove_file(&output_path).await {
+                        warn!(
+                            "Job {}: Failed to remove partial output {:?}: {}",
+                            job.id, output_path, err
+                        );
+                    } else {
+                        info!("Job {}: Removed partial output {:?}", job.id, output_path);
+                    }
+                }
                 if let crate::error::AlchemistError::Cancelled = e {
                     self.update_job_state(job.id, JobState::Cancelled).await
                 } else {
@@ -339,12 +437,19 @@ impl Agent {
             return Ok(());
         }
 
-        // 2. QUALITY GATE (VMAF)
+        // 2. QUALITY GATE (VMAF) - run in spawn_blocking to avoid blocking async runtime
         let mut vmaf_score = None;
         if config.quality.enable_vmaf {
             info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
-            match crate::media::ffmpeg::QualityScore::compute(input_path, output_path) {
-                Ok(score) => {
+            let input_clone = input_path.to_path_buf();
+            let output_clone = output_path.to_path_buf();
+            let vmaf_result = tokio::task::spawn_blocking(move || {
+                crate::media::ffmpeg::QualityScore::compute(&input_clone, &output_clone)
+            })
+            .await;
+
+            match vmaf_result {
+                Ok(Ok(score)) => {
                     vmaf_score = score.vmaf;
                     if let Some(s) = vmaf_score {
                         info!("[Job {}] VMAF Score: {:.2}", job_id, s);
@@ -364,14 +469,42 @@ impl Agent {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!("[Job {}] VMAF computation failed: {}", job_id, e);
+                }
+                Err(e) => {
+                    warn!("[Job {}] VMAF spawn_blocking failed: {}", job_id, e);
                 }
             }
         }
 
-        // Finalize results
-        let bitrate = (output_size as f64 * 8.0) / (encode_duration * 1000.0); // Rough estimate
+        // Get actual media duration for accurate metrics (using spawn_blocking)
+        let media_duration = {
+            let input_clone = input_path.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                crate::media::analyzer::Analyzer::probe(&input_clone)
+                    .ok()
+                    .and_then(|meta| meta.format.duration.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            })
+            .await
+            .unwrap_or(0.0)
+        };
+
+        // Calculate accurate encode_speed: how much faster than realtime (e.g., 2.0x)
+        let encode_speed = if encode_duration > 0.0 && media_duration > 0.0 {
+            media_duration / encode_duration
+        } else {
+            0.0
+        };
+
+        // Calculate avg_bitrate from output size and actual media duration (not encode time)
+        let avg_bitrate_kbps = if media_duration > 0.0 {
+            (output_size as f64 * 8.0) / (media_duration * 1000.0)
+        } else {
+            0.0
+        };
+
         let _ = self
             .db
             .save_encode_stats(
@@ -380,8 +513,8 @@ impl Agent {
                 output_size,
                 reduction,
                 encode_duration,
-                1.0, // Speed calculation could be refined
-                bitrate,
+                encode_speed,
+                avg_bitrate_kbps,
                 vmaf_score,
             )
             .await;

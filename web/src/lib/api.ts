@@ -2,7 +2,12 @@
  * Authenticated fetch utility - automatically adds Bearer token from localStorage
  */
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-    const token = localStorage.getItem('alchemist_token');
+    let token: string | null = null;
+    try {
+        token = localStorage.getItem('alchemist_token');
+    } catch {
+        token = null;
+    }
 
     const headers = new Headers(options.headers);
 
@@ -10,14 +15,48 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
         headers.set('Authorization', `Bearer ${token}`);
     }
 
-    if (!headers.has('Content-Type') && options.body) {
+    if (!headers.has('Content-Type') && typeof options.body === 'string') {
         headers.set('Content-Type', 'application/json');
     }
 
-    return fetch(url, {
-        ...options,
-        headers
-    });
+    const controller = new AbortController();
+    const timeoutMs = 15000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    if (options.signal) {
+        if (options.signal.aborted) {
+            controller.abort();
+        } else {
+            options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
+    }
+
+    try {
+        const response = await fetch(url, {
+            ...options,
+            headers,
+            signal: controller.signal,
+        });
+
+        if (response.status === 401) {
+            try {
+                localStorage.removeItem('alchemist_token');
+            } catch {
+                // Ignore storage failures (e.g., restricted environments)
+            }
+            if (typeof window !== 'undefined') {
+                const path = window.location.pathname;
+                const isAuthPage = path.startsWith('/login') || path.startsWith('/setup');
+                if (!isAuthPage) {
+                    window.location.href = '/login';
+                }
+            }
+        }
+
+        return response;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 /**

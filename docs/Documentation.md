@@ -440,7 +440,11 @@ Customize the UI with 12+ color profiles organized by category:
 
 ## API Reference
 
-All API endpoints require authentication via Bearer token (except `/api/setup/*` and `/api/auth/login`).
+All API endpoints require authentication via Bearer token, except for:
+- `/api/setup/*` - Setup wizard endpoints
+- `/api/auth/login` - Login endpoint
+- `/api/health` - Health check (returns status, version, uptime)
+- `/api/ready` - Readiness check (returns database status)
 
 ### Authentication
 
@@ -729,7 +733,7 @@ volumes:
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `0.2.3` | Specific version |
+| `0.2.4` | Specific version |
 | `0.2` | Latest patch of minor version |
 
 ---
@@ -1178,7 +1182,15 @@ A:
 
 ## Changelog
 
-### v0.2.3 (Current)
+### v0.2.4 (Current)
+- ✅ Async runtime reliability improvements (spawn_blocking for ffprobe/VMAF/hardware detection)
+- ✅ Accurate encode_speed and avg_bitrate_kbps metrics computed from actual media duration
+- ✅ GPU utilization monitoring in dashboard
+- ✅ Public /api/health and /api/ready endpoints for container orchestration
+- ✅ CPU encoding toggle in hardware settings
+- ✅ Output path refresh on config changes
+
+### v0.2.3
 - ✅ Database migration policy (backwards compatible from this version)
 - ✅ Schema version tracking
 - ✅ Auth token injection for API calls
@@ -1227,4 +1239,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-*Documentation for Alchemist v0.2.3+ • Last updated: January 2026*
+*Documentation for Alchemist v0.2.4+ • Last updated: January 2026*
