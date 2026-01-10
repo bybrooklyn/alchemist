@@ -23,6 +23,7 @@ interface Job {
     created_at: string;
     updated_at: string;
     vmaf_score?: number;
+    decision_reason?: string;
 }
 
 interface JobMetadata {
@@ -388,10 +389,11 @@ export default function JobManager() {
                         />
                         <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[101]">
                             <motion.div
-                                layoutId={`row-${focusedJob.job.id}`}
-                                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                                key="modal-content"
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
                                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                                transition={{ duration: 0.2 }}
                                 className="w-full max-w-2xl bg-helios-surface border border-helios-line/20 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden mx-4"
                             >
                                 {/* Header */}

@@ -353,14 +353,36 @@ export default function SetupWizard() {
                                 </div>
 
                                 {hardware && (
-                                    <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 flex items-center gap-3">
-                                        <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg">
-                                            <Cpu size={18} />
+                                    <div className="space-y-4">
+                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 flex items-center gap-3">
+                                            <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg">
+                                                <Cpu size={18} />
+                                            </div>
+                                            <div>
+                                                <p className="text-xs font-bold text-helios-ink">Detected: {hardware.vendor} Hardware Acceleration</p>
+                                                <p className="text-[10px] text-helios-slate">{hardware.supported_codecs.join(', ').toUpperCase()} Encoders Found</p>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p className="text-xs font-bold text-helios-ink">Detected: {hardware.vendor} Hardware Acceleration</p>
-                                            <p className="text-[10px] text-helios-slate">{hardware.supported_codecs.join(', ').toUpperCase()} Encoders Found</p>
-                                        </div>
+
+                                        {/* CPU Encoding Fallback Toggle */}
+                                        <label className="flex items-center justify-between group cursor-pointer p-4 rounded-xl border border-helios-line/20 hover:bg-helios-surface-soft/50 transition-colors">
+                                            <div className="flex flex-col gap-1">
+                                                <span className="text-sm font-bold text-helios-ink flex items-center gap-2">
+                                                    Allow CPU Encoding
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-500 font-mono">SLOW</span>
+                                                </span>
+                                                <p className="text-xs text-helios-slate">Enable software encoding fallback if GPU is unavailable or fails.</p>
+                                            </div>
+                                            <div className="relative inline-flex items-center cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={config.allow_cpu_encoding}
+                                                    onChange={(e) => setConfig({ ...config, allow_cpu_encoding: e.target.checked })}
+                                                    className="sr-only peer"
+                                                />
+                                                <div className="w-9 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                                            </div>
+                                        </label>
                                     </div>
                                 )}
                             </div>

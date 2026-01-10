@@ -24,14 +24,16 @@ use rand::rngs::OsRng;
 use rand::Rng;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -142,6 +144,10 @@ pub async fn run_server(
             get(get_schedule_handler).post(add_schedule_handler),
         )
         .route(
+            "/api/settings/hardware",
+            get(get_hardware_settings_handler).post(update_hardware_settings_handler),
+        )
+        .route(
             "/api/settings/schedule/:id",
             delete(delete_schedule_handler),
         )
@@ -175,6 +181,55 @@ pub async fn run_server(
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
+}
+
+async fn refresh_file_watcher(state: &AppState) {
+    if state.setup_required.load(Ordering::Relaxed) {
+        if let Err(e) = state.file_watcher.watch(&[]) {
+            error!("Failed to stop file watcher: {}", e);
+        }
+        return;
+    }
+
+    let mut watch_dirs: HashMap<PathBuf, bool> = HashMap::new();
+
+    {
+        let config = state.config.read().await;
+        if config.scanner.watch_enabled {
+            for dir in &config.scanner.directories {
+                watch_dirs.insert(PathBuf::from(dir), true);
+            }
+        }
+    }
+
+    match state.db.get_watch_dirs().await {
+        Ok(dirs) => {
+            for dir in dirs {
+                watch_dirs
+                    .entry(PathBuf::from(dir.path))
+                    .and_modify(|recursive| *recursive |= dir.is_recursive)
+                    .or_insert(dir.is_recursive);
+            }
+        }
+        Err(e) => error!("Failed to fetch watch dirs from DB: {}", e),
+    }
+
+    let mut all_dirs: Vec<crate::system::watcher::WatchPath> = watch_dirs
+        .into_iter()
+        .map(|(path, recursive)| crate::system::watcher::WatchPath { path, recursive })
+        .collect();
+    all_dirs.sort_by(|a, b| a.path.cmp(&b.path));
+
+    if all_dirs.is_empty() {
+        if let Err(e) = state.file_watcher.watch(&[]) {
+            error!("Failed to stop file watcher: {}", e);
+        }
+        return;
+    }
+
+    if let Err(e) = state.file_watcher.watch(&all_dirs) {
+        error!("Failed to update file watcher: {}", e);
+    }
 }
 
 async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -233,6 +288,57 @@ async fn update_transcode_settings_handler(
     config.transcode.output_codec = payload.output_codec;
     config.transcode.quality_profile = payload.quality_profile;
     config.transcode.threads = payload.threads;
+
+    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save config: {}", e),
+        )
+            .into_response();
+    }
+
+    state
+        .agent
+        .set_concurrent_jobs(payload.concurrent_jobs)
+        .await;
+
+    StatusCode::OK.into_response()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HardwareSettingsPayload {
+    allow_cpu_fallback: bool,
+    allow_cpu_encoding: bool,
+    cpu_preset: String,
+    preferred_vendor: Option<String>,
+}
+
+async fn get_hardware_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    axum::Json(HardwareSettingsPayload {
+        allow_cpu_fallback: config.hardware.allow_cpu_fallback,
+        allow_cpu_encoding: config.hardware.allow_cpu_encoding,
+        cpu_preset: config.hardware.cpu_preset.to_string(),
+        preferred_vendor: config.hardware.preferred_vendor.clone(),
+    })
+}
+
+async fn update_hardware_settings_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<HardwareSettingsPayload>,
+) -> impl IntoResponse {
+    let mut config = state.config.write().await;
+
+    config.hardware.allow_cpu_fallback = payload.allow_cpu_fallback;
+    config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+    config.hardware.cpu_preset = match payload.cpu_preset.to_lowercase().as_str() {
+        "slow" => crate::config::CpuPreset::Slow,
+        "medium" => crate::config::CpuPreset::Medium,
+        "fast" => crate::config::CpuPreset::Fast,
+        "faster" => crate::config::CpuPreset::Faster,
+        _ => crate::config::CpuPreset::Medium,
+    };
+    config.hardware.preferred_vendor = payload.preferred_vendor;
 
     if let Err(e) = config.save(std::path::Path::new("config.toml")) {
         return (
@@ -361,6 +467,8 @@ async fn setup_complete_handler(
     config_lock.scanner.directories = payload.directories;
     config_lock.system.enable_telemetry = payload.enable_telemetry;
 
+    config_lock.system.enable_telemetry = payload.enable_telemetry;
+
     // Serialize to TOML
     let toml_string = match toml::to_string_pretty(&*config_lock) {
         Ok(s) => s,
@@ -372,6 +480,7 @@ async fn setup_complete_handler(
                 .into_response()
         }
     };
+    drop(config_lock);
 
     // Write to file
     if let Err(e) = std::fs::write("config.toml", toml_string) {
@@ -384,16 +493,22 @@ async fn setup_complete_handler(
 
     // Update Setup State (Hot Reload)
     state.setup_required.store(false, Ordering::Relaxed);
+    state
+        .agent
+        .set_concurrent_jobs(payload.concurrent_jobs)
+        .await;
     state.agent.resume();
+    refresh_file_watcher(&state).await;
 
     // Start Scan (optional, but good for UX)
-    let dirs = config_lock
-        .scanner
-        .directories
-        .iter()
-        .map(std::path::PathBuf::from)
-        .collect();
-    let _ = state.agent.scan_and_enqueue(dirs).await;
+    // Start Scan (optional, but good for UX)
+    // Use library_scanner so the UI can track progress via /api/scan/status
+    let scanner = state.library_scanner.clone();
+    tokio::spawn(async move {
+        if let Err(e) = scanner.start_scan().await {
+            error!("Background initial scan failed: {}", e);
+        }
+    });
 
     info!("Configuration saved via web setup. Auth info created.");
 
@@ -690,7 +805,11 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
     // 1. API Protection: Only lock down /api routes
     if path.starts_with("/api") {
         // Public API endpoints
-        if path.starts_with("/api/setup") || path.starts_with("/api/auth/login") {
+        if path.starts_with("/api/setup")
+            || path.starts_with("/api/auth/login")
+            || path == "/api/health"
+            || path == "/api/ready"
+        {
             return next.run(req).await;
         }
 
@@ -815,8 +934,8 @@ struct SystemResources {
     active_jobs: i64,
     concurrent_limit: usize,
     cpu_count: usize,
-    // GPU info would require additional platform-specific code
-    // For now we report what sysinfo provides
+    gpu_utilization: Option<f32>,
+    gpu_memory_percent: Option<f32>,
 }
 
 async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -856,6 +975,12 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl In
     let stats = state.db.get_job_stats().await.unwrap_or_default();
     let config = state.config.read().await;
 
+    // Query GPU utilization (using spawn_blocking to avoid blocking)
+    let (gpu_utilization, gpu_memory_percent) =
+        tokio::task::spawn_blocking(|| query_gpu_utilization())
+            .await
+            .unwrap_or((None, None));
+
     axum::Json(SystemResources {
         cpu_percent,
         memory_used_mb,
@@ -865,7 +990,38 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl In
         active_jobs: stats.active,
         concurrent_limit: config.transcode.concurrent_jobs,
         cpu_count,
+        gpu_utilization,
+        gpu_memory_percent,
     })
+}
+
+/// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools
+fn query_gpu_utilization() -> (Option<f32>, Option<f32>) {
+    // Try nvidia-smi first
+    if let Ok(output) = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Format: "45, 2048, 8192" (utilization %, memory used MB, memory total MB)
+            let parts: Vec<&str> = stdout.trim().split(',').map(|s| s.trim()).collect();
+            if parts.len() >= 3 {
+                let util = parts[0].parse::<f32>().ok();
+                let mem_used = parts[1].parse::<f32>().ok();
+                let mem_total = parts[2].parse::<f32>().ok();
+                let mem_percent = match (mem_used, mem_total) {
+                    (Some(used), Some(total)) if total > 0.0 => Some((used / total) * 100.0),
+                    _ => None,
+                };
+                return (util, mem_percent);
+            }
+        }
+    }
+    (None, None)
 }
 
 #[derive(serde::Deserialize)]
@@ -1111,7 +1267,10 @@ async fn add_watch_dir_handler(
         .add_watch_dir(&payload.path, payload.is_recursive.unwrap_or(true))
         .await
     {
-        Ok(dir) => axum::Json(dir).into_response(),
+        Ok(dir) => {
+            refresh_file_watcher(&state).await;
+            axum::Json(dir).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1121,7 +1280,10 @@ async fn remove_watch_dir_handler(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     match state.db.remove_watch_dir(id).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => {
+            refresh_file_watcher(&state).await;
+            StatusCode::OK.into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1254,7 +1416,7 @@ async fn get_system_info_handler(State(state): State<Arc<AppState>>) -> impl Int
         version,
         os_version,
         is_docker,
-        telemetry_enabled: !config.system.monitoring_poll_interval.is_nan(),
+        telemetry_enabled: config.system.enable_telemetry,
         ffmpeg_version,
     })
     .into_response()
@@ -1262,7 +1424,7 @@ async fn get_system_info_handler(State(state): State<Arc<AppState>>) -> impl Int
 
 async fn get_hardware_info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.read().await;
-    match crate::system::hardware::detect_hardware(config.hardware.allow_cpu_fallback) {
+    match crate::system::hardware::detect_hardware_async(config.hardware.allow_cpu_fallback).await {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

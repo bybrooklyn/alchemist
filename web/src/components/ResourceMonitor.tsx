@@ -12,6 +12,8 @@ interface SystemResources {
     active_jobs: number;
     concurrent_limit: number;
     cpu_count: number;
+    gpu_utilization?: number;
+    gpu_memory_percent?: number;
 }
 
 interface SystemSettings {
@@ -77,13 +79,22 @@ export default function ResourceMonitor() {
     };
 
     if (!stats) return (
-        <div className="p-6 rounded-2xl bg-white/5 border border-white/10 animate-pulse h-48 flex items-center justify-center">
-            <div className="text-white/40">Loading system stats...</div>
+        <div className={`p-6 rounded-2xl bg-white/5 border border-white/10 h-48 flex items-center justify-center ${error ? "" : "animate-pulse"}`}>
+            <div className="text-center">
+                <div className={`text-sm ${error ? "text-red-400" : "text-white/40"}`}>
+                    {error ? "Unable to load system stats." : "Loading system stats..."}
+                </div>
+                {error && (
+                    <div className="text-[10px] text-white/40 mt-2">
+                        {error} Retrying automatically...
+                    </div>
+                )}
+            </div>
         </div>
     );
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             {/* CPU Usage */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
@@ -185,6 +196,37 @@ export default function ResourceMonitor() {
                     {formatUptime(stats.uptime_seconds)}
                 </div>
             </motion.div>
+
+            {/* GPU Usage (only shown when GPU data available) */}
+            {stats.gpu_utilization !== undefined && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.4 }}
+                    className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                >
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                            <Cpu size={16} /> GPU
+                        </div>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${getUsageColor(stats.gpu_utilization)}`}>
+                            {stats.gpu_utilization.toFixed(1)}%
+                        </span>
+                    </div>
+                    <div className="space-y-1">
+                        <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.gpu_utilization)}`}
+                                style={{ width: `${Math.min(stats.gpu_utilization, 100)}%` }}
+                            />
+                        </div>
+                        <div className="flex justify-between text-xs text-white/40">
+                            <span>VRAM</span>
+                            <span>{stats.gpu_memory_percent?.toFixed(0) || 0}% used</span>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
         </div>
     );
 }

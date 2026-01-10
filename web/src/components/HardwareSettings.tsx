@@ -8,13 +8,23 @@ interface HardwareInfo {
     supported_codecs: string[];
 }
 
+interface HardwareSettings {
+    allow_cpu_fallback: boolean;
+    allow_cpu_encoding: boolean;
+    cpu_preset: string;
+    preferred_vendor: string | null;
+}
+
 export default function HardwareSettings() {
     const [info, setInfo] = useState<HardwareInfo | null>(null);
+    const [settings, setSettings] = useState<HardwareSettings | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         fetchHardware();
+        fetchSettings();
     }, []);
 
     const fetchHardware = async () => {
@@ -28,6 +38,37 @@ export default function HardwareSettings() {
             console.error(err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchSettings = async () => {
+        try {
+            const res = await apiFetch("/api/settings/hardware");
+            if (res.ok) {
+                const data = await res.json();
+                setSettings(data);
+            }
+        } catch (err) {
+            console.error("Failed to fetch hardware settings:", err);
+        }
+    };
+
+    const updateCpuEncoding = async (enabled: boolean) => {
+        if (!settings) return;
+        setSaving(true);
+        try {
+            const res = await apiFetch("/api/settings/hardware", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, allow_cpu_encoding: enabled }),
+            });
+            if (res.ok) {
+                setSettings({ ...settings, allow_cpu_encoding: enabled });
+            }
+        } catch (err) {
+            console.error("Failed to update CPU encoding:", err);
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -131,6 +172,36 @@ export default function HardwareSettings() {
                                 GPU acceleration was not detected or is incompatible. Alchemist will use software encoding (SVT-AV1 / x264), which is significantly more resource intensive.
                             </p>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* CPU Encoding Toggle */}
+            {settings && (
+                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
+                                <Cpu size={18} />
+                            </div>
+                            <div>
+                                <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">CPU Encoding</h4>
+                                <p className="text-[10px] text-helios-slate font-bold">
+                                    {settings.allow_cpu_encoding ? "Enabled - CPU can be used for encoding" : "Disabled - GPU only mode"}
+                                </p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => updateCpuEncoding(!settings.allow_cpu_encoding)}
+                            disabled={saving}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.allow_cpu_encoding ? 'bg-emerald-500' : 'bg-helios-line/50'
+                                } ${saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.allow_cpu_encoding ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                            />
+                        </button>
                     </div>
                 </div>
             )}

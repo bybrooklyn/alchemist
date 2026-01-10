@@ -1,4 +1,4 @@
-use crate::db::{Db, Job, JobState};
+use crate::db::Db;
 use crate::error::Result;
 use crate::media::scanner::Scanner;
 use std::path::PathBuf;
@@ -62,6 +62,20 @@ impl LibraryScanner {
                 }
             };
 
+            let settings = match db.get_file_settings().await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to fetch file settings, using defaults: {}", e);
+                    crate::db::FileSettings {
+                        id: 1,
+                        delete_source: false,
+                        output_extension: "mkv".to_string(),
+                        output_suffix: "-alchemist".to_string(),
+                        replace_strategy: "keep".to_string(),
+                    }
+                }
+            };
+
             let scanner = Scanner::new();
             let mut all_scanned = Vec::new();
 
@@ -77,7 +91,7 @@ impl LibraryScanner {
                     s.current_folder = Some(watch_dir.path.clone());
                 }
 
-                let files = scanner.scan(vec![path]);
+                let files = scanner.scan_with_recursion(vec![(path, watch_dir.is_recursive)]);
                 all_scanned.extend(files);
             }
 
@@ -90,32 +104,17 @@ impl LibraryScanner {
             let mut added = 0;
             for file in all_scanned {
                 let path_str = file.path.to_string_lossy().to_string();
+                let output_path = settings.output_path_for(&file.path);
+
+                if output_path.exists() && !settings.should_replace_existing_output() {
+                    continue;
+                }
 
                 // Check if already exists
                 match db.get_job_by_input_path(&path_str).await {
                     Ok(Some(_)) => continue,
                     Ok(None) => {
-                        // Add new job
-                        let output_path = path_str
-                            .replace(".mkv", ".mp4")
-                            .replace(".avi", ".mp4")
-                            .replace(".mov", ".mp4"); // Dummy output logic for now
-
-                        let job = Job {
-                            id: 0,
-                            input_path: path_str,
-                            output_path,
-                            status: JobState::Queued,
-                            priority: 0,
-                            progress: 0.0,
-                            attempt_count: 0,
-                            decision_reason: None,
-                            vmaf_score: None,
-                            created_at: chrono::Utc::now(),
-                            updated_at: chrono::Utc::now(),
-                        };
-
-                        if let Err(e) = db.add_job(job).await {
+                        if let Err(e) = db.enqueue_job(&file.path, &output_path, file.mtime).await {
                             error!("Failed to add job during scan: {}", e);
                         } else {
                             added += 1;

@@ -55,6 +55,12 @@ impl Transcoder {
             return Ok(());
         }
 
+        if input == output {
+            return Err(AlchemistError::Config(
+                "Output path matches input path".into(),
+            ));
+        }
+
         // Ensure output directory exists
         if let Some(parent) = output.parent() {
             if !parent.as_os_str().is_empty() {

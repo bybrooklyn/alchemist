@@ -20,6 +20,7 @@ interface Stats {
 export default function SystemStatus() {
     const [stats, setStats] = useState<Stats | null>(null);
     const [isExpanded, setIsExpanded] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchStats = async () => {
@@ -34,9 +35,13 @@ export default function SystemStatus() {
                         failed: data.failed || 0,
                         total: data.total || 0,
                     });
+                    setError(null);
+                } else {
+                    setError("Status unavailable");
                 }
             } catch (e) {
                 console.error("Failed to fetch system status", e);
+                setError("Status unavailable");
             }
         };
 
@@ -48,8 +53,10 @@ export default function SystemStatus() {
     if (!stats) {
         return (
             <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Loading Status...</span>
-                <span className="w-2 h-2 rounded-full bg-helios-slate/50 animate-pulse"></span>
+                <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">
+                    {error ? "Status Unavailable" : "Loading Status..."}
+                </span>
+                <span className={`w-2 h-2 rounded-full ${error ? "bg-red-500/70" : "bg-helios-slate/50 animate-pulse"}`}></span>
             </div>
         );
     }

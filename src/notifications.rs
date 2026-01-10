@@ -138,7 +138,8 @@ impl NotificationManager {
             .post(&target.endpoint_url)
             .json(&body)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -171,7 +172,7 @@ impl NotificationManager {
             req = req.header("X-Gotify-Key", token);
         }
 
-        req.send().await?;
+        req.send().await?.error_for_status()?;
         Ok(())
     }
 
@@ -201,7 +202,59 @@ impl NotificationManager {
             req = req.bearer_auth(token);
         }
 
-        req.send().await?;
+        req.send().await?.error_for_status()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_webhook_errors_on_non_success() {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_notifications_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref())
+            .await
+            .expect("db init");
+        let manager = NotificationManager::new(db);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let target = NotificationTarget {
+            id: 0,
+            name: "test".to_string(),
+            target_type: "webhook".to_string(),
+            endpoint_url: format!("http://{}", addr),
+            auth_token: None,
+            events: "[]".to_string(),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+        };
+        let event = AlchemistEvent::JobStateChanged {
+            job_id: 1,
+            status: crate::db::JobState::Failed,
+        };
+
+        let result = manager.send_webhook(&target, &event, "failed").await;
+        assert!(result.is_err());
+
+        drop(manager);
+        let _ = std::fs::remove_file(db_path);
     }
 }
