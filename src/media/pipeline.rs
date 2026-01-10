@@ -15,6 +15,9 @@ pub struct MediaMetadata {
     pub size_bytes: u64,
     pub bit_rate: f64,
     pub fps: f64,
+    pub container: String,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

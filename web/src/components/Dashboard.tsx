@@ -6,7 +6,8 @@ import {
     Clock,
     HardDrive,
     Database,
-    Zap
+    Zap,
+    Terminal
 } from "lucide-react";
 import { apiFetch } from "../lib/api";
 
@@ -23,6 +24,8 @@ interface Job {
     status: string;
     created_at: string;
 }
+
+import ResourceMonitor from "./ResourceMonitor";
 
 export default function Dashboard() {
     const [stats, setStats] = useState<Stats>({ total: 0, completed: 0, active: 0, failed: 0 });
@@ -71,6 +74,7 @@ export default function Dashboard() {
 
     return (
         <div className="flex flex-col gap-6">
+            <ResourceMonitor />
             {/* Stats Grid */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
@@ -141,44 +145,44 @@ export default function Dashboard() {
                 </div>
 
                 {/* Getting Started Tips */}
-                <div className="p-6 rounded-3xl bg-gradient-to-br from-helios-surface to-helios-surface-soft border border-helios-line/40 shadow-sm">
+                <div className="p-6 rounded-3xl bg-gradient-to-br from-helios-surface to-helios-surface-soft border border-helios-line/40 shadow-sm self-start">
                     <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
-                        <Clock size={20} className="text-helios-slate" />
-                        Quick Tips
+                        <Zap size={20} className="text-helios-solar" />
+                        Quick Start
                     </h3>
-                    <div className="flex flex-col gap-4">
-                        <div className="flex gap-3 items-start">
-                            <div className="p-2 rounded-lg bg-helios-solar/10 text-helios-solar mt-0.5">
-                                <HardDrive size={16} />
+                    <div className="flex flex-col gap-5">
+                        <div className="flex gap-4 items-start">
+                            <div className="p-2.5 rounded-xl bg-helios-solar/10 text-helios-solar mt-0.5 shadow-inner">
+                                <HardDrive size={18} />
                             </div>
                             <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Add Media</h4>
+                                <h4 className="text-sm font-bold text-helios-ink">Organize Media</h4>
                                 <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Mount your media volume to <code className="bg-black/10 px-1 py-0.5 rounded font-mono text-[10px]">/data</code> in Docker. Alchemist watches configured folders automatically.
+                                    Map your library to <code className="bg-black/20 px-1.5 py-0.5 rounded font-mono text-[10px] text-helios-solar">/data</code> and configure Watch Folders in <a href="/settings" className="underline hover:text-helios-ink transition-colors">Settings</a>.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex gap-3 items-start">
-                            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500 mt-0.5">
-                                <Zap size={16} />
+                        <div className="flex gap-4 items-start">
+                            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500 mt-0.5 shadow-inner">
+                                <Activity size={18} />
                             </div>
                             <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Performance</h4>
+                                <h4 className="text-sm font-bold text-helios-ink">Boost Speed</h4>
                                 <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Toggle <strong>Hardware Acceleration</strong> in Settings if you have a supported GPU (NVIDIA/Intel) for 10x speeds.
+                                    Enable <strong>Hardware Acceleration</strong> and adjust <strong>Thread Allocation</strong> to maximize your CPU/GPU throughput.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex gap-3 items-start">
-                            <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500 mt-0.5">
-                                <Activity size={16} />
+                        <div className="flex gap-4 items-start">
+                            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500 mt-0.5 shadow-inner">
+                                <Terminal size={18} />
                             </div>
                             <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Monitor Logs</h4>
+                                <h4 className="text-sm font-bold text-helios-ink">Direct Control</h4>
                                 <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Check the <strong>Logs</strong> page for detailed real-time insights into the transcoding pipeline.
+                                    Alchemist is built for automation. Check the <a href="/logs" className="underline hover:text-helios-ink transition-colors">Logs</a> for detailed FFmpeg execution streams.
                                 </p>
                             </div>
                         </div>

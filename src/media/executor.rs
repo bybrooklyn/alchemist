@@ -61,6 +61,7 @@ impl Executor for FfmpegExecutor {
                 self.config.transcode.quality_profile,
                 self.config.hardware.cpu_preset,
                 self.config.transcode.output_codec,
+                self.config.transcode.threads,
                 self.dry_run,
                 metadata,
                 Some((job.id, self.event_tx.clone())),

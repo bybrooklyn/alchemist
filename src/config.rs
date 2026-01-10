@@ -1,4 +1,3 @@
-use crate::scheduler::ScheduleConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -13,7 +12,7 @@ pub struct Config {
     #[serde(default)]
     pub quality: QualityConfig,
     #[serde(default)]
-    pub schedule: ScheduleConfig,
+    pub system: SystemConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +161,8 @@ pub struct TranscodeConfig {
     pub min_file_size_mb: u64,         // e.g., 50
     pub concurrent_jobs: usize,
     #[serde(default)]
+    pub threads: usize, // 0 = auto
+    #[serde(default)]
     pub quality_profile: QualityProfile,
     #[serde(default)]
     pub output_codec: OutputCodec,
@@ -214,6 +215,31 @@ impl Default for QualityConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemConfig {
+    #[serde(default = "default_poll_interval")]
+    pub monitoring_poll_interval: f64,
+    #[serde(default = "default_true")]
+    pub enable_telemetry: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_poll_interval() -> f64 {
+    2.0
+}
+
+impl Default for SystemConfig {
+    fn default() -> Self {
+        Self {
+            monitoring_poll_interval: default_poll_interval(),
+            enable_telemetry: true,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -222,6 +248,7 @@ impl Default for Config {
                 min_bpp_threshold: 0.1,
                 min_file_size_mb: 50,
                 concurrent_jobs: 1,
+                threads: 0,
                 quality_profile: QualityProfile::Balanced,
                 output_codec: OutputCodec::Av1,
                 subtitle_mode: SubtitleMode::Copy,
@@ -239,7 +266,10 @@ impl Default for Config {
             },
             notifications: NotificationsConfig::default(),
             quality: QualityConfig::default(),
-            schedule: ScheduleConfig::default(),
+            system: SystemConfig {
+                monitoring_poll_interval: default_poll_interval(),
+                enable_telemetry: true,
+            },
         }
     }
 }
@@ -259,6 +289,15 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         // Enums automatically handle valid values via Serde,
         // so we don't need manual string checks for presets/profiles anymore.
+
+        // Validate system monitoring poll interval
+        if self.system.monitoring_poll_interval < 0.5 || self.system.monitoring_poll_interval > 10.0
+        {
+            anyhow::bail!(
+                "monitoring_poll_interval must be between 0.5 and 10.0 seconds, got {}",
+                self.system.monitoring_poll_interval
+            );
+        }
 
         // Validate thresholds
         if self.transcode.size_reduction_threshold < 0.0

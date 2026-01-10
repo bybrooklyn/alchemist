@@ -30,6 +30,21 @@ interface ConfigState {
     allow_cpu_encoding: boolean;
     // Scanner
     directories: string[];
+    // System
+    enable_telemetry: boolean;
+}
+
+interface HardwareInfo {
+    vendor: "Nvidia" | "Amd" | "Intel" | "Apple" | "Cpu";
+    device_path: string | null;
+    supported_codecs: string[];
+}
+
+interface ScanStatus {
+    is_running: boolean;
+    files_found: number;
+    files_added: number;
+    current_folder: string | null;
 }
 
 export default function SetupWizard() {
@@ -37,6 +52,8 @@ export default function SetupWizard() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
+    const [hardware, setHardware] = useState<HardwareInfo | null>(null);
+    const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
 
     // Tooltip state
     const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
@@ -50,21 +67,71 @@ export default function SetupWizard() {
         output_codec: 'av1',
         quality_profile: 'balanced',
         directories: ['/media/movies'],
-        allow_cpu_encoding: false
+        allow_cpu_encoding: false,
+        enable_telemetry: true
     });
 
     const [dirInput, setDirInput] = useState('');
 
-    const handleNext = () => {
+    const handleNext = async () => {
         if (step === 1 && (!config.username || !config.password)) {
             setError("Please fill in both username and password.");
             return;
         }
+
+        if (step === 2) {
+            // Hardware step - fetch if not already
+            if (!hardware) {
+                setLoading(true);
+                try {
+                    const res = await fetch('/api/system/hardware');
+                    const data = await res.json();
+                    setHardware(data);
+                } catch (e) {
+                    console.error("Hardware detection failed", e);
+                } finally {
+                    setLoading(false);
+                }
+            }
+        }
+
+        if (step === 4) {
+            // Save & Start Scan step
+            await handleSubmit();
+            return;
+        }
+
         setError(null);
-        setStep(s => Math.min(s + 1, 5));
+        setStep(s => Math.min(s + 1, 6));
     };
 
     const handleBack = () => setStep(s => Math.max(s - 1, 1));
+
+    const startScan = async () => {
+        try {
+            await fetch('/api/scan/start', { method: 'POST' });
+            pollScanStatus();
+        } catch (e) {
+            console.error("Failed to start scan", e);
+        }
+    };
+
+    const pollScanStatus = async () => {
+        const interval = setInterval(async () => {
+            try {
+                const res = await fetch('/api/scan/status');
+                const data = await res.json();
+                setScanStatus(data);
+                if (!data.is_running) {
+                    clearInterval(interval);
+                    setLoading(false);
+                }
+            } catch (e) {
+                console.error("Polling failed", e);
+                clearInterval(interval);
+            }
+        }, 1000);
+    };
 
     const addDirectory = () => {
         if (dirInput && !config.directories.includes(dirInput)) {
@@ -102,44 +169,18 @@ export default function SetupWizard() {
 
             const data = await res.json();
             if (data.token) {
-                // Save token
                 localStorage.setItem('alchemist_token', data.token);
-                // Also set basic auth for legacy (optional) or just rely on new check
             }
 
-            setSuccess(true);
-
-            // Auto redirect after short delay
-            setTimeout(() => {
-                window.location.reload();
-            }, 1000);
+            setStep(5); // Move to Scan Progress
+            startScan();
 
         } catch (err: any) {
             setError(err.message || "Failed to save configuration");
+        } finally {
             setLoading(false);
         }
     };
-
-    // Total steps = 5
-    // 1: Account
-    // 2: Transcoding (Codec, Profile)
-    // 3: Thresholds
-    // 4: Hardware
-    // 5: Review & Save
-
-    // Combined Steps for brevity:
-    // 1: Account
-    // 2: Transcode Rules (Codec, Profile, Thresholds)
-    // 3: Hardware & Directories
-    // 4: Review
-
-    // Let's stick to 4 logical steps but grouped differently?
-    // User requested "username and password be the first step".
-
-    // Step 1: Account
-    // Step 2: Codec & Quality (New)
-    // Step 3: Performance & Directories (Merged old 2/3)
-    // Step 4: Review
 
     return (
         <div className="bg-helios-surface border border-helios-line/60 rounded-2xl overflow-hidden shadow-2xl max-w-2xl w-full mx-auto">
@@ -148,7 +189,7 @@ export default function SetupWizard() {
                 <motion.div
                     className="bg-helios-solar h-full"
                     initial={{ width: 0 }}
-                    animate={{ width: `${(step / 5) * 100}%` }}
+                    animate={{ width: `${(step / 6) * 100}%` }}
                 />
             </div>
 
@@ -221,78 +262,107 @@ export default function SetupWizard() {
                         >
                             <h2 className="text-lg font-semibold text-helios-ink flex items-center gap-2">
                                 <Video size={20} className="text-helios-solar" />
-                                Transcoding Preferences
+                                Hardware & Rules
                             </h2>
 
                             <div className="space-y-6">
-                                {/* Codec Selector */}
                                 <div className="space-y-3">
-                                    <div className="flex items-center gap-2">
-                                        <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Output Codec</label>
-                                        <div className="relative group">
-                                            <Info size={14} className="text-helios-slate cursor-help hover:text-helios-solar transition-colors" />
-                                            <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-48 p-2 bg-helios-ink text-helios-main text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                                Determines the video format for processed files. AV1 provides better compression but requires newer hardware.
-                                            </div>
-                                        </div>
-                                    </div>
-
+                                    <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Transcoding Target</label>
                                     <div className="grid grid-cols-2 gap-4">
                                         <button
                                             onClick={() => setConfig({ ...config, output_codec: "av1" })}
                                             className={clsx(
-                                                "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all relative group",
-                                                config.output_codec === "av1"
-                                                    ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm"
-                                                    : "bg-helios-surface-soft border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft/80"
+                                                "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all",
+                                                config.output_codec === "av1" ? "bg-helios-solar/10 border-helios-solar text-helios-ink" : "bg-helios-surface-soft border-helios-line/30 text-helios-slate"
                                             )}
                                         >
                                             <span className="font-bold">AV1</span>
-                                            <span className="text-xs text-center opacity-70">Best compression. Requires Arc/RTX 4000+.</span>
-                                            {/* Hover Tooltip */}
-                                            <div className="absolute inset-0 bg-helios-ink/90 text-helios-main p-4 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-center">
-                                                Excellent efficiency. Ideal for Intel Arc GPUs.
-                                            </div>
+                                            <span className="text-[10px] opacity-70">Extreme compression. Needs modern GPU.</span>
                                         </button>
                                         <button
                                             onClick={() => setConfig({ ...config, output_codec: "hevc" })}
                                             className={clsx(
-                                                "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all relative group",
-                                                config.output_codec === "hevc"
-                                                    ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm"
-                                                    : "bg-helios-surface-soft border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft/80"
+                                                "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all",
+                                                config.output_codec === "hevc" ? "bg-helios-solar/10 border-helios-solar text-helios-ink" : "bg-helios-surface-soft border-helios-line/30 text-helios-slate"
                                             )}
                                         >
                                             <span className="font-bold">HEVC</span>
-                                            <span className="text-xs text-center opacity-70">Broad compatibility. Fast encoding.</span>
-                                            {/* Hover Tooltip */}
-                                            <div className="absolute inset-0 bg-helios-ink/90 text-helios-main p-4 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-center">
-                                                Standard H.265. Compatible with most modern devices.
-                                            </div>
+                                            <span className="text-[10px] opacity-70">Broad support. High efficiency.</span>
                                         </button>
                                     </div>
                                 </div>
 
-                                {/* Quality Profile */}
                                 <div className="space-y-3">
-                                    <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Quality Profile</label>
-                                    <div className="grid grid-cols-3 gap-3">
-                                        {(["speed", "balanced", "quality"] as const).map((profile) => (
-                                            <button
-                                                key={profile}
-                                                onClick={() => setConfig({ ...config, quality_profile: profile })}
-                                                className={clsx(
-                                                    "p-3 rounded-lg border capitalize transition-all",
-                                                    config.quality_profile === profile
-                                                        ? "bg-helios-solar/10 border-helios-solar text-helios-ink font-bold"
-                                                        : "bg-helios-surface-soft border-helios-line/30 text-helios-slate"
-                                                )}
-                                            >
-                                                {profile}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Min Savings Threshold ({Math.round(config.size_reduction_threshold * 100)}%)</label>
+                                    <input
+                                        type="range" min="0.1" max="0.9" step="0.05"
+                                        value={config.size_reduction_threshold}
+                                        onChange={(e) => setConfig({ ...config, size_reduction_threshold: parseFloat(e.target.value) })}
+                                        className="w-full accent-helios-solar h-2 bg-helios-surface-soft rounded-lg appearance-none cursor-pointer"
+                                    />
+                                    <p className="text-[10px] text-helios-slate italic">If encodes don't save at least {Math.round(config.size_reduction_threshold * 100)}%, they are discarded.</p>
                                 </div>
+
+                                <div className="space-y-3">
+                                    <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Concurrent Jobs ({config.concurrent_jobs})</label>
+                                    <input
+                                        type="range" min="1" max="8" step="1"
+                                        value={config.concurrent_jobs}
+                                        onChange={(e) => setConfig({ ...config, concurrent_jobs: parseInt(e.target.value) })}
+                                        className="w-full accent-helios-solar h-2 bg-helios-surface-soft rounded-lg appearance-none cursor-pointer"
+                                    />
+                                    <p className="text-[10px] text-helios-slate italic">How many files to process at the same time.</p>
+                                </div>
+
+                                <div className="pt-2 border-t border-helios-line/10">
+                                    <label className="flex items-center justify-between group cursor-pointer">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold uppercase tracking-wider text-helios-slate">Anonymous Telemetry</span>
+                                            <div className="relative">
+                                                <button
+                                                    onMouseEnter={() => setActiveTooltip('telemetry')}
+                                                    onMouseLeave={() => setActiveTooltip(null)}
+                                                    className="text-helios-slate/40 hover:text-helios-solar transition-colors"
+                                                >
+                                                    <Info size={14} />
+                                                </button>
+                                                <AnimatePresence>
+                                                    {activeTooltip === 'telemetry' && (
+                                                        <motion.div
+                                                            initial={{ opacity: 0, y: 10 }}
+                                                            animate={{ opacity: 1, y: 0 }}
+                                                            exit={{ opacity: 0, y: 10 }}
+                                                            className="absolute bottom-full left-0 mb-2 w-48 p-2 bg-helios-surface-soft border border-helios-line/40 rounded-lg shadow-xl text-[10px] text-helios-slate z-50 leading-relaxed"
+                                                        >
+                                                            Help improve Alchemist by sending anonymous usage statistics and error reports. No filenames or personal data are ever collected.
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </div>
+                                        </div>
+                                        <div className="relative inline-flex items-center cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={config.enable_telemetry}
+                                                onChange={(e) => setConfig({ ...config, enable_telemetry: e.target.checked })}
+                                                className="sr-only peer"
+                                            />
+                                            <div className="w-9 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                {hardware && (
+                                    <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 flex items-center gap-3">
+                                        <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg">
+                                            <Cpu size={18} />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-bold text-helios-ink">Detected: {hardware.vendor} Hardware Acceleration</p>
+                                            <p className="text-[10px] text-helios-slate">{hardware.supported_codecs.join(', ').toUpperCase()} Encoders Found</p>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </motion.div>
                     )}
@@ -306,37 +376,30 @@ export default function SetupWizard() {
                             className="space-y-6"
                         >
                             <h2 className="text-lg font-semibold text-helios-ink flex items-center gap-2">
-                                <Settings size={20} className="text-helios-solar" />
-                                Processing Rules
+                                <FolderOpen size={20} className="text-helios-solar" />
+                                Watch Directories
                             </h2>
+                            <p className="text-sm text-helios-slate">Add folders to monitor for new media files.</p>
 
                             <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-helios-slate mb-2">
-                                        Size Reduction Threshold ({Math.round(config.size_reduction_threshold * 100)}%)
-                                    </label>
+                                <div className="flex gap-2">
                                     <input
-                                        type="range"
-                                        min="0.1"
-                                        max="0.9"
-                                        step="0.05"
-                                        value={config.size_reduction_threshold}
-                                        onChange={(e) => setConfig({ ...config, size_reduction_threshold: parseFloat(e.target.value) })}
-                                        className="w-full accent-helios-solar h-2 bg-helios-surface-soft rounded-lg appearance-none cursor-pointer"
+                                        type="text"
+                                        placeholder="/movies"
+                                        value={dirInput}
+                                        onChange={(e) => setDirInput(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && addDirectory()}
+                                        className="flex-1 bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2 text-helios-ink focus:border-helios-solar outline-none font-mono text-sm"
                                     />
-                                    <p className="text-xs text-helios-slate mt-1">Files will be reverted if they don't shrink by this much.</p>
+                                    <button onClick={addDirectory} className="px-4 py-2 bg-helios-solar text-helios-main rounded-lg font-bold">Add</button>
                                 </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-helios-slate mb-2">
-                                        Minimum File Size ({config.min_file_size_mb} MB)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        value={config.min_file_size_mb}
-                                        onChange={(e) => setConfig({ ...config, min_file_size_mb: parseInt(e.target.value) })}
-                                        className="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2 text-helios-ink focus:border-helios-solar outline-none"
-                                    />
+                                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                                    {config.directories.map((dir, i) => (
+                                        <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-helios-surface-soft/50 border border-helios-line/20 group animate-in fade-in slide-in-from-right-2">
+                                            <span className="font-mono text-xs text-helios-ink">{dir}</span>
+                                            <button onClick={() => removeDirectory(dir)} className="text-red-500 opacity-50 hover:opacity-100 transition-opacity font-bold">×</button>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         </motion.div>
@@ -351,140 +414,125 @@ export default function SetupWizard() {
                             className="space-y-6"
                         >
                             <h2 className="text-lg font-semibold text-helios-ink flex items-center gap-2">
-                                <Cpu size={20} className="text-helios-solar" />
-                                Environment
+                                <CheckCircle size={20} className="text-helios-solar" />
+                                Final Review
                             </h2>
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-helios-slate mb-2">
-                                        Concurrent Jobs ({config.concurrent_jobs})
-                                    </label>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max="16"
-                                        value={config.concurrent_jobs}
-                                        onChange={(e) => setConfig({ ...config, concurrent_jobs: parseInt(e.target.value) })}
-                                        className="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2 text-helios-ink focus:border-helios-solar outline-none"
-                                    />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="p-4 rounded-xl bg-helios-surface-soft/50 border border-helios-line/20 text-xs text-helios-slate space-y-2">
+                                    <p>ACCOUNT: <span className="text-helios-ink font-bold">{config.username}</span></p>
+                                    <p>TARGET: <span className="text-helios-ink font-bold uppercase">{config.output_codec}</span></p>
+                                    <p>CONCURRENCY: <span className="text-helios-ink font-bold">{config.concurrent_jobs} Jobs</span></p>
                                 </div>
-
-                                <div className="space-y-4 pt-4 border-t border-helios-line/20">
-                                    <label className="block text-sm font-medium text-helios-slate mb-2">Media Directories</label>
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/media"
-                                            value={dirInput}
-                                            onChange={(e) => setDirInput(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && addDirectory()}
-                                            className="flex-1 bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2 text-helios-ink focus:border-helios-solar outline-none font-mono text-sm"
-                                        />
-                                        <button
-                                            onClick={addDirectory}
-                                            className="px-4 py-2 bg-helios-surface-soft hover:bg-helios-surface-soft/80 text-helios-ink rounded-lg font-medium transition-colors"
-                                        >
-                                            Add
-                                        </button>
-                                    </div>
-                                    <div className="space-y-2 max-h-32 overflow-y-auto">
-                                        {config.directories.map((dir, i) => (
-                                            <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-helios-surface-soft/50 border border-helios-line/20 group">
-                                                <span className="font-mono text-xs text-helios-ink truncate">{dir}</span>
-                                                <button onClick={() => removeDirectory(dir)} className="text-status-error hover:text-status-error/80">×</button>
-                                            </div>
-                                        ))}
-                                    </div>
+                                <div className="p-4 rounded-xl bg-helios-surface-soft/50 border border-helios-line/20 text-xs text-helios-slate space-y-2">
+                                    <p>FOLDERS: <span className="text-helios-ink font-bold">{config.directories.length} total</span></p>
+                                    <p>THRESHOLD: <span className="text-helios-ink font-bold">{Math.round(config.size_reduction_threshold * 100)}%</span></p>
                                 </div>
                             </div>
+
+                            {error && <p className="text-xs text-red-500 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">{error}</p>}
                         </motion.div>
                     )}
 
                     {step === 5 && (
                         <motion.div
                             key="step5"
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            className="space-y-6"
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="space-y-8 py-10 text-center"
                         >
-                            <h2 className="text-lg font-semibold text-helios-ink flex items-center gap-2">
-                                <Server size={20} className="text-helios-solar" />
-                                Review & Save
-                            </h2>
-
-                            <div className="space-y-4 text-sm text-helios-slate">
-                                <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 space-y-3">
-                                    <div className="flex justify-between">
-                                        <span>User</span>
-                                        <span className="text-helios-ink font-bold">{config.username}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span>Codec</span>
-                                        <span className="text-helios-ink font-mono uppercase">{config.output_codec}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span>Profile</span>
-                                        <span className="text-helios-ink capitalize">{config.quality_profile}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span>Concurrency</span>
-                                        <span className="text-helios-ink font-mono">{config.concurrent_jobs} jobs</span>
-                                    </div>
-                                    <div className="pt-2 border-t border-helios-line/20">
-                                        <span className="block mb-1">Directories ({config.directories.length}):</span>
-                                        <div className="flex flex-wrap gap-1">
-                                            {config.directories.map(d => (
-                                                <span key={d} className="px-1.5 py-0.5 bg-helios-surface border border-helios-line/30 rounded text-xs font-mono">{d}</span>
-                                            ))}
-                                        </div>
+                            <div className="flex justify-center">
+                                <div className="relative">
+                                    <div className="w-20 h-20 rounded-full border-4 border-helios-solar/20 border-t-helios-solar animate-spin" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <SearchIcon className="text-helios-solar" size={24} />
                                     </div>
                                 </div>
-
-                                {error && (
-                                    <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error flex items-center gap-2">
-                                        <AlertTriangle size={16} />
-                                        <span>{error}</span>
-                                    </div>
-                                )}
                             </div>
+                            <div>
+                                <h2 className="text-xl font-bold text-helios-ink mb-2">Primary Library Scan</h2>
+                                <p className="text-sm text-helios-slate">Building your transcoding queue. This might take a moment.</p>
+                            </div>
+
+                            {scanStatus && (
+                                <div className="space-y-3">
+                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                        <span>Found: {scanStatus.files_found}</span>
+                                        <span>Added: {scanStatus.files_added}</span>
+                                    </div>
+                                    <div className="h-2 bg-helios-surface-soft rounded-full overflow-hidden border border-helios-line/20">
+                                        <motion.div
+                                            className="h-full bg-helios-solar"
+                                            animate={{ width: `${scanStatus.files_found > 0 ? (scanStatus.files_added / scanStatus.files_found) * 100 : 0}%` }}
+                                        />
+                                    </div>
+                                    {scanStatus.current_folder && (
+                                        <p className="text-[10px] text-helios-slate font-mono truncate px-4">{scanStatus.current_folder}</p>
+                                    )}
+
+                                    {!scanStatus.is_running && (
+                                        <motion.button
+                                            initial={{ opacity: 0, y: 10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            onClick={() => window.location.href = '/'}
+                                            className="w-full py-3 bg-helios-solar text-helios-main font-bold rounded-xl mt-4 shadow-lg shadow-helios-solar/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                                        >
+                                            Enter Dashboard
+                                        </motion.button>
+                                    )}
+                                </div>
+                            )}
+
+                            {!scanStatus && loading && (
+                                <p className="text-xs text-helios-slate animate-pulse">Initializing scanner...</p>
+                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>
 
-                <div className="mt-8 flex justify-between pt-6 border-t border-helios-line/40">
-                    <button
-                        onClick={handleBack}
-                        disabled={step === 1}
-                        className={clsx(
-                            "px-4 py-2 rounded-lg font-medium transition-colors",
-                            step === 1 ? "text-helios-line cursor-not-allowed" : "text-helios-slate hover:text-helios-ink"
-                        )}
-                    >
-                        Back
-                    </button>
+                {step < 5 && (
+                    <div className="mt-8 flex justify-between pt-6 border-t border-helios-line/40">
+                        <button
+                            onClick={handleBack}
+                            disabled={step === 1 || loading}
+                            className={clsx(
+                                "px-4 py-2 rounded-lg font-medium transition-colors",
+                                step === 1 ? "text-helios-line cursor-not-allowed" : "text-helios-slate hover:text-helios-ink"
+                            )}
+                        >
+                            Back
+                        </button>
 
-                    {step < 5 ? (
                         <button
                             onClick={handleNext}
-                            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity"
+                            disabled={loading}
+                            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
                         >
-                            Next
-                            <ArrowRight size={18} />
+                            {loading ? "Searching..." : step === 4 ? "Build Engine" : "Next"}
+                            {!loading && <ArrowRight size={18} />}
                         </button>
-                    ) : (
-                        <button
-                            onClick={handleSubmit}
-                            disabled={loading || success}
-                            className="flex items-center gap-2 px-6 py-2 rounded-lg bg-status-success text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
-                        >
-                            {loading ? "Activating..." : success ? "Redirecting..." : "Launch Alchemist"}
-                            {!loading && !success && <Save size={18} />}
-                        </button>
-                    )}
-                </div>
+                    </div>
+                )}
             </div>
         </div>
+    );
+}
+
+function SearchIcon({ className, size }: { className?: string; size?: number }) {
+    return (
+        <svg
+            className={className}
+            width={size}
+            height={size}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+        </svg>
     );
 }

@@ -9,7 +9,6 @@ use crate::media::pipeline::{
 use crate::media::planner::BasicPlanner;
 use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareInfo;
-use crate::system::notifications::NotificationService;
 use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +23,8 @@ pub struct Agent {
     hw_info: Arc<Option<HardwareInfo>>,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
-    notifications: NotificationService,
     paused: Arc<AtomicBool>,
+    scheduler_paused: Arc<AtomicBool>,
     dry_run: bool,
 }
 
@@ -41,7 +40,6 @@ impl Agent {
         // Read config asynchronously to avoid blocking atomic in async runtime
         let config_read = config.read().await;
         let concurrent_jobs = config_read.transcode.concurrent_jobs;
-        let notifications = NotificationService::new(config_read.notifications.clone());
         drop(config_read);
 
         Self {
@@ -51,8 +49,8 @@ impl Agent {
             hw_info: Arc::new(hw_info),
             tx: Arc::new(tx),
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
-            notifications,
             paused: Arc::new(AtomicBool::new(false)),
+            scheduler_paused: Arc::new(AtomicBool::new(false)),
             dry_run,
         }
     }
@@ -62,9 +60,32 @@ impl Agent {
         let scanner = Scanner::new();
         let files = scanner.scan(directories);
 
+        // Get output settings
+        let settings = match self.db.get_file_settings().await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to fetch file settings, using defaults: {}", e);
+                crate::db::FileSettings {
+                    id: 1,
+                    delete_source: false,
+                    output_extension: "mkv".to_string(),
+                    output_suffix: "-alchemist".to_string(),
+                    replace_strategy: "keep".to_string(),
+                }
+            }
+        };
+
         for scanned_file in files {
             let mut output_path = scanned_file.path.clone();
-            output_path.set_extension("av1.mkv");
+            let stem = output_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let new_filename = format!(
+                "{}{}.{}",
+                stem, settings.output_suffix, settings.output_extension
+            );
+            output_path.set_file_name(new_filename);
 
             if let Err(e) = self
                 .db
@@ -83,7 +104,27 @@ impl Agent {
     }
 
     pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst) || self.scheduler_paused.load(Ordering::SeqCst)
+    }
+
+    pub fn is_manual_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    pub fn is_scheduler_paused(&self) -> bool {
+        self.scheduler_paused.load(Ordering::SeqCst)
+    }
+
+    pub fn set_scheduler_paused(&self, paused: bool) {
+        let current = self.scheduler_paused.load(Ordering::SeqCst);
+        if current != paused {
+            self.scheduler_paused.store(paused, Ordering::SeqCst);
+            if paused {
+                info!("Engine paused by scheduler.");
+            } else {
+                info!("Engine resumed by scheduler.");
+            }
+        }
     }
 
     pub fn pause(&self) {
@@ -225,10 +266,6 @@ impl Agent {
                     self.update_job_state(job.id, JobState::Cancelled).await
                 } else {
                     error!("Job {}: Transcode failed: {}", job.id, e);
-                    let _ = self
-                        .notifications
-                        .notify_job_failed(&job, &e.to_string())
-                        .await;
                     self.update_job_state(job.id, JobState::Failed).await?;
                     Err(e)
                 }
@@ -363,20 +400,20 @@ impl Agent {
 
         self.update_job_state(job_id, JobState::Completed).await?;
 
-        // Notifications
-        let stats_msg = format!(
-            "📊 {} MB -> {} MB ({:.1}% reduction), VMAF: {}",
-            input_size / 1_048_576,
-            output_size / 1_048_576,
-            reduction * 100.0,
-            vmaf_score
-                .map(|s| format!("{:.2}", s))
-                .unwrap_or_else(|| "N/A".to_string())
-        );
-        let _ = self
-            .notifications
-            .notify_job_complete(&job, Some(&stats_msg))
-            .await;
+        // Handle File Deletion Policy
+        if let Ok(settings) = self.db.get_file_settings().await {
+            if settings.delete_source {
+                info!(
+                    "Job {}: 'Delete Source' is enabled. Removing input file: {:?}",
+                    job_id, input_path
+                );
+                if let Err(e) = tokio::fs::remove_file(input_path).await {
+                    error!("Job {}: Failed to delete input file: {}", job_id, e);
+                } else {
+                    info!("Job {}: Input file deleted successfully.", job_id);
+                }
+            }
+        }
 
         Ok(())
     }

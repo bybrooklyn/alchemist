@@ -2,7 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
 import Dashboard from "../components/Dashboard.tsx";
-import { Activity, Server, Settings, Video } from "lucide-react";
+import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
 <Layout title="Alchemist | Dashboard">
@@ -20,6 +20,7 @@ import { Activity, Server, Settings, Video } from "lucide-react";
                         System Overview & Performance
                     </p>
                 </div>
+                <HeaderActions client:load />
             </header>
 
             <Dashboard client:load />

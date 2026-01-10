@@ -19,14 +19,13 @@ services:
     # For Intel QuickSync (uncomment if needed)
     # devices:
     #   - /dev/dri:/dev/dri
-    # For NVIDIA GPU (uncomment if needed)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   alchemist_data:

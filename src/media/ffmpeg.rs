@@ -146,6 +146,7 @@ pub struct FFmpegCommandBuilder<'a> {
     profile: QualityProfile,
     cpu_preset: CpuPreset,
     target_codec: crate::config::OutputCodec,
+    threads: usize,
 }
 
 impl<'a> FFmpegCommandBuilder<'a> {
@@ -157,7 +158,13 @@ impl<'a> FFmpegCommandBuilder<'a> {
             profile: QualityProfile::Balanced,
             cpu_preset: CpuPreset::Medium,
             target_codec: crate::config::OutputCodec::Av1,
+            threads: 0,
         }
+    }
+
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
     }
 
     pub fn with_hardware(mut self, hw_info: Option<&'a HardwareInfo>) -> Self {
@@ -189,6 +196,10 @@ impl<'a> FFmpegCommandBuilder<'a> {
             None => self.apply_cpu_params(&mut cmd),
         }
 
+        if self.threads > 0 {
+            cmd.arg("-threads").arg(self.threads.to_string());
+        }
+
         cmd.arg("-c:a").arg("copy");
         cmd.arg("-c:s").arg("copy");
         cmd.arg(self.output);
@@ -198,7 +209,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
 
     fn apply_hardware_params(&self, cmd: &mut tokio::process::Command, hw: &HardwareInfo) {
         let codec_str = self.target_codec.as_str();
-        
+
         // Check if target codec is supported by hardware
         let supports_codec = hw.supported_codecs.iter().any(|c| c == codec_str);
 
@@ -235,7 +246,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
             (Vendor::Nvidia, crate::config::OutputCodec::Av1) => {
                 cmd.arg("-c:v").arg("av1_nvenc");
                 cmd.arg("-preset").arg(self.profile.nvenc_preset());
-                cmd.arg("-cq").arg("25"); 
+                cmd.arg("-cq").arg("25");
             }
             (Vendor::Nvidia, crate::config::OutputCodec::Hevc) => {
                 cmd.arg("-c:v").arg("hevc_nvenc");
@@ -243,7 +254,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 cmd.arg("-cq").arg("25");
             }
             (Vendor::Apple, crate::config::OutputCodec::Av1) => {
-                 cmd.arg("-c:v").arg("av1_videotoolbox");
+                cmd.arg("-c:v").arg("av1_videotoolbox");
             }
             (Vendor::Apple, crate::config::OutputCodec::Hevc) => {
                 cmd.arg("-c:v").arg("hevc_videotoolbox");
@@ -252,7 +263,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
             }
             (Vendor::Amd, crate::config::OutputCodec::Av1) => {
                 // Ensure VAAPI device is set if needed
-                 if let Some(ref device_path) = hw.device_path {
+                if let Some(ref device_path) = hw.device_path {
                     cmd.arg("-vaapi_device").arg(device_path);
                 }
                 if cfg!(target_os = "windows") {
@@ -262,7 +273,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 }
             }
             (Vendor::Amd, crate::config::OutputCodec::Hevc) => {
-                 if let Some(ref device_path) = hw.device_path {
+                if let Some(ref device_path) = hw.device_path {
                     cmd.arg("-vaapi_device").arg(device_path);
                 }
                 if cfg!(target_os = "windows") {
@@ -282,24 +293,23 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 cmd.arg("-c:v").arg("libsvtav1");
                 cmd.arg("-preset").arg(preset_str);
                 cmd.arg("-crf").arg(crf_str);
-                cmd.arg("-svtav1-params").arg("tune=0:film-grain=8");
             }
             crate::config::OutputCodec::Hevc => {
-                 // For HEVC CPU, we use libx265
-                 // Map presets roughly:
-                 // slow -> slow
-                 // medium -> medium
-                 // fast -> fast
-                 // faster -> faster
-                 let preset = self.cpu_preset.as_str(); 
-                 // CRF mapping: libsvtav1 24-32 is roughly equivalent to x265 20-28
-                 // Let's use a simple offset or strict mapping
-                 let crf = match self.cpu_preset {
-                     CpuPreset::Slow => "20",
-                     CpuPreset::Medium => "24", 
-                     CpuPreset::Fast => "26",
-                     CpuPreset::Faster => "28",
-                 };
+                // For HEVC CPU, we use libx265
+                // Map presets roughly:
+                // slow -> slow
+                // medium -> medium
+                // fast -> fast
+                // faster -> faster
+                let preset = self.cpu_preset.as_str();
+                // CRF mapping: libsvtav1 24-32 is roughly equivalent to x265 20-28
+                // Let's use a simple offset or strict mapping
+                let crf = match self.cpu_preset {
+                    CpuPreset::Slow => "20",
+                    CpuPreset::Medium => "24",
+                    CpuPreset::Fast => "26",
+                    CpuPreset::Faster => "28",
+                };
                 cmd.arg("-c:v").arg("libx265");
                 cmd.arg("-preset").arg(preset);
                 cmd.arg("-crf").arg(crf);

@@ -3,7 +3,10 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{error, info, warn};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Vendor {
     Nvidia,
     Amd,
@@ -24,7 +27,7 @@ impl std::fmt::Display for Vendor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareInfo {
     pub vendor: Vendor,
     pub device_path: Option<String>,

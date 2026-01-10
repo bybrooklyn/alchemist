@@ -61,6 +61,7 @@ impl ConfigWizard {
                 min_bpp_threshold: min_bpp,
                 min_file_size_mb: min_file_size,
                 concurrent_jobs,
+                threads: 0,
                 quality_profile: crate::config::QualityProfile::Balanced,
                 output_codec: crate::config::OutputCodec::Av1,
                 subtitle_mode: crate::config::SubtitleMode::Copy,
@@ -78,7 +79,7 @@ impl ConfigWizard {
             },
             notifications: crate::config::NotificationsConfig::default(),
             quality: crate::config::QualityConfig::default(),
-            schedule: crate::scheduler::ScheduleConfig::default(),
+            system: crate::config::SystemConfig::default(),
         };
 
         // Show summary

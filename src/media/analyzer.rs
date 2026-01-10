@@ -26,6 +26,8 @@ pub struct Stream {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Format {
+    pub format_name: String,
+    pub format_long_name: Option<String>,
     pub duration: String,
     pub size: String,
     pub bit_rate: String,
@@ -64,6 +66,8 @@ impl AnalyzerTrait for FfmpegAnalyzer {
             .find(|s| s.codec_type == "video")
             .ok_or_else(|| AlchemistError::Analyzer("No video stream found".to_string()))?;
 
+        let audio_stream = metadata.streams.iter().find(|s| s.codec_type == "audio");
+
         Ok(MediaMetadata {
             path: path.to_path_buf(),
             duration_secs: metadata.format.duration.parse().unwrap_or(0.0),
@@ -88,6 +92,9 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 .as_deref()
                 .and_then(Analyzer::parse_fps)
                 .unwrap_or(24.0),
+            container: metadata.format.format_name.clone(),
+            audio_codec: audio_stream.map(|s| s.codec_name.clone()),
+            audio_channels: audio_stream.and_then(|s| s.channels),
         })
     }
 }

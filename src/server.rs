@@ -8,14 +8,14 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{header, StatusCode, Uri},
     middleware::{self, Next},
     response::{
         sse::{Event as AxumEvent, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use chrono::Utc;
@@ -23,6 +23,7 @@ use futures::stream::Stream;
 use rand::rngs::OsRng;
 use rand::Rng;
 use rust_embed::RustEmbed;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -44,6 +45,10 @@ pub struct AppState {
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: Arc<AtomicBool>,
     pub start_time: Instant,
+    pub notification_manager: Arc<crate::notifications::NotificationManager>,
+    pub sys: std::sync::Mutex<sysinfo::System>,
+    pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
+    pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
 }
 
 pub async fn run_server(
@@ -53,7 +58,16 @@ pub async fn run_server(
     transcoder: Arc<Transcoder>,
     tx: broadcast::Sender<AlchemistEvent>,
     setup_required: bool,
+    notification_manager: Arc<crate::notifications::NotificationManager>,
+    file_watcher: Arc<crate::system::watcher::FileWatcher>,
 ) -> Result<()> {
+    // Initialize sysinfo
+    let mut sys = sysinfo::System::new();
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+
+    let library_scanner = Arc::new(crate::system::scanner::LibraryScanner::new(db.clone()));
+
     let state = Arc::new(AppState {
         db,
         config,
@@ -62,20 +76,31 @@ pub async fn run_server(
         tx,
         setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: std::time::Instant::now(),
+        notification_manager,
+        sys: std::sync::Mutex::new(sys),
+        file_watcher,
+        library_scanner,
     });
 
     let app = Router::new()
         // API Routes
+        .route("/api/scan/start", post(start_scan_handler))
+        .route("/api/scan/status", get(get_scan_status_handler))
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/stats/aggregated", get(aggregated_stats_handler))
         .route("/api/stats/daily", get(daily_stats_handler))
         .route("/api/stats/detailed", get(detailed_stats_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
+        .route("/api/jobs/batch", post(batch_jobs_handler))
+        .route("/api/logs/history", get(logs_history_handler))
+        .route("/api/logs", delete(clear_logs_handler))
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
         .route("/api/jobs/:id/cancel", post(cancel_job_handler))
         .route("/api/jobs/:id/restart", post(restart_job_handler))
+        .route("/api/jobs/:id/delete", post(delete_job_handler))
+        .route("/api/jobs/:id/details", get(get_job_detail_handler))
         .route("/api/events", get(sse_handler))
         .route("/api/engine/pause", post(pause_engine_handler))
         .route("/api/engine/resume", post(resume_engine_handler))
@@ -84,9 +109,49 @@ pub async fn run_server(
             "/api/settings/transcode",
             get(get_transcode_settings_handler).post(update_transcode_settings_handler),
         )
+        .route(
+            "/api/settings/system",
+            get(get_system_settings_handler).post(update_system_settings_handler),
+        )
+        .route(
+            "/api/settings/watch-dirs",
+            get(get_watch_dirs_handler).post(add_watch_dir_handler),
+        )
+        .route(
+            "/api/settings/watch-dirs/:id",
+            delete(remove_watch_dir_handler),
+        )
+        .route(
+            "/api/settings/notifications",
+            get(get_notifications_handler).post(add_notification_handler),
+        )
+        .route(
+            "/api/settings/notifications/:id",
+            delete(delete_notification_handler),
+        )
+        .route(
+            "/api/settings/notifications/test",
+            post(test_notification_handler),
+        )
+        .route(
+            "/api/settings/files",
+            get(get_file_settings_handler).post(update_file_settings_handler),
+        )
+        .route(
+            "/api/settings/schedule",
+            get(get_schedule_handler).post(add_schedule_handler),
+        )
+        .route(
+            "/api/settings/schedule/:id",
+            delete(delete_schedule_handler),
+        )
         // Health Check Routes
         .route("/api/health", get(health_handler))
         .route("/api/ready", get(ready_handler))
+        // System Routes
+        .route("/api/system/resources", get(system_resources_handler))
+        .route("/api/system/info", get(get_system_info_handler))
+        .route("/api/system/hardware", get(get_hardware_info_handler))
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
@@ -126,6 +191,8 @@ struct TranscodeSettingsPayload {
     min_file_size_mb: u64,
     output_codec: crate::config::OutputCodec,
     quality_profile: crate::config::QualityProfile,
+    #[serde(default)]
+    threads: usize,
 }
 
 async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -137,6 +204,7 @@ async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> i
         min_file_size_mb: config.transcode.min_file_size_mb,
         output_codec: config.transcode.output_codec,
         quality_profile: config.transcode.quality_profile,
+        threads: config.transcode.threads,
     })
 }
 
@@ -164,6 +232,7 @@ async fn update_transcode_settings_handler(
     config.transcode.min_file_size_mb = payload.min_file_size_mb;
     config.transcode.output_codec = payload.output_codec;
     config.transcode.quality_profile = payload.quality_profile;
+    config.transcode.threads = payload.threads;
 
     if let Err(e) = config.save(std::path::Path::new("config.toml")) {
         return (
@@ -176,6 +245,48 @@ async fn update_transcode_settings_handler(
     StatusCode::OK.into_response()
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SystemSettingsPayload {
+    monitoring_poll_interval: f64,
+    enable_telemetry: bool,
+}
+
+async fn get_system_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    axum::Json(SystemSettingsPayload {
+        monitoring_poll_interval: config.system.monitoring_poll_interval,
+        enable_telemetry: config.system.enable_telemetry,
+    })
+}
+
+async fn update_system_settings_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<SystemSettingsPayload>,
+) -> impl IntoResponse {
+    let mut config = state.config.write().await;
+
+    if payload.monitoring_poll_interval < 0.5 || payload.monitoring_poll_interval > 10.0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "monitoring_poll_interval must be between 0.5 and 10.0 seconds",
+        )
+            .into_response();
+    }
+
+    config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
+    config.system.enable_telemetry = payload.enable_telemetry;
+
+    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save config: {}", e),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, "Settings updated").into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct SetupConfig {
     username: String,
@@ -185,6 +296,7 @@ struct SetupConfig {
     concurrent_jobs: usize,
     directories: Vec<String>,
     allow_cpu_encoding: bool,
+    enable_telemetry: bool,
 }
 
 async fn setup_complete_handler(
@@ -247,6 +359,7 @@ async fn setup_complete_handler(
     config_lock.transcode.min_file_size_mb = payload.min_file_size_mb;
     config_lock.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
     config_lock.scanner.directories = payload.directories;
+    config_lock.system.enable_telemetry = payload.enable_telemetry;
 
     // Serialize to TOML
     let toml_string = match toml::to_string_pretty(&*config_lock) {
@@ -271,6 +384,7 @@ async fn setup_complete_handler(
 
     // Update Setup State (Hot Reload)
     state.setup_required.store(false, Ordering::Relaxed);
+    state.agent.resume();
 
     // Start Scan (optional, but good for UX)
     let dirs = config_lock
@@ -433,24 +547,21 @@ async fn detailed_stats_handler(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 
-async fn jobs_table_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let jobs = state.db.get_all_jobs().await.unwrap_or_default();
-    axum::Json(jobs)
-}
-
 async fn scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.read().await;
-    let dirs = config
+    let mut dirs: Vec<std::path::PathBuf> = config
         .scanner
         .directories
         .iter()
         .map(std::path::PathBuf::from)
         .collect();
-    drop(config); // Release lock before awaiting scan (though scan might take long time? no scan_and_enqueue is async but returns quickly? Let's check Agent::scan_and_enqueue)
-                  // Agent::scan_and_enqueue is async. We should probably release lock before calling it if it takes long time.
-                  // It does 'Scanner::new().scan()' which IS synchronous and blocking?
-                  // Looking at Agent::scan_and_enqueue: `let files = scanner.scan(directories);`
-                  // If scanner.scan is slow, we are holding the config lock? No, I dropped it.
+    drop(config);
+
+    if let Ok(watch_dirs) = state.db.get_watch_dirs().await {
+        for wd in watch_dirs {
+            dirs.push(std::path::PathBuf::from(wd.path));
+        }
+    }
 
     let _ = state.agent.scan_and_enqueue(dirs).await;
     StatusCode::OK
@@ -465,14 +576,6 @@ async fn cancel_job_handler(
     } else {
         StatusCode::NOT_FOUND
     }
-}
-
-async fn restart_job_handler(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
-    let _ = state.db.update_job_status(id, JobState::Queued).await;
-    StatusCode::OK
 }
 
 async fn restart_failed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -639,21 +742,39 @@ async fn sse_handler(
     let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
         Ok(event) => {
             let (event_name, data) = match &event {
-                AlchemistEvent::Log { message, .. } => ("log", message.clone()),
+                AlchemistEvent::Log {
+                    level,
+                    job_id,
+                    message,
+                } => (
+                    "log",
+                    serde_json::json!({
+                        "level": level,
+                        "job_id": job_id,
+                        "message": message
+                    })
+                    .to_string(),
+                ),
                 AlchemistEvent::Progress {
                     job_id,
                     percentage,
                     time,
                 } => (
                     "progress",
-                    format!(
-                        "{{\"job_id\": {}, \"percentage\": {:.1}, \"time\": \"{}\"}}",
-                        job_id, percentage, time
-                    ),
+                    serde_json::json!({
+                        "job_id": job_id,
+                        "percentage": percentage,
+                        "time": time
+                    })
+                    .to_string(),
                 ),
                 AlchemistEvent::JobStateChanged { job_id, status } => (
                     "status",
-                    format!("{{\"job_id\": {}, \"status\": \"{:?}\"}}", job_id, status),
+                    serde_json::json!({
+                        "job_id": job_id,
+                        "status": status // Uses serde impl (lowercase)
+                    })
+                    .to_string(),
                 ),
                 AlchemistEvent::Decision {
                     job_id,
@@ -661,10 +782,12 @@ async fn sse_handler(
                     reason,
                 } => (
                     "decision",
-                    format!(
-                        "{{\"job_id\": {}, \"action\": \"{}\", \"reason\": \"{}\"}}",
-                        job_id, action, reason
-                    ),
+                    serde_json::json!({
+                        "job_id": job_id,
+                        "action": action,
+                        "reason": reason
+                    })
+                    .to_string(),
                 ),
             };
             Some(Ok(AxumEvent::default().event(event_name).data(data)))
@@ -673,4 +796,486 @@ async fn sse_handler(
     });
 
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+// #[derive(serde::Serialize)]
+// struct GpuInfo {
+//     name: String,
+//     utilization: f32,
+//     memory_used_mb: u64,
+// }
+
+#[derive(serde::Serialize)]
+struct SystemResources {
+    cpu_percent: f32,
+    memory_used_mb: u64,
+    memory_total_mb: u64,
+    memory_percent: f32,
+    uptime_seconds: u64,
+    active_jobs: i64,
+    concurrent_limit: usize,
+    cpu_count: usize,
+    // GPU info would require additional platform-specific code
+    // For now we report what sysinfo provides
+}
+
+async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Use a block to limit the scope of the lock
+    let (cpu_percent, memory_used_mb, memory_total_mb, memory_percent, cpu_count) = {
+        let mut sys = state.sys.lock().unwrap();
+        // Full refresh for better accuracy when polled less frequently
+        sys.refresh_all();
+
+        // Get CPU usage (average across all cores)
+        let cpu_percent =
+            sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len().max(1) as f32;
+
+        let cpu_count = sys.cpus().len();
+
+        // Memory info
+        let memory_used_mb = (sys.used_memory() / 1024 / 1024) as u64;
+        let memory_total_mb = (sys.total_memory() / 1024 / 1024) as u64;
+        let memory_percent = if memory_total_mb > 0 {
+            (memory_used_mb as f32 / memory_total_mb as f32) * 100.0
+        } else {
+            0.0
+        };
+        (
+            cpu_percent,
+            memory_used_mb,
+            memory_total_mb,
+            memory_percent,
+            cpu_count,
+        )
+    };
+
+    // Uptime
+    let uptime_seconds = state.start_time.elapsed().as_secs();
+
+    // Active jobs from database
+    let stats = state.db.get_job_stats().await.unwrap_or_default();
+    let config = state.config.read().await;
+
+    axum::Json(SystemResources {
+        cpu_percent,
+        memory_used_mb,
+        memory_total_mb,
+        memory_percent,
+        uptime_seconds,
+        active_jobs: stats.active,
+        concurrent_limit: config.transcode.concurrent_jobs,
+        cpu_count,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct LogParams {
+    page: Option<i64>,
+    limit: Option<i64>,
+}
+
+async fn logs_history_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LogParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    match state.db.get_logs(limit, offset).await {
+        Ok(logs) => axum::Json(logs).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn clear_logs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.clear_logs().await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct JobTableParams {
+    limit: Option<i64>,
+    page: Option<i64>,
+    status: Option<String>,
+    search: Option<String>,
+    sort: Option<String>,
+    sort_desc: Option<bool>,
+}
+
+async fn jobs_table_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<JobTableParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    let statuses = if let Some(s) = params.status {
+        let list: Vec<JobState> = s
+            .split(',')
+            .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
+            .collect();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list)
+        }
+    } else {
+        None
+    };
+
+    match state
+        .db
+        .get_jobs_filtered(
+            limit,
+            offset,
+            statuses,
+            params.search,
+            params.sort,
+            params.sort_desc.unwrap_or(false),
+        )
+        .await
+    {
+        Ok(jobs) => axum::Json(jobs).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BatchActionPayload {
+    action: String,
+    ids: Vec<i64>,
+}
+
+async fn batch_jobs_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<BatchActionPayload>,
+) -> impl IntoResponse {
+    let result = match payload.action.as_str() {
+        "cancel" => state.db.batch_cancel_jobs(&payload.ids).await,
+        "delete" => state.db.batch_delete_jobs(&payload.ids).await,
+        "restart" => state.db.batch_restart_jobs(&payload.ids).await,
+        _ => return (StatusCode::BAD_REQUEST, "Invalid action").into_response(),
+    };
+
+    match result {
+        Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddNotificationTargetPayload {
+    name: String,
+    target_type: String,
+    endpoint_url: String,
+    auth_token: Option<String>,
+    events: Vec<String>,
+    enabled: bool,
+}
+
+// #[derive(Deserialize)]
+// struct TestNotificationPayload {
+//     target: AddNotificationTargetPayload,
+// }
+
+async fn get_notifications_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_notification_targets().await {
+        Ok(t) => axum::Json(serde_json::json!(t)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn add_notification_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
+) -> impl IntoResponse {
+    let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
+    match state
+        .db
+        .add_notification_target(
+            &payload.name,
+            &payload.target_type,
+            &payload.endpoint_url,
+            payload.auth_token.as_deref(),
+            &events_json,
+            payload.enabled,
+        )
+        .await
+    {
+        Ok(t) => axum::Json(serde_json::json!(t)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_notification_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.delete_notification_target(id).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn test_notification_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
+) -> impl IntoResponse {
+    // Construct a temporary target
+    let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
+    let target = crate::db::NotificationTarget {
+        id: 0,
+        name: payload.name,
+        target_type: payload.target_type,
+        endpoint_url: payload.endpoint_url,
+        auth_token: payload.auth_token,
+        events: events_json,
+        enabled: payload.enabled,
+        created_at: Utc::now(),
+    };
+
+    match state.notification_manager.send_test(&target).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_schedule_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_schedule_windows().await {
+        Ok(w) => axum::Json(serde_json::json!(w)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddSchedulePayload {
+    start_time: String,
+    end_time: String,
+    days_of_week: Vec<i32>,
+    enabled: bool,
+}
+
+async fn add_schedule_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<AddSchedulePayload>,
+) -> impl IntoResponse {
+    let days_json = serde_json::to_string(&payload.days_of_week).unwrap_or_default();
+    match state
+        .db
+        .add_schedule_window(
+            &payload.start_time,
+            &payload.end_time,
+            &days_json,
+            payload.enabled,
+        )
+        .await
+    {
+        Ok(w) => axum::Json(serde_json::json!(w)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_schedule_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.delete_schedule_window(id).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AddWatchDirPayload {
+    path: String,
+    is_recursive: Option<bool>,
+}
+
+async fn get_watch_dirs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_watch_dirs().await {
+        Ok(dirs) => axum::Json(dirs).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn add_watch_dir_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<AddWatchDirPayload>,
+) -> impl IntoResponse {
+    match state
+        .db
+        .add_watch_dir(&payload.path, payload.is_recursive.unwrap_or(true))
+        .await
+    {
+        Ok(dir) => axum::Json(dir).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn remove_watch_dir_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.remove_watch_dir(id).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn restart_job_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.get_job_by_id(id).await {
+        Ok(Some(job)) => {
+            if let Err(e) = state
+                .db
+                .update_job_status(job.id, crate::db::JobState::Queued)
+                .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            StatusCode::OK.into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_job_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.delete_job(id).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct JobDetailResponse {
+    job: crate::db::Job,
+    metadata: Option<crate::media::pipeline::MediaMetadata>,
+    encode_stats: Option<crate::db::DetailedEncodeStats>,
+}
+
+async fn get_job_detail_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let job = match state.db.get_job_by_id(id).await {
+        Ok(Some(j)) => j,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Try to get metadata
+    let analyzer = crate::media::analyzer::FfmpegAnalyzer;
+    use crate::media::pipeline::Analyzer;
+    let metadata = analyzer
+        .analyze(std::path::Path::new(&job.input_path))
+        .await
+        .ok();
+
+    // Try to get encode stats (using the subquery result or a specific query)
+    // For now we'll just query the encode_stats table if completed
+    let encode_stats = if job.status == crate::db::JobState::Completed {
+        state.db.get_encode_stats_by_job_id(id).await.ok()
+    } else {
+        None
+    };
+
+    axum::Json(JobDetailResponse {
+        job,
+        metadata,
+        encode_stats,
+    })
+    .into_response()
+}
+
+async fn get_file_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_file_settings().await {
+        Ok(s) => axum::Json(serde_json::json!(s)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateFileSettingsPayload {
+    delete_source: bool,
+    output_extension: String,
+    output_suffix: String,
+    replace_strategy: String,
+}
+
+async fn update_file_settings_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<UpdateFileSettingsPayload>,
+) -> impl IntoResponse {
+    match state
+        .db
+        .update_file_settings(
+            payload.delete_source,
+            &payload.output_extension,
+            &payload.output_suffix,
+            &payload.replace_strategy,
+        )
+        .await
+    {
+        Ok(s) => axum::Json(serde_json::json!(s)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct SystemInfo {
+    version: String,
+    os_version: String,
+    is_docker: bool,
+    telemetry_enabled: bool,
+    ffmpeg_version: String,
+}
+
+async fn get_system_info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let is_docker = std::path::Path::new("/.dockerenv").exists();
+
+    // Attempt to verify ffmpeg version
+    let ffmpeg_version =
+        crate::media::ffmpeg::verify_ffmpeg().unwrap_or_else(|_| "Unknown".to_string());
+
+    axum::Json(SystemInfo {
+        version,
+        os_version,
+        is_docker,
+        telemetry_enabled: !config.system.monitoring_poll_interval.is_nan(),
+        ffmpeg_version,
+    })
+    .into_response()
+}
+
+async fn get_hardware_info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    match crate::system::hardware::detect_hardware(config.hardware.allow_cpu_fallback) {
+        Ok(info) => axum::Json(info).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.library_scanner.start_scan().await {
+        Ok(_) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_scan_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::Json::<crate::system::scanner::ScanStatus>(state.library_scanner.get_status().await)
+        .into_response()
 }
