@@ -1,8 +1,8 @@
 # Database Migration Policy
 
-**Baseline Version: 0.2.3**
+**Baseline Version: 0.2.4**
 
-All database migrations from this point forward MUST maintain backwards compatibility with the v0.2.3 schema.
+All database migrations from this point forward MUST maintain backwards compatibility with the v0.2.4 schema.
 
 ## Rules for Future Migrations
 
@@ -36,7 +36,7 @@ Example: `20260109210000_add_notifications_table.sql`
 ## Testing Migrations
 
 Before releasing any migration:
-1. Test upgrading from v0.2.3 database
+1. Test upgrading from v0.2.4 database
 2. Verify all existing queries still work
 3. Verify new features work with fresh DB
 4. Verify new features gracefully handle missing data in old DBs

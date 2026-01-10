@@ -1,22 +1,25 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
-import { Server } from "lucide-react";
+import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
 <Layout title="Alchemist | Library">
     <div class="app-shell">
         <Sidebar />
-        <main class="app-main">
-            <header
-                class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
-            >
-                <div class="flex items-center gap-3">
-                    <Server class="text-helios-solar" />
-                    <h1 class="text-lg font-semibold text-helios-ink">
-                        Media Library
+        <main class="app-main p-8 overflow-y-auto">
+            <header class="flex items-center justify-between mb-8">
+                <div>
+                    <h1
+                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
+                    >
+                        Library
                     </h1>
+                    <p class="text-helios-slate mt-2 text-sm">
+                        Browse media files
+                    </p>
                 </div>
+                <HeaderActions client:load />
             </header>
             <div class="p-6">
                 <div

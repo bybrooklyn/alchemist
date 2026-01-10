@@ -2,10 +2,11 @@
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
 import StatsCharts from "../components/StatsCharts.tsx";
+import HeaderActions from "../components/HeaderActions.tsx";
 import { BarChart3 } from "lucide-react";
 ---
 
-<Layout title="Statistics | Alchemist">
+<Layout title="Alchemist | Statistics">
     <div class="app-shell">
         <Sidebar />
         <main class="app-main p-8 overflow-y-auto">
@@ -17,9 +18,10 @@ import { BarChart3 } from "lucide-react";
                         Statistics
                     </h1>
                     <p class="text-helios-slate mt-2 text-sm">
-                        Encoding performance and space savings
+                        Encoding performance metrics
                     </p>
                 </div>
+                <HeaderActions client:load />
             </header>
 
             <StatsCharts client:load />

@@ -31,12 +31,12 @@ RUN cargo build --release
 FROM debian:testing-slim AS runtime
 WORKDIR /app
 
-# Enable non-free repositories and install packages
-# Note: Intel VA drivers are x86-only, we install them conditionally
+# Install runtime dependencies
 RUN apt-get update && \
     sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
+    wget \
+    xz-utils \
     libva-drm2 \
     libva2 \
     va-driver-all \
@@ -48,6 +48,18 @@ RUN apt-get update && \
     i965-va-driver || true; \
     fi \
     && rm -rf /var/lib/apt/lists/*
+
+# Download stable FFmpeg static build (v7.1)
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz; \
+    elif [ "$ARCH" = "arm64" ]; then \
+    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz; \
+    fi && \
+    tar xf ffmpeg-release-*-static.tar.xz && \
+    mv ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
+    mv ffmpeg-*-static/ffprobe /usr/local/bin/ && \
+    rm -rf ffmpeg-release-*-static.tar.xz ffmpeg-*-static
 
 COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 

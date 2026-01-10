@@ -45,6 +45,7 @@ impl Transcoder {
         quality_profile: QualityProfile,
         cpu_preset: CpuPreset,
         target_codec: crate::config::OutputCodec,
+        threads: usize,
         dry_run: bool,
         metadata: &crate::media::pipeline::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
@@ -54,13 +55,28 @@ impl Transcoder {
             return Ok(());
         }
 
+        // Ensure output directory exists
+        if let Some(parent) = output.parent() {
+            if !parent.as_os_str().is_empty() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    error!("Failed to create output directory {:?}: {}", parent, e);
+                    AlchemistError::FFmpeg(format!(
+                        "Failed to create output directory {:?}: {}",
+                        parent, e
+                    ))
+                })?;
+            }
+        }
+
         let mut cmd = FFmpegCommandBuilder::new(input, output)
             .with_hardware(hw_info)
             .with_profile(quality_profile)
             .with_cpu_preset(cpu_preset)
             .with_codec(target_codec)
+            .with_threads(threads)
             .build();
-        cmd.arg(output);
+
+        info!("Executing FFmpeg command: {:?}", cmd);
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -93,14 +109,24 @@ impl Transcoder {
 
         let mut kill_rx = kill_rx;
         let mut killed = false;
+        let mut last_lines = std::collections::VecDeque::with_capacity(10);
 
         loop {
             tokio::select! {
                 line_res = reader.next_line() => {
                     match line_res {
                         Ok(Some(line)) => {
+                            last_lines.push_back(line.clone());
+                            if last_lines.len() > 10 {
+                                last_lines.pop_front();
+                            }
+
                             if let Some((job_id, ref tx)) = event_target_clone {
-                                let _ = tx.send(crate::db::AlchemistEvent::Log { job_id, message: line.clone() });
+                                let _ = tx.send(crate::db::AlchemistEvent::Log {
+                                    level: "info".to_string(),
+                                    job_id: Some(job_id),
+                                    message: line.clone()
+                                });
 
                                 if let Some(progress) = FFmpegProgress::parse_line(&line) {
                                     let percentage: f64 = progress.percentage(total_duration);
@@ -145,10 +171,14 @@ impl Transcoder {
             info!("Transcode successful: {:?}", output);
             Ok(())
         } else {
-            error!("FFmpeg failed with status: {}", status);
+            let error_detail = last_lines.make_contiguous().join("\n");
+            error!(
+                "FFmpeg failed with status: {}\nDetails:\n{}",
+                status, error_detail
+            );
             Err(AlchemistError::FFmpeg(format!(
-                "FFmpeg failed with status: {}",
-                status
+                "FFmpeg failed ({}). Last output:\n{}",
+                status, error_detail
             )))
         }
     }

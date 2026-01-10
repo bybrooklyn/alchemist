@@ -1,31 +1,30 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
+import JobManager from "../components/JobManager.tsx";
 import { Video } from "lucide-react";
+import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
 <Layout title="Alchemist | Jobs">
     <div class="app-shell">
         <Sidebar />
-        <main class="app-main">
-            <header
-                class="h-16 flex items-center justify-between px-6 border-b border-helios-line/60 bg-helios-surface/98 backdrop-blur"
-            >
-                <div class="flex items-center gap-3">
-                    <Video class="text-helios-solar" />
-                    <h1 class="text-lg font-semibold text-helios-ink">
-                        Jobs Management
+        <main class="app-main p-8 overflow-y-auto">
+            <header class="flex items-center justify-between mb-8">
+                <div>
+                    <h1
+                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
+                    >
+                        Jobs
                     </h1>
-                </div>
-            </header>
-            <div class="p-6">
-                <div
-                    class="p-8 text-center border-2 border-dashed border-helios-line/40 rounded-2xl bg-helios-surface/50"
-                >
-                    <p class="text-helios-slate">
-                        Job management interface coming soon.
+                    <p class="text-helios-slate mt-2 text-sm">
+                        Manage transcoding tasks
                     </p>
                 </div>
+                <HeaderActions client:load />
+            </header>
+            <div class="p-6">
+                <JobManager client:load />
             </div>
         </main>
     </div>

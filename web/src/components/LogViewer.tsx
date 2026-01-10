@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal, Pause, Play, Trash2 } from "lucide-react";
+import { Terminal, Pause, Play, Trash2, RefreshCw } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { apiFetch } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -9,125 +10,114 @@ function cn(...inputs: ClassValue[]) {
 
 interface LogEntry {
     id: number;
-    timestamp: string;
+    level: string;
+    job_id?: number;
     message: string;
-    level: "info" | "warn" | "error" | "debug";
+    created_at: string;
 }
 
 export default function LogViewer() {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [paused, setPaused] = useState(false);
+    const [loading, setLoading] = useState(true);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const pausedRef = useRef(paused);
     const maxLogs = 1000;
 
-    useEffect(() => {
-        let eventSource: EventSource | null = null;
-
-        const connect = () => {
-            eventSource = new EventSource("/api/events");
-
-            eventSource.addEventListener("log", (e) => {
-                if (paused) return; // Note: This drops logs while paused. Alternatively we could buffer.
-                // But usually "pause" implies "stop scrolling me".
-                // For now, let's keep accumulating but not auto-scroll? 
-                // Or truly ignore updates. Let's buffer/append always effectively, but control scroll?
-                // Simpler: Just append functionality is standard. "Pause" usually means "Pause updates".
-
-                // Actually, if we are paused, we shouldn't update state to avoid re-renders/shifting.
-                if (paused) return;
-
-                const message = e.data;
-                const level = message.toLowerCase().includes("error")
-                    ? "error"
-                    : message.toLowerCase().includes("warn")
-                        ? "warn"
-                        : "info";
-
-                addLog({
-                    id: Date.now() + Math.random(),
-                    timestamp: new Date().toLocaleTimeString(),
-                    message,
-                    level
-                });
-            });
-
-            // Also listen for other events to show interesting activity
-            eventSource.addEventListener("decision", (e) => {
-                if (paused) return;
-                try {
-                    const data = JSON.parse(e.data);
-                    addLog({
-                        id: Date.now() + Math.random(),
-                        timestamp: new Date().toLocaleTimeString(),
-                        message: `Decision: ${data.action.toUpperCase()} Job #${data.job_id} - ${data.reason}`,
-                        level: "info"
-                    });
-                } catch { }
-            });
-
-            eventSource.addEventListener("job_status", (e) => {
-                if (paused) return;
-                try {
-                    const data = JSON.parse(e.data);
-                    addLog({
-                        id: Date.now() + Math.random(),
-                        timestamp: new Date().toLocaleTimeString(),
-                        message: `Job #${data.job_id} status changed to ${data.status}`,
-                        level: "info"
-                    });
-                } catch { }
-            });
-
-            eventSource.onerror = (e) => {
-                console.error("SSE Error", e);
-                eventSource?.close();
-                // Reconnect after delay
-                setTimeout(connect, 5000);
-            };
-        };
-
-        connect();
-
-        return () => {
-            eventSource?.close();
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [paused]); // Re-connecting on pause toggle is inefficient. Better to use ref for paused state inside callback.
-
-    // Correction: Use ref for paused state to avoid reconnecting.
-    const pausedRef = useRef(paused);
+    // Sync ref
     useEffect(() => { pausedRef.current = paused; }, [paused]);
 
-    // Re-implement effect with ref
+    const fetchHistory = async () => {
+        setLoading(true);
+        try {
+            const res = await apiFetch("/api/logs/history?limit=200");
+            if (res.ok) {
+                const history = await res.json();
+                // Logs come newest first (DESC), reverse for display
+                setLogs(history.reverse());
+            }
+        } catch (e) {
+            console.error("Failed to fetch logs", e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const clearLogs = async () => {
+        if (!confirm("Are you sure you want to clear all server logs?")) return;
+        try {
+            await apiFetch("/api/logs", { method: "DELETE" });
+            setLogs([]);
+        } catch (e) {
+            console.error("Failed to clear logs", e);
+        }
+    };
+
     useEffect(() => {
+        fetchHistory();
+
         let eventSource: EventSource | null = null;
         const connect = () => {
             const token = localStorage.getItem('alchemist_token') || '';
             eventSource = new EventSource(`/api/events?token=${token}`);
-            const handleMsg = (msg: string, level: "info" | "warn" | "error" = "info") => {
+
+            const handleMsg = (msg: string, level: string, job_id?: number) => {
                 if (pausedRef.current) return;
+
+                const entry: LogEntry = {
+                    id: Date.now() + Math.random(),
+                    level,
+                    message: msg,
+                    job_id,
+                    created_at: new Date().toISOString()
+                };
+
                 setLogs(prev => {
-                    const newLogs = [...prev, {
-                        id: Date.now() + Math.random(),
-                        timestamp: new Date().toLocaleTimeString(),
-                        message: msg,
-                        level
-                    }];
+                    const newLogs = [...prev, entry];
                     if (newLogs.length > maxLogs) return newLogs.slice(newLogs.length - maxLogs);
                     return newLogs;
                 });
             };
 
-            eventSource.addEventListener("log", (e) => handleMsg(e.data, e.data.toLowerCase().includes("warn") ? "warn" : e.data.toLowerCase().includes("error") ? "error" : "info"));
-            eventSource.addEventListener("decision", (e) => {
-                try { const d = JSON.parse(e.data); handleMsg(`Decision: ${d.action.toUpperCase()} Job #${d.job_id} - ${d.reason}`); } catch { }
+            eventSource.addEventListener("log", (e) => {
+                try {
+                    // Expecting simple text or JSON? 
+                    // Backend sends AlchemistEvent::Log { level, job_id, message }
+                    // But SSE serializer matches structure.
+                    // Wait, existing SSE in server.rs sends plain text or JSON?
+                    // Let's check server.rs sse_handler or Event impl.
+                    // Assuming existing impl sends `data: message` for "log" event.
+                    // But I added structured event in backend: AlchemistEvent::Log
+                    // If server.rs uses `sse::Event::default().event("log").data(...)`
+
+                    // Actually, I need to check `sse_handler` in `server.rs` to see what it sends.
+                    // Assuming it sends JSON for structured events or adapts.
+                    // If it used to send string, I should support string.
+                    const data = e.data;
+                    // Try parsing JSON first
+                    try {
+                        const json = JSON.parse(data);
+                        if (json.message) {
+                            handleMsg(json.message, json.level || "info", json.job_id);
+                            return;
+                        }
+                    } catch { }
+
+                    // Fallback to text
+                    handleMsg(data, data.toLowerCase().includes("error") ? "error" : "info");
+                } catch { }
             });
-            eventSource.addEventListener("status", (e) => { // NOTE: "status" event name in server.rs is "status", not "job_status" in one place? server.rs:376 says "status"
-                try { const d = JSON.parse(e.data); handleMsg(`Job #${d.job_id} is now ${d.status}`); } catch { }
+
+            eventSource.addEventListener("decision", (e) => {
+                try { const d = JSON.parse(e.data); handleMsg(`Decision: ${d.action.toUpperCase()} - ${d.reason}`, "info", d.job_id); } catch { }
+            });
+            eventSource.addEventListener("status", (e) => {
+                try { const d = JSON.parse(e.data); handleMsg(`Status changed to ${d.status}`, "info", d.job_id); } catch { }
             });
 
             eventSource.onerror = () => { eventSource?.close(); setTimeout(connect, 3000); };
         };
+
         connect();
         return () => eventSource?.close();
     }, []);
@@ -139,9 +129,10 @@ export default function LogViewer() {
         }
     }, [logs, paused]);
 
-
-    const addLog = (log: LogEntry) => {
-        setLogs(prev => [...prev.slice(-999), log]);
+    const formatTime = (iso: string) => {
+        try {
+            return new Date(iso).toLocaleTimeString();
+        } catch { return iso; }
     };
 
     return (
@@ -149,9 +140,17 @@ export default function LogViewer() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20 bg-helios-surface/50 backdrop-blur">
                 <div className="flex items-center gap-2 text-helios-slate">
                     <Terminal size={16} />
-                    <span className="text-xs font-bold uppercase tracking-widest">System Logs</span>
+                    <span className="text-xs font-bold uppercase tracking-widest">Server Logs</span>
+                    {loading && <span className="text-xs animate-pulse opacity-50 ml-2">Loading history...</span>}
                 </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={fetchHistory}
+                        className="p-1.5 rounded-lg hover:bg-helios-line/10 text-helios-slate transition-colors"
+                        title="Reload History"
+                    >
+                        <RefreshCw size={14} />
+                    </button>
                     <button
                         onClick={() => setPaused(!paused)}
                         className="p-1.5 rounded-lg hover:bg-helios-line/10 text-helios-slate transition-colors"
@@ -160,9 +159,9 @@ export default function LogViewer() {
                         {paused ? <Play size={14} /> : <Pause size={14} />}
                     </button>
                     <button
-                        onClick={() => setLogs([])}
+                        onClick={clearLogs}
                         className="p-1.5 rounded-lg hover:bg-red-500/10 text-helios-slate hover:text-red-400 transition-colors"
-                        title="Clear Logs"
+                        title="Clear Server Logs"
                     >
                         <Trash2 size={14} />
                     </button>
@@ -173,20 +172,25 @@ export default function LogViewer() {
                 ref={scrollRef}
                 className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-helios-line/20 scrollbar-track-transparent"
             >
-                {logs.length === 0 && (
-                    <div className="text-helios-slate/30 text-center py-10 italic">Waiting for events...</div>
+                {logs.length === 0 && !loading && (
+                    <div className="text-helios-slate/30 text-center py-10 italic">No logs found.</div>
                 )}
                 {logs.map((log) => (
-                    <div key={log.id} className="flex gap-3 hover:bg-white/5 px-2 py-0.5 rounded -mx-2">
-                        <span className="text-helios-slate/50 shrink-0 select-none">{log.timestamp}</span>
-                        <span className={cn(
-                            "break-all",
-                            log.level === "error" ? "text-red-400 font-bold" :
-                                log.level === "warn" ? "text-amber-400" :
-                                    "text-helios-mist/80"
-                        )}>
-                            {log.message}
-                        </span>
+                    <div key={log.id} className="flex gap-3 hover:bg-white/5 px-2 py-0.5 rounded -mx-2 group">
+                        <span className="text-helios-slate/50 shrink-0 select-none w-20 text-right">{formatTime(log.created_at)}</span>
+
+                        <div className="flex-1 min-w-0 break-all">
+                            {log.job_id && (
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-white/5 text-helios-slate/80 mr-2 text-[10px]">#{log.job_id}</span>
+                            )}
+                            <span className={cn(
+                                log.level.toLowerCase().includes("error") ? "text-red-400 font-bold" :
+                                    log.level.toLowerCase().includes("warn") ? "text-amber-400" :
+                                        "text-white/90"
+                            )}>
+                                {log.message}
+                            </span>
+                        </div>
                     </div>
                 ))}
             </div>

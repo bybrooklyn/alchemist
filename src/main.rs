@@ -4,7 +4,7 @@ use alchemist::{config, db, Agent, Transcoder};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use notify::{RecursiveMode, Watcher};
@@ -57,10 +57,14 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // Default to server mode if no arguments are provided (e.g. double-click run)
+    // or if explicit --server flag is used
+    let is_server_mode = args.server || args.directories.is_empty();
+
     // 0. Load Configuration
     let config_path = std::path::Path::new("config.toml");
     let (config, setup_mode) = if !config_path.exists() {
-        if args.server {
+        if is_server_mode {
             info!("No configuration file found. Entering Setup Mode (Web UI).");
             (config::Config::default(), true)
         } else {
@@ -134,6 +138,13 @@ async fn main() -> Result<()> {
     // 2. Initialize Database, Broadcast Channel, Orchestrator, and Processor
     let db = Arc::new(db::Db::new("alchemist.db").await?);
     let (tx, _rx) = broadcast::channel(100);
+
+    // Initialize Notification Manager
+    let notification_manager = Arc::new(alchemist::notifications::NotificationManager::new(
+        db.as_ref().clone(),
+    ));
+    notification_manager.start_listener(tx.subscribe());
+
     let transcoder = Arc::new(Transcoder::new());
     let config = Arc::new(RwLock::new(config));
     let agent = Arc::new(
@@ -151,111 +162,173 @@ async fn main() -> Result<()> {
     info!("Database and services initialized.");
 
     // 3. Start Background Processor Loop
-    // Only start if NOT in setup mode. If in setup mode, the agent should effectively be paused or idle/empty
-    // But since we pass agent to server, we can start it. It just won't have any jobs or directories to scan yet.
-    // However, if we want to be strict, we can pause it.
+    // Always start the loop. The agent will be paused if setup_mode is true.
     if setup_mode {
-        info!("Setup mode active. Background processor paused.");
         agent.pause();
-    } else {
-        let proc = agent.clone();
-        tokio::spawn(async move {
-            proc.run_loop().await;
-        });
     }
+    let proc = agent.clone();
+    tokio::spawn(async move {
+        proc.run_loop().await;
+    });
 
-    if args.server {
+    if is_server_mode {
         info!("Starting web server...");
 
-        // Start File Watcher if directories are configured and not in setup mode
-        let watcher_dirs_opt = {
-            let config_read = config.read().await;
-            if !setup_mode && !config_read.scanner.directories.is_empty() {
-                Some(
-                    config_read
-                        .scanner
-                        .directories
-                        .iter()
-                        .map(PathBuf::from)
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                None
+        // Start Log Persistence Task
+        let log_db = db.clone();
+        let mut log_rx = tx.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = log_rx.recv().await {
+                match event {
+                    alchemist::db::AlchemistEvent::Log {
+                        level,
+                        job_id,
+                        message,
+                        ..
+                    } => {
+                        if let Err(e) = log_db.add_log(&level, job_id, &message).await {
+                            eprintln!("Failed to persist log: {}", e);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Initialize File Watcher
+        let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(db.clone()));
+
+        // Function to reload watcher (Config + DB)
+        let reload_watcher = {
+            let config = config.clone();
+            let db = db.clone();
+            let file_watcher = file_watcher.clone();
+
+            move |setup_mode: bool| {
+                let config = config.clone();
+                let db = db.clone();
+                let file_watcher = file_watcher.clone();
+                async move {
+                    let mut all_dirs = Vec::new();
+
+                    // 1. Config Dirs
+                    {
+                        let config_read = config.read().await;
+                        if !setup_mode {
+                            all_dirs
+                                .extend(config_read.scanner.directories.iter().map(PathBuf::from));
+                        }
+                    }
+
+                    // 2. DB Dirs
+                    if !setup_mode {
+                        match db.get_watch_dirs().await {
+                            Ok(dirs) => {
+                                all_dirs.extend(dirs.into_iter().map(|d| PathBuf::from(d.path)));
+                            }
+                            Err(e) => error!("Failed to fetch watch dirs from DB: {}", e),
+                        }
+                    }
+
+                    // Deduplicate
+                    all_dirs.sort();
+                    all_dirs.dedup();
+
+                    if !all_dirs.is_empty() {
+                        info!("Updating file watcher with {} directories", all_dirs.len());
+                        if let Err(e) = file_watcher.watch(&all_dirs) {
+                            error!("Failed to update file watcher: {}", e);
+                        }
+                    } else {
+                        // Ensure we clear it if empty?
+                        // The file_watcher.watch() handles empty list by stopping watcher.
+                        if let Err(e) = file_watcher.watch(&[]) {
+                            debug!("Watcher stopped (empty list): {}", e);
+                        }
+                    }
+                }
             }
         };
 
-        if let Some(watcher_dirs) = watcher_dirs_opt {
-            let watcher = alchemist::system::watcher::FileWatcher::new(watcher_dirs, db.clone());
-            let watcher_handle = watcher.clone();
-            tokio::spawn(async move {
-                if let Err(e) = watcher_handle.start().await {
-                    error!("File watcher failed: {}", e);
-                }
-            });
-        }
+        // Initial Watcher Load
+        reload_watcher(setup_mode).await;
 
-        // Config Watcher
+        // Start Scheduler
+        let scheduler = alchemist::scheduler::Scheduler::new(db.clone(), agent.clone());
+        scheduler.start();
+
+        // Async Config Watcher
         let config_watcher_arc = config.clone();
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            // We use recommended_watcher (usually Create/Write/Modify/Remove events)
-            let mut watcher = match notify::recommended_watcher(tx) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("Failed to create config watcher: {}", e);
-                    return;
+        let reload_watcher_clone = reload_watcher.clone();
+
+        // Channel for file events
+        let (tx_notify, mut rx_notify) = tokio::sync::mpsc::unbounded_channel();
+
+        let tx_notify_clone = tx_notify.clone();
+        let watcher_res = notify::recommended_watcher(
+            move |res: std::result::Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = tx_notify_clone.send(event);
                 }
-            };
+            },
+        );
 
-            if let Err(e) = watcher.watch(
-                std::path::Path::new("config.toml"),
-                RecursiveMode::NonRecursive,
-            ) {
-                error!("Failed to watch config.toml: {}", e);
-                return;
-            }
+        match watcher_res {
+            Ok(mut watcher) => {
+                if let Err(e) = watcher.watch(
+                    std::path::Path::new("config.toml"),
+                    RecursiveMode::NonRecursive,
+                ) {
+                    error!("Failed to watch config.toml: {}", e);
+                } else {
+                    // Prevent watcher from dropping by keeping it in the spawn if needed,
+                    // or just spawning the processing loop.
+                    // notify watcher works in background thread usually.
+                    // We need to keep `watcher` alive.
 
-            // Simple debounce by waiting for events
-            for res in rx {
-                match res {
-                    Ok(event) => {
-                        // Reload on any event for simplicity, usually Write/Modify
-                        // We can filter for event.kind.
-                        if let notify::EventKind::Modify(_) = event.kind {
-                            info!("Config file changed. Reloading...");
-                            // Brief sleep to ensure write complete?
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            match alchemist::config::Config::load(std::path::Path::new(
-                                "config.toml",
-                            )) {
-                                Ok(new_config) => {
-                                    // We need to write to the async RwLock from this blocking thread.
-                                    // We can use blocking_write() if available or block_on.
-                                    // tokio::sync::RwLock can contain a blocking_write feature?
-                                    // No, tokio RwLock is async.
-                                    // We can spawn a handle back to async world?
-                                    // Or just use std::sync::RwLock for config?
-                                    // Using `blocking_write` requires `tokio` feature `sync`?
-                                    // Actually `config_watcher_arc` is `Arc<tokio::sync::RwLock<Config>>`.
-                                    // We can use `futures::executor::block_on` or create a new runtime?
-                                    // BETTER: Spawn the loop as a `tokio::spawn`, but use `notify::Event` stream (async config)?
-                                    // OR: Use `tokio::sync::RwLock::blocking_write()` method? It exists!
-                                    let mut w = config_watcher_arc.blocking_write();
-                                    *w = new_config;
-                                    info!("Configuration reloaded successfully.");
-                                }
-                                Err(e) => {
-                                    error!("Failed to reload config: {}", e);
+                    tokio::spawn(async move {
+                        // Keep watcher alive by moving it here
+                        let _watcher = watcher;
+
+                        while let Some(event) = rx_notify.recv().await {
+                            if let notify::EventKind::Modify(_) = event.kind {
+                                info!("Config file changed. Reloading...");
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                                match alchemist::config::Config::load(std::path::Path::new(
+                                    "config.toml",
+                                )) {
+                                    Ok(new_config) => {
+                                        {
+                                            let mut w = config_watcher_arc.write().await;
+                                            *w = new_config;
+                                        }
+                                        info!("Configuration reloaded successfully.");
+
+                                        // Trigger watcher update (merges DB + New Config)
+                                        reload_watcher_clone(false).await;
+                                    }
+                                    Err(e) => error!("Failed to reload config: {}", e),
                                 }
                             }
                         }
-                    }
-                    Err(e) => error!("Config watch error: {:?}", e),
+                    });
                 }
             }
-        });
+            Err(e) => error!("Failed to create config watcher: {}", e),
+        }
 
-        alchemist::server::run_server(db, config, agent, transcoder, tx, setup_mode).await?;
+        alchemist::server::run_server(
+            db,
+            config,
+            agent,
+            transcoder,
+            tx,
+            setup_mode,
+            notification_manager.clone(),
+            file_watcher,
+        )
+        .await?;
     } else {
         // CLI Mode
         if setup_mode {

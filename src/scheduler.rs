@@ -1,151 +1,88 @@
-//! Job scheduler for time-based processing
-//!
-//! Allows users to configure specific hours when transcoding should run.
+use crate::db::Db;
+use crate::Agent;
+use chrono::{Datelike, Local, Timelike};
+use std::sync::Arc;
+use tokio::time::Duration;
+use tracing::{error, info};
 
-use chrono::{Datelike, Local, Timelike, Weekday};
-use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
-
-/// Schedule configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ScheduleConfig {
-    /// Enable scheduling (if false, run 24/7)
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Start hour (0-23)
-    #[serde(default = "default_start_hour")]
-    pub start_hour: u32,
-
-    /// End hour (0-23)
-    #[serde(default = "default_end_hour")]
-    pub end_hour: u32,
-
-    /// Days of week to run (empty = all days)
-    #[serde(default)]
-    pub days: Vec<String>,
-}
-
-fn default_start_hour() -> u32 {
-    22
-} // 10 PM
-fn default_end_hour() -> u32 {
-    6
-} // 6 AM
-
-impl ScheduleConfig {
-    /// Check if we should be running right now
-    pub fn should_run(&self) -> bool {
-        if !self.enabled {
-            return true; // If scheduling disabled, always run
-        }
-
-        let now = Local::now();
-        let current_hour = now.hour();
-
-        // Check day of week
-        if !self.days.is_empty() {
-            let today = match now.weekday() {
-                Weekday::Mon => "mon",
-                Weekday::Tue => "tue",
-                Weekday::Wed => "wed",
-                Weekday::Thu => "thu",
-                Weekday::Fri => "fri",
-                Weekday::Sat => "sat",
-                Weekday::Sun => "sun",
-            };
-
-            if !self.days.iter().any(|d| d.to_lowercase() == today) {
-                debug!("Scheduler: Today ({}) not in allowed days", today);
-                return false;
-            }
-        }
-
-        // Check time window
-        let in_window = if self.start_hour <= self.end_hour {
-            // Normal window (e.g., 08:00 - 17:00)
-            current_hour >= self.start_hour && current_hour < self.end_hour
-        } else {
-            // Overnight window (e.g., 22:00 - 06:00)
-            current_hour >= self.start_hour || current_hour < self.end_hour
-        };
-
-        if !in_window {
-            debug!(
-                "Scheduler: Current hour ({}) outside window ({}-{})",
-                current_hour, self.start_hour, self.end_hour
-            );
-        }
-
-        in_window
-    }
-
-    /// Format the schedule for display
-    pub fn format_schedule(&self) -> String {
-        if !self.enabled {
-            return "24/7 (no schedule)".to_string();
-        }
-
-        let days_str = if self.days.is_empty() {
-            "Every day".to_string()
-        } else {
-            self.days.join(", ")
-        };
-
-        format!(
-            "{} from {:02}:00 to {:02}:00",
-            days_str, self.start_hour, self.end_hour
-        )
-    }
-}
-
-/// Scheduler that can pause/resume the agent based on time
 pub struct Scheduler {
-    config: ScheduleConfig,
+    db: Arc<Db>,
+    agent: Arc<Agent>,
 }
 
 impl Scheduler {
-    pub fn new(config: ScheduleConfig) -> Self {
-        if config.enabled {
-            info!("Scheduler enabled: {}", config.format_schedule());
+    pub fn new(db: Arc<Db>, agent: Arc<Agent>) -> Self {
+        Self { db, agent }
+    }
+
+    pub fn start(self) {
+        tokio::spawn(async move {
+            info!("Scheduler started");
+            loop {
+                if let Err(e) = self.check_schedule().await {
+                    error!("Scheduler check failed: {}", e);
+                }
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+    }
+
+    async fn check_schedule(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let windows: Vec<crate::db::ScheduleWindow> = self.db.get_schedule_windows().await?;
+
+        // Filter for enabled windows
+        let enabled_windows: Vec<_> = windows.into_iter().filter(|w| w.enabled).collect();
+
+        if enabled_windows.is_empty() {
+            // No schedule active -> Always Run
+            if self.agent.is_scheduler_paused() {
+                self.agent.set_scheduler_paused(false);
+            }
+            return Ok(());
         }
-        Self { config }
-    }
 
-    pub fn update_config(&mut self, config: ScheduleConfig) {
-        self.config = config;
-    }
+        let now = Local::now();
+        let current_time_str = format!("{:02}:{:02}", now.hour(), now.minute());
+        let current_day = now.weekday().num_days_from_sunday() as i32; // 0=Sun, 6=Sat
 
-    pub fn should_run(&self) -> bool {
-        self.config.should_run()
-    }
+        let mut in_window = false;
 
-    pub fn config(&self) -> &ScheduleConfig {
-        &self.config
-    }
-}
+        for window in enabled_windows {
+            // Parse days
+            let days: Vec<i32> = serde_json::from_str(&window.days_of_week).unwrap_or_default();
+            if !days.contains(&current_day) {
+                continue;
+            }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+            // Check time
+            // Handle cross-day windows (e.g. 23:00 to 02:00)
+            if window.start_time <= window.end_time {
+                // Normal window
+                if current_time_str >= window.start_time && current_time_str < window.end_time {
+                    in_window = true;
+                    break;
+                }
+            } else {
+                // Split window
+                if current_time_str >= window.start_time || current_time_str < window.end_time {
+                    in_window = true;
+                    break;
+                }
+            }
+        }
 
-    #[test]
-    fn test_disabled_scheduler() {
-        let config = ScheduleConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        assert!(config.should_run());
-    }
+        if in_window {
+            // Allowed to run
+            if self.agent.is_scheduler_paused() {
+                self.agent.set_scheduler_paused(false);
+            }
+        } else {
+            // RESTRICTED
+            if !self.agent.is_scheduler_paused() {
+                self.agent.set_scheduler_paused(true);
+            }
+        }
 
-    #[test]
-    fn test_schedule_format() {
-        let config = ScheduleConfig {
-            enabled: true,
-            start_hour: 22,
-            end_hour: 6,
-            days: vec!["mon".to_string(), "tue".to_string()],
-        };
-        assert_eq!(config.format_schedule(), "mon, tue from 22:00 to 06:00");
+        Ok(())
     }
 }

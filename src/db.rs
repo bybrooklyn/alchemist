@@ -6,6 +6,7 @@ use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum JobState {
     Queued,
     Analyzing,
@@ -15,6 +16,23 @@ pub enum JobState {
     Failed,
     Cancelled,
     Resuming,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct JobStats {
+    pub active: i64,
+    pub queued: i64,
+    pub completed: i64,
+    pub failed: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct LogEntry {
+    pub id: i64,
+    pub level: String,
+    pub job_id: Option<i64>,
+    pub message: String,
+    pub created_at: String, // SQLite datetime as string
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +53,8 @@ pub enum AlchemistEvent {
         reason: String,
     },
     Log {
-        job_id: i64,
+        level: String,
+        job_id: Option<i64>,
         message: String,
     },
 }
@@ -69,6 +88,44 @@ pub struct Job {
     pub vmaf_score: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct WatchDir {
+    pub id: i64,
+    pub path: String,
+    pub is_recursive: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct NotificationTarget {
+    pub id: i64,
+    pub name: String,
+    pub target_type: String,
+    pub endpoint_url: String,
+    pub auth_token: Option<String>,
+    pub events: String,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct ScheduleWindow {
+    pub id: i64,
+    pub start_time: String,
+    pub end_time: String,
+    pub days_of_week: String, // as JSON string
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct FileSettings {
+    pub id: i64,
+    pub delete_source: bool,
+    pub output_extension: String,
+    pub output_suffix: String,
+    pub replace_strategy: String,
 }
 
 impl Job {
@@ -192,6 +249,7 @@ pub struct Decision {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug)]
 pub struct Db {
     pool: SqlitePool,
 }
@@ -260,6 +318,24 @@ impl Db {
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    pub async fn add_job(&self, job: Job) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO jobs (input_path, output_path, status, priority, progress, attempt_count, created_at, updated_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(job.input_path)
+        .bind(job.output_path)
+        .bind(job.status)
+        .bind(job.priority)
+        .bind(job.progress)
+        .bind(job.attempt_count)
+        .bind(job.created_at)
+        .bind(job.updated_at)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -448,6 +524,328 @@ impl Db {
         Ok(jobs)
     }
 
+    /// Get jobs with filtering, sorting and pagination
+    pub async fn get_jobs_filtered(
+        &self,
+        limit: i64,
+        offset: i64,
+        statuses: Option<Vec<JobState>>,
+        search: Option<String>,
+        sort_by: Option<String>,
+        sort_desc: bool,
+    ) -> Result<Vec<Job>> {
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT j.id, j.input_path, j.output_path, j.status, 
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority, 
+                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE 1=1 "
+        );
+
+        if let Some(statuses) = statuses {
+            if !statuses.is_empty() {
+                qb.push(" AND j.status IN (");
+                let mut separated = qb.separated(", ");
+                for status in statuses {
+                    separated.push_bind(status);
+                }
+                separated.push_unseparated(") ");
+            }
+        }
+
+        if let Some(search) = search {
+            qb.push(" AND j.input_path LIKE ");
+            qb.push_bind(format!("%{}%", search));
+        }
+
+        qb.push(" ORDER BY ");
+        let sort_col = match sort_by.as_deref() {
+            Some("created_at") => "j.created_at",
+            Some("updated_at") => "j.updated_at",
+            Some("input_path") => "j.input_path",
+            Some("size") => "(SELECT input_size_bytes FROM encode_stats WHERE job_id = j.id)",
+            _ => "j.updated_at",
+        };
+        qb.push(sort_col);
+        qb.push(if sort_desc { " DESC" } else { " ASC" });
+
+        qb.push(" LIMIT ");
+        qb.push_bind(limit);
+        qb.push(" OFFSET ");
+        qb.push_bind(offset);
+
+        let jobs = qb.build_query_as::<Job>().fetch_all(&self.pool).await?;
+        Ok(jobs)
+    }
+
+    pub async fn batch_cancel_jobs(&self, ids: &[i64]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id IN (",
+        );
+        let mut separated = qb.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        let result = qb.build().execute(&self.pool).await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn batch_delete_jobs(&self, ids: &[i64]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM jobs WHERE id IN (");
+        let mut separated = qb.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        let result = qb.build().execute(&self.pool).await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn batch_restart_jobs(&self, ids: &[i64]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "UPDATE jobs SET status = 'queued', progress = 0.0, updated_at = CURRENT_TIMESTAMP WHERE id IN ("
+        );
+        let mut separated = qb.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        let result = qb.build().execute(&self.pool).await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn get_job_by_id(&self, id: i64) -> Result<Option<Job>> {
+        let job = sqlx::query_as::<_, Job>(
+            "SELECT j.id, j.input_path, j.output_path, j.status, 
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority, 
+                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE j.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(job)
+    }
+
+    pub async fn delete_job(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM jobs WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_encode_stats_by_job_id(&self, job_id: i64) -> Result<DetailedEncodeStats> {
+        let stats =
+            sqlx::query_as::<_, DetailedEncodeStats>("SELECT * FROM encode_stats WHERE job_id = ?")
+                .bind(job_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(stats)
+    }
+
+    pub async fn get_watch_dirs(&self) -> Result<Vec<WatchDir>> {
+        let dirs = sqlx::query_as::<_, WatchDir>("SELECT * FROM watch_dirs ORDER BY path ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(dirs)
+    }
+
+    pub async fn get_job_by_input_path(&self, path: &str) -> Result<Option<Job>> {
+        let job = sqlx::query_as::<_, Job>(
+            "SELECT j.id, j.input_path, j.output_path, j.status, 
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority, 
+                    COALESCE(j.progress, 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE j.input_path = ?",
+        )
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(job)
+    }
+
+    pub async fn add_watch_dir(&self, path: &str, is_recursive: bool) -> Result<WatchDir> {
+        let row = sqlx::query_as::<_, WatchDir>(
+            "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING *",
+        )
+        .bind(path)
+        .bind(is_recursive)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn remove_watch_dir(&self, id: i64) -> Result<()> {
+        let res = sqlx::query("DELETE FROM watch_dirs WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn get_notification_targets(&self) -> Result<Vec<NotificationTarget>> {
+        let targets = sqlx::query_as::<_, NotificationTarget>("SELECT * FROM notification_targets")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(targets)
+    }
+
+    pub async fn add_notification_target(
+        &self,
+        name: &str,
+        target_type: &str,
+        endpoint_url: &str,
+        auth_token: Option<&str>,
+        events: &str,
+        enabled: bool,
+    ) -> Result<NotificationTarget> {
+        let row = sqlx::query_as::<_, NotificationTarget>(
+            "INSERT INTO notification_targets (name, target_type, endpoint_url, auth_token, events, enabled) 
+             VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+        )
+        .bind(name)
+        .bind(target_type)
+        .bind(endpoint_url)
+        .bind(auth_token)
+        .bind(events)
+        .bind(enabled)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_notification_target(&self, id: i64) -> Result<()> {
+        let res = sqlx::query("DELETE FROM notification_targets WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn get_schedule_windows(&self) -> Result<Vec<ScheduleWindow>> {
+        let windows = sqlx::query_as::<_, ScheduleWindow>("SELECT * FROM schedule_windows")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(windows)
+    }
+
+    pub async fn add_schedule_window(
+        &self,
+        start_time: &str,
+        end_time: &str,
+        days_of_week: &str,
+        enabled: bool,
+    ) -> Result<ScheduleWindow> {
+        let row = sqlx::query_as::<_, ScheduleWindow>(
+            "INSERT INTO schedule_windows (start_time, end_time, days_of_week, enabled) 
+            VALUES (?, ?, ?, ?) 
+            RETURNING *",
+        )
+        .bind(start_time)
+        .bind(end_time)
+        .bind(days_of_week)
+        .bind(enabled)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_schedule_window(&self, id: i64) -> Result<()> {
+        let res = sqlx::query("DELETE FROM schedule_windows WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        if res.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn get_file_settings(&self) -> Result<FileSettings> {
+        // Migration ensures row 1 exists, but we handle missing just in case
+        let row = sqlx::query_as::<_, FileSettings>("SELECT * FROM file_settings WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await?;
+
+        match row {
+            Some(s) => Ok(s),
+            None => {
+                // If missing (shouldn't happen), return default
+                Ok(FileSettings {
+                    id: 1,
+                    delete_source: false,
+                    output_extension: "mkv".to_string(),
+                    output_suffix: "-alchemist".to_string(),
+                    replace_strategy: "keep".to_string(),
+                })
+            }
+        }
+    }
+
+    pub async fn update_file_settings(
+        &self,
+        delete_source: bool,
+        output_extension: &str,
+        output_suffix: &str,
+        replace_strategy: &str,
+    ) -> Result<FileSettings> {
+        let row = sqlx::query_as::<_, FileSettings>(
+            "UPDATE file_settings 
+            SET delete_source = ?, output_extension = ?, output_suffix = ?, replace_strategy = ?
+            WHERE id = 1
+            RETURNING *",
+        )
+        .bind(delete_source)
+        .bind(output_extension)
+        .bind(output_suffix)
+        .bind(replace_strategy)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn get_aggregated_stats(&self) -> Result<AggregatedStats> {
         let row = sqlx::query(
             "SELECT 
@@ -592,6 +990,55 @@ impl Db {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(row.map(|r| r.0))
+    }
+
+    pub async fn get_job_stats(&self) -> Result<JobStats> {
+        let rows = sqlx::query("SELECT status, COUNT(*) as count FROM jobs GROUP BY status")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut stats = JobStats::default();
+        for row in rows {
+            let status_str: String = row.get("status");
+            let count: i64 = row.get("count");
+
+            // Map status string to JobStats fields
+            // Assuming JobState serialization matches stored strings ("queued", "active", etc)
+            match status_str.as_str() {
+                "queued" => stats.queued += count,
+                "encoding" | "analyzing" | "resuming" => stats.active += count,
+                "completed" => stats.completed += count,
+                "failed" | "cancelled" => stats.failed += count,
+                _ => {}
+            }
+        }
+        Ok(stats)
+    }
+
+    pub async fn add_log(&self, level: &str, job_id: Option<i64>, message: &str) -> Result<()> {
+        sqlx::query("INSERT INTO logs (level, job_id, message) VALUES (?, ?, ?)")
+            .bind(level)
+            .bind(job_id)
+            .bind(message)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_logs(&self, limit: i64, offset: i64) -> Result<Vec<LogEntry>> {
+        let logs = sqlx::query_as::<_, LogEntry>(
+            "SELECT id, level, job_id, message, created_at FROM logs ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(logs)
+    }
+
+    pub async fn clear_logs(&self) -> Result<()> {
+        sqlx::query("DELETE FROM logs").execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn create_user(&self, username: &str, password_hash: &str) -> Result<i64> {

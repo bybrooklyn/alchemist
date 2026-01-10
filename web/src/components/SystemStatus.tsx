@@ -66,7 +66,7 @@ export default function SystemStatus() {
                 onClick={() => setIsExpanded(true)}
                 className="flex flex-col gap-3 cursor-pointer group p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 shadow-sm"
                 whileHover={{ scale: 1.02 }}
-                transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -76,18 +76,18 @@ export default function SystemStatus() {
                         </span>
                         <span className="text-xs font-bold text-helios-slate uppercase tracking-wider group-hover:text-helios-inc transition-colors">Engine Status</span>
                     </div>
-                    <motion.div layoutId="status-badge" className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${isActive ? 'bg-status-success/10 text-status-success' : 'bg-helios-slate/10 text-helios-slate'}`}>
+                    <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${isActive ? 'bg-status-success/10 text-status-success' : 'bg-helios-slate/10 text-helios-slate'}`}>
                         {isActive ? 'ONLINE' : 'IDLE'}
-                    </motion.div>
+                    </div>
                 </div>
 
                 <div className="space-y-1.5">
                     <div className="flex items-end justify-between text-helios-ink">
                         <span className="text-xs font-medium opacity-80">Active Jobs</span>
                         <div className="flex items-baseline gap-0.5">
-                            <motion.span layoutId="active-count" className={`text-lg font-bold ${isFull ? 'text-status-warning' : 'text-helios-solar'}`}>
+                            <span className={`text-lg font-bold ${isFull ? 'text-status-warning' : 'text-helios-solar'}`}>
                                 {stats.active}
-                            </motion.span>
+                            </span>
                             <span className="text-xs text-helios-slate">
                                 / {stats.concurrent_limit}
                             </span>
@@ -95,8 +95,7 @@ export default function SystemStatus() {
                     </div>
 
                     <div className="h-1.5 w-full bg-helios-line/20 rounded-full overflow-hidden relative">
-                        <motion.div
-                            layoutId="progress-bar"
+                        <div
                             className={`h-full transition-all duration-700 ease-out rounded-full ${isFull ? 'bg-status-warning' : 'bg-helios-solar'}`}
                             style={{ width: `${percentage}%` }}
                         />
@@ -159,9 +158,9 @@ export default function SystemStatus() {
                                             <div className="flex flex-col">
                                                 <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Concurrency</span>
                                                 <div className="flex items-baseline justify-center gap-1 mt-1">
-                                                    <motion.span layoutId="active-count" className="text-3xl font-bold text-helios-ink">
+                                                    <span className="text-3xl font-bold text-helios-ink">
                                                         {stats.active}
-                                                    </motion.span>
+                                                    </span>
                                                     <span className="text-sm font-medium text-helios-slate opacity-60">
                                                         / {stats.concurrent_limit}
                                                     </span>
@@ -169,8 +168,7 @@ export default function SystemStatus() {
                                             </div>
                                             {/* Big Progress Bar */}
                                             <div className="w-full h-2 bg-helios-line/10 rounded-full mt-2 overflow-hidden relative">
-                                                <motion.div
-                                                    layoutId="progress-bar"
+                                                <div
                                                     className={`h-full rounded-full ${isFull ? 'bg-status-warning' : 'bg-helios-solar'}`}
                                                     style={{ width: `${percentage}%` }}
                                                 />

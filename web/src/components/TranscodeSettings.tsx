@@ -23,6 +23,7 @@ interface TranscodeSettingsPayload {
     min_file_size_mb: number;
     output_codec: "av1" | "hevc";
     quality_profile: "quality" | "balanced" | "speed";
+    threads: number;
 }
 
 export default function TranscodeSettings() {
@@ -161,6 +162,20 @@ export default function TranscodeSettings() {
                 </div>
 
                 {/* Numeric Inputs */}
+                <div className="space-y-3">
+                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                        <Cpu size={14} /> Encoding Threads (libsvtav1/x265)
+                    </label>
+                    <input
+                        type="number"
+                        min="0"
+                        value={settings.threads}
+                        onChange={(e) => setSettings({ ...settings, threads: parseInt(e.target.value) || 0 })}
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                    />
+                    <p className="text-[10px] text-helios-slate ml-1">Number of threads to allocate for software encoding (0 = Auto).</p>
+                </div>
+
                 <div className="space-y-3">
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
                         <Zap size={14} /> Concurrent Jobs
