@@ -63,12 +63,6 @@ jobs:
           # For aarch64, this might fail if Wix 3 doesn't support it fully, but we try.
           CARGO_WIX_EXTRA_ARGS: "-v" 
         run: |
-          cargo wix --no-build --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
-          
-          REM If cargo wix --no-build is used, we must build first? No, cargo wix does build.
-          REM Let's try standard cargo wix command which builds and packages.
-          REM Warning: 'cargo wix' effectively runs 'cargo build --release'
-          
           cargo wix --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
 
       # Move EXE to a predictable name for upload
@@ -191,7 +185,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Build Frontend
         run: |
