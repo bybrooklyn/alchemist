@@ -4,87 +4,240 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build-release:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  # WINDOWS BUILD (MSI + EXE)
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  build-windows:
+    name: Windows ${{ matrix.target_name }}
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: alchemist
-            asset_name: alchemist-linux-x86_64
-            use_cross: false
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: alchemist.exe
-            asset_name: alchemist-windows-x86_64.exe
-            use_cross: false
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: alchemist
-            asset_name: alchemist-macos-x86_64
-            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            target_name: x86_64
+            msi_arch: x64
+          # Attempting ARM64 build. Note that Wix 3 may have limited ARM64 support, 
+          # but we will try to build the binary and let cargo-wix handle the packaging if possible.
+          - target: aarch64-pc-windows-msvc
+            target_name: arm64
+            msi_arch: arm64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      # Use bundled Bun (installed via npm or setup-bun) to build frontend
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
 
-      - name: Install Cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      # Build Frontend (Runs on host, embedded into binary)
+      # Frontend Build
       - name: Build Frontend
         shell: bash
         run: |
           cd web
           bun install --frozen-lockfile
           bun run build
-          echo "Listing web/dist:"
-          ls -R dist
 
+      # Backend Build & MSI Generation
+      # using cargo wix (which runs cargo build --release underneath)
+      - name: Build MSI and EXE
+        shell: cmd
+        env:
+          # We pass the target architecture to wix. 
+          # For aarch64, this might fail if Wix 3 doesn't support it fully, but we try.
+          CARGO_WIX_EXTRA_ARGS: "-v" 
+        run: |
+          cargo wix --no-build --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
+          
+          REM If cargo wix --no-build is used, we must build first? No, cargo wix does build.
+          REM Let's try standard cargo wix command which builds and packages.
+          REM Warning: 'cargo wix' effectively runs 'cargo build --release'
+          
+          cargo wix --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
 
-      # Build Backend
-      - name: Build Backend
+      # Move EXE to a predictable name for upload
+      - name: Prepare EXE
         shell: bash
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+          cp target/${{ matrix.target }}/release/alchemist.exe alchemist-${{ matrix.target_name }}.exe
 
-      # Prepare Asset
-      - name: Prepare Asset
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            mv target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          else
-            mv target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          fi
-
-      # Upload Release Asset
-      - name: Release
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ matrix.asset_name }}
+          files: |
+            target/wix/alchemist-${{ matrix.target_name }}.msi
+            alchemist-${{ matrix.target_name }}.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  # MACOS BUILD (.app bundle)
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  build-macos:
+    name: macOS ${{ matrix.target_name }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            target_name: x86_64
+          - target: aarch64-apple-darwin
+            target_name: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Frontend
+        run: |
+          cd web
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create App Bundle
+        run: |
+          APP_NAME="Alchemist"
+          APP_DIR="$APP_NAME.app"
+          mkdir -p "$APP_DIR/Contents/MacOS"
+          mkdir -p "$APP_DIR/Contents/Resources"
+          
+          # Copy Binary
+          cp "target/${{ matrix.target }}/release/alchemist" "$APP_DIR/Contents/MacOS/$APP_NAME"
+          
+          # Create Info.plist (Basic)
+          cat <<EOF > "$APP_DIR/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>$APP_NAME</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.alchemist.app</string>
+              <key>CFBundleName</key>
+              <string>$APP_NAME</string>
+              <key>CFBundleVersion</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.13</string>
+          </dict>
+          </plist>
+          EOF
+          
+          # Zip for release (No signing/notarization)
+          ditto -c -k --keepParent "$APP_DIR" "alchemist-macos-${{ matrix.target_name }}.zip"
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: alchemist-macos-${{ matrix.target_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  # LINUX BUILD (AppImage)
+  # ------------------------------------------------------------------------------------------------------------------------------------------------
+  build-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build Frontend
+        run: |
+          cd web
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Build Binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Create AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/share/applications
+
+          cp target/x86_64-unknown-linux-gnu/release/alchemist AppDir/usr/bin/alchemist
+          
+          # Create Desktop Entry
+          cat <<EOF > AppDir/usr/share/applications/alchemist.desktop
+          [Desktop Entry]
+          Name=Alchemist
+          Exec=alchemist
+          Icon=alchemist
+          Type=Application
+          Categories=Utility;
+          EOF
+          
+          # Placeholder Icon (Generate one if missing)
+          convert -size 256x256 xc:purple AppDir/usr/share/icons/hicolor/256x256/apps/alchemist.png || touch AppDir/usr/share/icons/hicolor/256x256/apps/alchemist.png
+
+      - name: Create AppImage
+        env:
+          ARCH: x86_64
+        run: |
+          wget -O linuxdeploy "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          chmod +x linuxdeploy
+          
+          ./linuxdeploy --appdir AppDir --output appimage
+
+          mv Alchemist*.AppImage alchemist-linux-x86_64.AppImage
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: alchemist-linux-x86_64.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
