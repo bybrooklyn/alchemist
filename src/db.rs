@@ -19,6 +19,7 @@ pub enum JobState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(default)]
 pub struct JobStats {
     pub active: i64,
     pub queued: i64,
@@ -206,6 +207,7 @@ impl Job {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct AggregatedStats {
     pub total_jobs: i64,
     pub completed_jobs: i64,
@@ -469,7 +471,7 @@ impl Db {
 
     pub async fn get_job_decision(&self, job_id: i64) -> Result<Option<Decision>> {
         let decision = sqlx::query_as::<_, Decision>(
-            "SELECT * FROM decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, job_id, action, reason, created_at FROM decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
@@ -733,7 +735,7 @@ impl Db {
 
     pub async fn get_encode_stats_by_job_id(&self, job_id: i64) -> Result<DetailedEncodeStats> {
         let stats =
-            sqlx::query_as::<_, DetailedEncodeStats>("SELECT * FROM encode_stats WHERE job_id = ?")
+            sqlx::query_as::<_, DetailedEncodeStats>("SELECT id, job_id, input_size_bytes, output_size_bytes, compression_ratio, encode_time_seconds, encode_speed, avg_bitrate_kbps, vmaf_score, created_at FROM encode_stats WHERE job_id = ?")
                 .bind(job_id)
                 .fetch_one(&self.pool)
                 .await?;
@@ -741,9 +743,11 @@ impl Db {
     }
 
     pub async fn get_watch_dirs(&self) -> Result<Vec<WatchDir>> {
-        let dirs = sqlx::query_as::<_, WatchDir>("SELECT * FROM watch_dirs ORDER BY path ASC")
-            .fetch_all(&self.pool)
-            .await?;
+        let dirs = sqlx::query_as::<_, WatchDir>(
+            "SELECT id, path, is_recursive, created_at FROM watch_dirs ORDER BY path ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         Ok(dirs)
     }
 
@@ -768,7 +772,7 @@ impl Db {
 
     pub async fn add_watch_dir(&self, path: &str, is_recursive: bool) -> Result<WatchDir> {
         let row = sqlx::query_as::<_, WatchDir>(
-            "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING *",
+            "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING id, path, is_recursive, created_at",
         )
         .bind(path)
         .bind(is_recursive)
@@ -791,7 +795,7 @@ impl Db {
     }
 
     pub async fn get_notification_targets(&self) -> Result<Vec<NotificationTarget>> {
-        let targets = sqlx::query_as::<_, NotificationTarget>("SELECT * FROM notification_targets")
+        let targets = sqlx::query_as::<_, NotificationTarget>("SELECT id, name, target_type, endpoint_url, auth_token, events, enabled, created_at FROM notification_targets")
             .fetch_all(&self.pool)
             .await?;
         Ok(targets)
