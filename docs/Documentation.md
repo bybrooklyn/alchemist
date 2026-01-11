@@ -613,9 +613,9 @@ Alchemist uses SQLite for persistence. The database file is located at `data/alc
 
 ## Database Migration Policy
 
-> **Baseline Version: 0.2.4**
+> **Baseline Version: 0.2.5**
 
-All database migrations maintain **backwards compatibility** with the v0.2.4 schema. This means:
+All database migrations maintain **backwards compatibility** with the v0.2.5 schema. This means:
 
 - ✅ Newer app versions work with older database files
 - ✅ Database files can be safely upgraded
@@ -642,7 +642,7 @@ The `schema_info` table tracks compatibility:
 
 ```sql
 SELECT value FROM schema_info WHERE key = 'min_compatible_version';
--- Returns: "0.2.4"
+-- Returns: "0.2.5"
 ```
 
 ---
@@ -733,7 +733,7 @@ volumes:
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `0.2.4` | Specific version |
+| `0.2.5` | Specific version |
 | `0.2` | Latest patch of minor version |
 
 ---
@@ -933,7 +933,7 @@ Version is tracked in two places that must stay in sync:
 
 To release:
 1. Update both files to new version
-2. Commit: `git commit -m "v0.2.4: Description"`
+2. Commit: `git commit -m "v0.2.5: Description"`
 3. Push to master (triggers Docker build)
 
 ---
@@ -1182,7 +1182,7 @@ A:
 
 ## Changelog
 
-### v0.2.4 (Current)
+### v0.2.5 (Current)
 - ✅ Async runtime reliability improvements (spawn_blocking for ffprobe/VMAF/hardware detection)
 - ✅ Accurate encode_speed and avg_bitrate_kbps metrics computed from actual media duration
 - ✅ GPU utilization monitoring in dashboard
@@ -1239,4 +1239,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-*Documentation for Alchemist v0.2.4+ • Last updated: January 2026*
+*Documentation for Alchemist v0.2.5+ • Last updated: January 2026*

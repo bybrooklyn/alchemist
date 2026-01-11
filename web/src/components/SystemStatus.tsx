@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, X, Zap, CheckCircle2, AlertTriangle, Database } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
@@ -21,6 +21,7 @@ export default function SystemStatus() {
     const [stats, setStats] = useState<Stats | null>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const layoutId = useId();
 
     useEffect(() => {
         const fetchStats = async () => {
@@ -69,7 +70,7 @@ export default function SystemStatus() {
         <>
             {/* Compact Sidebar View */}
             <motion.div
-                layoutId="status-container"
+                layoutId={layoutId}
                 onClick={() => setIsExpanded(true)}
                 className="flex flex-col gap-3 cursor-pointer group p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 shadow-sm"
                 whileHover={{ scale: 1.02 }}
@@ -127,7 +128,7 @@ export default function SystemStatus() {
                         >
                             {/* Modal Card */}
                             <motion.div
-                                layoutId="status-container"
+                                layoutId={layoutId}
                                 className="w-full max-w-lg bg-helios-surface border border-helios-line/30 rounded-3xl shadow-2xl overflow-hidden relative"
                                 onClick={(e) => e.stopPropagation()}
                             >

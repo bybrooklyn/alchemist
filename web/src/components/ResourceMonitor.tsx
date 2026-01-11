@@ -179,11 +179,48 @@ export default function ResourceMonitor() {
                 </div>
             </motion.div>
 
-            {/* Uptime */}
+            {/* GPU Usage */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
+                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+            >
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                        <Cpu size={16} /> GPU
+                    </div>
+                    {stats.gpu_utilization != null ? (
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${getUsageColor(stats.gpu_utilization)}`}>
+                            {stats.gpu_utilization.toFixed(1)}%
+                        </span>
+                    ) : (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/10 text-white/40">
+                            N/A
+                        </span>
+                    )}
+                </div>
+                <div className="space-y-1">
+                    <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                        {stats.gpu_utilization != null && (
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.gpu_utilization)}`}
+                                style={{ width: `${Math.min(stats.gpu_utilization, 100)}%` }}
+                            />
+                        )}
+                    </div>
+                    <div className="flex justify-between text-xs text-white/40">
+                        <span>VRAM</span>
+                        <span>{stats.gpu_memory_percent?.toFixed(0) || "-"}% used</span>
+                    </div>
+                </div>
+            </motion.div>
+
+            {/* Uptime */}
+            <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
                 className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex flex-col justify-between"
             >
                 <div className="flex items-center justify-between">
@@ -197,36 +234,7 @@ export default function ResourceMonitor() {
                 </div>
             </motion.div>
 
-            {/* GPU Usage (only shown when GPU data available) */}
-            {stats.gpu_utilization !== undefined && (
-                <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.4 }}
-                    className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
-                >
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
-                            <Cpu size={16} /> GPU
-                        </div>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${getUsageColor(stats.gpu_utilization)}`}>
-                            {stats.gpu_utilization.toFixed(1)}%
-                        </span>
-                    </div>
-                    <div className="space-y-1">
-                        <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
-                            <div
-                                className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.gpu_utilization)}`}
-                                style={{ width: `${Math.min(stats.gpu_utilization, 100)}%` }}
-                            />
-                        </div>
-                        <div className="flex justify-between text-xs text-white/40">
-                            <span>VRAM</span>
-                            <span>{stats.gpu_memory_percent?.toFixed(0) || 0}% used</span>
-                        </div>
-                    </div>
-                </motion.div>
-            )}
+
         </div>
     );
 }
