@@ -1,8 +1,8 @@
 # Database Migration Policy
 
-**Baseline Version: 0.2.4**
+**Baseline Version: 0.2.5**
 
-All database migrations from this point forward MUST maintain backwards compatibility with the v0.2.4 schema.
+All database migrations from this point forward MUST maintain backwards compatibility with the v0.2.5 schema.
 
 ## Rules for Future Migrations
 
@@ -18,6 +18,7 @@ All database migrations from this point forward MUST maintain backwards compatib
 - **Never change column types** - Add a new column instead
 - **Never remove tables** - Mark as deprecated in comments instead
 - **Never add NOT NULL columns without defaults**
+- **Never modify existing migration files** - Once a migration is applied, it is immutable. Changing it breaks database integrity checksums. Creates a NEW migration file for any changes.
 
 ## Schema Version Tracking
 
@@ -36,7 +37,7 @@ Example: `20260109210000_add_notifications_table.sql`
 ## Testing Migrations
 
 Before releasing any migration:
-1. Test upgrading from v0.2.4 database
+1. Test upgrading from v0.2.5 database
 2. Verify all existing queries still work
 3. Verify new features work with fresh DB
 4. Verify new features gracefully handle missing data in old DBs
