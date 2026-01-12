@@ -26,7 +26,7 @@ Alchemist is a Rust-based video transcoding system that automatically converts y
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/alchemist.git
+git clone https://github.com/BrooklynLovesZelda/alchemist.git
 cd alchemist
 
 # Build the project
