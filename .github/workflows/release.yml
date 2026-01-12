@@ -23,11 +23,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             target_name: x86_64
             msi_arch: x64
-          # Attempting ARM64 build. Note that Wix 3 may have limited ARM64 support, 
-          # but we will try to build the binary and let cargo-wix handle the packaging if possible.
-          - target: aarch64-pc-windows-msvc
-            target_name: arm64
-            msi_arch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +37,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install WiX Toolset
+        shell: powershell
+        run: |
+          choco install wixtoolset --version=3.11.2 -y
+          $wixBin = "C:\\Program Files (x86)\\WiX Toolset v3.11\\bin"
+          echo $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install cargo-wix
         run: cargo install cargo-wix
