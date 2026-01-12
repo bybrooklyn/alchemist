@@ -1,8 +1,12 @@
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
+    Row, SqlitePool,
+};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
@@ -304,7 +308,10 @@ impl Db {
     pub async fn new(db_path: &str) -> Result<Self> {
         let options = SqliteConnectOptions::new()
             .filename(db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePool::connect_with(options).await?;
 
@@ -378,12 +385,13 @@ impl Db {
 
     pub async fn add_job(&self, job: Job) -> Result<()> {
         sqlx::query(
-            "INSERT INTO jobs (input_path, output_path, status, priority, progress, attempt_count, created_at, updated_at) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, priority, progress, attempt_count, created_at, updated_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(job.input_path)
         .bind(job.output_path)
         .bind(job.status)
+        .bind("0.0")
         .bind(job.priority)
         .bind(job.progress)
         .bind(job.attempt_count)
@@ -743,11 +751,27 @@ impl Db {
     }
 
     pub async fn get_watch_dirs(&self) -> Result<Vec<WatchDir>> {
-        let dirs = sqlx::query_as::<_, WatchDir>(
-            "SELECT id, path, is_recursive, created_at FROM watch_dirs ORDER BY path ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
+        let has_recursive = self.has_column("watch_dirs", "recursive").await?;
+        let has_enabled = self.has_column("watch_dirs", "enabled").await?;
+
+        let recursive_expr = if has_is_recursive {
+            "is_recursive"
+        } else if has_recursive {
+            "recursive"
+        } else {
+            "1"
+        };
+
+        let enabled_filter = if has_enabled { "WHERE enabled = 1 " } else { "" };
+        let query = format!(
+            "SELECT id, path, {} as is_recursive, created_at FROM watch_dirs {}ORDER BY path ASC",
+            recursive_expr, enabled_filter
+        );
+
+        let dirs = sqlx::query_as::<_, WatchDir>(&query)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(dirs)
     }
 
@@ -771,13 +795,33 @@ impl Db {
     }
 
     pub async fn add_watch_dir(&self, path: &str, is_recursive: bool) -> Result<WatchDir> {
-        let row = sqlx::query_as::<_, WatchDir>(
-            "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING id, path, is_recursive, created_at",
-        )
-        .bind(path)
-        .bind(is_recursive)
-        .fetch_one(&self.pool)
-        .await?;
+        let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
+        let has_recursive = self.has_column("watch_dirs", "recursive").await?;
+
+        let row = if has_is_recursive {
+            sqlx::query_as::<_, WatchDir>(
+                "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING id, path, is_recursive, created_at",
+            )
+            .bind(path)
+            .bind(is_recursive)
+            .fetch_one(&self.pool)
+            .await?
+        } else if has_recursive {
+            sqlx::query_as::<_, WatchDir>(
+                "INSERT INTO watch_dirs (path, recursive) VALUES (?, ?) RETURNING id, path, recursive as is_recursive, created_at",
+            )
+            .bind(path)
+            .bind(is_recursive)
+            .fetch_one(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, WatchDir>(
+                "INSERT INTO watch_dirs (path) VALUES (?) RETURNING id, path, 1 as is_recursive, created_at",
+            )
+            .bind(path)
+            .fetch_one(&self.pool)
+            .await?
+        };
         Ok(row)
     }
 
@@ -1173,6 +1217,19 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn has_column(&self, table: &str, column: &str) -> Result<bool> {
+        let table = table.replace('\'', "''");
+        let sql = format!("PRAGMA table_info('{}')", table);
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        for row in rows {
+            let name: String = row.get("name");
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

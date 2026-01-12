@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, OutputCodec};
 use crate::db::{AlchemistEvent, Db, Job, JobState};
 use crate::error::Result;
 use crate::media::analyzer::FfmpegAnalyzer;
@@ -9,6 +9,7 @@ use crate::media::pipeline::{
 use crate::media::planner::BasicPlanner;
 use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareInfo;
+use crate::telemetry::{encoder_label, hardware_label, resolution_bucket, TelemetryEvent};
 use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -104,6 +105,44 @@ impl Agent {
             status: JobState::Queued,
         }); // Trigger UI refresh
         Ok(())
+    }
+
+    async fn emit_telemetry_event(
+        &self,
+        telemetry_enabled: bool,
+        output_codec: OutputCodec,
+        metadata: &crate::media::pipeline::MediaMetadata,
+        event_type: &'static str,
+        status: Option<&'static str>,
+        failure_reason: Option<&'static str>,
+        input_size_bytes: Option<u64>,
+        output_size_bytes: Option<u64>,
+        duration_ms: Option<u64>,
+        speed_factor: Option<f64>,
+    ) {
+        if !telemetry_enabled {
+            return;
+        }
+
+        let hw = self.hw_info.as_ref().as_ref();
+        let event = TelemetryEvent {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            event_type: event_type.to_string(),
+            status: status.map(str::to_string),
+            failure_reason: failure_reason.map(str::to_string),
+            hardware_model: hardware_label(hw),
+            encoder: Some(encoder_label(hw, output_codec)),
+            video_codec: Some(output_codec.as_str().to_string()),
+            resolution: resolution_bucket(metadata.width, metadata.height),
+            duration_ms,
+            input_size_bytes,
+            output_size_bytes,
+            speed_factor,
+        };
+
+        tokio::spawn(async move {
+            crate::telemetry::send_event(event).await;
+        });
     }
 
     pub fn is_paused(&self) -> bool {
@@ -323,6 +362,20 @@ impl Agent {
 
         self.update_job_state(job.id, JobState::Encoding).await?;
 
+        self.emit_telemetry_event(
+            config_snapshot.system.enable_telemetry,
+            config_snapshot.transcode.output_codec,
+            &metadata,
+            "job_started",
+            None,
+            None,
+            Some(metadata.size_bytes),
+            None,
+            None,
+            None,
+        )
+        .await;
+
         let executor = FfmpegExecutor::new(
             self.orchestrator.clone(),
             Arc::new(config_snapshot.clone()), // Use snapshot
@@ -346,7 +399,7 @@ impl Agent {
             .await
         {
             Ok(_) => {
-                self.finalize_job(job, &file_path, &output_path, start_time)
+                self.finalize_job(job, &file_path, &output_path, start_time, &metadata)
                     .await
             }
             Err(e) => {
@@ -360,6 +413,25 @@ impl Agent {
                         info!("Job {}: Removed partial output {:?}", job.id, output_path);
                     }
                 }
+                let failure_reason = if let crate::error::AlchemistError::Cancelled = e {
+                    "cancelled"
+                } else {
+                    "transcode_failed"
+                };
+                self.emit_telemetry_event(
+                    config_snapshot.system.enable_telemetry,
+                    config_snapshot.transcode.output_codec,
+                    &metadata,
+                    "job_finished",
+                    Some("failure"),
+                    Some(failure_reason),
+                    Some(metadata.size_bytes),
+                    None,
+                    Some(start_time.elapsed().as_millis() as u64),
+                    None,
+                )
+                .await;
+
                 if let crate::error::AlchemistError::Cancelled = e {
                     self.update_job_state(job.id, JobState::Cancelled).await
                 } else {
@@ -372,10 +444,11 @@ impl Agent {
     }
 
     async fn update_job_state(&self, job_id: i64, status: JobState) -> Result<()> {
-        let _ = self.db.update_job_status(job_id, status).await;
-        let _ = self
-            .tx
-            .send(AlchemistEvent::JobStateChanged { job_id, status });
+        if let Err(e) = self.db.update_job_status(job_id, status).await {
+            error!("Failed to update job {} status {:?}: {}", job_id, status, e);
+            return Err(e);
+        }
+        let _ = self.tx.send(AlchemistEvent::JobStateChanged { job_id, status });
         Ok(())
     }
 
@@ -385,6 +458,7 @@ impl Agent {
         input_path: &std::path::Path,
         output_path: &std::path::Path,
         start_time: std::time::Instant,
+        metadata: &crate::media::pipeline::MediaMetadata,
     ) -> Result<()> {
         let job_id = job.id;
         // Integrity & Size Reduction check
@@ -418,6 +492,8 @@ impl Agent {
         let encode_duration = start_time.elapsed().as_secs_f64();
 
         let config = self.config.read().await;
+        let telemetry_enabled = config.system.enable_telemetry;
+        let output_codec = config.transcode.output_codec;
 
         // Check reduction threshold
         if output_size == 0 || reduction < config.transcode.size_reduction_threshold {
@@ -532,6 +608,20 @@ impl Agent {
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         self.update_job_state(job_id, JobState::Completed).await?;
+
+        self.emit_telemetry_event(
+            telemetry_enabled,
+            output_codec,
+            metadata,
+            "job_finished",
+            Some("success"),
+            None,
+            Some(input_size),
+            Some(output_size),
+            Some((encode_duration * 1000.0) as u64),
+            Some(encode_speed),
+        )
+        .await;
 
         // Handle File Deletion Policy
         if let Ok(settings) = self.db.get_file_settings().await {

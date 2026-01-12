@@ -7,6 +7,7 @@ pub mod orchestrator;
 pub mod scheduler;
 pub mod server;
 pub mod system;
+pub mod telemetry;
 pub mod wizard;
 
 pub use config::QualityProfile;
