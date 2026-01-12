@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowRight,
@@ -73,6 +73,28 @@ export default function SetupWizard() {
 
     const [dirInput, setDirInput] = useState('');
 
+    const getAuthHeaders = () => {
+        const token = localStorage.getItem('alchemist_token');
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    };
+
+    useEffect(() => {
+        const loadSetupDefaults = async () => {
+            try {
+                const res = await fetch('/api/setup/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (typeof data.enable_telemetry === 'boolean') {
+                    setConfig(prev => ({ ...prev, enable_telemetry: data.enable_telemetry }));
+                }
+            } catch (e) {
+                console.error("Failed to load setup defaults", e);
+            }
+        };
+
+        loadSetupDefaults();
+    }, []);
+
     const handleNext = async () => {
         if (step === 1 && (!config.username || !config.password)) {
             setError("Please fill in both username and password.");
@@ -84,7 +106,12 @@ export default function SetupWizard() {
             if (!hardware) {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/system/hardware');
+                    const res = await fetch('/api/system/hardware', {
+                        headers: getAuthHeaders()
+                    });
+                    if (!res.ok) {
+                        throw new Error(`Hardware detection failed (${res.status})`);
+                    }
                     const data = await res.json();
                     setHardware(data);
                 } catch (e) {
@@ -109,17 +136,29 @@ export default function SetupWizard() {
 
     const startScan = async () => {
         try {
-            await fetch('/api/scan/start', { method: 'POST' });
+            const res = await fetch('/api/scan/start', {
+                method: 'POST',
+                headers: getAuthHeaders()
+            });
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
             pollScanStatus();
         } catch (e) {
             console.error("Failed to start scan", e);
+            setError("Failed to start scan. Please check authentication.");
         }
     };
 
     const pollScanStatus = async () => {
         const interval = setInterval(async () => {
             try {
-                const res = await fetch('/api/scan/status');
+                const res = await fetch('/api/scan/status', {
+                    headers: getAuthHeaders()
+                });
+                if (!res.ok) {
+                    throw new Error(await res.text());
+                }
                 const data = await res.json();
                 setScanStatus(data);
                 if (!data.is_running) {
@@ -128,7 +167,9 @@ export default function SetupWizard() {
                 }
             } catch (e) {
                 console.error("Polling failed", e);
+                setError("Scan status unavailable. Please refresh and try again.");
                 clearInterval(interval);
+                setLoading(false);
             }
         }, 1000);
     };

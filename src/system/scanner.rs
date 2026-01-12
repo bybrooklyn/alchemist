@@ -1,9 +1,11 @@
+use crate::config::Config;
 use crate::db::Db;
 use crate::error::Result;
 use crate::media::scanner::Scanner;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -16,13 +18,15 @@ pub struct ScanStatus {
 
 pub struct LibraryScanner {
     db: Arc<Db>,
+    config: Arc<RwLock<Config>>,
     status: Arc<Mutex<ScanStatus>>,
 }
 
 impl LibraryScanner {
-    pub fn new(db: Arc<Db>) -> Self {
+    pub fn new(db: Arc<Db>, config: Arc<RwLock<Config>>) -> Self {
         Self {
             db,
+            config,
             status: Arc::new(Mutex::new(ScanStatus {
                 is_running: false,
                 files_found: 0,
@@ -48,6 +52,7 @@ impl LibraryScanner {
 
         let scanner_self = self.status.clone();
         let db = self.db.clone();
+        let config = self.config.clone();
 
         tokio::spawn(async move {
             info!("🚀 Starting full library scan...");
@@ -76,11 +81,26 @@ impl LibraryScanner {
                 }
             };
 
+            let config_dirs = {
+                let cfg = config.read().await;
+                cfg.scanner.directories.clone()
+            };
+
+            let mut scan_targets: HashMap<PathBuf, bool> = HashMap::new();
+            for dir in config_dirs {
+                scan_targets.insert(PathBuf::from(dir), true);
+            }
+            for watch_dir in watch_dirs {
+                scan_targets
+                    .entry(PathBuf::from(&watch_dir.path))
+                    .and_modify(|recursive| *recursive |= watch_dir.is_recursive)
+                    .or_insert(watch_dir.is_recursive);
+            }
+
             let scanner = Scanner::new();
             let mut all_scanned = Vec::new();
 
-            for watch_dir in watch_dirs {
-                let path = PathBuf::from(&watch_dir.path);
+            for (path, recursive) in scan_targets {
                 if !path.exists() {
                     warn!("Watch directory does not exist: {:?}", path);
                     continue;
@@ -88,10 +108,10 @@ impl LibraryScanner {
 
                 {
                     let mut s = scanner_self.lock().await;
-                    s.current_folder = Some(watch_dir.path.clone());
+                    s.current_folder = Some(path.to_string_lossy().to_string());
                 }
 
-                let files = scanner.scan_with_recursion(vec![(path, watch_dir.is_recursive)]);
+                let files = scanner.scan_with_recursion(vec![(path, recursive)]);
                 all_scanned.extend(files);
             }
 

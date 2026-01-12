@@ -1182,6 +1182,18 @@ A:
 
 ## Changelog
 
+### v0.2.6-beta
+- ✅ Setup wizard now authenticates scan and hardware calls to prevent endless loading
+- ✅ Scheduler window validation and normalized time handling
+- ✅ File watcher no longer blocks on bursty filesystem events
+- ✅ DB stability pass: WAL + busy timeout + foreign keys enabled
+- ✅ Legacy watch directory schemas now supported at runtime
+- ✅ Session cleanup task to prevent DB growth
+- ✅ New DB indexes for faster jobs/logs/schedule/notifications queries
+- ✅ Reqwest switched to rustls for cross-compiles without OpenSSL
+- ✅ Cross-platform build script (bun + zig + cargo-xwin)
+- ✅ Design philosophy added for consistent development standards
+
 ### v0.2.5 (Current)
 - ✅ Async runtime reliability improvements (spawn_blocking for ffprobe/VMAF/hardware detection)
 - ✅ Accurate encode_speed and avg_bitrate_kbps metrics computed from actual media duration
@@ -1239,4 +1251,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-*Documentation for Alchemist v0.2.5+ • Last updated: January 2026*
+*Documentation for Alchemist v0.2.6-beta • Last updated: January 2026*

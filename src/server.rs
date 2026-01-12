@@ -31,9 +31,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, RwLock};
+use tokio::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::{error, info};
+use uuid::Uuid;
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -47,6 +49,7 @@ pub struct AppState {
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: Arc<AtomicBool>,
     pub start_time: Instant,
+    pub telemetry_runtime_id: String,
     pub notification_manager: Arc<crate::notifications::NotificationManager>,
     pub sys: std::sync::Mutex<sysinfo::System>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
@@ -68,7 +71,10 @@ pub async fn run_server(
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
-    let library_scanner = Arc::new(crate::system::scanner::LibraryScanner::new(db.clone()));
+    let library_scanner = Arc::new(crate::system::scanner::LibraryScanner::new(
+        db.clone(),
+        config.clone(),
+    ));
 
     let state = Arc::new(AppState {
         db,
@@ -78,10 +84,21 @@ pub async fn run_server(
         tx,
         setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: std::time::Instant::now(),
+        telemetry_runtime_id: Uuid::new_v4().to_string(),
         notification_manager,
         sys: std::sync::Mutex::new(sys),
         file_watcher,
         library_scanner,
+    });
+
+    let cleanup_db = state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = cleanup_db.cleanup_sessions().await {
+                error!("Failed to cleanup sessions: {}", e);
+            }
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+        }
     });
 
     let app = Router::new()
@@ -158,6 +175,7 @@ pub async fn run_server(
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
+        .route("/api/telemetry/payload", get(telemetry_payload_handler))
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
@@ -233,8 +251,10 @@ async fn refresh_file_watcher(state: &AppState) {
 }
 
 async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
     axum::Json(serde_json::json!({
-        "setup_required": state.setup_required.load(Ordering::Relaxed)
+        "setup_required": state.setup_required.load(Ordering::Relaxed),
+        "enable_telemetry": config.system.enable_telemetry
     }))
 }
 
@@ -443,9 +463,9 @@ async fn setup_complete_handler(
     };
 
     // Create Initial Session
-    let token: String = rand::thread_rng()
+    let token: String = OsRng
         .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
+        .take(64)
         .map(char::from)
         .collect();
     let expires_at = Utc::now() + chrono::Duration::days(30);
@@ -780,9 +800,9 @@ async fn login_handler(
     }
 
     // Create session
-    let token: String = rand::thread_rng()
+    let token: String = OsRng
         .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
+        .take(64)
         .map(char::from)
         .collect();
 
@@ -810,6 +830,10 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
             || path == "/api/health"
             || path == "/api/ready"
         {
+            return next.run(req).await;
+        }
+
+        if state.setup_required.load(Ordering::Relaxed) && path == "/api/system/hardware" {
             return next.run(req).await;
         }
 
@@ -1215,16 +1239,54 @@ struct AddSchedulePayload {
     enabled: bool,
 }
 
+fn normalize_schedule_time(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let hour: u32 = parts[0].parse().ok()?;
+    let minute: u32 = parts[1].parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(format!("{:02}:{:02}", hour, minute))
+}
+
 async fn add_schedule_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddSchedulePayload>,
 ) -> impl IntoResponse {
+    if payload.days_of_week.is_empty()
+        || payload
+            .days_of_week
+            .iter()
+            .any(|day| *day < 0 || *day > 6)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "days_of_week must include values 0-6",
+        )
+            .into_response();
+    }
+
+    let start_time = match normalize_schedule_time(&payload.start_time) {
+        Some(value) => value,
+        None => {
+            return (StatusCode::BAD_REQUEST, "start_time must be HH:MM").into_response();
+        }
+    };
+    let end_time = match normalize_schedule_time(&payload.end_time) {
+        Some(value) => value,
+        None => return (StatusCode::BAD_REQUEST, "end_time must be HH:MM").into_response(),
+    };
+
     let days_json = serde_json::to_string(&payload.days_of_week).unwrap_or_default();
     match state
         .db
         .add_schedule_window(
-            &payload.start_time,
-            &payload.end_time,
+            &start_time,
+            &end_time,
             &days_json,
             payload.enabled,
         )
@@ -1418,6 +1480,53 @@ async fn get_system_info_handler(State(state): State<Arc<AppState>>) -> impl Int
         is_docker,
         telemetry_enabled: config.system.enable_telemetry,
         ffmpeg_version,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct TelemetryPayload {
+    runtime_id: String,
+    timestamp: String,
+    version: String,
+    os_version: String,
+    is_docker: bool,
+    uptime_seconds: u64,
+    cpu_count: usize,
+    memory_total_mb: u64,
+    active_jobs: i64,
+    concurrent_limit: usize,
+}
+
+async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    if !config.system.enable_telemetry {
+        return (StatusCode::FORBIDDEN, "Telemetry disabled").into_response();
+    }
+
+    let (cpu_count, memory_total_mb) = {
+        let mut sys = state.sys.lock().unwrap();
+        sys.refresh_memory();
+        (sys.cpus().len(), (sys.total_memory() / 1024 / 1024) as u64)
+    };
+
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let is_docker = std::path::Path::new("/.dockerenv").exists();
+    let uptime_seconds = state.start_time.elapsed().as_secs();
+    let stats = state.db.get_job_stats().await.unwrap_or_default();
+
+    axum::Json(TelemetryPayload {
+        runtime_id: state.telemetry_runtime_id.clone(),
+        timestamp: Utc::now().to_rfc3339(),
+        version,
+        os_version,
+        is_docker,
+        uptime_seconds,
+        cpu_count,
+        memory_total_mb,
+        active_jobs: stats.active,
+        concurrent_limit: config.transcode.concurrent_jobs,
     })
     .into_response()
 }

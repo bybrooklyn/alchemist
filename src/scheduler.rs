@@ -3,7 +3,7 @@ use crate::Agent;
 use chrono::{Datelike, Local, Timelike};
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct Scheduler {
     db: Arc<Db>,
@@ -42,7 +42,7 @@ impl Scheduler {
         }
 
         let now = Local::now();
-        let current_time_str = format!("{:02}:{:02}", now.hour(), now.minute());
+        let current_minutes = (now.hour() * 60 + now.minute()) as u32;
         let current_day = now.weekday().num_days_from_sunday() as i32; // 0=Sun, 6=Sat
 
         let mut in_window = false;
@@ -54,17 +54,32 @@ impl Scheduler {
                 continue;
             }
 
+            let start_minutes = match parse_schedule_minutes(&window.start_time) {
+                Some(value) => value,
+                None => {
+                    warn!("Invalid schedule start_time '{}'", window.start_time);
+                    continue;
+                }
+            };
+            let end_minutes = match parse_schedule_minutes(&window.end_time) {
+                Some(value) => value,
+                None => {
+                    warn!("Invalid schedule end_time '{}'", window.end_time);
+                    continue;
+                }
+            };
+
             // Check time
             // Handle cross-day windows (e.g. 23:00 to 02:00)
-            if window.start_time <= window.end_time {
+            if start_minutes <= end_minutes {
                 // Normal window
-                if current_time_str >= window.start_time && current_time_str < window.end_time {
+                if current_minutes >= start_minutes && current_minutes < end_minutes {
                     in_window = true;
                     break;
                 }
             } else {
                 // Split window
-                if current_time_str >= window.start_time || current_time_str < window.end_time {
+                if current_minutes >= start_minutes || current_minutes < end_minutes {
                     in_window = true;
                     break;
                 }
@@ -85,4 +100,18 @@ impl Scheduler {
 
         Ok(())
     }
+}
+
+fn parse_schedule_minutes(value: &str) -> Option<u32> {
+    let trimmed = value.trim();
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let hour: u32 = parts[0].parse().ok()?;
+    let minute: u32 = parts[1].parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(hour * 60 + minute)
 }

@@ -118,7 +118,9 @@ impl FileWatcher {
                         // Check if it's a media file
                         if let Some(ext) = path.extension() {
                             if extensions.contains(&ext.to_string_lossy().to_lowercase()) {
-                                let _ = tx_clone.blocking_send(path);
+                                if let Err(err) = tx_clone.try_send(path) {
+                                    debug!("Watcher queue full or closed: {}", err);
+                                }
                             }
                         }
                     }
