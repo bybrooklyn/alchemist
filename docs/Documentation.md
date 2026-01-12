@@ -1182,7 +1182,7 @@ A:
 
 ## Changelog
 
-### v0.2.6-beta
+### v0.2.6-beta-2
 - ✅ Setup wizard now authenticates scan and hardware calls to prevent endless loading
 - ✅ Scheduler window validation and normalized time handling
 - ✅ File watcher no longer blocks on bursty filesystem events
@@ -1194,7 +1194,7 @@ A:
 - ✅ Cross-platform build script (bun + zig + cargo-xwin)
 - ✅ Design philosophy added for consistent development standards
 
-### v0.2.5 (Current)
+### v0.2.5
 - ✅ Async runtime reliability improvements (spawn_blocking for ffprobe/VMAF/hardware detection)
 - ✅ Accurate encode_speed and avg_bitrate_kbps metrics computed from actual media duration
 - ✅ GPU utilization monitoring in dashboard
@@ -1251,4 +1251,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-*Documentation for Alchemist v0.2.6-beta • Last updated: January 2026*
+*Documentation for Alchemist v0.2.6-beta-2 • Last updated: January 2026*
