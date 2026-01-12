@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, Plus, Trash2, Zap, CheckCircle, AlertTriangle } from "lucide-react";
+import { Bell, Plus, Trash2, Zap } from "lucide-react";
 import { apiFetch } from "../lib/api";
 
 interface NotificationTarget {

@@ -214,18 +214,17 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[tokio::test]
-    async fn test_webhook_errors_on_non_success() {
+    async fn test_webhook_errors_on_non_success(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_notifications_test_{}.db", token));
 
-        let db = Db::new(db_path.to_string_lossy().as_ref())
-            .await
-            .expect("db init");
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
         let manager = NotificationManager::new(db);
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
 
         tokio::spawn(async move {
             if let Ok((mut socket, _)) = listener.accept().await {
@@ -256,5 +255,6 @@ mod tests {
 
         drop(manager);
         let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

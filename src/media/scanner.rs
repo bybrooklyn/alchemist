@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use walkdir::WalkDir;
 
 #[derive(Clone)]
@@ -67,10 +67,19 @@ impl Scanner {
                     }
                 }
             }
-            files.lock().unwrap().extend(local_files);
+            match files.lock() {
+                Ok(mut guard) => guard.extend(local_files),
+                Err(e) => error!("Failed to lock scan results: {}", e),
+            }
         });
 
-        let mut final_files = files.lock().unwrap().clone();
+        let mut final_files = match files.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                error!("Failed to lock scan results for finalize: {}", e);
+                Vec::new()
+            }
+        };
         // Deterministic ordering
         final_files.sort_by(|a, b| a.path.cmp(&b.path));
 

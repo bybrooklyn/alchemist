@@ -142,22 +142,21 @@
         --border-subtle: 98 114 164;
     }
 
+    html,
+    body {
+        height: 100%;
+        min-height: 100%;
+    }
+
     html {
         background-color: rgb(var(--bg-main));
-        overscroll-behavior-y: none; /* Disable bounce if user prefers, but color fix is main request. Doing both is safest based on "disable... unless" logic. User seemed to want "disable" primarily, with "unless color works" as secondary. I'll do both or just color? User: "disable overscroll unless there is someway it doesnt show white". 
-        If I fix color, I don't NEED to disable it. But "disable overscroll" was the first request. 
-        I'll set color AND disable overscroll-y to be safe? 
-        Re-reading: "disable overscroll unless there is someway it doesnt show white... (maybe make it show the theme color?)"
-        This implies if I make it show theme color, I DON'T need to disable it.
-        I will ONLY fix the color. The rubber banding feels nice on mac. 
-        */
-         background: rgb(var(--bg-main));
+        background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.05), transparent 65%),
+            linear-gradient(180deg, rgb(var(--bg-main)), rgb(var(--bg-panel)));
     }
 
     body {
-        @apply font-display text-helios-ink bg-helios-main min-h-screen;
-        background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.05), transparent 65%),
-            linear-gradient(180deg, rgb(var(--bg-main)), rgb(var(--bg-panel)));
+        @apply font-display text-helios-ink min-h-screen;
+        background: inherit;
     }
 }
 
@@ -167,7 +166,8 @@
     }
 
     .app-main {
-        @apply flex-1 flex flex-col h-full bg-helios-main min-w-0;
+        @apply flex-1 flex flex-col h-full min-w-0;
+        background: inherit;
     }
 
     /* Add other utility classes from Helios as needed */

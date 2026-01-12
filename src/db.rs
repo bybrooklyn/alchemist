@@ -742,11 +742,25 @@ impl Db {
     }
 
     pub async fn get_encode_stats_by_job_id(&self, job_id: i64) -> Result<DetailedEncodeStats> {
-        let stats =
-            sqlx::query_as::<_, DetailedEncodeStats>("SELECT id, job_id, input_size_bytes, output_size_bytes, compression_ratio, encode_time_seconds, encode_speed, avg_bitrate_kbps, vmaf_score, created_at FROM encode_stats WHERE job_id = ?")
-                .bind(job_id)
-                .fetch_one(&self.pool)
-                .await?;
+        let stats = sqlx::query_as::<_, DetailedEncodeStats>(
+            "SELECT 
+                e.job_id,
+                j.input_path,
+                e.input_size_bytes,
+                e.output_size_bytes,
+                e.compression_ratio,
+                e.encode_time_seconds,
+                e.encode_speed,
+                e.avg_bitrate_kbps,
+                e.vmaf_score,
+                e.created_at
+             FROM encode_stats e
+             JOIN jobs j ON e.job_id = j.id
+             WHERE e.job_id = ?",
+        )
+        .bind(job_id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(stats)
     }
 
@@ -1299,37 +1313,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_claim_next_job_marks_analyzing() {
+    async fn test_claim_next_job_marks_analyzing(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_test_{}.db", token));
 
-        let db = Db::new(db_path.to_string_lossy().as_ref())
-            .await
-            .expect("db init");
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
 
         let input1 = Path::new("input1.mkv");
         let output1 = Path::new("output1.mkv");
         db.enqueue_job(input1, output1, SystemTime::UNIX_EPOCH)
-            .await
-            .expect("enqueue job 1");
+            .await?;
 
         let input2 = Path::new("input2.mkv");
         let output2 = Path::new("output2.mkv");
         db.enqueue_job(input2, output2, SystemTime::UNIX_EPOCH)
-            .await
-            .expect("enqueue job 2");
+            .await?;
 
-        let first = db.claim_next_job().await.expect("claim job 1").unwrap();
+        let first = db
+            .claim_next_job()
+            .await?
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "missing job 1"))?;
         assert_eq!(first.status, JobState::Analyzing);
 
-        let second = db.claim_next_job().await.expect("claim job 2").unwrap();
+        let second = db
+            .claim_next_job()
+            .await?
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "missing job 2"))?;
         assert_ne!(first.id, second.id);
 
-        let none = db.claim_next_job().await.expect("claim none");
+        let none = db.claim_next_job().await?;
         assert!(none.is_none());
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

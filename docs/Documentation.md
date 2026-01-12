@@ -1182,7 +1182,7 @@ A:
 
 ## Changelog
 
-### v0.2.6-beta-2
+### v0.2.6
 - ✅ Setup wizard now authenticates scan and hardware calls to prevent endless loading
 - ✅ Scheduler window validation and normalized time handling
 - ✅ File watcher no longer blocks on bursty filesystem events
@@ -1219,27 +1219,7 @@ A:
 
 ## License
 
-Alchemist is licensed under the **MIT License**.
-
-```
-MIT License
-
-Copyright (c) 2024 BrooklynLovesZelda
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-```
+Alchemist is licensed under the **GPL-3.0 License**. See `LICENSE` for details.
 
 ---
 
@@ -1251,4 +1231,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-*Documentation for Alchemist v0.2.6-beta-2 • Last updated: January 2026*
+*Documentation for Alchemist v0.2.6*

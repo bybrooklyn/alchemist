@@ -592,7 +592,10 @@ mod tests {
     fn test_progress_parsing() {
         let line =
             "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x";
-        let progress = FFmpegProgress::parse_line(line).unwrap();
+        let progress = match FFmpegProgress::parse_line(line) {
+            Some(progress) => progress,
+            None => panic!("Expected progress parse to succeed"),
+        };
 
         assert_eq!(progress.frame, 100);
         assert_eq!(progress.fps, 25.0);
@@ -610,7 +613,10 @@ mod tests {
     #[test]
     fn test_vmaf_score_text_parse() {
         let stderr = "Some log\nVMAF score: 93.2\nMore log";
-        let vmaf = QualityScore::extract_vmaf_score_text(stderr).unwrap();
+        let vmaf = match QualityScore::extract_vmaf_score_text(stderr) {
+            Some(vmaf) => vmaf,
+            None => panic!("Expected VMAF score in text"),
+        };
         assert!((vmaf - 93.2).abs() < 0.01);
     }
 
@@ -624,7 +630,10 @@ mod tests {
                 }
             }
         }"#;
-        let vmaf = QualityScore::extract_vmaf_score_json(json).unwrap();
+        let vmaf = match QualityScore::extract_vmaf_score_json(json) {
+            Some(vmaf) => vmaf,
+            None => panic!("Expected VMAF score in JSON"),
+        };
         assert!((vmaf - 87.65).abs() < 0.01);
     }
 }
