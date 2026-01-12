@@ -24,17 +24,26 @@ const { title } = Astro.props;
         <slot />
         <script is:inline>
             function initTheme() {
-                const theme = localStorage.getItem("theme");
-                if (theme) {
-                    document.documentElement.setAttribute("data-color-profile", theme);
-                } else {
+                try {
+                    const theme = localStorage.getItem("theme");
+                    if (theme) {
+                        document.documentElement.setAttribute("data-color-profile", theme);
+                    } else {
+                        document.documentElement.setAttribute("data-color-profile", "helios-orange");
+                    }
+                } catch {
                     document.documentElement.setAttribute("data-color-profile", "helios-orange");
                 }
             }
             
             function checkAuth() {
                 const isAuthPage = window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/setup');
-                const token = localStorage.getItem('alchemist_token');
+                let token = null;
+                try {
+                    token = localStorage.getItem('alchemist_token');
+                } catch {
+                    token = null;
+                }
                 
                 if (!isAuthPage && !token) {
                     // Check if setup is needed
@@ -66,21 +75,6 @@ const { title } = Astro.props;
                 initTheme();
                 checkAuth();
             });
-        </script>
-        <script>
-            // Check setup status on load
-            if (window.location.pathname !== "/setup") {
-                fetch("/api/setup/status")
-                    .then((res) => res.json())
-                    .then((data) => {
-                        if (data.setup_required) {
-                            window.location.href = "/setup";
-                        }
-                    })
-                    .catch((err) =>
-                        console.error("Failed to check setup status", err),
-                    );
-            }
         </script>
     </body>
 </html>

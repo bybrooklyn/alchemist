@@ -28,12 +28,19 @@ impl Transcoder {
     }
 
     pub fn cancel_job(&self, job_id: i64) -> bool {
-        let mut channels = self.cancel_channels.lock().unwrap();
-        if let Some(tx) = channels.remove(&job_id) {
-            let _ = tx.send(());
-            true
-        } else {
-            false
+        let mut channels = match self.cancel_channels.lock() {
+            Ok(channels) => channels,
+            Err(e) => {
+                error!("Cancel channels lock poisoned: {}", e);
+                return false;
+            }
+        };
+        match channels.remove(&job_id) {
+            Some(tx) => {
+                let _ = tx.send(());
+                true
+            }
+            None => false,
         }
     }
 
@@ -107,7 +114,14 @@ impl Transcoder {
         let job_id = event_target.as_ref().map(|(id, _)| *id);
 
         if let Some(id) = job_id {
-            self.cancel_channels.lock().unwrap().insert(id, kill_tx);
+            match self.cancel_channels.lock() {
+                Ok(mut channels) => {
+                    channels.insert(id, kill_tx);
+                }
+                Err(e) => {
+                    error!("Cancel channels lock poisoned: {}", e);
+                }
+            }
         }
 
         let mut reader = BufReader::new(stderr).lines();
@@ -156,7 +170,11 @@ impl Transcoder {
                     let _ = child.kill().await;
                     killed = true;
                     if let Some(id) = job_id {
-                        self.cancel_channels.lock().unwrap().remove(&id);
+                        if let Ok(mut channels) = self.cancel_channels.lock() {
+                            channels.remove(&id);
+                        } else {
+                            error!("Cancel channels lock poisoned while removing job: {}", id);
+                        }
                     }
                     break;
                 }
@@ -166,7 +184,11 @@ impl Transcoder {
         let status: std::process::ExitStatus = child.wait().await?;
 
         if let Some(id) = job_id {
-            self.cancel_channels.lock().unwrap().remove(&id);
+            if let Ok(mut channels) = self.cancel_channels.lock() {
+                channels.remove(&id);
+            } else {
+                error!("Cancel channels lock poisoned while removing job: {}", id);
+            }
         }
 
         if killed {

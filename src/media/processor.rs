@@ -246,7 +246,14 @@ impl Agent {
 
             match self.db.claim_next_job().await {
                 Ok(Some(job)) => {
-                    let permit = self.semaphore.clone().acquire_owned().await.unwrap();
+                    let permit = match self.semaphore.clone().acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(e) => {
+                            error!("Failed to acquire job permit: {}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    };
                     let agent = self.clone();
 
                     tokio::spawn(async move {

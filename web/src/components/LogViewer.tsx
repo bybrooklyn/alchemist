@@ -20,6 +20,7 @@ export default function LogViewer() {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [paused, setPaused] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [streamError, setStreamError] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const pausedRef = useRef(paused);
     const maxLogs = 1000;
@@ -59,6 +60,11 @@ export default function LogViewer() {
         let eventSource: EventSource | null = null;
         const connect = () => {
             const token = localStorage.getItem('alchemist_token') || '';
+            if (!token) {
+                setStreamError("Log stream requires authentication. Please log in.");
+                return;
+            }
+            setStreamError(null);
             eventSource = new EventSource(`/api/events?token=${token}`);
 
             const handleMsg = (msg: string, level: string, job_id?: number) => {
@@ -115,7 +121,15 @@ export default function LogViewer() {
                 try { const d = JSON.parse(e.data); handleMsg(`Status changed to ${d.status}`, "info", d.job_id); } catch { }
             });
 
-            eventSource.onerror = () => { eventSource?.close(); setTimeout(connect, 3000); };
+            eventSource.onerror = () => {
+                eventSource?.close();
+                const nextToken = localStorage.getItem('alchemist_token') || '';
+                if (!nextToken) {
+                    setStreamError("Log stream stopped due to missing token.");
+                    return;
+                }
+                setTimeout(connect, 3000);
+            };
         };
 
         connect();
@@ -172,7 +186,12 @@ export default function LogViewer() {
                 ref={scrollRef}
                 className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-helios-line/20 scrollbar-track-transparent"
             >
-                {logs.length === 0 && !loading && (
+                {streamError && (
+                    <div className="text-amber-400 text-center py-4 text-[11px] font-semibold">
+                        {streamError}
+                    </div>
+                )}
+                {logs.length === 0 && !loading && !streamError && (
                     <div className="text-helios-slate/30 text-center py-10 italic">No logs found.</div>
                 )}
                 {logs.map((log) => (

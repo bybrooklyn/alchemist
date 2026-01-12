@@ -23,12 +23,12 @@ pub struct WatchPath {
 #[derive(Clone)]
 pub struct FileWatcher {
     inner: Arc<std::sync::Mutex<Option<RecommendedWatcher>>>,
-    tx: mpsc::Sender<PathBuf>,
+    tx: mpsc::UnboundedSender<PathBuf>,
 }
 
 impl FileWatcher {
     pub fn new(db: Arc<Db>) -> Self {
-        let (tx, mut rx) = mpsc::channel::<PathBuf>(100);
+        let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
         let debounce_ms = 1000;
         let db_clone = db.clone();
 
@@ -90,7 +90,10 @@ impl FileWatcher {
 
     /// Update watched directories
     pub fn watch(&self, directories: &[WatchPath]) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| AlchemistError::Watch(format!("Watcher lock poisoned: {}", e)))?;
 
         // Stop existing watcher implicitly by dropping it (if we replace it)
         // Or explicitly unwatch? Dropping RecommendedWatcher stops it.
@@ -118,9 +121,7 @@ impl FileWatcher {
                         // Check if it's a media file
                         if let Some(ext) = path.extension() {
                             if extensions.contains(&ext.to_string_lossy().to_lowercase()) {
-                                if let Err(err) = tx_clone.try_send(path) {
-                                    debug!("Watcher queue full or closed: {}", err);
-                                }
+                                let _ = tx_clone.send(path);
                             }
                         }
                     }

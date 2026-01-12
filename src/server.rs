@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
-use crate::error::Result;
+use crate::error::{AlchemistError, Result};
 use crate::Agent;
 use crate::Transcoder;
 use argon2::{
@@ -195,8 +195,12 @@ pub async fn run_server(
 
     let addr = "0.0.0.0:3000";
     info!("listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(AlchemistError::Io)?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
 
     Ok(())
 }
@@ -480,14 +484,19 @@ async fn setup_complete_handler(
 
     // Save Config
     let mut config_lock = state.config.write().await;
-    config_lock.transcode.concurrent_jobs = payload.concurrent_jobs;
-    config_lock.transcode.size_reduction_threshold = payload.size_reduction_threshold;
-    config_lock.transcode.min_file_size_mb = payload.min_file_size_mb;
-    config_lock.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    config_lock.scanner.directories = payload.directories;
-    config_lock.system.enable_telemetry = payload.enable_telemetry;
+    let mut next_config = config_lock.clone();
+    next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
+    next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+    next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
+    next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+    next_config.scanner.directories = payload.directories;
+    next_config.system.enable_telemetry = payload.enable_telemetry;
 
-    config_lock.system.enable_telemetry = payload.enable_telemetry;
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+
+    *config_lock = next_config;
 
     // Serialize to TOML
     let toml_string = match toml::to_string_pretty(&*config_lock) {
@@ -962,10 +971,17 @@ struct SystemResources {
     gpu_memory_percent: Option<f32>,
 }
 
-async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Response {
     // Use a block to limit the scope of the lock
     let (cpu_percent, memory_used_mb, memory_total_mb, memory_percent, cpu_count) = {
-        let mut sys = state.sys.lock().unwrap();
+        let mut sys = match state.sys.lock() {
+            Ok(sys) => sys,
+            Err(e) => {
+                error!("System monitor lock poisoned: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "System monitor unavailable")
+                    .into_response();
+            }
+        };
         // Full refresh for better accuracy when polled less frequently
         sys.refresh_all();
 
@@ -1017,6 +1033,7 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> impl In
         gpu_utilization,
         gpu_memory_percent,
     })
+    .into_response()
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools
@@ -1498,14 +1515,21 @@ struct TelemetryPayload {
     concurrent_limit: usize,
 }
 
-async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Response {
     let config = state.config.read().await;
     if !config.system.enable_telemetry {
         return (StatusCode::FORBIDDEN, "Telemetry disabled").into_response();
     }
 
     let (cpu_count, memory_total_mb) = {
-        let mut sys = state.sys.lock().unwrap();
+        let mut sys = match state.sys.lock() {
+            Ok(sys) => sys,
+            Err(e) => {
+                error!("System monitor lock poisoned: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "System monitor unavailable")
+                    .into_response();
+            }
+        };
         sys.refresh_memory();
         (sys.cpus().len(), (sys.total_memory() / 1024 / 1024) as u64)
     };

@@ -41,8 +41,11 @@ jobs:
       - name: Install WiX Toolset
         shell: powershell
         run: |
-          choco install wixtoolset --version=3.11.2 -y
-          $wixBin = "C:\\Program Files (x86)\\WiX Toolset v3.11\\bin"
+          choco install wixtoolset -y
+          $wixBin = Get-ChildItem "C:\\Program Files (x86)\\WiX Toolset v3.*\\bin" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $wixBin) { throw "WiX Toolset bin directory not found." }
           echo $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install cargo-wix
@@ -63,7 +66,7 @@ jobs:
         env:
           # We pass the target architecture to wix. 
           # For aarch64, this might fail if Wix 3 doesn't support it fully, but we try.
-          CARGO_WIX_EXTRA_ARGS: "-v" 
+          CARGO_WIX_EXTRA_ARGS: "--nocapture -v"
         run: |
           cargo wix --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
 
