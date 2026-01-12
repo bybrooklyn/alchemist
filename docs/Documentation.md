@@ -67,7 +67,7 @@ Modern video codecs like AV1 and HEVC can reduce file sizes by 30-70% compared t
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   SCAN      │───▶│   ANALYZE   │────▶│   DECIDE    │────▶│   ENCODE    │
+│   SCAN      │-───>│   ANALYZE   │────>│   DECIDE    │────>│   ENCODE    │
 │             │     │             │     │             │     │             │
 │ Find video  │     │ FFprobe     │     │ Worth it?   │     │ FFmpeg      │
 │ files       │     │ metadata    │     │ BPP check   │     │ GPU/CPU     │
@@ -1245,7 +1245,7 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ## Getting Help
 
-- **GitHub Issues**: [github.com/BrooklynLovesZelda/alchemist/issues](https://github.com/BrooklynLovesZelda/alchemist/issues)
+- **GitHub Issues**: [github.com/BrooklynLovesZelda/alchemist/issues](https://github.com/bybrooklyn/alchemist/issues)
 - **Logs**: Use `/logs` in web UI for real-time diagnostics
 - **Documentation**: You're here! 📖
 
