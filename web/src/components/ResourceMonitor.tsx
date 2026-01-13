@@ -94,12 +94,12 @@ export default function ResourceMonitor() {
     );
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3">
             {/* CPU Usage */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
             >
                 <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
@@ -128,7 +128,7 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 }}
-                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
             >
                 <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
@@ -157,7 +157,7 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
-                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
             >
                 <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
@@ -184,7 +184,7 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
-                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
             >
                 <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
@@ -221,7 +221,7 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
-                className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex flex-col justify-between"
+                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex flex-col justify-between"
             >
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">

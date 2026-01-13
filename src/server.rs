@@ -27,7 +27,7 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1802,6 +1802,24 @@ fn validate_notification_url(raw: &str) -> std::result::Result<(), &'static str>
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_private_ip(ip) {
             return Err("endpoint_url host is not allowed");
+        }
+    } else {
+        let port = url
+            .port_or_known_default()
+            .ok_or("endpoint_url must include a port")?;
+        let host_port = format!("{}:{}", host, port);
+        let mut resolved = false;
+        let addrs = host_port
+            .to_socket_addrs()
+            .map_err(|_| "endpoint_url host could not be resolved")?;
+        for addr in addrs {
+            resolved = true;
+            if is_private_ip(addr.ip()) {
+                return Err("endpoint_url host is not allowed");
+            }
+        }
+        if !resolved {
+            return Err("endpoint_url host could not be resolved");
         }
     }
 

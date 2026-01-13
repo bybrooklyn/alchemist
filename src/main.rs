@@ -79,6 +79,14 @@ async fn run() -> Result<()> {
     info!("  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/");
     info!("");
     info!("");
+    let version = env!("CARGO_PKG_VERSION");
+    let build_info = option_env!("BUILD_INFO")
+        .or(option_env!("GIT_SHA"))
+        .or(option_env!("VERGEN_GIT_SHA"))
+        .unwrap_or("unknown");
+    info!("Version: {}", version);
+    info!("Build: {}", build_info);
+    info!("");
     info!("System Information:");
     info!(
         "  OS: {} ({})",
