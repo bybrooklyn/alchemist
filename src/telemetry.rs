@@ -1,9 +1,14 @@
 use crate::config::OutputCodec;
 use crate::system::hardware::{HardwareInfo, Vendor};
 use serde::Serialize;
+use std::sync::OnceLock;
+use std::time::Duration;
 use tracing::warn;
 
-const DEFAULT_ALEMBIC_INGEST_URL: &str = "http://localhost:3000/v1/event";
+const DEFAULT_ALEMBIC_INGEST_URL: &str = "https://alembic.alchemist-project.org/v1/event";
+const TELEMETRY_TIMEOUT_SECS: u64 = 4;
+const TELEMETRY_MAX_RETRIES: usize = 2;
+const TELEMETRY_BACKOFF_MS: [u64; TELEMETRY_MAX_RETRIES] = [200, 800];
 
 #[derive(Debug, Serialize)]
 pub struct TelemetryEvent {
@@ -106,23 +111,65 @@ pub fn resolution_bucket(width: u32, height: u32) -> Option<String> {
     Some(bucket.to_string())
 }
 
+fn telemetry_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(TELEMETRY_TIMEOUT_SECS))
+            .user_agent(format!("alchemist/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+fn sanitize_speed(speed: Option<f64>) -> Option<f64> {
+    speed.filter(|value| value.is_finite())
+}
+
+fn should_retry_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
 pub async fn send_event(event: TelemetryEvent) {
     let endpoint =
         std::env::var("ALEMBIC_INGEST_URL").unwrap_or_else(|_| DEFAULT_ALEMBIC_INGEST_URL.into());
 
-    let client = reqwest::Client::new();
-    match client.post(&endpoint).json(&event).send().await {
-        Ok(resp) => {
-            if !resp.status().is_success() {
-                warn!(
-                    "Telemetry ingest failed with status {} from {}",
-                    resp.status(),
-                    endpoint
-                );
+    let mut event = event;
+    event.speed_factor = sanitize_speed(event.speed_factor);
+
+    let client = telemetry_client();
+    for attempt in 0..=TELEMETRY_MAX_RETRIES {
+        match client.post(&endpoint).json(&event).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    return;
+                }
+                if !should_retry_status(resp.status()) {
+                    warn!(
+                        "Telemetry ingest failed with status {} from {}",
+                        resp.status(),
+                        endpoint
+                    );
+                    return;
+                }
+                if attempt == TELEMETRY_MAX_RETRIES {
+                    warn!(
+                        "Telemetry ingest failed after retries with status {} from {}",
+                        resp.status(),
+                        endpoint
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                if attempt == TELEMETRY_MAX_RETRIES {
+                    warn!("Telemetry ingest error to {}: {}", endpoint, e);
+                    return;
+                }
             }
         }
-        Err(e) => {
-            warn!("Telemetry ingest error to {}: {}", endpoint, e);
-        }
+
+        let backoff_ms = TELEMETRY_BACKOFF_MS[attempt];
+        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
     }
 }

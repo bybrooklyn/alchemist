@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     Activity,
     CheckCircle2,
@@ -32,6 +32,8 @@ export default function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
 
+    const lastJob = jobs[0];
+
     useEffect(() => {
         const fetchData = async () => {
             try {
@@ -60,9 +62,100 @@ export default function Dashboard() {
         return () => clearInterval(interval);
     }, []);
 
+    const formatRelativeTime = (iso?: string) => {
+        if (!iso) return "Just now";
+        const then = new Date(iso).getTime();
+        if (Number.isNaN(then)) return "Just now";
+        const diff = Math.max(0, Date.now() - then);
+        const minutes = Math.floor(diff / 60000);
+        if (minutes < 1) return "Just now";
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        return `${days}d ago`;
+    };
+
+    const quickStartItems = useMemo(() => {
+        const items = [];
+        if (stats.total === 0) {
+            items.push({
+                title: "Connect Your Library",
+                body: (
+                    <>
+                        Map your media to{" "}
+                        <code className="bg-black/20 px-1.5 py-0.5 rounded font-mono text-[10px] text-helios-solar">
+                            /data
+                        </code>{" "}
+                        and set Watch Folders in{" "}
+                        <a href="/settings" className="underline hover:text-helios-ink transition-colors">
+                            Settings
+                        </a>
+                        .
+                    </>
+                ),
+                icon: HardDrive,
+                tone: "text-helios-solar",
+                bg: "bg-helios-solar/10",
+            });
+        }
+        if (stats.failed > 0) {
+            items.push({
+                title: "Review Failures",
+                body: (
+                    <>
+                        {stats.failed} jobs failed recently. Check{" "}
+                        <a href="/logs" className="underline hover:text-helios-ink transition-colors">
+                            Logs
+                        </a>{" "}
+                        to diagnose and retry.
+                    </>
+                ),
+                icon: Terminal,
+                tone: "text-red-500",
+                bg: "bg-red-500/10",
+            });
+        }
+        if (stats.active === 0 && stats.total > 0) {
+            items.push({
+                title: "Queue New Work",
+                body: (
+                    <>
+                        No active jobs right now. Add items in{" "}
+                        <a href="/jobs" className="underline hover:text-helios-ink transition-colors">
+                            Jobs
+                        </a>{" "}
+                        or drop files into your watched folders.
+                    </>
+                ),
+                icon: Activity,
+                tone: "text-emerald-500",
+                bg: "bg-emerald-500/10",
+            });
+        }
+        if (items.length === 0) {
+            items.push({
+                title: "Optimize Throughput",
+                body: (
+                    <>
+                        Tune Hardware Acceleration and Thread Allocation in{" "}
+                        <a href="/settings" className="underline hover:text-helios-ink transition-colors">
+                            Settings
+                        </a>{" "}
+                        to squeeze out more FPS.
+                    </>
+                ),
+                icon: Zap,
+                tone: "text-amber-500",
+                bg: "bg-amber-500/10",
+            });
+        }
+        return items.slice(0, 3);
+    }, [stats.active, stats.failed, stats.total]);
+
     const StatCard = ({ label, value, icon: Icon, colorClass }: any) => (
         <div className="p-5 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden group hover:bg-helios-surface-soft transition-colors">
-            <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${colorClass}`}>
+            <div className={`absolute -top-2 -right-2 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${colorClass}`}>
                 <Icon size={64} />
             </div>
             <div className="relative z-10 flex flex-col gap-1">
@@ -74,7 +167,55 @@ export default function Dashboard() {
 
     return (
         <div className="flex flex-col gap-6">
-            <ResourceMonitor />
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                <div className="lg:col-span-3 p-6 rounded-3xl bg-gradient-to-br from-helios-surface via-helios-surface-soft to-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden">
+                    <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top,_rgba(255,186,73,0.18),_transparent_60%)]" />
+                    <div className="relative z-10 flex flex-col gap-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">System Snapshot</p>
+                                <h2 className="text-2xl font-bold text-helios-ink">Alchemist Dashboard</h2>
+                            </div>
+                            <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-helios-solar/15 text-helios-solar">
+                                {stats.active > 0 ? "Processing" : "Ready"}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Active</p>
+                                <p className="text-2xl font-bold text-amber-500">{stats.active}</p>
+                            </div>
+                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Completed</p>
+                                <p className="text-2xl font-bold text-emerald-500">{stats.completed}</p>
+                            </div>
+                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Failed</p>
+                                <p className="text-2xl font-bold text-red-500">{stats.failed}</p>
+                            </div>
+                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Last Job</p>
+                                <p className="text-sm font-semibold text-helios-ink truncate" title={lastJob?.input_path}>
+                                    {lastJob ? lastJob.input_path.split(/[/\\]/).pop() : "No jobs yet"}
+                                </p>
+                                <p className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
+                                    {lastJob ? `${lastJob.status} · ${formatRelativeTime(lastJob.created_at)}` : "Waiting"}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm">
+                    <div className="flex items-center gap-2 mb-4">
+                        <Activity size={18} className="text-helios-solar" />
+                        <h3 className="text-sm font-bold uppercase tracking-wider text-helios-slate">System Health</h3>
+                    </div>
+                    <ResourceMonitor />
+                </div>
+            </div>
+
             {/* Stats Grid */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
@@ -132,7 +273,9 @@ export default function Dashboard() {
                                             <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
                                                 {job.input_path.split(/[/\\]/).pop()}
                                             </span>
-                                            <span className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">{job.status}</span>
+                                            <span className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
+                                                {job.status} · {formatRelativeTime(job.created_at)}
+                                            </span>
                                         </div>
                                     </div>
                                     <span className="text-xs font-mono text-helios-slate/60 whitespace-nowrap ml-4">
@@ -151,41 +294,19 @@ export default function Dashboard() {
                         Quick Start
                     </h3>
                     <div className="flex flex-col gap-5">
-                        <div className="flex gap-4 items-start">
-                            <div className="p-2.5 rounded-xl bg-helios-solar/10 text-helios-solar mt-0.5 shadow-inner">
-                                <HardDrive size={18} />
+                        {quickStartItems.map(({ title, body, icon: Icon, tone, bg }) => (
+                            <div className="flex gap-4 items-start" key={title}>
+                                <div className={`p-2.5 rounded-xl ${bg} ${tone} mt-0.5 shadow-inner`}>
+                                    <Icon size={18} />
+                                </div>
+                                <div>
+                                    <h4 className="text-sm font-bold text-helios-ink">{title}</h4>
+                                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                                        {body}
+                                    </p>
+                                </div>
                             </div>
-                            <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Organize Media</h4>
-                                <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Map your library to <code className="bg-black/20 px-1.5 py-0.5 rounded font-mono text-[10px] text-helios-solar">/data</code> and configure Watch Folders in <a href="/settings" className="underline hover:text-helios-ink transition-colors">Settings</a>.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-4 items-start">
-                            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500 mt-0.5 shadow-inner">
-                                <Activity size={18} />
-                            </div>
-                            <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Boost Speed</h4>
-                                <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Enable <strong>Hardware Acceleration</strong> and adjust <strong>Thread Allocation</strong> to maximize your CPU/GPU throughput.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-4 items-start">
-                            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500 mt-0.5 shadow-inner">
-                                <Terminal size={18} />
-                            </div>
-                            <div>
-                                <h4 className="text-sm font-bold text-helios-ink">Direct Control</h4>
-                                <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                    Alchemist is built for automation. Check the <a href="/logs" className="underline hover:text-helios-ink transition-colors">Logs</a> for detailed FFmpeg execution streams.
-                                </p>
-                            </div>
-                        </div>
+                        ))}
                     </div>
                 </div>
             </div>
