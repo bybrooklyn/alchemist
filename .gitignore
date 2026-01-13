@@ -9,3 +9,5 @@ web/dist
 web/.astro
 web.zip
 .DS_Store
+alchemist.db-shm
+alchemist.db-wal

@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 - DB stability pass (WAL, FK enforcement, indexes, session cleanup, legacy watch_dirs compatibility).
 - Build pipeline updates (rustls for reqwest, cross-platform build script, WiX workflow fix).
 - Documentation and design philosophy updates.
+- More themes!!
 
 ## [v0.2.5] - 2026-01-11
 

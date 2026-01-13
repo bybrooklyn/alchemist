@@ -66,6 +66,11 @@ struct RateLimitEntry {
     last_refill: Instant,
 }
 
+const LOGIN_RATE_LIMIT_CAPACITY: f64 = 10.0;
+const LOGIN_RATE_LIMIT_REFILL_PER_SEC: f64 = 1.0;
+const GLOBAL_RATE_LIMIT_CAPACITY: f64 = 120.0;
+const GLOBAL_RATE_LIMIT_REFILL_PER_SEC: f64 = 60.0;
+
 pub async fn run_server(
     db: Arc<Db>,
     config: Arc<RwLock<Config>>,
@@ -101,7 +106,7 @@ pub async fn run_server(
         library_scanner,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(RateLimitEntry {
-            tokens: 5.0,
+            tokens: GLOBAL_RATE_LIMIT_CAPACITY,
             last_refill: Instant::now(),
         }),
     });
@@ -1717,14 +1722,14 @@ async fn allow_login_attempt(state: &AppState, ip: IpAddr) -> bool {
     limiter.retain(|_, entry| now.duration_since(entry.last_refill) <= cleanup_after);
 
     let entry = limiter.entry(ip).or_insert(RateLimitEntry {
-        tokens: 5.0,
+        tokens: LOGIN_RATE_LIMIT_CAPACITY,
         last_refill: now,
     });
 
     let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
     if elapsed > 0.0 {
-        let refill = elapsed * 5.0;
-        entry.tokens = (entry.tokens + refill).min(5.0);
+        let refill = elapsed * LOGIN_RATE_LIMIT_REFILL_PER_SEC;
+        entry.tokens = (entry.tokens + refill).min(LOGIN_RATE_LIMIT_CAPACITY);
         entry.last_refill = now;
     }
 
@@ -1742,8 +1747,8 @@ async fn allow_global_request(state: &AppState) -> bool {
 
     let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
     if elapsed > 0.0 {
-        let refill = elapsed * 5.0;
-        entry.tokens = (entry.tokens + refill).min(5.0);
+        let refill = elapsed * GLOBAL_RATE_LIMIT_REFILL_PER_SEC;
+        entry.tokens = (entry.tokens + refill).min(GLOBAL_RATE_LIMIT_CAPACITY);
         entry.last_refill = now;
     }
 
