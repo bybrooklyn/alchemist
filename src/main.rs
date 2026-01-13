@@ -301,18 +301,16 @@ async fn run() -> Result<()> {
         let mut log_rx = tx.subscribe();
         tokio::spawn(async move {
             while let Ok(event) = log_rx.recv().await {
-                match event {
-                    alchemist::db::AlchemistEvent::Log {
-                        level,
-                        job_id,
-                        message,
-                        ..
-                    } => {
-                        if let Err(e) = log_db.add_log(&level, job_id, &message).await {
-                            eprintln!("Failed to persist log: {}", e);
-                        }
+                if let alchemist::db::AlchemistEvent::Log {
+                    level,
+                    job_id,
+                    message,
+                    ..
+                } = event
+                {
+                    if let Err(e) = log_db.add_log(&level, job_id, &message).await {
+                        eprintln!("Failed to persist log: {}", e);
                     }
-                    _ => {}
                 }
             }
         });
@@ -470,16 +468,16 @@ async fn run() -> Result<()> {
             "Boot sequence completed in {} ms",
             boot_start.elapsed().as_millis()
         );
-        alchemist::server::run_server(
+        alchemist::server::run_server(alchemist::server::RunServerArgs {
             db,
             config,
             agent,
             transcoder,
             tx,
-            setup_mode,
-            notification_manager.clone(),
+            setup_required: setup_mode,
+            notification_manager: notification_manager.clone(),
             file_watcher,
-        )
+        })
         .await?;
     } else {
         // CLI Mode

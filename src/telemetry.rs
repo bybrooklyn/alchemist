@@ -149,7 +149,15 @@ pub async fn send_event(event: TelemetryEvent) {
     event.speed_factor = sanitize_speed(event.speed_factor);
 
     let client = telemetry_client();
-    for attempt in 0..=TELEMETRY_MAX_RETRIES {
+    let backoff_iter = TELEMETRY_BACKOFF_MS
+        .iter()
+        .copied()
+        .chain(std::iter::once(
+            *TELEMETRY_BACKOFF_MS.last().unwrap_or(&0),
+        ))
+        .enumerate()
+        .take(TELEMETRY_MAX_RETRIES + 1);
+    for (attempt, backoff_ms) in backoff_iter {
         match client.post(&endpoint).json(&event).send().await {
             Ok(resp) => {
                 if resp.status().is_success() {
@@ -180,7 +188,6 @@ pub async fn send_event(event: TelemetryEvent) {
             }
         }
 
-        let backoff_ms = TELEMETRY_BACKOFF_MS[attempt];
         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
     }
 }

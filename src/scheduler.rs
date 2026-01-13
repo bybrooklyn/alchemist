@@ -42,7 +42,7 @@ impl Scheduler {
         }
 
         let now = Local::now();
-        let current_minutes = (now.hour() * 60 + now.minute()) as u32;
+        let current_minutes = now.hour() * 60 + now.minute();
         let current_day = now.weekday().num_days_from_sunday() as i32; // 0=Sun, 6=Sat
 
         let mut in_window = false;

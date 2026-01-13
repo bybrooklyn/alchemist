@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::db::{AlchemistEvent, Decision, Job};
 use crate::error::Result;
 use crate::media::pipeline::{ExecutionStats, Executor, MediaMetadata};
-use crate::orchestrator::Transcoder;
+use crate::orchestrator::{TranscodeRequest, Transcoder};
 use crate::system::hardware::HardwareInfo;
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -54,23 +54,23 @@ impl Executor for FfmpegExecutor {
         let output_path = PathBuf::from(&job.output_path); // Use job's output path
 
         self.transcoder
-            .transcode_media(
-                &input_path,
-                &output_path,
-                self.hw_info.as_ref(),
-                self.config.transcode.quality_profile,
-                self.config.hardware.cpu_preset,
-                self.config.transcode.output_codec,
-                self.config.transcode.threads,
-                self.config.transcode.allow_fallback,
-                self.config.transcode.hdr_mode,
-                self.config.transcode.tonemap_algorithm,
-                self.config.transcode.tonemap_peak,
-                self.config.transcode.tonemap_desat,
-                self.dry_run,
+            .transcode_media(TranscodeRequest {
+                input: &input_path,
+                output: &output_path,
+                hw_info: self.hw_info.as_ref(),
+                quality_profile: self.config.transcode.quality_profile,
+                cpu_preset: self.config.hardware.cpu_preset,
+                target_codec: self.config.transcode.output_codec,
+                threads: self.config.transcode.threads,
+                allow_fallback: self.config.transcode.allow_fallback,
+                hdr_mode: self.config.transcode.hdr_mode,
+                tonemap_algorithm: self.config.transcode.tonemap_algorithm,
+                tonemap_peak: self.config.transcode.tonemap_peak,
+                tonemap_desat: self.config.transcode.tonemap_desat,
+                dry_run: self.dry_run,
                 metadata,
-                Some((job.id, self.event_tx.clone())),
-            )
+                event_target: Some((job.id, self.event_tx.clone())),
+            })
             .await?;
 
         // TODO: Populate actual stats from somewhere?

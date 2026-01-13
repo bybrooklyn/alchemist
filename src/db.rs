@@ -292,6 +292,18 @@ pub struct DetailedEncodeStats {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EncodeStatsInput {
+    pub job_id: i64,
+    pub input_size: u64,
+    pub output_size: u64,
+    pub compression_ratio: f64,
+    pub encode_time: f64,
+    pub encode_speed: f64,
+    pub avg_bitrate: f64,
+    pub vmaf_score: Option<f64>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Decision {
     pub id: i64,
@@ -541,17 +553,7 @@ impl Db {
     }
 
     /// Save encode statistics
-    pub async fn save_encode_stats(
-        &self,
-        job_id: i64,
-        input_size: u64,
-        output_size: u64,
-        compression_ratio: f64,
-        encode_time: f64,
-        encode_speed: f64,
-        avg_bitrate: f64,
-        vmaf_score: Option<f64>,
-    ) -> Result<()> {
+    pub async fn save_encode_stats(&self, stats: EncodeStatsInput) -> Result<()> {
         sqlx::query(
             "INSERT INTO encode_stats 
              (job_id, input_size_bytes, output_size_bytes, compression_ratio, 
@@ -566,14 +568,14 @@ impl Db {
              avg_bitrate_kbps = excluded.avg_bitrate_kbps,
              vmaf_score = excluded.vmaf_score",
         )
-        .bind(job_id)
-        .bind(input_size as i64)
-        .bind(output_size as i64)
-        .bind(compression_ratio)
-        .bind(encode_time)
-        .bind(encode_speed)
-        .bind(avg_bitrate)
-        .bind(vmaf_score)
+        .bind(stats.job_id)
+        .bind(stats.input_size as i64)
+        .bind(stats.output_size as i64)
+        .bind(stats.compression_ratio)
+        .bind(stats.encode_time)
+        .bind(stats.encode_speed)
+        .bind(stats.avg_bitrate)
+        .bind(stats.vmaf_score)
         .execute(&self.pool)
         .await?;
 
@@ -1078,7 +1080,6 @@ impl Db {
     }
 
     /// Batch update job statuses (for batch operations)
-
     pub async fn batch_update_status(
         &self,
         status_from: JobState,

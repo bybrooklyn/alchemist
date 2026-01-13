@@ -344,9 +344,15 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 }
                 cmd.arg("-c:v").arg("h264_vaapi");
             }
-            "av1_amf" => cmd.arg("-c:v").arg("av1_amf"),
-            "hevc_amf" => cmd.arg("-c:v").arg("hevc_amf"),
-            "h264_amf" => cmd.arg("-c:v").arg("h264_amf"),
+            "av1_amf" => {
+                cmd.arg("-c:v").arg("av1_amf");
+            }
+            "hevc_amf" => {
+                cmd.arg("-c:v").arg("hevc_amf");
+            }
+            "h264_amf" => {
+                cmd.arg("-c:v").arg("h264_amf");
+            }
             "av1_videotoolbox" => {
                 cmd.arg("-c:v").arg("av1_videotoolbox");
                 cmd.arg("-b:v").arg("0");
@@ -434,7 +440,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
             encoder: c.encoder.to_string(),
             requested_codec: preferred,
             effective_codec: c.effective_codec,
-            reason: c.reason.to_string(),
+            reason: c.reason,
         })
     }
 
@@ -649,6 +655,18 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 cmd.arg("-crf").arg(crf);
                 cmd.arg("-tag:v").arg("hvc1"); // Apple compatibility
             }
+            crate::config::OutputCodec::H264 => {
+                let preset = self.cpu_preset.as_str();
+                let crf = match self.cpu_preset {
+                    CpuPreset::Slow => "18",
+                    CpuPreset::Medium => "21",
+                    CpuPreset::Fast => "23",
+                    CpuPreset::Faster => "25",
+                };
+                cmd.arg("-c:v").arg("libx264");
+                cmd.arg("-preset").arg(preset);
+                cmd.arg("-crf").arg(crf);
+            }
         }
     }
 }
@@ -747,25 +765,25 @@ impl FFmpegProgress {
     }
 }
 
-struct EncoderCandidate<'a> {
-    encoder: &'a str,
+struct EncoderCandidate {
+    encoder: &'static str,
     effective_codec: crate::config::OutputCodec,
     available: bool,
-    reason: &'a str,
+    reason: String,
 }
 
-impl<'a> EncoderCandidate<'a> {
+impl EncoderCandidate {
     fn new(
-        encoder: &'a str,
+        encoder: &'static str,
         effective_codec: crate::config::OutputCodec,
         available: bool,
-        reason: &'a str,
+        reason: &str,
     ) -> Self {
         Self {
             encoder,
             effective_codec,
             available,
-            reason,
+            reason: reason.to_string(),
         }
     }
 }
