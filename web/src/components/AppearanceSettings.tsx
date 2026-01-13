@@ -305,29 +305,17 @@ export default function AppearanceSettings() {
                 </div>
             )}
 
-            <div className="flex flex-col gap-8">
+            <div className="flex flex-col gap-10">
                 {THEME_CATEGORIES.map((category) => (
-                    <div
-                        key={category.id}
-                        className="rounded-3xl border border-helios-line/30 bg-helios-surface/60 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.08)]"
-                    >
-                        <div className="flex items-center justify-between gap-3 pb-4 border-b border-helios-line/20">
-                            <div className="flex items-center gap-2">
-                                <div className="p-2 rounded-xl bg-helios-solar/10 text-helios-solar">
-                                    {category.icon}
-                                </div>
-                                <div>
-                                    <h4 className="text-[11px] font-bold uppercase tracking-widest text-helios-slate/70">
-                                        {category.label}
-                                    </h4>
-                                </div>
-                            </div>
-                            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-helios-slate/40">
-                                {category.themes.length} themes
-                            </span>
+                    <div key={category.id} className="flex flex-col gap-4">
+                        <div className="flex items-center gap-2 px-1">
+                            {category.icon}
+                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-helios-slate/60">
+                                {category.label}
+                            </h4>
                         </div>
 
-                        <div className="grid gap-4 pt-5 sm:grid-cols-2 xl:grid-cols-3">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                             {category.themes.map((theme) => {
                                 const isActive = theme.id === activeThemeId;
                                 const isSaving = savingThemeId === theme.id;
@@ -381,7 +369,7 @@ export default function AppearanceSettings() {
                                             </span>
                                         </div>
 
-                                        <div className="mt-2 flex w-full gap-1.5 opacity-40 transition-opacity group-hover:opacity-80" data-color-profile={theme.id}>
+                                        <div className="mt-1 flex w-full gap-1.5 opacity-40 transition-opacity group-hover:opacity-80" data-color-profile={theme.id}>
                                             <div className="h-1.5 flex-1 rounded-full" style={{ backgroundColor: 'rgb(var(--accent-primary))' }} />
                                             <div className="h-1.5 flex-1 rounded-full" style={{ backgroundColor: 'rgb(var(--accent-secondary))' }} />
                                             <div className="h-1.5 flex-1 rounded-full opacity-40" style={{ backgroundColor: 'rgb(var(--accent-primary))' }} />

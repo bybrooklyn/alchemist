@@ -1182,7 +1182,7 @@ A:
 
 ## Changelog
 
-### v0.2.6
+### v0.2.6-2
 - ✅ Setup wizard now authenticates scan and hardware calls to prevent endless loading
 - ✅ Scheduler window validation and normalized time handling
 - ✅ File watcher no longer blocks on bursty filesystem events
@@ -1231,4 +1231,4 @@ Alchemist is licensed under the **GPL-3.0 License**. See `LICENSE` for details.
 
 ---
 
-*Documentation for Alchemist v0.2.6*
+*Documentation for Alchemist v0.2.6-2*

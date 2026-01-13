@@ -1,6 +1,6 @@
 {
   "name": "alchemist-web",
-  "version": "0.2.6",
+"v0.2.6-2",
   "private": true,
   "type": "module",
   "scripts": {
