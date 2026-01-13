@@ -61,6 +61,17 @@ pub struct AppState {
     global_rate_limiter: Mutex<RateLimitEntry>,
 }
 
+pub struct RunServerArgs {
+    pub db: Arc<Db>,
+    pub config: Arc<RwLock<Config>>,
+    pub agent: Arc<Agent>,
+    pub transcoder: Arc<Transcoder>,
+    pub tx: broadcast::Sender<AlchemistEvent>,
+    pub setup_required: bool,
+    pub notification_manager: Arc<crate::notifications::NotificationManager>,
+    pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
+}
+
 struct RateLimitEntry {
     tokens: f64,
     last_refill: Instant,
@@ -71,16 +82,17 @@ const LOGIN_RATE_LIMIT_REFILL_PER_SEC: f64 = 1.0;
 const GLOBAL_RATE_LIMIT_CAPACITY: f64 = 120.0;
 const GLOBAL_RATE_LIMIT_REFILL_PER_SEC: f64 = 60.0;
 
-pub async fn run_server(
-    db: Arc<Db>,
-    config: Arc<RwLock<Config>>,
-    agent: Arc<Agent>,
-    transcoder: Arc<Transcoder>,
-    tx: broadcast::Sender<AlchemistEvent>,
-    setup_required: bool,
-    notification_manager: Arc<crate::notifications::NotificationManager>,
-    file_watcher: Arc<crate::system::watcher::FileWatcher>,
-) -> Result<()> {
+pub async fn run_server(args: RunServerArgs) -> Result<()> {
+    let RunServerArgs {
+        db,
+        config,
+        agent,
+        transcoder,
+        tx,
+        setup_required,
+        notification_manager,
+        file_watcher,
+    } = args;
     // Initialize sysinfo
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_usage();
@@ -915,13 +927,7 @@ async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) -> imp
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
-        .and_then(|auth_str| {
-            if auth_str.starts_with("Bearer ") {
-                Some(auth_str[7..].to_string())
-            } else {
-                None
-            }
-        })
+        .and_then(|auth_str| auth_str.strip_prefix("Bearer ").map(str::to_string))
         .or_else(|| get_cookie_value(req.headers(), "alchemist_session"));
 
     if let Some(t) = token {
@@ -960,13 +966,7 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
             .headers()
             .get("Authorization")
             .and_then(|h| h.to_str().ok())
-            .and_then(|auth_str| {
-                if auth_str.starts_with("Bearer ") {
-                    Some(auth_str[7..].to_string())
-                } else {
-                    None
-                }
-            });
+            .and_then(|auth_str| auth_str.strip_prefix("Bearer ").map(str::to_string));
 
         if token.is_none() {
             token = get_cookie_value(req.headers(), "alchemist_session");
@@ -1128,7 +1128,7 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
 
     // Query GPU utilization (using spawn_blocking to avoid blocking)
     let (gpu_utilization, gpu_memory_percent) =
-        tokio::task::spawn_blocking(|| query_gpu_utilization())
+        tokio::task::spawn_blocking(query_gpu_utilization)
             .await
             .unwrap_or((None, None));
 

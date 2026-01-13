@@ -1,5 +1,5 @@
 use crate::config::{Config, OutputCodec};
-use crate::db::{AlchemistEvent, Db, Job, JobState};
+use crate::db::{AlchemistEvent, Db, EncodeStatsInput, Job, JobState};
 use crate::error::Result;
 use crate::media::analyzer::FfmpegAnalyzer;
 use crate::media::executor::FfmpegExecutor;
@@ -29,6 +29,19 @@ pub struct Agent {
     paused: Arc<AtomicBool>,
     scheduler_paused: Arc<AtomicBool>,
     dry_run: bool,
+}
+
+struct TelemetryEventParams<'a> {
+    telemetry_enabled: bool,
+    output_codec: OutputCodec,
+    metadata: &'a crate::media::pipeline::MediaMetadata,
+    event_type: &'static str,
+    status: Option<&'static str>,
+    failure_reason: Option<&'static str>,
+    input_size_bytes: Option<u64>,
+    output_size_bytes: Option<u64>,
+    duration_ms: Option<u64>,
+    speed_factor: Option<f64>,
 }
 
 impl Agent {
@@ -107,37 +120,25 @@ impl Agent {
         Ok(())
     }
 
-    async fn emit_telemetry_event(
-        &self,
-        telemetry_enabled: bool,
-        output_codec: OutputCodec,
-        metadata: &crate::media::pipeline::MediaMetadata,
-        event_type: &'static str,
-        status: Option<&'static str>,
-        failure_reason: Option<&'static str>,
-        input_size_bytes: Option<u64>,
-        output_size_bytes: Option<u64>,
-        duration_ms: Option<u64>,
-        speed_factor: Option<f64>,
-    ) {
-        if !telemetry_enabled {
+    async fn emit_telemetry_event(&self, params: TelemetryEventParams<'_>) {
+        if !params.telemetry_enabled {
             return;
         }
 
         let hw = self.hw_info.as_ref().as_ref();
         let event = TelemetryEvent {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            event_type: event_type.to_string(),
-            status: status.map(str::to_string),
-            failure_reason: failure_reason.map(str::to_string),
+            event_type: params.event_type.to_string(),
+            status: params.status.map(str::to_string),
+            failure_reason: params.failure_reason.map(str::to_string),
             hardware_model: hardware_label(hw),
-            encoder: Some(encoder_label(hw, output_codec)),
-            video_codec: Some(output_codec.as_str().to_string()),
-            resolution: resolution_bucket(metadata.width, metadata.height),
-            duration_ms,
-            input_size_bytes,
-            output_size_bytes,
-            speed_factor,
+            encoder: Some(encoder_label(hw, params.output_codec)),
+            video_codec: Some(params.output_codec.as_str().to_string()),
+            resolution: resolution_bucket(params.metadata.width, params.metadata.height),
+            duration_ms: params.duration_ms,
+            input_size_bytes: params.input_size_bytes,
+            output_size_bytes: params.output_size_bytes,
+            speed_factor: params.speed_factor,
         };
 
         tokio::spawn(async move {
@@ -371,18 +372,18 @@ impl Agent {
 
         self.update_job_state(job.id, JobState::Encoding).await?;
 
-        self.emit_telemetry_event(
-            config_snapshot.system.enable_telemetry,
-            config_snapshot.transcode.output_codec,
-            &metadata,
-            "job_started",
-            None,
-            None,
-            Some(metadata.size_bytes),
-            None,
-            None,
-            None,
-        )
+        self.emit_telemetry_event(TelemetryEventParams {
+            telemetry_enabled: config_snapshot.system.enable_telemetry,
+            output_codec: config_snapshot.transcode.output_codec,
+            metadata: &metadata,
+            event_type: "job_started",
+            status: None,
+            failure_reason: None,
+            input_size_bytes: Some(metadata.size_bytes),
+            output_size_bytes: None,
+            duration_ms: None,
+            speed_factor: None,
+        })
         .await;
 
         let executor = FfmpegExecutor::new(
@@ -427,18 +428,18 @@ impl Agent {
                 } else {
                     "transcode_failed"
                 };
-                self.emit_telemetry_event(
-                    config_snapshot.system.enable_telemetry,
-                    config_snapshot.transcode.output_codec,
-                    &metadata,
-                    "job_finished",
-                    Some("failure"),
-                    Some(failure_reason),
-                    Some(metadata.size_bytes),
-                    None,
-                    Some(start_time.elapsed().as_millis() as u64),
-                    None,
-                )
+                self.emit_telemetry_event(TelemetryEventParams {
+                    telemetry_enabled: config_snapshot.system.enable_telemetry,
+                    output_codec: config_snapshot.transcode.output_codec,
+                    metadata: &metadata,
+                    event_type: "job_finished",
+                    status: Some("failure"),
+                    failure_reason: Some(failure_reason),
+                    input_size_bytes: Some(metadata.size_bytes),
+                    output_size_bytes: None,
+                    duration_ms: Some(start_time.elapsed().as_millis() as u64),
+                    speed_factor: None,
+                })
                 .await;
 
                 if let crate::error::AlchemistError::Cancelled = e {
@@ -592,16 +593,16 @@ impl Agent {
 
         let _ = self
             .db
-            .save_encode_stats(
+            .save_encode_stats(EncodeStatsInput {
                 job_id,
                 input_size,
                 output_size,
-                reduction,
-                encode_duration,
+                compression_ratio: reduction,
+                encode_time: encode_duration,
                 encode_speed,
-                avg_bitrate_kbps,
+                avg_bitrate: avg_bitrate_kbps,
                 vmaf_score,
-            )
+            })
             .await;
 
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -618,18 +619,18 @@ impl Agent {
 
         self.update_job_state(job_id, JobState::Completed).await?;
 
-        self.emit_telemetry_event(
+        self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled,
             output_codec,
             metadata,
-            "job_finished",
-            Some("success"),
-            None,
-            Some(input_size),
-            Some(output_size),
-            Some((encode_duration * 1000.0) as u64),
-            Some(encode_speed),
-        )
+            event_type: "job_finished",
+            status: Some("success"),
+            failure_reason: None,
+            input_size_bytes: Some(input_size),
+            output_size_bytes: Some(output_size),
+            duration_ms: Some((encode_duration * 1000.0) as u64),
+            speed_factor: Some(encode_speed),
+        })
         .await;
 
         // Handle File Deletion Policy

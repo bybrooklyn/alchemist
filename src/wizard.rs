@@ -64,6 +64,7 @@ impl ConfigWizard {
                 threads: 0,
                 quality_profile: crate::config::QualityProfile::Balanced,
                 output_codec: crate::config::OutputCodec::Av1,
+                allow_fallback: crate::config::default_allow_fallback(),
                 hdr_mode: crate::config::HdrMode::Preserve,
                 tonemap_algorithm: crate::config::TonemapAlgorithm::Hable,
                 tonemap_peak: crate::config::default_tonemap_peak(),

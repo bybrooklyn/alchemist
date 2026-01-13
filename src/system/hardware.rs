@@ -43,7 +43,7 @@ fn check_encoder_support(encoder: &str) -> bool {
 
     // Attempt a tiny 1-frame encode
     let status = Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-v",
             "quiet",
             "-f",
@@ -195,15 +195,11 @@ pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
             info!("✓ Detected AMD GPU");
             accel_name = "VAAPI/AMF";
             vendor = Vendor::Amd;
-            if check_encoder_support("av1_amf") {
-                codecs.push("av1".to_string());
-            } else if check_encoder_support("av1_vaapi") {
+            if check_encoder_support("av1_amf") || check_encoder_support("av1_vaapi") {
                 codecs.push("av1".to_string());
             }
 
-            if check_encoder_support("hevc_amf") {
-                codecs.push("hevc".to_string());
-            } else if check_encoder_support("hevc_vaapi") {
+            if check_encoder_support("hevc_amf") || check_encoder_support("hevc_vaapi") {
                 codecs.push("hevc".to_string());
             }
         } else {
