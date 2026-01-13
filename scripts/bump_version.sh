@@ -28,8 +28,24 @@ cargo.write_text(text)
 # web/package.json
 pkg = root / "web" / "package.json"
 text = pkg.read_text()
-text = re.sub(r'(?m)^(\s*"version"\s*:\s*)"[^"]+"', f'\\1"{version}"', text, count=1)
-pkg.write_text(text)
+# Strip unexpected control characters that can break JSON parsing.
+text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ch == "\r" or ord(ch) >= 32)
+new_text, count = re.subn(
+    r'(?m)^(\s*"version"\s*:\s*)"[^"]+"',
+    f'\\1"{version}"',
+    text,
+    count=1,
+)
+if count == 0:
+    new_text, count = re.subn(
+        r'(?m)^(\s*"name"\s*:\s*"[^"]+",\s*)$',
+        r'\1  "version": "' + version + r'",\n',
+        text,
+        count=1,
+    )
+    if count == 0:
+        raise SystemExit("Failed to update web/package.json version field.")
+pkg.write_text(new_text)
 
 # CHANGELOG.md (top entry)
 changelog = root / "CHANGELOG.md"
