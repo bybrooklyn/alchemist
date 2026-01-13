@@ -354,6 +354,17 @@
     body {
         @apply font-display text-helios-ink min-h-screen;
         background: inherit;
+        background-color: rgb(var(--bg-main));
+        scroll-behavior: smooth;
+    }
+
+    body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: inherit;
+        z-index: -1;
+        pointer-events: none;
     }
 }
 
@@ -365,10 +376,36 @@
     .app-main {
         @apply flex-1 flex flex-col h-full min-w-0;
         background: inherit;
+        -webkit-overflow-scrolling: touch;
     }
 
     /* Add other utility classes from Helios as needed */
     .btn {
         @apply px-4 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity;
     }
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border-subtle)) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background-color: rgba(var(--accent-primary), 0.25);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(var(--accent-primary), 0.45);
 }
