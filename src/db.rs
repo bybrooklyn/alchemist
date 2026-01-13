@@ -1279,6 +1279,12 @@ impl Db {
         Ok(())
     }
 
+    pub async fn reset_auth(&self) -> Result<()> {
+        sqlx::query("DELETE FROM sessions").execute(&self.pool).await?;
+        sqlx::query("DELETE FROM users").execute(&self.pool).await?;
+        Ok(())
+    }
+
     async fn has_column(&self, table: &str, column: &str) -> Result<bool> {
         let table = table.replace('\'', "''");
         let sql = format!("PRAGMA table_info('{}')", table);

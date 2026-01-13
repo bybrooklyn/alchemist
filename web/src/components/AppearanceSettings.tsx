@@ -66,6 +66,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 name: "Ember",
                 description: "Molten oranges with glowing ember contrast.",
             },
+            {
+                id: "flare",
+                name: "Flare",
+                description: "Hot coral energy with bright ember highlights.",
+            },
+            {
+                id: "tropic",
+                name: "Tropic",
+                description: "Sun-soaked warmth with lush teal sparks.",
+            },
         ],
     },
     {
@@ -102,6 +112,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 id: "aurora",
                 name: "Aurora",
                 description: "Teal greens with soft, luminous shimmer.",
+            },
+            {
+                id: "mint-night",
+                name: "Mint Night",
+                description: "Dark mint depths with cool, calm glow.",
+            },
+            {
+                id: "cascade",
+                name: "Cascade",
+                description: "Steel blues with gentle oceanic flow.",
             },
         ],
     },
@@ -140,6 +160,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 name: "Dusk",
                 description: "Evening violets with muted glow.",
             },
+            {
+                id: "mauve",
+                name: "Mauve",
+                description: "Soft mauve haze with velvety highlights.",
+            },
+            {
+                id: "haze",
+                name: "Haze",
+                description: "Dreamy lilac fog with calm contrast.",
+            },
         ],
     },
     {
@@ -177,6 +207,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 name: "Sage",
                 description: "Soft green-white with herbaceous accents.",
             },
+            {
+                id: "sprout",
+                name: "Sprout",
+                description: "Fresh spring whites with leafy greens.",
+            },
+            {
+                id: "glow",
+                name: "Glow",
+                description: "Warm daylight cream with soft gold accents.",
+            },
         ],
     },
     {
@@ -213,6 +253,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 id: "ink",
                 name: "Ink",
                 description: "Deep navy blacks with electric accents.",
+            },
+            {
+                id: "nocturne",
+                name: "Nocturne",
+                description: "Cool midnight tones with steel highlights.",
+            },
+            {
+                id: "slate",
+                name: "Slate",
+                description: "Muted charcoal with calm, mineral edges.",
             },
         ],
     },

@@ -76,6 +76,28 @@
         --border-subtle: 90 55 45;
     }
 
+    [data-color-profile="flare"] {
+        --bg-main: 16 10 8;
+        --bg-panel: 26 16 12;
+        --bg-elevated: 36 22 16;
+        --accent-primary: 255 95 60;
+        --accent-secondary: 255 160 110;
+        --text-primary: 250 234 225;
+        --text-muted: 190 160 148;
+        --border-subtle: 86 58 48;
+    }
+
+    [data-color-profile="tropic"] {
+        --bg-main: 12 10 8;
+        --bg-panel: 22 16 12;
+        --bg-elevated: 32 22 16;
+        --accent-primary: 255 150 60;
+        --accent-secondary: 120 235 180;
+        --text-primary: 246 235 220;
+        --text-muted: 180 165 145;
+        --border-subtle: 78 60 42;
+    }
+
     [data-color-profile="deep-blue"] {
         --bg-main: 8 10 20;
         --bg-panel: 15 20 35;
@@ -140,6 +162,28 @@
         --text-primary: 230 250 245;
         --text-muted: 150 180 175;
         --border-subtle: 40 80 70;
+    }
+
+    [data-color-profile="mint-night"] {
+        --bg-main: 6 12 12;
+        --bg-panel: 12 20 20;
+        --bg-elevated: 18 28 28;
+        --accent-primary: 90 210 175;
+        --accent-secondary: 140 235 205;
+        --text-primary: 226 246 240;
+        --text-muted: 145 175 170;
+        --border-subtle: 40 70 62;
+    }
+
+    [data-color-profile="cascade"] {
+        --bg-main: 7 12 18;
+        --bg-panel: 12 20 28;
+        --bg-elevated: 18 28 38;
+        --accent-primary: 80 170 220;
+        --accent-secondary: 140 210 245;
+        --text-primary: 225 242 250;
+        --text-muted: 145 170 185;
+        --border-subtle: 40 65 80;
     }
 
     [data-color-profile="lavender"] {
@@ -208,6 +252,28 @@
         --border-subtle: 75 65 95;
     }
 
+    [data-color-profile="mauve"] {
+        --bg-main: 18 14 22;
+        --bg-panel: 28 22 32;
+        --bg-elevated: 38 30 44;
+        --accent-primary: 200 140 210;
+        --accent-secondary: 220 180 230;
+        --text-primary: 240 232 248;
+        --text-muted: 175 165 190;
+        --border-subtle: 80 70 100;
+    }
+
+    [data-color-profile="haze"] {
+        --bg-main: 20 18 22;
+        --bg-panel: 30 26 32;
+        --bg-elevated: 40 34 44;
+        --accent-primary: 190 170 230;
+        --accent-secondary: 210 200 240;
+        --text-primary: 242 236 252;
+        --text-muted: 180 170 198;
+        --border-subtle: 88 78 108;
+    }
+
     [data-color-profile="ivory"] {
         --bg-main: 247 243 235;
         --bg-panel: 255 252 246;
@@ -272,6 +338,28 @@
         --text-primary: 38 52 44;
         --text-muted: 100 118 108;
         --border-subtle: 205 220 212;
+    }
+
+    [data-color-profile="sprout"] {
+        --bg-main: 236 245 238;
+        --bg-panel: 246 252 248;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 90 170 140;
+        --accent-secondary: 140 210 170;
+        --text-primary: 34 46 40;
+        --text-muted: 96 112 104;
+        --border-subtle: 206 222 214;
+    }
+
+    [data-color-profile="glow"] {
+        --bg-main: 244 246 236;
+        --bg-panel: 252 254 244;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 190 170 90;
+        --accent-secondary: 220 200 130;
+        --text-primary: 42 44 32;
+        --text-muted: 108 110 92;
+        --border-subtle: 220 224 200;
     }
 
     [data-color-profile="midnight"] {
@@ -339,6 +427,28 @@
         --text-muted: 145 150 175;
         --border-subtle: 45 50 75;
     }
+
+    [data-color-profile="nocturne"] {
+        --bg-main: 8 9 12;
+        --bg-panel: 14 16 20;
+        --bg-elevated: 20 22 28;
+        --accent-primary: 120 160 210;
+        --accent-secondary: 170 200 235;
+        --text-primary: 228 236 248;
+        --text-muted: 150 162 178;
+        --border-subtle: 42 50 66;
+    }
+
+    [data-color-profile="slate"] {
+        --bg-main: 10 12 14;
+        --bg-panel: 16 18 22;
+        --bg-elevated: 22 24 30;
+        --accent-primary: 150 170 190;
+        --accent-secondary: 190 210 230;
+        --text-primary: 228 236 242;
+        --text-muted: 156 168 178;
+        --border-subtle: 50 58 68;
+    }
     html,
     body {
         height: 100%;
@@ -370,11 +480,11 @@
 
 @layer components {
     .app-shell {
-        @apply flex h-full min-h-screen w-full;
+        @apply flex flex-col lg:flex-row h-full min-h-screen w-full;
     }
 
     .app-main {
-        @apply flex-1 flex flex-col h-full min-w-0;
+        @apply flex-1 flex flex-col h-full min-w-0 overflow-x-hidden;
         background: inherit;
         -webkit-overflow-scrolling: touch;
     }

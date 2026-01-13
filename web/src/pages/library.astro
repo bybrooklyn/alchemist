@@ -7,11 +7,11 @@ import HeaderActions from "../components/HeaderActions.tsx";
 <Layout title="Alchemist | Library">
     <div class="app-shell">
         <Sidebar />
-        <main class="app-main p-8 overflow-y-auto">
-            <header class="flex items-center justify-between mb-8">
+        <main class="app-main p-4 sm:p-6 lg:p-8 overflow-y-auto">
+            <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 sm:mb-8">
                 <div>
                     <h1
-                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
+                        class="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
                     >
                         Library
                     </h1>
@@ -21,9 +21,9 @@ import HeaderActions from "../components/HeaderActions.tsx";
                 </div>
                 <HeaderActions client:load />
             </header>
-            <div class="p-6">
+            <div class="p-4 sm:p-6">
                 <div
-                    class="p-8 text-center border-2 border-dashed border-helios-line/40 rounded-2xl bg-helios-surface/50"
+                    class="p-6 sm:p-8 text-center border-2 border-dashed border-helios-line/40 rounded-2xl bg-helios-surface/50"
                 >
                     <p class="text-helios-slate">
                         Library browser interface coming soon.

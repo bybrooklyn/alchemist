@@ -300,6 +300,16 @@ struct TranscodeSettingsPayload {
     quality_profile: crate::config::QualityProfile,
     #[serde(default)]
     threads: usize,
+    #[serde(default = "crate::config::default_allow_fallback")]
+    allow_fallback: bool,
+    #[serde(default)]
+    hdr_mode: crate::config::HdrMode,
+    #[serde(default)]
+    tonemap_algorithm: crate::config::TonemapAlgorithm,
+    #[serde(default = "crate::config::default_tonemap_peak")]
+    tonemap_peak: f32,
+    #[serde(default = "crate::config::default_tonemap_desat")]
+    tonemap_desat: f32,
 }
 
 async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -312,6 +322,11 @@ async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> i
         output_codec: config.transcode.output_codec,
         quality_profile: config.transcode.quality_profile,
         threads: config.transcode.threads,
+        allow_fallback: config.transcode.allow_fallback,
+        hdr_mode: config.transcode.hdr_mode,
+        tonemap_algorithm: config.transcode.tonemap_algorithm,
+        tonemap_peak: config.transcode.tonemap_peak,
+        tonemap_desat: config.transcode.tonemap_desat,
     })
 }
 
@@ -340,6 +355,11 @@ async fn update_transcode_settings_handler(
     config.transcode.output_codec = payload.output_codec;
     config.transcode.quality_profile = payload.quality_profile;
     config.transcode.threads = payload.threads;
+    config.transcode.allow_fallback = payload.allow_fallback;
+    config.transcode.hdr_mode = payload.hdr_mode;
+    config.transcode.tonemap_algorithm = payload.tonemap_algorithm;
+    config.transcode.tonemap_peak = payload.tonemap_peak;
+    config.transcode.tonemap_desat = payload.tonemap_desat;
 
     if let Err(e) = config.save(std::path::Path::new("config.toml")) {
         return (

@@ -59,6 +59,15 @@ import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
 </Layout>
 
 <script>
+    fetch("/api/setup/status")
+        .then((res) => res.json())
+        .then((data) => {
+            if (data?.setup_required) {
+                window.location.href = "/setup";
+            }
+        })
+        .catch((err) => console.error("Failed to check setup status", err));
+
     const form = document.getElementById('login-form') as HTMLFormElement;
     const errorMsg = document.getElementById('error-msg');
 

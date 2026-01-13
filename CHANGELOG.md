@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.2.6-2] - 2026-01-12
+## [v0.2.7] - 2026-01-12
 - Setup wizard auth fixes, scheduler time validation, and watcher reliability improvements.
 - DB stability pass (WAL, FK enforcement, indexes, session cleanup, legacy watch_dirs compatibility).
 - Build pipeline updates (rustls for reqwest, cross-platform build script, WiX workflow fix).

@@ -184,7 +184,7 @@ cd .. && cargo build --release
 
 ```bash
 # Pull from GitHub Container Registry
-docker pull ghcr.io/brooklynloveszelda/alchemist:latest
+docker pull ghcr.io/bybrooklyn/alchemist:latest
 
 # Or build locally
 docker build -t alchemist .
@@ -212,8 +212,11 @@ Configuration is stored in `config.toml`. On first run, the setup wizard creates
 # TRANSCODING SETTINGS
 #──────────────────────────────────────────────────────────────────
 [transcode]
-# Output codec: "av1" or "hevc"
+# Preferred codec: "av1", "hevc", or "h264"
 output_codec = "av1"
+
+# Allow fallback to other codecs if preferred is unavailable
+allow_fallback = true
 
 # Quality profile: "quality", "balanced", or "speed"
 quality_profile = "balanced"
@@ -231,6 +234,18 @@ min_file_size_mb = 50
 
 # Number of concurrent transcode jobs
 concurrent_jobs = 2
+
+# HDR handling: "preserve" (keep HDR) or "tonemap" (convert to SDR)
+hdr_mode = "preserve"
+
+# Tonemap algorithm: "hable", "mobius", "reinhard", or "clip"
+tonemap_algorithm = "hable"
+
+# Tonemap peak luminance (nits)
+tonemap_peak = 100
+
+# Tonemap desaturation (0.0 - 1.0)
+tonemap_desat = 0.2
 
 #──────────────────────────────────────────────────────────────────
 # HARDWARE ACCELERATION
@@ -530,7 +545,13 @@ Content-Type: application/json
   "min_bpp_threshold": 0.1,
   "min_file_size_mb": 50,
   "output_codec": "av1",
-  "quality_profile": "balanced"
+  "allow_fallback": true,
+  "quality_profile": "balanced",
+  "threads": 0,
+  "hdr_mode": "preserve",
+  "tonemap_algorithm": "hable",
+  "tonemap_peak": 100,
+  "tonemap_desat": 0.2
 }
 ```
 
@@ -687,7 +708,7 @@ docker run -d \
   -p 3000:3000 \
   -v /path/to/media:/media \
   -v alchemist_data:/app/data \
-  ghcr.io/brooklynloveszelda/alchemist:latest
+  ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ### With NVIDIA GPU
@@ -699,7 +720,7 @@ docker run -d \
   -p 3000:3000 \
   -v /path/to/media:/media \
   -v alchemist_data:/app/data \
-  ghcr.io/brooklynloveszelda/alchemist:latest
+  ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ### Docker Compose
@@ -708,7 +729,7 @@ docker run -d \
 version: "3.8"
 services:
   alchemist:
-    image: ghcr.io/brooklynloveszelda/alchemist:latest
+    image: ghcr.io/bybrooklyn/alchemist:latest
     container_name: alchemist
     restart: unless-stopped
     ports:
@@ -830,10 +851,27 @@ cargo check
 cargo test
 
 # Run with debug logging
-RUST_LOG=debug cargo run -- --server
+RUST_LOG=debug cargo run -- 
 
 # Run in production mode
-./target/release/alchemist --server
+./target/release/alchemist
+```
+
+#### CLI Mode
+
+```bash
+# Process directories in CLI mode
+./target/release/alchemist --cli --dir /path/to/videos --dir /another/path
+
+# Dry run (analyze only)
+./target/release/alchemist --cli --dry-run --dir /path/to/videos
+```
+
+#### Reset Auth
+
+```bash
+# Clear users/sessions and re-run setup
+./target/release/alchemist --reset-auth
 ```
 
 #### Frontend (Astro + React)
@@ -1044,7 +1082,7 @@ Run with verbose logging to diagnose issues:
 
 ```bash
 # Binary
-RUST_LOG=debug ./alchemist --server
+RUST_LOG=debug ./alchemist
 
 # Docker
 docker run -e RUST_LOG=debug ...
@@ -1150,7 +1188,7 @@ docker run -v /path/on/host:/media ...
 **Q: How do I update to a new version?**
 
 ```bash
-docker pull ghcr.io/brooklynloveszelda/alchemist:latest
+docker pull ghcr.io/bybrooklyn/alchemist:latest
 docker stop alchemist
 docker rm alchemist
 docker run ... # same options as before
@@ -1181,6 +1219,25 @@ A:
 ---
 
 ## Changelog
+
+### v0.2.7
+- ✅ Default server mode; explicit CLI with `--cli --dir ...` and new `--reset-auth` flow
+- ✅ Login redirects to setup when no users exist
+- ✅ Startup banner now includes version/build info
+- ✅ Telemetry reliability: shared client, timeout, retry/backoff, and speed sanitization
+- ✅ Dashboard redesign, spacing polish, dynamic Quick Start, and mobile responsiveness
+- ✅ Sidebar brand/logo now links to dashboard
+- ✅ Settings nav auto-scrolls to active tab; section separators removed
+- ✅ Setup wizard: telemetry toggle removed; CPU encoding defaults on
+- ✅ Added 10 new themes, including dark mint (`Mint Night`)
+- ✅ Release pipeline: Windows EXE-only; macOS app ad-hoc signed with improved Info.plist
+- ✅ VideoToolbox quality tuning + HEVC `hvc1` tagging; AV1→HEVC fallback for Apple
+- ✅ HDR metadata detection, tone mapping controls, and color metadata preservation
+- ✅ Transcode settings expanded: HDR/tonemap options + fallback policy
+- ✅ Codec/encoder negotiation: AV1 is preference with hardware/CPU fallback chain
+- ✅ FFmpeg encoder cache probed at startup; no hard assumptions about encoder availability
+- ✅ Planner logic refined: H.264 always transcodes; BPP gate only when bitrate/fps are known
+- ✅ Jobs UI upgraded: in‑app confirm modals, contextual action menu, retry/cancel/delete polish
 
 ### v0.2.6-2
 - ✅ Setup wizard now authenticates scan and hardware calls to prevent endless loading
@@ -1231,4 +1288,4 @@ Alchemist is licensed under the **GPL-3.0 License**. See `LICENSE` for details.
 
 ---
 
-*Documentation for Alchemist v0.2.6-2*
+*Documentation for Alchemist v0.2.7*

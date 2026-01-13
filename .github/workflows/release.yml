@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   # ------------------------------------------------------------------------------------------------------------------------------------------------
-  # WINDOWS BUILD (MSI + EXE)
+  # WINDOWS BUILD (EXE)
   # ------------------------------------------------------------------------------------------------------------------------------------------------
   build-windows:
     name: Windows ${{ matrix.target_name }}
@@ -38,19 +38,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install WiX Toolset
-        shell: powershell
-        run: |
-          choco install wixtoolset -y
-          $wixBin = Get-ChildItem "C:\\Program Files (x86)\\WiX Toolset v3.*\\bin" |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1 -ExpandProperty FullName
-          if (-not $wixBin) { throw "WiX Toolset bin directory not found." }
-          echo $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install cargo-wix
-        run: cargo install cargo-wix
-
       # Frontend Build
       - name: Build Frontend
         shell: bash
@@ -59,16 +46,11 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
-      # Backend Build & MSI Generation
-      # using cargo wix (which runs cargo build --release underneath)
-      - name: Build MSI and EXE
+      # Backend Build (EXE)
+      - name: Build EXE
         shell: cmd
-        env:
-          # We pass the target architecture to wix. 
-          # For aarch64, this might fail if Wix 3 doesn't support it fully, but we try.
-          CARGO_WIX_EXTRA_ARGS: "--nocapture -v"
         run: |
-          cargo wix --target ${{ matrix.target }} --output target\wix\alchemist-${{ matrix.target_name }}.msi
+          cargo build --release --target ${{ matrix.target }}
 
       # Move EXE to a predictable name for upload
       - name: Prepare EXE
@@ -81,7 +63,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/wix/alchemist-${{ matrix.target_name }}.msi
             alchemist-${{ matrix.target_name }}.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,15 +127,23 @@ jobs:
               <string>com.alchemist.app</string>
               <key>CFBundleName</key>
               <string>$APP_NAME</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ github.ref_name }}</string>
               <key>CFBundleVersion</key>
               <string>${{ github.ref_name }}</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
+              <key>LSApplicationCategoryType</key>
+              <string>public.app-category.video</string>
               <key>LSMinimumSystemVersion</key>
               <string>10.13</string>
           </dict>
           </plist>
           EOF
+
+          # Ad-hoc codesign to reduce "damaged" warnings on launch
+          codesign --force --deep --sign - "$APP_DIR"
+          xattr -cr "$APP_DIR" || true
           
           # Zip for release (No signing/notarization)
           ditto -c -k --keepParent "$APP_DIR" "alchemist-macos-${{ matrix.target_name }}.zip"

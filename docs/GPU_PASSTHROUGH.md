@@ -29,7 +29,7 @@ sudo systemctl restart docker
 ```yaml
 services:
   alchemist:
-    image: ghcr.io/brooklynloveszelda/alchemist:latest
+    image: ghcr.io/bybrooklyn/alchemist:latest
     deploy:
       resources:
         reservations:
@@ -47,7 +47,7 @@ services:
 docker run --gpus all \
   -p 3000:3000 \
   -v /media:/media \
-  ghcr.io/brooklynloveszelda/alchemist:latest
+  ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ---
@@ -73,7 +73,7 @@ vainfo
 ```yaml
 services:
   alchemist:
-    image: ghcr.io/brooklynloveszelda/alchemist:latest
+    image: ghcr.io/bybrooklyn/alchemist:latest
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -91,7 +91,7 @@ docker run --device /dev/dri:/dev/dri \
   -e LIBVA_DRIVER_NAME=iHD \
   -p 3000:3000 \
   -v /media:/media \
-  ghcr.io/brooklynloveszelda/alchemist:latest
+  ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ---

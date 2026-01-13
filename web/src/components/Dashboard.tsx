@@ -166,58 +166,9 @@ export default function Dashboard() {
     );
 
     return (
-        <div className="flex flex-col gap-6">
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-                <div className="lg:col-span-3 p-6 rounded-3xl bg-gradient-to-br from-helios-surface via-helios-surface-soft to-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden">
-                    <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top,_rgba(255,186,73,0.18),_transparent_60%)]" />
-                    <div className="relative z-10 flex flex-col gap-6">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">System Snapshot</p>
-                                <h2 className="text-2xl font-bold text-helios-ink">Alchemist Dashboard</h2>
-                            </div>
-                            <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-helios-solar/15 text-helios-solar">
-                                {stats.active > 0 ? "Processing" : "Ready"}
-                            </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Active</p>
-                                <p className="text-2xl font-bold text-amber-500">{stats.active}</p>
-                            </div>
-                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Completed</p>
-                                <p className="text-2xl font-bold text-emerald-500">{stats.completed}</p>
-                            </div>
-                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Failed</p>
-                                <p className="text-2xl font-bold text-red-500">{stats.failed}</p>
-                            </div>
-                            <div className="rounded-2xl bg-helios-surface/70 border border-helios-line/30 p-4">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">Last Job</p>
-                                <p className="text-sm font-semibold text-helios-ink truncate" title={lastJob?.input_path}>
-                                    {lastJob ? lastJob.input_path.split(/[/\\]/).pop() : "No jobs yet"}
-                                </p>
-                                <p className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
-                                    {lastJob ? `${lastJob.status} · ${formatRelativeTime(lastJob.created_at)}` : "Waiting"}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm">
-                    <div className="flex items-center gap-2 mb-4">
-                        <Activity size={18} className="text-helios-solar" />
-                        <h3 className="text-sm font-bold uppercase tracking-wider text-helios-slate">System Health</h3>
-                    </div>
-                    <ResourceMonitor />
-                </div>
-            </div>
-
+        <div className="flex flex-col gap-6 flex-1 min-h-0 overflow-hidden">
             {/* Stats Grid */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatCard
                     label="Active Jobs"
                     value={stats.active}
@@ -244,9 +195,9 @@ export default function Dashboard() {
                 />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
                 {/* Recent Activity */}
-                <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm">
+                <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">
                     <div className="flex items-center justify-between mb-6">
                         <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
                             <Activity size={20} className="text-helios-solar" />
@@ -288,12 +239,12 @@ export default function Dashboard() {
                 </div>
 
                 {/* Getting Started Tips */}
-                <div className="p-6 rounded-3xl bg-gradient-to-br from-helios-surface to-helios-surface-soft border border-helios-line/40 shadow-sm self-start">
-                    <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
+                <div className="p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm h-full">
+                    <h3 className="text-lg font-bold text-helios-ink mb-6 flex items-center gap-2">
                         <Zap size={20} className="text-helios-solar" />
                         Quick Start
                     </h3>
-                    <div className="flex flex-col gap-5">
+                    <div className="flex flex-col gap-4">
                         {quickStartItems.map(({ title, body, icon: Icon, tone, bg }) => (
                             <div className="flex gap-4 items-start" key={title}>
                                 <div className={`p-2.5 rounded-xl ${bg} ${tone} mt-0.5 shadow-inner`}>
@@ -309,6 +260,14 @@ export default function Dashboard() {
                         ))}
                     </div>
                 </div>
+            </div>
+
+            <div className="p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm">
+                <div className="flex items-center gap-2 mb-6">
+                    <Activity size={18} className="text-helios-solar" />
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-helios-slate">System Health</h3>
+                </div>
+                <ResourceMonitor />
             </div>
         </div>
     );

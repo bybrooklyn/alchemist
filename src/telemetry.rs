@@ -52,6 +52,7 @@ pub fn encoder_label(hw: Option<&HardwareInfo>, codec: OutputCodec) -> String {
     let cpu_encoder = match codec {
         OutputCodec::Av1 => "libsvtav1",
         OutputCodec::Hevc => "libx265",
+        OutputCodec::H264 => "libx264",
     };
 
     let Some(hw) = hw else {
@@ -67,10 +68,13 @@ pub fn encoder_label(hw: Option<&HardwareInfo>, codec: OutputCodec) -> String {
     match (hw.vendor, codec) {
         (Vendor::Intel, OutputCodec::Av1) => "av1_qsv".to_string(),
         (Vendor::Intel, OutputCodec::Hevc) => "hevc_qsv".to_string(),
+        (Vendor::Intel, OutputCodec::H264) => "h264_qsv".to_string(),
         (Vendor::Nvidia, OutputCodec::Av1) => "av1_nvenc".to_string(),
         (Vendor::Nvidia, OutputCodec::Hevc) => "hevc_nvenc".to_string(),
+        (Vendor::Nvidia, OutputCodec::H264) => "h264_nvenc".to_string(),
         (Vendor::Apple, OutputCodec::Av1) => "av1_videotoolbox".to_string(),
         (Vendor::Apple, OutputCodec::Hevc) => "hevc_videotoolbox".to_string(),
+        (Vendor::Apple, OutputCodec::H264) => "h264_videotoolbox".to_string(),
         (Vendor::Amd, OutputCodec::Av1) => {
             if cfg!(target_os = "windows") {
                 "av1_amf".to_string()
@@ -83,6 +87,13 @@ pub fn encoder_label(hw: Option<&HardwareInfo>, codec: OutputCodec) -> String {
                 "hevc_amf".to_string()
             } else {
                 "hevc_vaapi".to_string()
+            }
+        }
+        (Vendor::Amd, OutputCodec::H264) => {
+            if cfg!(target_os = "windows") {
+                "h264_amf".to_string()
+            } else {
+                "h264_vaapi".to_string()
             }
         }
         (Vendor::Cpu, _) => cpu_encoder.to_string(),
