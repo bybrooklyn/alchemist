@@ -81,7 +81,7 @@ export default function SetupWizard() {
     useEffect(() => {
         const loadSetupDefaults = async () => {
             try {
-                const res = await fetch('/api/setup/status');
+                const res = await fetch('/api/setup/status', { credentials: 'same-origin' });
                 if (!res.ok) return;
                 const data = await res.json();
                 if (typeof data.enable_telemetry === 'boolean') {
@@ -107,7 +107,8 @@ export default function SetupWizard() {
                 setLoading(true);
                 try {
                     const res = await fetch('/api/system/hardware', {
-                        headers: getAuthHeaders()
+                        headers: getAuthHeaders(),
+                        credentials: 'same-origin'
                     });
                     if (!res.ok) {
                         throw new Error(`Hardware detection failed (${res.status})`);
@@ -138,7 +139,8 @@ export default function SetupWizard() {
         try {
             const res = await fetch('/api/scan/start', {
                 method: 'POST',
-                headers: getAuthHeaders()
+                headers: getAuthHeaders(),
+                credentials: 'same-origin'
             });
             if (!res.ok) {
                 throw new Error(await res.text());
@@ -154,7 +156,8 @@ export default function SetupWizard() {
         const interval = setInterval(async () => {
             try {
                 const res = await fetch('/api/scan/status', {
-                    headers: getAuthHeaders()
+                    headers: getAuthHeaders(),
+                    credentials: 'same-origin'
                 });
                 if (!res.ok) {
                     throw new Error(await res.text());
@@ -200,6 +203,7 @@ export default function SetupWizard() {
                 headers: {
                     'Content-Type': 'application/json'
                 },
+                credentials: 'same-origin',
                 body: JSON.stringify(config)
             });
 
@@ -211,6 +215,8 @@ export default function SetupWizard() {
             const data = await res.json();
             if (data.token) {
                 localStorage.setItem('alchemist_token', data.token);
+            } else {
+                localStorage.removeItem('alchemist_token');
             }
 
             setStep(5); // Move to Scan Progress

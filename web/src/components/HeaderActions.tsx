@@ -6,9 +6,15 @@ import AboutDialog from "./AboutDialog";
 export default function HeaderActions() {
     const [showAbout, setShowAbout] = useState(false);
 
-    const handleLogout = () => {
-        localStorage.removeItem('alchemist_token');
-        window.location.href = '/login';
+    const handleLogout = async () => {
+        try {
+            await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        } catch {
+            // Ignore logout failures and clear local state anyway.
+        } finally {
+            localStorage.removeItem('alchemist_token');
+            window.location.href = '/login';
+        }
     };
 
     return (

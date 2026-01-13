@@ -38,32 +38,28 @@ const { title } = Astro.props;
             
             function checkAuth() {
                 const isAuthPage = window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/setup');
-                let token = null;
-                try {
-                    token = localStorage.getItem('alchemist_token');
-                } catch {
-                    token = null;
-                }
-                
-                if (!isAuthPage && !token) {
-                    // Check if setup is needed
-                    fetch('/api/setup/status')
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.setup_required) {
-                                window.location.href = '/setup';
-                            } else {
-                                window.location.href = '/login';
-                            }
-                        })
-                        .catch(() => {
-                            // If API fails (server down?), maybe just stay? Or go to login?
-                            // Safest to go to login, but only if not already there
-                            if (!window.location.pathname.startsWith('/login')) {
-                                window.location.href = '/login';
-                            }
-                        });
-                }
+                if (isAuthPage) return;
+
+                fetch('/api/engine/status', { credentials: 'same-origin' })
+                    .then(res => {
+                        if (res.status !== 401) return;
+                        return fetch('/api/setup/status')
+                            .then(statusRes => statusRes.json())
+                            .then(data => {
+                                if (data.setup_required) {
+                                    window.location.href = '/setup';
+                                } else {
+                                    window.location.href = '/login';
+                                }
+                            });
+                    })
+                    .catch(() => {
+                        // If API fails (server down?), maybe just stay? Or go to login?
+                        // Safest to go to login, but only if not already there
+                        if (!window.location.pathname.startsWith('/login')) {
+                            window.location.href = '/login';
+                        }
+                    });
             }
             
             // Run on initial load
