@@ -5,6 +5,7 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -63,7 +64,12 @@ async fn run() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_thread_names(true)
         .init();
+
+    let boot_start = Instant::now();
 
     // Startup Banner
     info!(" ______     __         ______     __  __     ______     __    __     __     ______     ______ ");
@@ -83,16 +89,32 @@ async fn run() -> Result<()> {
     info!("");
 
     let args = Args::parse();
+    info!(
+        target: "startup",
+        "Parsed CLI args: server_mode={}, dry_run={}, output_dir={:?}, directories={}",
+        args.server,
+        args.dry_run,
+        args.output_dir,
+        args.directories.len()
+    );
 
     // ... rest of logic remains largely the same, just inside run()
     // Default to server mode if no arguments are provided (e.g. double-click run)
     // or if explicit --server flag is used
     let is_server_mode = args.server || args.directories.is_empty();
+    info!(target: "startup", "Resolved server mode: {}", is_server_mode);
 
     // 0. Load Configuration
+    let config_start = Instant::now();
     let config_path = std::path::Path::new("config.toml");
     let config_exists = config_path.exists();
     let (config, mut setup_mode) = if !config_exists {
+        let cwd = std::env::current_dir().ok();
+        info!(
+            target: "startup",
+            "config.toml not found (cwd={:?})",
+            cwd
+        );
         if is_server_mode {
             info!("No configuration file found. Entering Setup Mode (Web UI).");
             (config::Config::default(), true)
@@ -106,15 +128,40 @@ async fn run() -> Result<()> {
             Ok(c) => (c, false),
             Err(e) => {
                 warn!("Failed to load config.toml: {}. Using defaults.", e);
-                (config::Config::default(), false)
+                if is_server_mode {
+                    warn!("Config load failed in server mode. Entering Setup Mode (Web UI).");
+                    (config::Config::default(), true)
+                } else {
+                    (config::Config::default(), false)
+                }
             }
         }
     };
+    info!(
+        target: "startup",
+        "Config loaded (exists={} setup_mode={}) in {} ms",
+        config_exists,
+        setup_mode,
+        config_start.elapsed().as_millis()
+    );
 
     // 1. Initialize Database
+    let db_start = Instant::now();
     let db = Arc::new(db::Db::new("alchemist.db").await?);
+    info!(
+        target: "startup",
+        "Database initialized in {} ms",
+        db_start.elapsed().as_millis()
+    );
     if is_server_mode {
+        let users_start = Instant::now();
         let has_users = db.has_users().await?;
+        info!(
+            target: "startup",
+            "User check completed (has_users={}) in {} ms",
+            has_users,
+            users_start.elapsed().as_millis()
+        );
         if !has_users {
             if !setup_mode {
                 info!("No users found. Entering Setup Mode (Web UI).");
@@ -153,12 +200,18 @@ async fn run() -> Result<()> {
     info!("");
 
     // 2. Hardware Detection (using async version to avoid blocking runtime)
+    let hw_start = Instant::now();
     let allow_cpu_fallback = if setup_mode {
         true
     } else {
         config.hardware.allow_cpu_fallback
     };
     let hw_info = hardware::detect_hardware_async(allow_cpu_fallback).await?;
+    info!(
+        target: "startup",
+        "Hardware detection completed in {} ms",
+        hw_start.elapsed().as_millis()
+    );
     info!("");
     info!("Selected Hardware: {}", hw_info.vendor);
     if let Some(ref path) = hw_info.device_path {
@@ -180,6 +233,7 @@ async fn run() -> Result<()> {
     info!("");
 
     // 3. Initialize Broadcast Channel, Orchestrator, and Processor
+    let services_start = Instant::now();
     let (tx, _rx) = broadcast::channel(100);
 
     // Initialize Notification Manager
@@ -203,6 +257,11 @@ async fn run() -> Result<()> {
     );
 
     info!("Database and services initialized.");
+    info!(
+        target: "startup",
+        "Core services initialized in {} ms",
+        services_start.elapsed().as_millis()
+    );
 
     // 3. Start Background Processor Loop
     // Always start the loop. The agent will be paused if setup_mode is true.
@@ -304,8 +363,18 @@ async fn run() -> Result<()> {
             }
         };
 
-        // Initial Watcher Load
-        reload_watcher(setup_mode).await;
+        // Initial Watcher Load (async to reduce boot latency)
+        let reload_setup_mode = setup_mode;
+        let reload_watcher_task = reload_watcher.clone();
+        tokio::spawn(async move {
+            let watcher_start = Instant::now();
+            reload_watcher_task(reload_setup_mode).await;
+            info!(
+                target: "startup",
+                "Initial file watcher load completed in {} ms",
+                watcher_start.elapsed().as_millis()
+            );
+        });
 
         // Start Scheduler
         let scheduler = alchemist::scheduler::Scheduler::new(db.clone(), agent.clone());
@@ -376,6 +445,11 @@ async fn run() -> Result<()> {
             Err(e) => error!("Failed to create config watcher: {}", e),
         }
 
+        info!(
+            target: "startup",
+            "Boot sequence completed in {} ms",
+            boot_start.elapsed().as_millis()
+        );
         alchemist::server::run_server(
             db,
             config,

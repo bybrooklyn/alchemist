@@ -8,6 +8,7 @@ use sqlx::{
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
@@ -307,6 +308,7 @@ pub struct Db {
 
 impl Db {
     pub async fn new(db_path: &str) -> Result<Self> {
+        let start = std::time::Instant::now();
         let options = SqliteConnectOptions::new()
             .filename(db_path)
             .create_if_missing(true)
@@ -315,12 +317,23 @@ impl Db {
             .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePool::connect_with(options).await?;
+        info!(
+            target: "startup",
+            "Database connection opened in {} ms",
+            start.elapsed().as_millis()
+        );
 
         // Run migrations
+        let migrate_start = std::time::Instant::now();
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
             .map_err(|e| crate::error::AlchemistError::Database(e.into()))?;
+        info!(
+            target: "startup",
+            "Database migrations completed in {} ms",
+            migrate_start.elapsed().as_millis()
+        );
 
         let db = Self { pool };
         db.reset_interrupted_jobs().await?;
