@@ -68,6 +68,15 @@ impl QualityProfile {
             Self::Speed => "p1",
         }
     }
+
+    /// Get FFmpeg quality value for Apple VideoToolbox
+    pub fn videotoolbox_quality(&self) -> &'static str {
+        match self {
+            Self::Quality => "55",
+            Self::Balanced => "65",
+            Self::Speed => "75",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +123,7 @@ pub enum OutputCodec {
     #[default]
     Av1,
     Hevc,
+    H264,
 }
 
 impl OutputCodec {
@@ -121,6 +131,47 @@ impl OutputCodec {
         match self {
             Self::Av1 => "av1",
             Self::Hevc => "hevc",
+            Self::H264 => "h264",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum HdrMode {
+    #[default]
+    Preserve,
+    Tonemap,
+}
+
+impl HdrMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Preserve => "preserve",
+            Self::Tonemap => "tonemap",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum TonemapAlgorithm {
+    #[default]
+    Hable,
+    Mobius,
+    Reinhard,
+    Clip,
+}
+
+impl TonemapAlgorithm {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hable => "hable",
+            Self::Mobius => "mobius",
+            Self::Reinhard => "reinhard",
+            Self::Clip => "clip",
         }
     }
 }
@@ -166,6 +217,16 @@ pub struct TranscodeConfig {
     pub quality_profile: QualityProfile,
     #[serde(default)]
     pub output_codec: OutputCodec,
+    #[serde(default = "default_allow_fallback")]
+    pub allow_fallback: bool,
+    #[serde(default)]
+    pub hdr_mode: HdrMode,
+    #[serde(default)]
+    pub tonemap_algorithm: TonemapAlgorithm,
+    #[serde(default = "default_tonemap_peak")]
+    pub tonemap_peak: f32,
+    #[serde(default = "default_tonemap_desat")]
+    pub tonemap_desat: f32,
     #[serde(default)]
     pub subtitle_mode: SubtitleMode,
 }
@@ -187,6 +248,18 @@ pub struct HardwareConfig {
 
 fn default_allow_cpu_encoding() -> bool {
     true
+}
+
+pub(crate) fn default_allow_fallback() -> bool {
+    true
+}
+
+pub(crate) fn default_tonemap_peak() -> f32 {
+    100.0
+}
+
+pub(crate) fn default_tonemap_desat() -> f32 {
+    0.2
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -251,6 +324,11 @@ impl Default for Config {
                 threads: 0,
                 quality_profile: QualityProfile::Balanced,
                 output_codec: OutputCodec::Av1,
+                allow_fallback: default_allow_fallback(),
+                hdr_mode: HdrMode::Preserve,
+                tonemap_algorithm: TonemapAlgorithm::Hable,
+                tonemap_peak: default_tonemap_peak(),
+                tonemap_desat: default_tonemap_desat(),
                 subtitle_mode: SubtitleMode::Copy,
             },
             hardware: HardwareConfig {
@@ -318,6 +396,20 @@ impl Config {
 
         if self.transcode.concurrent_jobs == 0 {
             anyhow::bail!("concurrent_jobs must be >= 1");
+        }
+
+        if self.transcode.tonemap_peak < 50.0 || self.transcode.tonemap_peak > 1000.0 {
+            anyhow::bail!(
+                "tonemap_peak must be between 50 and 1000, got {}",
+                self.transcode.tonemap_peak
+            );
+        }
+
+        if !(0.0..=1.0).contains(&self.transcode.tonemap_desat) {
+            anyhow::bail!(
+                "tonemap_desat must be between 0.0 and 1.0, got {}",
+                self.transcode.tonemap_desat
+            );
         }
 
         // Validate VMAF threshold

@@ -22,6 +22,10 @@ pub struct Stream {
     pub channel_layout: Option<String>,
     pub channels: Option<u32>,
     pub r_frame_rate: Option<String>,
+    pub color_primaries: Option<String>,
+    pub color_transfer: Option<String>,
+    pub color_space: Option<String>,
+    pub color_range: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,6 +76,10 @@ impl AnalyzerTrait for FfmpegAnalyzer {
 
             let audio_stream = metadata.streams.iter().find(|s| s.codec_type == "audio");
 
+            let color_transfer = video_stream.color_transfer.clone();
+            let color_primaries = video_stream.color_primaries.clone();
+            let is_hdr = Analyzer::is_hdr(color_transfer.as_deref(), color_primaries.as_deref());
+
             Ok(MediaMetadata {
                 path: path.clone(),
                 duration_secs: metadata.format.duration.parse().unwrap_or(0.0),
@@ -84,6 +92,11 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                     .unwrap_or("8")
                     .parse()
                     .unwrap_or(8),
+                color_primaries,
+                color_transfer,
+                color_space: video_stream.color_space.clone(),
+                color_range: video_stream.color_range.clone(),
+                is_hdr,
                 size_bytes: metadata.format.size.parse().unwrap_or(0),
                 bit_rate: video_stream
                     .bit_rate
@@ -230,6 +243,11 @@ impl Analyzer {
         s.parse().ok()
     }
 
+    fn is_hdr(color_transfer: Option<&str>, color_primaries: Option<&str>) -> bool {
+        matches!(color_transfer, Some("smpte2084") | Some("arib-std-b67"))
+            || matches!(color_primaries, Some("bt2020"))
+    }
+
     pub fn should_transcode_audio(stream: &Stream) -> bool {
         if stream.codec_type != "audio" {
             return false;
@@ -281,6 +299,10 @@ mod tests {
             channel_layout: None,
             channels: None,
             r_frame_rate: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
         };
         assert!(Analyzer::should_transcode_audio(&heavy));
 
@@ -294,6 +316,10 @@ mod tests {
             channel_layout: None,
             channels: None,
             r_frame_rate: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
         };
         assert!(!Analyzer::should_transcode_audio(&standard));
 
@@ -307,6 +333,10 @@ mod tests {
             channel_layout: None,
             channels: None,
             r_frame_rate: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
         };
         assert!(Analyzer::should_transcode_audio(&high_bitrate_ac3));
     }

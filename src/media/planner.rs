@@ -10,19 +10,32 @@ use std::sync::Arc;
 pub struct BasicPlanner {
     config: Arc<Config>,
     hw_info: Option<HardwareInfo>,
+    encoder_caps: Arc<crate::media::ffmpeg::EncoderCapabilities>,
 }
 
 impl BasicPlanner {
-    pub fn new(config: Arc<Config>, hw_info: Option<HardwareInfo>) -> Self {
-        Self { config, hw_info }
+    pub fn new(
+        config: Arc<Config>,
+        hw_info: Option<HardwareInfo>,
+        encoder_caps: Arc<crate::media::ffmpeg::EncoderCapabilities>,
+    ) -> Self {
+        Self {
+            config,
+            hw_info,
+            encoder_caps,
+        }
     }
 }
 
 #[async_trait]
 impl Planner for BasicPlanner {
     async fn plan(&self, metadata: &MediaMetadata) -> Result<Decision> {
-        let (should_transcode, reason) =
-            should_transcode(metadata, &self.config, self.hw_info.as_ref());
+        let (should_transcode, reason) = should_transcode(
+            metadata,
+            &self.config,
+            self.hw_info.as_ref(),
+            &self.encoder_caps,
+        );
 
         // We don't have job_id here in plan() signature...
         // Wait, Decision struct requires job_id, created_at, id (db fields).
@@ -57,10 +70,24 @@ fn should_transcode(
     metadata: &MediaMetadata,
     config: &Config,
     hw_info: Option<&HardwareInfo>,
+    encoder_caps: &crate::media::ffmpeg::EncoderCapabilities,
 ) -> (bool, String) {
     // 0. Hardware Capability Check
     let target_codec = config.transcode.output_codec;
     let target_codec_str = target_codec.as_str();
+
+    if !config.transcode.allow_fallback {
+        let preferred_available = encoder_available_for_codec(target_codec, hw_info, encoder_caps);
+        if !preferred_available {
+            return (
+                false,
+                format!(
+                    "Preferred codec {} unavailable and fallback disabled",
+                    target_codec_str
+                ),
+            );
+        }
+    }
 
     if let Some(hw) = hw_info {
         if hw.vendor == Vendor::Cpu && !config.hardware.allow_cpu_encoding {
@@ -101,9 +128,24 @@ fn should_transcode(
         }
     }
 
-    // 1. Codec Check (skip if already target codec + 10-bit)
-    if metadata.codec_name == target_codec_str && metadata.bit_depth == 10 {
+    // 1. Codec Check (skip if already target codec + 10-bit, or H.264 preferred and already H.264)
+    if metadata.codec_name.eq_ignore_ascii_case(target_codec_str) && metadata.bit_depth == 10 {
         return (false, format!("Already {} 10-bit", target_codec_str));
+    }
+
+    if target_codec == crate::config::OutputCodec::H264
+        && metadata.codec_name.eq_ignore_ascii_case("h264")
+        && metadata.bit_depth <= 8
+    {
+        return (false, "Already H.264".to_string());
+    }
+
+    // 1b. Always transcode H.264 sources
+    if metadata.codec_name.eq_ignore_ascii_case("h264") {
+        return (
+            true,
+            "H.264 source prioritized for transcode".to_string(),
+        );
     }
 
     // 2. Efficiency Rules (BPP)
@@ -112,14 +154,18 @@ fn should_transcode(
     let height = metadata.height as f64;
     let fps = metadata.fps;
 
-    if width == 0.0 || height == 0.0 || bitrate == 0.0 {
+    if width == 0.0 || height == 0.0 {
         return (
             false,
-            "Incomplete metadata (bitrate/resolution)".to_string(),
+            "Incomplete metadata (resolution missing)".to_string(),
         );
     }
 
-    let bpp = bitrate / (width * height * fps);
+    let bpp = if bitrate > 0.0 && fps > 0.0 {
+        bitrate / (width * height * fps)
+    } else {
+        0.0
+    };
 
     // Normalize BPP based on resolution
     let res_correction = if width >= 3840.0 {
@@ -131,8 +177,8 @@ fn should_transcode(
     };
     let normalized_bpp = bpp * res_correction;
 
-    // Heuristic via config
-    if normalized_bpp < config.transcode.min_bpp_threshold {
+    // Heuristic via config (only if bitrate/fps are known)
+    if bpp > 0.0 && normalized_bpp < config.transcode.min_bpp_threshold {
         return (
             false,
             format!(
@@ -156,11 +202,61 @@ fn should_transcode(
         );
     }
 
-    (
-        true,
+    let reason = if bpp > 0.0 {
         format!(
             "Ready for {} transcode (Current codec: {}, BPP: {:.4})",
             target_codec_str, metadata.codec_name, bpp
-        ),
-    )
+        )
+    } else {
+        format!(
+            "Ready for {} transcode (Current codec: {}, bitrate/fps unknown)",
+            target_codec_str, metadata.codec_name
+        )
+    };
+
+    (true, reason)
+}
+
+fn encoder_available_for_codec(
+    target_codec: crate::config::OutputCodec,
+    hw_info: Option<&HardwareInfo>,
+    encoder_caps: &crate::media::ffmpeg::EncoderCapabilities,
+) -> bool {
+    let hw_vendor = hw_info.map(|h| h.vendor);
+    match target_codec {
+        crate::config::OutputCodec::Av1 => {
+            matches!(hw_vendor, Some(Vendor::Apple))
+                && encoder_caps.has_video_encoder("av1_videotoolbox")
+                || matches!(hw_vendor, Some(Vendor::Intel))
+                    && encoder_caps.has_video_encoder("av1_qsv")
+                || matches!(hw_vendor, Some(Vendor::Nvidia))
+                    && encoder_caps.has_video_encoder("av1_nvenc")
+                || matches!(hw_vendor, Some(Vendor::Amd))
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "av1_amf" } else { "av1_vaapi" })
+                || encoder_caps.has_libsvtav1()
+                || encoder_caps.has_video_encoder("libaom-av1")
+        }
+        crate::config::OutputCodec::Hevc => {
+            matches!(hw_vendor, Some(Vendor::Apple))
+                && encoder_caps.has_video_encoder("hevc_videotoolbox")
+                || matches!(hw_vendor, Some(Vendor::Intel))
+                    && encoder_caps.has_video_encoder("hevc_qsv")
+                || matches!(hw_vendor, Some(Vendor::Nvidia))
+                    && encoder_caps.has_video_encoder("hevc_nvenc")
+                || matches!(hw_vendor, Some(Vendor::Amd))
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "hevc_amf" } else { "hevc_vaapi" })
+                || encoder_caps.has_libx265()
+        }
+        crate::config::OutputCodec::H264 => {
+            matches!(hw_vendor, Some(Vendor::Apple))
+                && encoder_caps.has_video_encoder("h264_videotoolbox")
+                || matches!(hw_vendor, Some(Vendor::Intel))
+                    && encoder_caps.has_video_encoder("h264_qsv")
+                || matches!(hw_vendor, Some(Vendor::Nvidia))
+                    && encoder_caps.has_video_encoder("h264_nvenc")
+                || matches!(hw_vendor, Some(Vendor::Amd))
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "h264_amf" } else { "h264_vaapi" })
+                || encoder_caps.has_libx264()
+        }
+    }
 }

@@ -21,9 +21,14 @@ interface TranscodeSettingsPayload {
     size_reduction_threshold: number;
     min_bpp_threshold: number;
     min_file_size_mb: number;
-    output_codec: "av1" | "hevc";
+    output_codec: "av1" | "hevc" | "h264";
     quality_profile: "quality" | "balanced" | "speed";
     threads: number;
+    allow_fallback: boolean;
+    hdr_mode: "preserve" | "tonemap";
+    tonemap_algorithm: "hable" | "mobius" | "reinhard" | "clip";
+    tonemap_peak: number;
+    tonemap_desat: number;
 }
 
 export default function TranscodeSettings() {
@@ -108,9 +113,9 @@ export default function TranscodeSettings() {
                 {/* Codec Selection */}
                 <div className="md:col-span-2 space-y-3">
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
-                        <Video size={14} /> Output Codec
+                        <Video size={14} /> Preferred Codec
                     </label>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <button
                             onClick={() => setSettings({ ...settings, output_codec: "av1" })}
                             className={cn(
@@ -121,7 +126,7 @@ export default function TranscodeSettings() {
                             )}
                         >
                             <span className="font-bold text-lg">AV1</span>
-                            <span className="text-xs text-center opacity-70">Best compression, requires modern hardware.</span>
+                            <span className="text-xs text-center opacity-70">Best compression, depends on encoder availability.</span>
                         </button>
                         <button
                             onClick={() => setSettings({ ...settings, output_codec: "hevc" })}
@@ -135,6 +140,18 @@ export default function TranscodeSettings() {
                             <span className="font-bold text-lg">HEVC (H.265)</span>
                             <span className="text-xs text-center opacity-70">Broad compatibility, faster hardware encoding.</span>
                         </button>
+                        <button
+                            onClick={() => setSettings({ ...settings, output_codec: "h264" })}
+                            className={cn(
+                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                settings.output_codec === "h264"
+                                    ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
+                                    : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
+                            )}
+                        >
+                            <span className="font-bold text-lg">H.264</span>
+                            <span className="text-xs text-center opacity-70">Maximum compatibility, larger files.</span>
+                        </button>
                     </div>
                 </div>
 
@@ -143,7 +160,7 @@ export default function TranscodeSettings() {
                     <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
                         <Gauge size={14} /> Quality Profile
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {(["speed", "balanced", "quality"] as const).map((profile) => (
                             <button
                                 key={profile}
@@ -160,6 +177,108 @@ export default function TranscodeSettings() {
                         ))}
                     </div>
                 </div>
+
+                <div className="md:col-span-2 flex items-center justify-between rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4">
+                    <div>
+                        <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow Fallback</p>
+                        <p className="text-[10px] text-helios-slate mt-1">If preferred codec is unavailable, use the best available fallback.</p>
+                    </div>
+                    <div className="relative inline-flex items-center cursor-pointer">
+                        <input
+                            id="fallback-toggle"
+                            type="checkbox"
+                            checked={settings.allow_fallback}
+                            onChange={(e) => setSettings({ ...settings, allow_fallback: e.target.checked })}
+                            className="sr-only peer"
+                        />
+                        <div className="w-10 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
+                    </div>
+                </div>
+
+                {/* HDR + Tonemapping */}
+                <div className="md:col-span-2 space-y-3 pt-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                        <Film size={14} /> HDR Handling
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <button
+                            onClick={() => setSettings({ ...settings, hdr_mode: "preserve" })}
+                            className={cn(
+                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                settings.hdr_mode === "preserve"
+                                    ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
+                                    : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
+                            )}
+                        >
+                            <span className="font-bold text-sm">Preserve HDR</span>
+                            <span className="text-xs text-center opacity-70">Keep HDR metadata and color space intact.</span>
+                        </button>
+                        <button
+                            onClick={() => setSettings({ ...settings, hdr_mode: "tonemap" })}
+                            className={cn(
+                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                settings.hdr_mode === "tonemap"
+                                    ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
+                                    : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
+                            )}
+                        >
+                            <span className="font-bold text-sm">Tonemap to SDR</span>
+                            <span className="text-xs text-center opacity-70">Convert HDR to SDR for compatibility.</span>
+                        </button>
+                    </div>
+                </div>
+
+                {settings.hdr_mode === "tonemap" && (
+                    <>
+                        <div className="space-y-3">
+                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                                <Gauge size={14} /> Tonemap Algorithm
+                            </label>
+                            <select
+                                value={settings.tonemap_algorithm}
+                                onChange={(e) => setSettings({ ...settings, tonemap_algorithm: e.target.value as TranscodeSettingsPayload["tonemap_algorithm"] })}
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            >
+                                <option value="hable">Hable</option>
+                                <option value="mobius">Mobius</option>
+                                <option value="reinhard">Reinhard</option>
+                                <option value="clip">Clip</option>
+                            </select>
+                            <p className="text-[10px] text-helios-slate ml-1">Choose the tone curve for HDR → SDR conversion.</p>
+                        </div>
+
+                        <div className="space-y-3">
+                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                                <Scale size={14} /> Tonemap Peak (nits)
+                            </label>
+                            <input
+                                type="number"
+                                min="50"
+                                max="1000"
+                                value={settings.tonemap_peak}
+                                onChange={(e) => setSettings({ ...settings, tonemap_peak: parseFloat(e.target.value) || 100 })}
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            />
+                            <p className="text-[10px] text-helios-slate ml-1">Peak brightness used for tone mapping.</p>
+                        </div>
+
+                        <div className="space-y-3">
+                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                                <Zap size={14} /> Tonemap Desaturation
+                            </label>
+                            <input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={settings.tonemap_desat}
+                                onChange={(e) => setSettings({ ...settings, tonemap_desat: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            />
+                            <p className="text-[10px] text-helios-slate ml-1">Reduce oversaturated highlights after tonemapping.</p>
+                        </div>
+                    </>
+                )}
 
                 {/* Numeric Inputs */}
                 <div className="space-y-3">

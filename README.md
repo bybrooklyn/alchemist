@@ -6,13 +6,14 @@ Alchemist is a Rust-based video transcoding system that automatically converts y
 
 ## Features
 
-- **Hardware Acceleration**: Supports NVIDIA (NVENC), Intel (QSV), AMD (VAAPI) (macOS VideoToolbox is experimental/unsupported)
+- **Hardware Acceleration**: Supports NVIDIA (NVENC), Intel (QSV), AMD (VAAPI), Apple (VideoToolbox)
 - **CPU Fallback**: Automatic software encoding with libsvtav1 when GPU is unavailable
 - **Intelligent Analysis**: Only transcodes files that will benefit from AV1 encoding
 - **Web Dashboard**: Real-time monitoring and control via Axum/Askama/HTMX-based UI
 - **Single Binary**: All assets and templates are embedded into the binary for easy deployment
 - **Background Processing**: Queue-based system with concurrent job support
 - **Performance Metrics**: Detailed logging and statistics for each transcode job
+- **HDR Handling**: Preserve HDR metadata or tonemap to SDR for compatibility
 
 ## Quick Start
 
@@ -32,8 +33,8 @@ cd alchemist
 # Build the project
 cargo build --release
 
-# Run the server
-./target/release/alchemist --server
+# Run the server (default)
+./target/release/alchemist
 ```
 
 ### Docker Deployment
@@ -88,17 +89,24 @@ directories = [                  # Auto-scan directories
 
 ```bash
 # Scan and transcode specific directories
-alchemist /path/to/videos /another/path
+alchemist --cli --dir /path/to/videos --dir /another/path
 
 # Dry run (analyze only, don't transcode)
-alchemist --dry-run /path/to/videos
+alchemist --cli --dry-run --dir /path/to/videos
 ```
 
 ### Server Mode
 
 ```bash
 # Start web server on default port (3000)
-alchemist --server
+alchemist
+```
+
+### Reset Auth
+
+```bash
+# Clear users/sessions and re-run setup
+alchemist --reset-auth
 ```
 
 ## License

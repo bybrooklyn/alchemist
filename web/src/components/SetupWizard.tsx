@@ -12,7 +12,6 @@ import {
     User,
     Lock,
     Video,
-    Info
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -55,9 +54,6 @@ export default function SetupWizard() {
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
 
-    // Tooltip state
-    const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
-
     const [config, setConfig] = useState<ConfigState>({
         username: '',
         password: '',
@@ -67,7 +63,7 @@ export default function SetupWizard() {
         output_codec: 'av1',
         quality_profile: 'balanced',
         directories: ['/media/movies'],
-        allow_cpu_encoding: false,
+        allow_cpu_encoding: true,
         enable_telemetry: true
     });
 
@@ -315,7 +311,7 @@ export default function SetupWizard() {
                             <div className="space-y-6">
                                 <div className="space-y-3">
                                     <label className="text-sm font-bold uppercase tracking-wider text-helios-slate">Transcoding Target</label>
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <button
                                             onClick={() => setConfig({ ...config, output_codec: "av1" })}
                                             className={clsx(
@@ -359,44 +355,6 @@ export default function SetupWizard() {
                                         className="w-full accent-helios-solar h-2 bg-helios-surface-soft rounded-lg appearance-none cursor-pointer"
                                     />
                                     <p className="text-[10px] text-helios-slate italic">How many files to process at the same time.</p>
-                                </div>
-
-                                <div className="pt-2 border-t border-helios-line/10">
-                                    <label className="flex items-center justify-between group cursor-pointer">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs font-bold uppercase tracking-wider text-helios-slate">Anonymous Telemetry</span>
-                                            <div className="relative">
-                                                <button
-                                                    onMouseEnter={() => setActiveTooltip('telemetry')}
-                                                    onMouseLeave={() => setActiveTooltip(null)}
-                                                    className="text-helios-slate/40 hover:text-helios-solar transition-colors"
-                                                >
-                                                    <Info size={14} />
-                                                </button>
-                                                <AnimatePresence>
-                                                    {activeTooltip === 'telemetry' && (
-                                                        <motion.div
-                                                            initial={{ opacity: 0, y: 10 }}
-                                                            animate={{ opacity: 1, y: 0 }}
-                                                            exit={{ opacity: 0, y: 10 }}
-                                                            className="absolute bottom-full left-0 mb-2 w-48 p-2 bg-helios-surface-soft border border-helios-line/40 rounded-lg shadow-xl text-[10px] text-helios-slate z-50 leading-relaxed"
-                                                        >
-                                                            Help improve Alchemist by sending anonymous usage statistics and error reports. No filenames or personal data are ever collected.
-                                                        </motion.div>
-                                                    )}
-                                                </AnimatePresence>
-                                            </div>
-                                        </div>
-                                        <div className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={config.enable_telemetry}
-                                                onChange={(e) => setConfig({ ...config, enable_telemetry: e.target.checked })}
-                                                className="sr-only peer"
-                                            />
-                                            <div className="w-9 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
-                                        </div>
-                                    </label>
                                 </div>
 
                                 {hardware && (
@@ -487,7 +445,7 @@ export default function SetupWizard() {
                                 Final Review
                             </h2>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="p-4 rounded-xl bg-helios-surface-soft/50 border border-helios-line/20 text-xs text-helios-slate space-y-2">
                                     <p>ACCOUNT: <span className="text-helios-ink font-bold">{config.username}</span></p>
                                     <p>TARGET: <span className="text-helios-ink font-bold uppercase">{config.output_codec}</span></p>

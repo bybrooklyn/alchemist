@@ -16,8 +16,12 @@ use tokio::sync::RwLock;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Directories to scan for media files
-    #[arg()]
+    /// Run in CLI mode (process directories and exit)
+    #[arg(long)]
+    cli: bool,
+
+    /// Directories to scan for media files (CLI mode only)
+    #[arg(long, value_name = "DIR")]
     directories: Vec<PathBuf>,
 
     /// Dry run (don't actually transcode)
@@ -27,10 +31,9 @@ struct Args {
     /// Output directory (optional, defaults to same as input with .av1)
     #[arg(short, long)]
     output_dir: Option<PathBuf>,
-
-    /// Run as web server
+    /// Reset admin user/password and sessions (forces setup mode)
     #[arg(long)]
-    server: bool,
+    reset_auth: bool,
 }
 
 #[tokio::main]
@@ -99,18 +102,21 @@ async fn run() -> Result<()> {
     let args = Args::parse();
     info!(
         target: "startup",
-        "Parsed CLI args: server_mode={}, dry_run={}, output_dir={:?}, directories={}",
-        args.server,
+        "Parsed CLI args: cli_mode={}, reset_auth={}, dry_run={}, output_dir={:?}, directories={}",
+        args.cli,
+        args.reset_auth,
         args.dry_run,
         args.output_dir,
         args.directories.len()
     );
 
     // ... rest of logic remains largely the same, just inside run()
-    // Default to server mode if no arguments are provided (e.g. double-click run)
-    // or if explicit --server flag is used
-    let is_server_mode = args.server || args.directories.is_empty();
+    // Default to server mode unless CLI is explicitly requested.
+    let is_server_mode = !args.cli;
     info!(target: "startup", "Resolved server mode: {}", is_server_mode);
+    if is_server_mode && !args.directories.is_empty() {
+        warn!("Directories were provided without --cli; ignoring CLI inputs.");
+    }
 
     // 0. Load Configuration
     let config_start = Instant::now();
@@ -161,6 +167,11 @@ async fn run() -> Result<()> {
         "Database initialized in {} ms",
         db_start.elapsed().as_millis()
     );
+    if args.reset_auth {
+        db.reset_auth().await?;
+        warn!("Auth reset requested. All users and sessions cleared.");
+        setup_mode = true;
+    }
     if is_server_mode {
         let users_start = Instant::now();
         let has_users = db.has_users().await?;
@@ -225,6 +236,7 @@ async fn run() -> Result<()> {
     if let Some(ref path) = hw_info.device_path {
         info!("  Device Path: {}", path);
     }
+    alchemist::media::ffmpeg::warm_encoder_cache();
 
     // Check CPU encoding policy
     if !setup_mode && hw_info.vendor == hardware::Vendor::Cpu {
@@ -472,7 +484,7 @@ async fn run() -> Result<()> {
     } else {
         // CLI Mode
         if setup_mode {
-            error!("Configuration required. Run with --server to use the web-based setup wizard, or create config.toml manually.");
+            error!("Configuration required. Run without --cli to use the web-based setup wizard, or create config.toml manually.");
 
             // CLI early exit - error
             // (Caller will handle pause-on-exit if needed)
@@ -482,9 +494,7 @@ async fn run() -> Result<()> {
         }
 
         if args.directories.is_empty() {
-            error!(
-                "No directories provided. Usage: alchemist <DIRECTORIES>... or alchemist --server"
-            );
+            error!("No directories provided. Usage: alchemist --cli --dir <DIR> [--dir <DIR> ...]");
             return Err(alchemist::error::AlchemistError::Config(
                 "Missing directories for CLI mode".into(),
             ));

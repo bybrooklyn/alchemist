@@ -22,11 +22,11 @@ const navItems = [
 ---
 
 <aside
-    class="w-64 bg-helios-surface border-r border-helios-line/60 flex flex-col p-4 gap-4"
+    class="w-full lg:w-64 bg-helios-surface border-b lg:border-b-0 lg:border-r border-helios-line/60 flex flex-col lg:flex-col p-3 lg:p-4 gap-3 lg:gap-4"
 >
     <a
         href="/"
-        class="flex items-center gap-3 px-2 pb-4 border-b border-helios-line/40"
+        class="flex items-center gap-3 px-2 pb-3 lg:pb-4 border-b border-helios-line/40"
     >
         <div
             class="w-8 h-8 rounded-lg bg-helios-solar text-helios-main flex items-center justify-center font-bold"
@@ -36,7 +36,7 @@ const navItems = [
         <span class="font-bold text-lg text-helios-ink">Alchemist</span>
     </a>
 
-    <nav class="flex flex-col gap-2 flex-1">
+    <nav class="flex flex-row lg:flex-col gap-2 flex-1 overflow-x-auto lg:overflow-visible pb-1 lg:pb-0">
         {
             navItems.map(({ href, label, Icon }) => {
                 const isActive =
@@ -46,7 +46,7 @@ const navItems = [
                     <a
                         href={href}
                         class:list={[
-                            "flex items-center gap-3 px-3 py-2 rounded-xl transition-colors",
+                            "flex items-center gap-3 px-3 py-2 rounded-xl transition-colors whitespace-nowrap shrink-0",
                             isActive
                                 ? "bg-helios-solar text-helios-main font-bold"
                                 : "text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink",
@@ -60,7 +60,7 @@ const navItems = [
         }
     </nav>
 
-    <div class="mt-auto">
+    <div class="mt-auto hidden lg:block">
         <SystemStatus client:load />
     </div>
 </aside>

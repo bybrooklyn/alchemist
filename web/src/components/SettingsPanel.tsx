@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette } from "lucide-react";
 import WatchFolders from "./WatchFolders";
@@ -44,21 +44,20 @@ export default function SettingsPanel() {
         }
     };
 
-    const tabSections = useMemo(
-        () => [
-            { label: "Personalize", ids: ["appearance"] },
-            { label: "Library", ids: ["watch", "files", "schedule"] },
-            { label: "Processing", ids: ["transcode", "hardware"] },
-            { label: "System", ids: ["notifications", "system"] },
-        ],
-        []
-    );
+    const navItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
     useEffect(() => {
         if (activeIndex < 0) {
             setActiveTab("watch");
         }
     }, [activeIndex]);
+
+    useEffect(() => {
+        const target = navItemRefs.current[activeTab];
+        if (target) {
+            target.scrollIntoView({ block: "nearest" });
+        }
+    }, [activeTab]);
 
     const variants = {
         enter: (direction: number) => ({
@@ -81,44 +80,36 @@ export default function SettingsPanel() {
         <div className="flex flex-col lg:flex-row gap-8">
             {/* Sidebar Navigation for Settings */}
             <nav className="w-full lg:w-64 flex-shrink-0">
-                <div className="sticky top-8 space-y-6">
-                    {tabSections.map((section) => (
-                        <div key={section.label} className="space-y-2">
-                            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-helios-slate/50 px-2">
-                                {section.label}
-                            </div>
-                            <div className="space-y-1">
-                                {section.ids.map((tabId) => {
-                                    const tab = TABS.find((item) => item.id === tabId);
-                                    if (!tab) return null;
-                                    const isActive = activeTab === tab.id;
-                                    return (
-                                        <button
-                                            key={tab.id}
-                                            onClick={() => paginate(tab.id)}
-                                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 relative overflow-hidden group ${isActive
-                                                ? "text-helios-ink bg-helios-surface-soft shadow-sm border border-helios-line/20"
-                                                : "text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft/50"
-                                                }`}
-                                        >
-                                            {isActive && (
-                                                <motion.div
-                                                    layoutId="active-tab"
-                                                    className="absolute inset-0 bg-helios-surface-soft border border-helios-line/20 rounded-xl"
-                                                    initial={false}
-                                                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                                                />
-                                            )}
-                                            <span className="relative z-10 flex items-center gap-3">
-                                                <tab.icon size={18} className={isActive ? "text-helios-solar" : "opacity-70 group-hover:opacity-100"} />
-                                                {tab.label}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    ))}
+                <div className="sticky top-8 max-h-[calc(100vh-8rem)] overflow-y-auto pr-1 space-y-1">
+                    {TABS.map((tab) => {
+                        const isActive = activeTab === tab.id;
+                        return (
+                            <button
+                                key={tab.id}
+                                ref={(node) => {
+                                    navItemRefs.current[tab.id] = node;
+                                }}
+                                onClick={() => paginate(tab.id)}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 relative overflow-hidden group ${isActive
+                                    ? "text-helios-ink bg-helios-surface-soft shadow-sm border border-helios-line/20"
+                                    : "text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft/50"
+                                    }`}
+                            >
+                                {isActive && (
+                                    <motion.div
+                                        layoutId="active-tab"
+                                        className="absolute inset-0 bg-helios-surface-soft border border-helios-line/20 rounded-xl"
+                                        initial={false}
+                                        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                                    />
+                                )}
+                                <span className="relative z-10 flex items-center gap-3">
+                                    <tab.icon size={18} className={isActive ? "text-helios-solar" : "opacity-70 group-hover:opacity-100"} />
+                                    {tab.label}
+                                </span>
+                            </button>
+                        );
+                    })}
                 </div>
             </nav>
 

@@ -64,6 +64,10 @@ impl ConfigWizard {
                 threads: 0,
                 quality_profile: crate::config::QualityProfile::Balanced,
                 output_codec: crate::config::OutputCodec::Av1,
+                hdr_mode: crate::config::HdrMode::Preserve,
+                tonemap_algorithm: crate::config::TonemapAlgorithm::Hable,
+                tonemap_peak: crate::config::default_tonemap_peak(),
+                tonemap_desat: crate::config::default_tonemap_desat(),
                 subtitle_mode: crate::config::SubtitleMode::Copy,
             },
             hardware: crate::config::HardwareConfig {

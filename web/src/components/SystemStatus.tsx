@@ -160,7 +160,7 @@ export default function SystemStatus() {
                                     </div>
 
                                     {/* Main Metrics Grid */}
-                                    <div className="grid grid-cols-2 gap-4 mb-8">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
                                         <div className="bg-helios-surface-soft/50 rounded-2xl p-5 border border-helios-line/10 flex flex-col items-center text-center gap-2">
                                             <Zap size={20} className="text-helios-solar opacity-80" />
                                             <div className="flex flex-col">
@@ -198,7 +198,7 @@ export default function SystemStatus() {
                                     </div>
 
                                     {/* Secondary Metrics Row */}
-                                    <div className="grid grid-cols-3 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                         <div className="p-3 rounded-xl bg-status-success/5 border border-status-success/10 flex flex-col items-center justify-center text-center">
                                             <CheckCircle2 size={16} className="text-status-success mb-1" />
                                             <span className="text-lg font-bold text-helios-ink">{stats.completed}</span>

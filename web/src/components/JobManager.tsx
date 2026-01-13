@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
-    Search, RefreshCw, Trash2, Ban, Play,
-    AlertCircle, Clock, FileVideo,
-    X, Info, Activity, Database, Zap, ArrowRight, Maximize2
+    Search, RefreshCw, Trash2, Ban,
+    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal
 } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { clsx, type ClassValue } from "clsx";
@@ -68,6 +67,15 @@ export default function JobManager() {
     const [refreshing, setRefreshing] = useState(false);
     const [focusedJob, setFocusedJob] = useState<JobDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
+    const [menuJobId, setMenuJobId] = useState<number | null>(null);
+    const menuRef = useRef<HTMLDivElement | null>(null);
+    const [confirmState, setConfirmState] = useState<{
+        title: string;
+        body: string;
+        confirmLabel: string;
+        confirmTone?: "danger" | "primary";
+        onConfirm: () => Promise<void> | void;
+    } | null>(null);
 
     // Filter mapping
     const getStatusFilter = (tab: TabType) => {
@@ -116,6 +124,17 @@ export default function JobManager() {
         return () => clearInterval(interval);
     }, [fetchJobs]);
 
+    useEffect(() => {
+        if (!menuJobId) return;
+        const handleClick = (event: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setMenuJobId(null);
+            }
+        };
+        document.addEventListener("mousedown", handleClick);
+        return () => document.removeEventListener("mousedown", handleClick);
+    }, [menuJobId]);
+
     const toggleSelect = (id: number) => {
         const newSet = new Set(selected);
         if (newSet.has(id)) newSet.delete(id);
@@ -133,7 +152,6 @@ export default function JobManager() {
 
     const handleBatch = async (action: "cancel" | "restart" | "delete") => {
         if (selected.size === 0) return;
-        if (!confirm(`Are you sure you want to ${action} ${selected.size} jobs?`)) return;
 
         try {
             const res = await apiFetch("/api/jobs/batch", {
@@ -154,7 +172,6 @@ export default function JobManager() {
     };
 
     const clearCompleted = async () => {
-        if (!confirm("Clear all completed jobs?")) return;
         await apiFetch("/api/jobs/clear-completed", { method: "POST" });
         fetchJobs();
     };
@@ -219,6 +236,16 @@ export default function JobManager() {
         );
     };
 
+    const openConfirm = (config: {
+        title: string;
+        body: string;
+        confirmLabel: string;
+        confirmTone?: "danger" | "primary";
+        onConfirm: () => Promise<void> | void;
+    }) => {
+        setConfirmState(config);
+    };
+
     return (
         <div className="space-y-6 relative">
             {/* Toolbar */}
@@ -267,13 +294,48 @@ export default function JobManager() {
                         {selected.size} jobs selected
                     </span>
                     <div className="flex gap-2">
-                        <button onClick={() => handleBatch("restart")} className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar" title="Restart">
+                        <button
+                            onClick={() =>
+                                openConfirm({
+                                    title: "Restart jobs",
+                                    body: `Restart ${selected.size} selected jobs?`,
+                                    confirmLabel: "Restart",
+                                    onConfirm: () => handleBatch("restart"),
+                                })
+                            }
+                            className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar"
+                            title="Restart"
+                        >
                             <RefreshCw size={18} />
                         </button>
-                        <button onClick={() => handleBatch("cancel")} className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar" title="Cancel">
+                        <button
+                            onClick={() =>
+                                openConfirm({
+                                    title: "Cancel jobs",
+                                    body: `Cancel ${selected.size} selected jobs?`,
+                                    confirmLabel: "Cancel",
+                                    confirmTone: "danger",
+                                    onConfirm: () => handleBatch("cancel"),
+                                })
+                            }
+                            className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar"
+                            title="Cancel"
+                        >
                             <Ban size={18} />
                         </button>
-                        <button onClick={() => handleBatch("delete")} className="p-2 hover:bg-red-500/10 rounded-lg text-red-500" title="Delete">
+                        <button
+                            onClick={() =>
+                                openConfirm({
+                                    title: "Delete jobs",
+                                    body: `Delete ${selected.size} selected jobs from history?`,
+                                    confirmLabel: "Delete",
+                                    confirmTone: "danger",
+                                    onConfirm: () => handleBatch("delete"),
+                                })
+                            }
+                            className="p-2 hover:bg-red-500/10 rounded-lg text-red-500"
+                            title="Delete"
+                        >
                             <Trash2 size={18} />
                         </button>
                     </div>
@@ -296,12 +358,13 @@ export default function JobManager() {
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">Progress</th>
                             <th className="px-6 py-4">Updated</th>
+                            <th className="px-6 py-4 w-14"></th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-helios-line/10">
                         {jobs.length === 0 ? (
                             <tr>
-                                <td colSpan={5} className="px-6 py-12 text-center text-helios-slate">
+                                <td colSpan={6} className="px-6 py-12 text-center text-helios-slate">
                                     {loading ? "Loading jobs..." : "No jobs found"}
                                 </td>
                             </tr>
@@ -361,6 +424,85 @@ export default function JobManager() {
                                     <td className="px-6 py-4 text-xs text-helios-slate font-mono">
                                         {new Date(job.updated_at).toLocaleString()}
                                     </td>
+                                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                                        <div className="relative" ref={menuJobId === job.id ? menuRef : null}>
+                                            <button
+                                                onClick={() => setMenuJobId(menuJobId === job.id ? null : job.id)}
+                                                className="p-2 rounded-lg border border-helios-line/20 hover:bg-helios-surface-soft text-helios-slate"
+                                                title="Actions"
+                                            >
+                                                <MoreHorizontal size={14} />
+                                            </button>
+                                            <AnimatePresence>
+                                                {menuJobId === job.id && (
+                                                    <motion.div
+                                                        initial={{ opacity: 0, y: 6 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        exit={{ opacity: 0, y: 6 }}
+                                                        className="absolute right-0 mt-2 w-44 rounded-xl border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden"
+                                                    >
+                                                        <button
+                                                            onClick={() => {
+                                                                setMenuJobId(null);
+                                                                fetchJobDetails(job.id);
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                        >
+                                                            View details
+                                                        </button>
+                                                        {(job.status === "failed" || job.status === "cancelled") && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setMenuJobId(null);
+                                                                    openConfirm({
+                                                                        title: "Retry job",
+                                                                        body: "Retry this job now?",
+                                                                        confirmLabel: "Retry",
+                                                                        onConfirm: () => handleAction(job.id, "restart"),
+                                                                    });
+                                                                }}
+                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                            >
+                                                                Retry
+                                                            </button>
+                                                        )}
+                                                        {(job.status === "encoding" || job.status === "analyzing") && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setMenuJobId(null);
+                                                                    openConfirm({
+                                                                        title: "Cancel job",
+                                                                        body: "Stop this job immediately?",
+                                                                        confirmLabel: "Cancel",
+                                                                        confirmTone: "danger",
+                                                                        onConfirm: () => handleAction(job.id, "cancel"),
+                                                                    });
+                                                                }}
+                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                            >
+                                                                Stop / Cancel
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            onClick={() => {
+                                                                setMenuJobId(null);
+                                                                openConfirm({
+                                                                    title: "Delete job",
+                                                                    body: "Delete this job from history?",
+                                                                    confirmLabel: "Delete",
+                                                                    confirmTone: "danger",
+                                                                    onConfirm: () => handleAction(job.id, "delete"),
+                                                                });
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-red-500 hover:bg-red-500/5"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </motion.div>
+                                                )}
+                                            </AnimatePresence>
+                                        </div>
+                                    </td>
                                 </tr>
                             ))
                         )}
@@ -371,7 +513,18 @@ export default function JobManager() {
             {/* Footer Actions */}
             <div className="flex justify-between items-center pt-2">
                 <p className="text-xs text-helios-slate font-medium">Showing {jobs.length} jobs (Limit 50)</p>
-                <button onClick={clearCompleted} className="text-xs text-red-500 hover:text-red-400 font-bold flex items-center gap-1 transition-colors">
+                <button
+                    onClick={() =>
+                        openConfirm({
+                            title: "Clear completed jobs",
+                            body: "Remove all completed jobs from history?",
+                            confirmLabel: "Clear",
+                            confirmTone: "danger",
+                            onConfirm: () => clearCompleted(),
+                        })
+                    }
+                    className="text-xs text-red-500 hover:text-red-400 font-bold flex items-center gap-1 transition-colors"
+                >
                     <Trash2 size={12} /> Clear Completed
                 </button>
             </div>
@@ -536,15 +689,30 @@ export default function JobManager() {
                                         <div className="flex gap-2">
                                             {(focusedJob.job.status === 'failed' || focusedJob.job.status === 'cancelled') && (
                                                 <button
-                                                    onClick={() => handleAction(focusedJob.job.id, 'restart')}
-                                                    className="px-4 py-2 bg-helios-solar text-white rounded-lg text-sm font-bold flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-sm"
+                                                    onClick={() =>
+                                                        openConfirm({
+                                                            title: "Retry job",
+                                                            body: "Retry this job now?",
+                                                            confirmLabel: "Retry",
+                                                            onConfirm: () => handleAction(focusedJob.job.id, 'restart'),
+                                                        })
+                                                    }
+                                                    className="px-4 py-2 bg-helios-solar text-helios-main rounded-lg text-sm font-bold flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-sm"
                                                 >
                                                     <RefreshCw size={14} /> Retry Job
                                                 </button>
                                             )}
                                             {(focusedJob.job.status === 'encoding' || focusedJob.job.status === 'analyzing') && (
                                                 <button
-                                                    onClick={() => handleAction(focusedJob.job.id, 'cancel')}
+                                                    onClick={() =>
+                                                        openConfirm({
+                                                            title: "Cancel job",
+                                                            body: "Stop this job immediately?",
+                                                            confirmLabel: "Cancel",
+                                                            confirmTone: "danger",
+                                                            onConfirm: () => handleAction(focusedJob.job.id, 'cancel'),
+                                                        })
+                                                    }
                                                     className="px-4 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-helios-surface-soft active:scale-95 transition-all"
                                                 >
                                                     <Ban size={14} /> Stop / Cancel
@@ -552,14 +720,71 @@ export default function JobManager() {
                                             )}
                                         </div>
                                         <button
-                                            onClick={() => {
-                                                if (confirm("Delete this job from history?")) handleAction(focusedJob.job.id, 'delete');
-                                            }}
+                                            onClick={() =>
+                                                openConfirm({
+                                                    title: "Delete job",
+                                                    body: "Delete this job from history?",
+                                                    confirmLabel: "Delete",
+                                                    confirmTone: "danger",
+                                                    onConfirm: () => handleAction(focusedJob.job.id, 'delete'),
+                                                })
+                                            }
                                             className="px-4 py-2 text-red-500 hover:bg-red-500/5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
                                         >
                                             <Trash2 size={14} /> Delete
                                         </button>
                                     </div>
+                                </div>
+                            </motion.div>
+                        </div>
+                    </>
+                )}
+            </AnimatePresence>
+
+            {/* Confirm Modal */}
+            <AnimatePresence>
+                {confirmState && (
+                    <>
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setConfirmState(null)}
+                            className="fixed inset-0 bg-helios-ink/40 backdrop-blur-md z-[120]"
+                        />
+                        <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[121]">
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                                className="w-full max-w-sm bg-helios-surface border border-helios-line/20 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden mx-4"
+                            >
+                                <div className="p-6 space-y-2">
+                                    <h3 className="text-lg font-bold text-helios-ink">{confirmState.title}</h3>
+                                    <p className="text-sm text-helios-slate">{confirmState.body}</p>
+                                </div>
+                                <div className="flex items-center justify-end gap-2 px-6 pb-6">
+                                    <button
+                                        onClick={() => setConfirmState(null)}
+                                        className="px-4 py-2 text-sm font-semibold text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft rounded-lg"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            const action = confirmState.onConfirm;
+                                            setConfirmState(null);
+                                            await action();
+                                        }}
+                                        className={cn(
+                                            "px-4 py-2 text-sm font-semibold rounded-lg",
+                                            confirmState.confirmTone === "danger"
+                                                ? "bg-red-500/15 text-red-500 hover:bg-red-500/25"
+                                                : "bg-helios-solar text-helios-main hover:brightness-110"
+                                        )}
+                                    >
+                                        {confirmState.confirmLabel}
+                                    </button>
                                 </div>
                             </motion.div>
                         </div>

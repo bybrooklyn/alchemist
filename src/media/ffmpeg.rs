@@ -1,7 +1,7 @@
 //! FFmpeg wrapper module for Alchemist
 //! Provides typed FFmpeg commands, encoder detection, and structured progress parsing.
 
-use crate::config::{CpuPreset, QualityProfile};
+use crate::config::{CpuPreset, HdrMode, QualityProfile, TonemapAlgorithm};
 use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareInfo, Vendor};
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
 /// Available hardware accelerators detected from FFmpeg
@@ -136,6 +137,18 @@ impl EncoderCapabilities {
     pub fn has_libsvtav1(&self) -> bool {
         self.has_video_encoder("libsvtav1")
     }
+
+    pub fn has_hevc_videotoolbox(&self) -> bool {
+        self.has_video_encoder("hevc_videotoolbox")
+    }
+
+    pub fn has_libx265(&self) -> bool {
+        self.has_video_encoder("libx265")
+    }
+
+    pub fn has_libx264(&self) -> bool {
+        self.has_video_encoder("libx264")
+    }
 }
 
 // QualityProfile moved to config.rs
@@ -148,6 +161,12 @@ pub struct FFmpegCommandBuilder<'a> {
     cpu_preset: CpuPreset,
     target_codec: crate::config::OutputCodec,
     threads: usize,
+    allow_fallback: bool,
+    hdr_mode: HdrMode,
+    tonemap_algorithm: TonemapAlgorithm,
+    tonemap_peak: f32,
+    tonemap_desat: f32,
+    metadata: Option<&'a crate::media::pipeline::MediaMetadata>,
 }
 
 impl<'a> FFmpegCommandBuilder<'a> {
@@ -160,6 +179,12 @@ impl<'a> FFmpegCommandBuilder<'a> {
             cpu_preset: CpuPreset::Medium,
             target_codec: crate::config::OutputCodec::Av1,
             threads: 0,
+            allow_fallback: true,
+            hdr_mode: HdrMode::Preserve,
+            tonemap_algorithm: TonemapAlgorithm::Hable,
+            tonemap_peak: crate::config::default_tonemap_peak(),
+            tonemap_desat: crate::config::default_tonemap_desat(),
+            metadata: None,
         }
     }
 
@@ -188,14 +213,60 @@ impl<'a> FFmpegCommandBuilder<'a> {
         self
     }
 
+    pub fn with_allow_fallback(mut self, allow_fallback: bool) -> Self {
+        self.allow_fallback = allow_fallback;
+        self
+    }
+
+    pub fn with_hdr_settings(
+        mut self,
+        hdr_mode: HdrMode,
+        tonemap_algorithm: TonemapAlgorithm,
+        tonemap_peak: f32,
+        tonemap_desat: f32,
+        metadata: Option<&'a crate::media::pipeline::MediaMetadata>,
+    ) -> Self {
+        self.hdr_mode = hdr_mode;
+        self.tonemap_algorithm = tonemap_algorithm;
+        self.tonemap_peak = tonemap_peak;
+        self.tonemap_desat = tonemap_desat;
+        self.metadata = metadata;
+        self
+    }
+
     pub fn build(self) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new("ffmpeg");
         cmd.arg("-hide_banner").arg("-y").arg("-i").arg(self.input);
 
-        match self.hw_info {
-            Some(hw) => self.apply_hardware_params(&mut cmd, hw),
-            None => self.apply_cpu_params(&mut cmd),
+        let caps = encoder_caps();
+        if let Some(selection) = self.select_encoder(caps) {
+            if selection.requested_codec != selection.effective_codec {
+                info!(
+                    "Requested codec: {} | Effective codec: {} ({}). Reason: {}",
+                    selection.requested_codec.as_str(),
+                    selection.effective_codec.as_str(),
+                    selection.encoder,
+                    selection.reason
+                );
+            } else {
+                info!(
+                    "Requested codec: {} | Effective codec: {} ({})",
+                    selection.requested_codec.as_str(),
+                    selection.effective_codec.as_str(),
+                    selection.encoder
+                );
+            }
+            self.apply_encoder(&mut cmd, &selection);
+        } else {
+            warn!(
+                "No suitable encoder found for {} (fallbacks {}). Encoding may fail.",
+                self.target_codec.as_str(),
+                if self.allow_fallback { "allowed" } else { "disabled" }
+            );
+            self.apply_cpu_params(&mut cmd);
         }
+
+        self.apply_hdr_settings(&mut cmd);
 
         if self.threads > 0 {
             cmd.arg("-threads").arg(self.threads.to_string());
@@ -208,92 +279,354 @@ impl<'a> FFmpegCommandBuilder<'a> {
         cmd
     }
 
-    fn apply_hardware_params(&self, cmd: &mut tokio::process::Command, hw: &HardwareInfo) {
-        let codec_str = self.target_codec.as_str();
-
-        // Check if target codec is supported by hardware
-        let supports_codec = hw.supported_codecs.iter().any(|c| c == codec_str);
-
-        if !supports_codec {
-            warn!(
-                "Hardware {:?} does not support {}. Falling back to CPU encoding.",
-                hw.vendor, codec_str
-            );
-            self.apply_cpu_params(cmd);
-            return;
-        }
-
-        match (hw.vendor, self.target_codec) {
-            (Vendor::Intel, crate::config::OutputCodec::Av1) => {
-                if let Some(ref device_path) = hw.device_path {
-                    cmd.arg("-init_hw_device")
-                        .arg(format!("qsv=qsv:{}", device_path));
-                    cmd.arg("-filter_hw_device").arg("qsv");
+    fn apply_encoder(&self, cmd: &mut tokio::process::Command, selection: &EncoderSelection) {
+        match selection.encoder.as_str() {
+            "av1_qsv" => {
+                if let Some(hw) = self.hw_info {
+                    if let Some(ref device_path) = hw.device_path {
+                        cmd.arg("-init_hw_device")
+                            .arg(format!("qsv=qsv:{}", device_path));
+                        cmd.arg("-filter_hw_device").arg("qsv");
+                    }
                 }
                 cmd.arg("-c:v").arg("av1_qsv");
                 cmd.arg("-global_quality").arg(self.profile.qsv_quality());
                 cmd.arg("-look_ahead").arg("1");
             }
-            (Vendor::Intel, crate::config::OutputCodec::Hevc) => {
-                if let Some(ref device_path) = hw.device_path {
-                    cmd.arg("-init_hw_device")
-                        .arg(format!("qsv=qsv:{}", device_path));
-                    cmd.arg("-filter_hw_device").arg("qsv");
+            "hevc_qsv" => {
+                if let Some(hw) = self.hw_info {
+                    if let Some(ref device_path) = hw.device_path {
+                        cmd.arg("-init_hw_device")
+                            .arg(format!("qsv=qsv:{}", device_path));
+                        cmd.arg("-filter_hw_device").arg("qsv");
+                    }
                 }
                 cmd.arg("-c:v").arg("hevc_qsv");
                 cmd.arg("-global_quality").arg(self.profile.qsv_quality());
                 cmd.arg("-look_ahead").arg("1");
             }
-            (Vendor::Nvidia, crate::config::OutputCodec::Av1) => {
+            "av1_nvenc" => {
                 cmd.arg("-c:v").arg("av1_nvenc");
                 cmd.arg("-preset").arg(self.profile.nvenc_preset());
                 cmd.arg("-cq").arg("25");
             }
-            (Vendor::Nvidia, crate::config::OutputCodec::Hevc) => {
+            "hevc_nvenc" => {
                 cmd.arg("-c:v").arg("hevc_nvenc");
                 cmd.arg("-preset").arg(self.profile.nvenc_preset());
                 cmd.arg("-cq").arg("25");
             }
-            (Vendor::Apple, crate::config::OutputCodec::Av1) => {
+            "h264_nvenc" => {
+                cmd.arg("-c:v").arg("h264_nvenc");
+                cmd.arg("-preset").arg(self.profile.nvenc_preset());
+                cmd.arg("-cq").arg("23");
+            }
+            "av1_vaapi" => {
+                if let Some(hw) = self.hw_info {
+                    if let Some(ref device_path) = hw.device_path {
+                        cmd.arg("-vaapi_device").arg(device_path);
+                    }
+                }
+                cmd.arg("-c:v").arg("av1_vaapi");
+            }
+            "hevc_vaapi" => {
+                if let Some(hw) = self.hw_info {
+                    if let Some(ref device_path) = hw.device_path {
+                        cmd.arg("-vaapi_device").arg(device_path);
+                    }
+                }
+                cmd.arg("-c:v").arg("hevc_vaapi");
+            }
+            "h264_vaapi" => {
+                if let Some(hw) = self.hw_info {
+                    if let Some(ref device_path) = hw.device_path {
+                        cmd.arg("-vaapi_device").arg(device_path);
+                    }
+                }
+                cmd.arg("-c:v").arg("h264_vaapi");
+            }
+            "av1_amf" => cmd.arg("-c:v").arg("av1_amf"),
+            "hevc_amf" => cmd.arg("-c:v").arg("hevc_amf"),
+            "h264_amf" => cmd.arg("-c:v").arg("h264_amf"),
+            "av1_videotoolbox" => {
                 cmd.arg("-c:v").arg("av1_videotoolbox");
+                cmd.arg("-b:v").arg("0");
+                cmd.arg("-q:v").arg(self.profile.videotoolbox_quality());
             }
-            (Vendor::Apple, crate::config::OutputCodec::Hevc) => {
+            "hevc_videotoolbox" => {
                 cmd.arg("-c:v").arg("hevc_videotoolbox");
-                // Allow hardware to choose profile, generally reliable
-                cmd.arg("-q:v").arg("60"); // Quality factor
+                cmd.arg("-b:v").arg("0");
+                cmd.arg("-q:v").arg(self.profile.videotoolbox_quality());
+                cmd.arg("-tag:v").arg("hvc1");
             }
-            (Vendor::Amd, crate::config::OutputCodec::Av1) => {
-                // Ensure VAAPI device is set if needed
-                if let Some(ref device_path) = hw.device_path {
-                    cmd.arg("-vaapi_device").arg(device_path);
-                }
-                if cfg!(target_os = "windows") {
-                    cmd.arg("-c:v").arg("av1_amf");
-                } else {
-                    cmd.arg("-c:v").arg("av1_vaapi");
-                }
+            "h264_videotoolbox" => {
+                cmd.arg("-c:v").arg("h264_videotoolbox");
+                cmd.arg("-b:v").arg("0");
+                cmd.arg("-q:v").arg("65");
             }
-            (Vendor::Amd, crate::config::OutputCodec::Hevc) => {
-                if let Some(ref device_path) = hw.device_path {
-                    cmd.arg("-vaapi_device").arg(device_path);
-                }
-                if cfg!(target_os = "windows") {
-                    cmd.arg("-c:v").arg("hevc_amf");
-                } else {
-                    cmd.arg("-c:v").arg("hevc_vaapi");
-                }
-            }
-            (Vendor::Cpu, _) => self.apply_cpu_params(cmd),
-        }
-    }
-
-    fn apply_cpu_params(&self, cmd: &mut tokio::process::Command) {
-        match self.target_codec {
-            crate::config::OutputCodec::Av1 => {
+            "libsvtav1" => {
                 let (preset_str, crf_str) = self.cpu_preset.params();
                 cmd.arg("-c:v").arg("libsvtav1");
                 cmd.arg("-preset").arg(preset_str);
                 cmd.arg("-crf").arg(crf_str);
+            }
+            "libaom-av1" => {
+                cmd.arg("-c:v").arg("libaom-av1");
+                cmd.arg("-crf").arg("32");
+                cmd.arg("-cpu-used").arg("6");
+            }
+            "libx265" => {
+                let preset = self.cpu_preset.as_str();
+                let crf = match self.cpu_preset {
+                    CpuPreset::Slow => "20",
+                    CpuPreset::Medium => "24",
+                    CpuPreset::Fast => "26",
+                    CpuPreset::Faster => "28",
+                };
+                cmd.arg("-c:v").arg("libx265");
+                cmd.arg("-preset").arg(preset);
+                cmd.arg("-crf").arg(crf);
+                cmd.arg("-tag:v").arg("hvc1");
+            }
+            "libx264" => {
+                let preset = self.cpu_preset.as_str();
+                let crf = match self.cpu_preset {
+                    CpuPreset::Slow => "18",
+                    CpuPreset::Medium => "21",
+                    CpuPreset::Fast => "23",
+                    CpuPreset::Faster => "25",
+                };
+                cmd.arg("-c:v").arg("libx264");
+                cmd.arg("-preset").arg(preset);
+                cmd.arg("-crf").arg(crf);
+            }
+            _ => self.apply_cpu_params(cmd),
+        }
+    }
+
+    fn select_encoder(&self, caps: &EncoderCapabilities) -> Option<EncoderSelection> {
+        let preferred = self.target_codec;
+
+        let mut candidates: Vec<EncoderCandidate> = Vec::new();
+        match preferred {
+            crate::config::OutputCodec::Av1 => {
+                self.push_av1_candidates(&mut candidates, caps);
+                if self.allow_fallback {
+                    self.push_hevc_candidates(&mut candidates, caps, "AV1 encoders unavailable");
+                    self.push_h264_candidates(&mut candidates, caps, "HEVC encoders unavailable");
+                }
+            }
+            crate::config::OutputCodec::Hevc => {
+                self.push_hevc_candidates(&mut candidates, caps, "Preferred HEVC");
+                if self.allow_fallback {
+                    self.push_h264_candidates(&mut candidates, caps, "HEVC encoders unavailable");
+                }
+            }
+            crate::config::OutputCodec::H264 => {
+                self.push_h264_candidates(&mut candidates, caps, "Preferred H.264");
+                if self.allow_fallback {
+                    self.push_hevc_candidates(&mut candidates, caps, "H.264 encoders unavailable");
+                }
+            }
+        }
+
+        let selection = candidates.into_iter().find(|c| c.available);
+        selection.map(|c| EncoderSelection {
+            encoder: c.encoder.to_string(),
+            requested_codec: preferred,
+            effective_codec: c.effective_codec,
+            reason: c.reason.to_string(),
+        })
+    }
+
+    fn push_av1_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities) {
+        match self.hw_info.map(|h| h.vendor) {
+            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
+                "av1_videotoolbox",
+                crate::config::OutputCodec::Av1,
+                caps.has_video_encoder("av1_videotoolbox"),
+                "Hardware AV1 (VideoToolbox)",
+            )),
+            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
+                "av1_qsv",
+                crate::config::OutputCodec::Av1,
+                caps.has_video_encoder("av1_qsv"),
+                "Hardware AV1 (QSV)",
+            )),
+            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
+                "av1_nvenc",
+                crate::config::OutputCodec::Av1,
+                caps.has_video_encoder("av1_nvenc"),
+                "Hardware AV1 (NVENC)",
+            )),
+            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
+                if cfg!(target_os = "windows") { "av1_amf" } else { "av1_vaapi" },
+                crate::config::OutputCodec::Av1,
+                caps.has_video_encoder(if cfg!(target_os = "windows") { "av1_amf" } else { "av1_vaapi" }),
+                "Hardware AV1 (AMF/VAAPI)",
+            )),
+            _ => {}
+        }
+        out.push(EncoderCandidate::new(
+            "libsvtav1",
+            crate::config::OutputCodec::Av1,
+            caps.has_libsvtav1(),
+            "CPU AV1 (SVT-AV1)",
+        ));
+        out.push(EncoderCandidate::new(
+            "libaom-av1",
+            crate::config::OutputCodec::Av1,
+            caps.has_video_encoder("libaom-av1"),
+            "CPU AV1 (libaom)",
+        ));
+    }
+
+    fn push_hevc_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities, reason: &str) {
+        match self.hw_info.map(|h| h.vendor) {
+            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
+                "hevc_videotoolbox",
+                crate::config::OutputCodec::Hevc,
+                caps.has_hevc_videotoolbox(),
+                reason,
+            )),
+            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
+                "hevc_qsv",
+                crate::config::OutputCodec::Hevc,
+                caps.has_video_encoder("hevc_qsv"),
+                reason,
+            )),
+            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
+                "hevc_nvenc",
+                crate::config::OutputCodec::Hevc,
+                caps.has_video_encoder("hevc_nvenc"),
+                reason,
+            )),
+            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
+                if cfg!(target_os = "windows") { "hevc_amf" } else { "hevc_vaapi" },
+                crate::config::OutputCodec::Hevc,
+                caps.has_video_encoder(if cfg!(target_os = "windows") { "hevc_amf" } else { "hevc_vaapi" }),
+                reason,
+            )),
+            _ => {}
+        }
+        out.push(EncoderCandidate::new(
+            "libx265",
+            crate::config::OutputCodec::Hevc,
+            caps.has_libx265(),
+            reason,
+        ));
+    }
+
+    fn push_h264_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities, reason: &str) {
+        match self.hw_info.map(|h| h.vendor) {
+            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
+                "h264_videotoolbox",
+                crate::config::OutputCodec::H264,
+                caps.has_video_encoder("h264_videotoolbox"),
+                reason,
+            )),
+            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
+                "h264_qsv",
+                crate::config::OutputCodec::H264,
+                caps.has_video_encoder("h264_qsv"),
+                reason,
+            )),
+            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
+                "h264_nvenc",
+                crate::config::OutputCodec::H264,
+                caps.has_video_encoder("h264_nvenc"),
+                reason,
+            )),
+            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
+                if cfg!(target_os = "windows") { "h264_amf" } else { "h264_vaapi" },
+                crate::config::OutputCodec::H264,
+                caps.has_video_encoder(if cfg!(target_os = "windows") { "h264_amf" } else { "h264_vaapi" }),
+                reason,
+            )),
+            _ => {}
+        }
+        out.push(EncoderCandidate::new(
+            "libx264",
+            crate::config::OutputCodec::H264,
+            caps.has_libx264(),
+            reason,
+        ));
+    }
+
+    fn apply_hdr_settings(&self, cmd: &mut tokio::process::Command) {
+        let Some(metadata) = self.metadata else {
+            return;
+        };
+
+        if metadata.is_hdr && self.hdr_mode == HdrMode::Tonemap {
+            let filter = format!(
+                "zscale=t=linear:npl={},tonemap=tonemap={}:desat={},zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
+                self.tonemap_peak,
+                self.tonemap_algorithm.as_str(),
+                self.tonemap_desat
+            );
+            cmd.arg("-vf").arg(filter);
+            cmd.arg("-color_primaries").arg("bt709");
+            cmd.arg("-color_trc").arg("bt709");
+            cmd.arg("-colorspace").arg("bt709");
+            cmd.arg("-color_range").arg("tv");
+            return;
+        }
+
+        if let Some(ref primaries) = metadata.color_primaries {
+            cmd.arg("-color_primaries").arg(primaries);
+        }
+        if let Some(ref transfer) = metadata.color_transfer {
+            cmd.arg("-color_trc").arg(transfer);
+        }
+        if let Some(ref space) = metadata.color_space {
+            cmd.arg("-colorspace").arg(space);
+        }
+        if let Some(ref range) = metadata.color_range {
+            cmd.arg("-color_range").arg(range);
+        }
+    }
+
+    fn apply_cpu_params(&self, cmd: &mut tokio::process::Command) {
+        let caps = encoder_caps();
+        match self.target_codec {
+            crate::config::OutputCodec::Av1 => {
+                if caps.has_libsvtav1() {
+                    let (preset_str, crf_str) = self.cpu_preset.params();
+                    cmd.arg("-c:v").arg("libsvtav1");
+                    cmd.arg("-preset").arg(preset_str);
+                    cmd.arg("-crf").arg(crf_str);
+                } else if caps.has_libx265() {
+                    warn!("libsvtav1 not available. Falling back to libx265.");
+                    let preset = self.cpu_preset.as_str();
+                    let crf = match self.cpu_preset {
+                        CpuPreset::Slow => "20",
+                        CpuPreset::Medium => "24",
+                        CpuPreset::Fast => "26",
+                        CpuPreset::Faster => "28",
+                    };
+                    cmd.arg("-c:v").arg("libx265");
+                    cmd.arg("-preset").arg(preset);
+                    cmd.arg("-crf").arg(crf);
+                    cmd.arg("-tag:v").arg("hvc1");
+                } else if caps.has_libx264() {
+                    warn!("libsvtav1 not available. Falling back to libx264.");
+                    let preset = self.cpu_preset.as_str();
+                    let crf = match self.cpu_preset {
+                        CpuPreset::Slow => "18",
+                        CpuPreset::Medium => "21",
+                        CpuPreset::Fast => "23",
+                        CpuPreset::Faster => "25",
+                    };
+                    cmd.arg("-c:v").arg("libx264");
+                    cmd.arg("-preset").arg(preset);
+                    cmd.arg("-crf").arg(crf);
+                } else {
+                    warn!("No AV1/HEVC/H.264 CPU encoder available. Encoding will likely fail.");
+                    let (preset_str, crf_str) = self.cpu_preset.params();
+                    cmd.arg("-c:v").arg("libsvtav1");
+                    cmd.arg("-preset").arg(preset_str);
+                    cmd.arg("-crf").arg(crf_str);
+                }
             }
             crate::config::OutputCodec::Hevc => {
                 // For HEVC CPU, we use libx265
@@ -412,6 +745,54 @@ impl FFmpegProgress {
         }
         (self.time_seconds / total_duration * 100.0).min(100.0)
     }
+}
+
+struct EncoderCandidate<'a> {
+    encoder: &'a str,
+    effective_codec: crate::config::OutputCodec,
+    available: bool,
+    reason: &'a str,
+}
+
+impl<'a> EncoderCandidate<'a> {
+    fn new(
+        encoder: &'a str,
+        effective_codec: crate::config::OutputCodec,
+        available: bool,
+        reason: &'a str,
+    ) -> Self {
+        Self {
+            encoder,
+            effective_codec,
+            available,
+            reason,
+        }
+    }
+}
+
+struct EncoderSelection {
+    encoder: String,
+    requested_codec: crate::config::OutputCodec,
+    effective_codec: crate::config::OutputCodec,
+    reason: String,
+}
+
+fn encoder_caps() -> &'static EncoderCapabilities {
+    static CAPS: OnceLock<EncoderCapabilities> = OnceLock::new();
+    CAPS.get_or_init(|| EncoderCapabilities::detect().unwrap_or_default())
+}
+
+pub fn encoder_caps_clone() -> EncoderCapabilities {
+    encoder_caps().clone()
+}
+
+pub fn warm_encoder_cache() {
+    let caps = encoder_caps();
+    info!(
+        "Encoder capabilities cached: video_encoders={}, audio_encoders={}",
+        caps.video_encoders.len(),
+        caps.audio_encoders.len()
+    );
 }
 
 /// VMAF quality score result

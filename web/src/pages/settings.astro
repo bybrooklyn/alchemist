@@ -9,11 +9,11 @@ import { Settings } from "lucide-react";
 <Layout title="Alchemist | Settings">
     <div class="app-shell">
         <Sidebar />
-        <main class="app-main p-8 overflow-y-auto">
-            <header class="flex items-center justify-between mb-8">
+        <main class="app-main p-4 sm:p-6 lg:p-8 overflow-y-auto">
+            <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 sm:mb-8">
                 <div>
                     <h1
-                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
+                        class="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight"
                     >
                         Settings
                     </h1>
@@ -23,7 +23,7 @@ import { Settings } from "lucide-react";
                 </div>
                 <HeaderActions client:load />
             </header>
-            <div class="px-6 pb-6">
+            <div class="px-4 sm:px-6 pb-6">
                 <SettingsPanel client:load />
             </div>
         </main>

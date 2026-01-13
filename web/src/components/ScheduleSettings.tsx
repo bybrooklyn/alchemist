@@ -126,7 +126,7 @@ export default function ScheduleSettings() {
 
             {showForm && (
                 <form onSubmit={handleAdd} className="bg-helios-surface-soft p-4 rounded-xl space-y-4 border border-helios-line/20 mb-6">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Start Time</label>
                             <input

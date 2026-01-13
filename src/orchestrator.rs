@@ -53,6 +53,11 @@ impl Transcoder {
         cpu_preset: CpuPreset,
         target_codec: crate::config::OutputCodec,
         threads: usize,
+        allow_fallback: bool,
+        hdr_mode: crate::config::HdrMode,
+        tonemap_algorithm: crate::config::TonemapAlgorithm,
+        tonemap_peak: f32,
+        tonemap_desat: f32,
         dry_run: bool,
         metadata: &crate::media::pipeline::MediaMetadata,
         event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
@@ -87,6 +92,14 @@ impl Transcoder {
             .with_cpu_preset(cpu_preset)
             .with_codec(target_codec)
             .with_threads(threads)
+            .with_allow_fallback(allow_fallback)
+            .with_hdr_settings(
+                hdr_mode,
+                tonemap_algorithm,
+                tonemap_peak,
+                tonemap_desat,
+                Some(metadata),
+            )
             .build();
 
         info!("Executing FFmpeg command: {:?}", cmd);

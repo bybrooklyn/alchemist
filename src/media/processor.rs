@@ -344,9 +344,11 @@ impl Agent {
         info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
         let config_snapshot = self.config.read().await.clone();
+        let encoder_caps = Arc::new(crate::media::ffmpeg::encoder_caps_clone());
         let planner = BasicPlanner::new(
             Arc::new(config_snapshot.clone()),
             self.hw_info.as_ref().clone(),
+            encoder_caps,
         );
         let decision = planner.plan(&metadata).await?;
         let should_encode = decision.action == "encode";
