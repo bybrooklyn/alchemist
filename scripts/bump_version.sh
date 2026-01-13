@@ -32,7 +32,7 @@ text = pkg.read_text()
 text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ch == "\r" or ord(ch) >= 32)
 new_text, count = re.subn(
     r'(?m)^(\s*"version"\s*:\s*)"[^"]+"',
-    f'\\1"{version}"',
+    rf'\1"{version}"',
     text,
     count=1,
 )
