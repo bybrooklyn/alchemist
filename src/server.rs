@@ -8,8 +8,8 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Path, Query, Request, State},
-    http::{header, StatusCode, Uri},
+    extract::{ConnectInfo, Path, Query, Request, State},
+    http::{header, HeaderMap, StatusCode, Uri},
     middleware::{self, Next},
     response::{
         sse::{Event as AxumEvent, Sse},
@@ -22,15 +22,18 @@ use chrono::Utc;
 use futures::stream::Stream;
 use rand::rngs::OsRng;
 use rand::Rng;
+use reqwest::Url;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -54,6 +57,13 @@ pub struct AppState {
     pub sys: std::sync::Mutex<sysinfo::System>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
+    login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
+    global_rate_limiter: Mutex<RateLimitEntry>,
+}
+
+struct RateLimitEntry {
+    tokens: f64,
+    last_refill: Instant,
 }
 
 pub async fn run_server(
@@ -89,6 +99,11 @@ pub async fn run_server(
         sys: std::sync::Mutex::new(sys),
         file_watcher,
         library_scanner,
+        login_rate_limiter: Mutex::new(HashMap::new()),
+        global_rate_limiter: Mutex::new(RateLimitEntry {
+            tokens: 5.0,
+            last_refill: Instant::now(),
+        }),
     });
 
     let cleanup_db = state.db.clone();
@@ -191,6 +206,10 @@ pub async fn run_server(
             state.clone(),
             auth_middleware,
         ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .with_state(state);
 
     let addr = "0.0.0.0:3000";
@@ -198,7 +217,10 @@ pub async fn run_server(
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(AlchemistError::Io)?;
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .await
         .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
 
@@ -541,7 +563,12 @@ async fn setup_complete_handler(
 
     info!("Configuration saved via web setup. Auth info created.");
 
-    axum::Json(serde_json::json!({ "status": "saved", "token": token })).into_response()
+    let cookie = build_session_cookie(&token);
+    (
+        [(header::SET_COOKIE, cookie)],
+        axum::Json(serde_json::json!({ "status": "saved", "token": token })),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -787,8 +814,13 @@ struct LoginPayload {
 
 async fn login_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::Json(payload): axum::Json<LoginPayload>,
 ) -> impl IntoResponse {
+    if !allow_login_attempt(&state, addr.ip()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
+    }
+
     let user = match state.db.get_user_by_username(&payload.username).await {
         Ok(Some(u)) => u,
         _ => return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
@@ -825,7 +857,12 @@ async fn login_handler(
             .into_response();
     }
 
-    axum::Json(serde_json::json!({ "token": token })).into_response()
+    let cookie = build_session_cookie(&token);
+    (
+        [(header::SET_COOKIE, cookie)],
+        axum::Json(serde_json::json!({ "token": token })),
+    )
+        .into_response()
 }
 
 async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
@@ -859,17 +896,8 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
                 }
             });
 
-        // Fallback: Check query param "token" (for EventSource which can't set headers)
         if token.is_none() {
-            if let Some(query) = req.uri().query() {
-                if let Ok(params) =
-                    serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
-                {
-                    if let Some(t) = params.get("token") {
-                        token = Some(t.clone());
-                    }
-                }
-            }
+            token = get_cookie_value(req.headers(), "alchemist_session");
         }
 
         if let Some(t) = token {
@@ -884,6 +912,17 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
     // 2. Static Assets / Frontend Pages
     // Allow everything else. The frontend app (Layout.astro) handles client-side redirects
     // if the user isn't authenticated, and the backend API protects the actual data.
+    next.run(req).await
+}
+
+async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if !allow_global_request(&state).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
+    }
     next.run(req).await
 }
 
@@ -1039,13 +1078,14 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools
 fn query_gpu_utilization() -> (Option<f32>, Option<f32>) {
     // Try nvidia-smi first
-    if let Ok(output) = std::process::Command::new("nvidia-smi")
-        .args([
+    if let Some(output) = run_command_with_timeout(
+        "nvidia-smi",
+        &[
             "--query-gpu=utilization.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
-        ])
-        .output()
-    {
+        ],
+        Duration::from_secs(2),
+    ) {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // Format: "45, 2048, 8192" (utilization %, memory used MB, memory total MB)
@@ -1063,6 +1103,34 @@ fn query_gpu_utilization() -> (Option<f32>, Option<f32>) {
         }
     }
     (None, None)
+}
+
+fn run_command_with_timeout(
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+
+    loop {
+        if let Ok(Some(_status)) = child.try_wait() {
+            return child.wait_with_output().ok();
+        }
+
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -1190,6 +1258,10 @@ async fn add_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url) {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+
     let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
     match state
         .db
@@ -1222,6 +1294,10 @@ async fn test_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url) {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+
     // Construct a temporary target
     let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
     let target = crate::db::NotificationTarget {
@@ -1457,6 +1533,14 @@ async fn update_file_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<UpdateFileSettingsPayload>,
 ) -> impl IntoResponse {
+    if has_path_separator(&payload.output_extension) || has_path_separator(&payload.output_suffix) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "output_extension and output_suffix must not contain path separators",
+        )
+            .into_response();
+    }
+
     match state
         .db
         .update_file_settings(
@@ -1470,6 +1554,10 @@ async fn update_file_settings_handler(
         Ok(s) => axum::Json(serde_json::json!(s)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+fn has_path_separator(value: &str) -> bool {
+    value.chars().any(|c| c == '/' || c == '\\')
 }
 
 #[derive(Serialize)]
@@ -1573,4 +1661,111 @@ async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResp
 async fn get_scan_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     axum::Json::<crate::system::scanner::ScanStatus>(state.library_scanner.get_status().await)
         .into_response()
+}
+
+async fn allow_login_attempt(state: &AppState, ip: IpAddr) -> bool {
+    let mut limiter = state.login_rate_limiter.lock().await;
+    let now = Instant::now();
+
+    let entry = limiter.entry(ip).or_insert(RateLimitEntry {
+        tokens: 5.0,
+        last_refill: now,
+    });
+
+    let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
+    if elapsed > 0.0 {
+        let refill = elapsed * 5.0;
+        entry.tokens = (entry.tokens + refill).min(5.0);
+        entry.last_refill = now;
+    }
+
+    if entry.tokens >= 1.0 {
+        entry.tokens -= 1.0;
+        true
+    } else {
+        false
+    }
+}
+
+async fn allow_global_request(state: &AppState) -> bool {
+    let mut entry = state.global_rate_limiter.lock().await;
+    let now = Instant::now();
+
+    let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
+    if elapsed > 0.0 {
+        let refill = elapsed * 5.0;
+        entry.tokens = (entry.tokens + refill).min(5.0);
+        entry.last_refill = now;
+    }
+
+    if entry.tokens >= 1.0 {
+        entry.tokens -= 1.0;
+        true
+    } else {
+        false
+    }
+}
+
+fn build_session_cookie(token: &str) -> String {
+    format!(
+        "alchemist_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
+        token
+    )
+}
+
+fn get_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in cookie_header.split(';') {
+        let mut iter = part.trim().splitn(2, '=');
+        let key = iter.next()?.trim();
+        let value = iter.next()?.trim();
+        if key == name {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn validate_notification_url(raw: &str) -> std::result::Result<(), &'static str> {
+    let url = Url::parse(raw).map_err(|_| "endpoint_url must be a valid URL")?;
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => return Err("endpoint_url must use http or https"),
+    }
+
+    let host = url
+        .host_str()
+        .ok_or("endpoint_url must include a host")?;
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err("endpoint_url host is not allowed");
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_private_ip(ip) {
+            return Err("endpoint_url host is not allowed");
+        }
+    }
+
+    Ok(())
+}
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+        }
+    }
 }
