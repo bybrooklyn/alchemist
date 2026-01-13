@@ -195,6 +195,7 @@ pub async fn run_server(
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))
         .route("/api/auth/login", post(login_handler))
+        .route("/api/auth/logout", post(logout_handler))
         .route(
             "/api/ui/preferences",
             get(get_preferences_handler).post(update_preferences_handler),
@@ -453,6 +454,7 @@ struct SetupConfig {
 
 async fn setup_complete_handler(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<IncludeTokenQuery>,
     axum::Json(payload): axum::Json<SetupConfig>,
 ) -> impl IntoResponse {
     if !state.setup_required.load(Ordering::Relaxed) {
@@ -564,9 +566,15 @@ async fn setup_complete_handler(
     info!("Configuration saved via web setup. Auth info created.");
 
     let cookie = build_session_cookie(&token);
+    let include_token = query.include_token.unwrap_or(false);
+    let body = if include_token {
+        serde_json::json!({ "status": "saved", "token": token })
+    } else {
+        serde_json::json!({ "status": "saved" })
+    };
     (
         [(header::SET_COOKIE, cookie)],
-        axum::Json(serde_json::json!({ "status": "saved", "token": token })),
+        axum::Json(body),
     )
         .into_response()
 }
@@ -812,9 +820,15 @@ struct LoginPayload {
     password: String,
 }
 
+#[derive(serde::Deserialize)]
+struct IncludeTokenQuery {
+    include_token: Option<bool>,
+}
+
 async fn login_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(query): Query<IncludeTokenQuery>,
     axum::Json(payload): axum::Json<LoginPayload>,
 ) -> impl IntoResponse {
     if !allow_login_attempt(&state, addr.ip()).await {
@@ -858,9 +872,41 @@ async fn login_handler(
     }
 
     let cookie = build_session_cookie(&token);
+    let include_token = query.include_token.unwrap_or(false);
+    let body = if include_token {
+        serde_json::json!({ "token": token })
+    } else {
+        serde_json::json!({ "status": "ok" })
+    };
     (
         [(header::SET_COOKIE, cookie)],
-        axum::Json(serde_json::json!({ "token": token })),
+        axum::Json(body),
+    )
+        .into_response()
+}
+
+async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) -> impl IntoResponse {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|auth_str| {
+            if auth_str.starts_with("Bearer ") {
+                Some(auth_str[7..].to_string())
+            } else {
+                None
+            }
+        })
+        .or_else(|| get_cookie_value(req.headers(), "alchemist_session"));
+
+    if let Some(t) = token {
+        let _ = state.db.delete_session(&t).await;
+    }
+
+    let cookie = build_clear_session_cookie();
+    (
+        [(header::SET_COOKIE, cookie)],
+        axum::Json(serde_json::json!({ "status": "ok" })),
     )
         .into_response()
 }
@@ -873,6 +919,7 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
         // Public API endpoints
         if path.starts_with("/api/setup")
             || path.starts_with("/api/auth/login")
+            || path.starts_with("/api/auth/logout")
             || path == "/api/health"
             || path == "/api/ready"
         {
@@ -1666,6 +1713,8 @@ async fn get_scan_status_handler(State(state): State<Arc<AppState>>) -> impl Int
 async fn allow_login_attempt(state: &AppState, ip: IpAddr) -> bool {
     let mut limiter = state.login_rate_limiter.lock().await;
     let now = Instant::now();
+    let cleanup_after = Duration::from_secs(60 * 60);
+    limiter.retain(|_, entry| now.duration_since(entry.last_refill) <= cleanup_after);
 
     let entry = limiter.entry(ip).or_insert(RateLimitEntry {
         tokens: 5.0,
@@ -1711,6 +1760,10 @@ fn build_session_cookie(token: &str) -> String {
         "alchemist_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
         token
     )
+}
+
+fn build_clear_session_cookie() -> String {
+    "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string()
 }
 
 fn get_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {

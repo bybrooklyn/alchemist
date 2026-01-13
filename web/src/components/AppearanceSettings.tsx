@@ -56,6 +56,16 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 name: "Crimson",
                 description: "Charcoal reds with confident crimson energy.",
             },
+            {
+                id: "citrus",
+                name: "Citrus",
+                description: "Zesty tangerine with lime and bright highlights.",
+            },
+            {
+                id: "ember",
+                name: "Ember",
+                description: "Molten oranges with glowing ember contrast.",
+            },
         ],
     },
     {
@@ -78,6 +88,21 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 name: "Emerald",
                 description: "Deep green base with luminous emerald accents.",
             },
+            {
+                id: "glacier",
+                name: "Glacier",
+                description: "Icy blues with crisp, glassy contrast.",
+            },
+            {
+                id: "fjord",
+                name: "Fjord",
+                description: "Slate blues with deep, coastal calm.",
+            },
+            {
+                id: "aurora",
+                name: "Aurora",
+                description: "Teal greens with soft, luminous shimmer.",
+            },
         ],
     },
     {
@@ -94,6 +119,63 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 id: "purple",
                 name: "Purple",
                 description: "Velvet violets with bright lavender accents.",
+            },
+            {
+                id: "rose",
+                name: "Rose",
+                description: "Muted rosewood with soft blush highlights.",
+            },
+            {
+                id: "blush",
+                name: "Blush",
+                description: "Powdered pinks with gentle warmth.",
+            },
+            {
+                id: "pearl",
+                name: "Pearl",
+                description: "Soft lilacs with pearly light.",
+            },
+            {
+                id: "dusk",
+                name: "Dusk",
+                description: "Evening violets with muted glow.",
+            },
+        ],
+    },
+    {
+        id: "light",
+        label: "Light & Airy",
+        icon: <Sun size={16} className="text-helios-solar" />,
+        themes: [
+            {
+                id: "ivory",
+                name: "Ivory",
+                description: "Warm paper whites with soft amber accents.",
+            },
+            {
+                id: "cloud",
+                name: "Cloud",
+                description: "Soft gray whites with gentle sky-blue highlights.",
+            },
+            {
+                id: "mint",
+                name: "Mint",
+                description: "Clean minty whites with calm green accents.",
+            },
+            {
+                id: "linen",
+                name: "Linen",
+                description: "Warm neutrals with sunlit undertones.",
+            },
+            {
+                id: "sunlit",
+                name: "Sunlit",
+                description: "Bright cream with golden highlights.",
+            },
+            {
+                id: "sage",
+                name: "Sage",
+                description: "Soft green-white with herbaceous accents.",
             },
         ],
     },
@@ -113,9 +195,24 @@ const THEME_CATEGORIES: ThemeCategory[] = [
                 description: "Neutral graphite with clean grayscale accents.",
             },
             {
-                id: "dracula",
-                name: "Dracula",
-                description: "Dark vampire aesthetic with pink and purple accents.",
+                id: "carbon",
+                name: "Carbon",
+                description: "Smoky charcoal with sharp steel accents.",
+            },
+            {
+                id: "obsidian",
+                name: "Obsidian",
+                description: "Inky black with cool blue highlights.",
+            },
+            {
+                id: "graphite",
+                name: "Graphite",
+                description: "Dense grays with refined metallic edges.",
+            },
+            {
+                id: "ink",
+                name: "Ink",
+                description: "Deep navy blacks with electric accents.",
             },
         ],
     },
@@ -208,17 +305,29 @@ export default function AppearanceSettings() {
                 </div>
             )}
 
-            <div className="flex flex-col gap-10">
+            <div className="flex flex-col gap-8">
                 {THEME_CATEGORIES.map((category) => (
-                    <div key={category.id} className="flex flex-col gap-4">
-                        <div className="flex items-center gap-2 px-1">
-                            {category.icon}
-                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-helios-slate/60">
-                                {category.label}
-                            </h4>
+                    <div
+                        key={category.id}
+                        className="rounded-3xl border border-helios-line/30 bg-helios-surface/60 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.08)]"
+                    >
+                        <div className="flex items-center justify-between gap-3 pb-4 border-b border-helios-line/20">
+                            <div className="flex items-center gap-2">
+                                <div className="p-2 rounded-xl bg-helios-solar/10 text-helios-solar">
+                                    {category.icon}
+                                </div>
+                                <div>
+                                    <h4 className="text-[11px] font-bold uppercase tracking-widest text-helios-slate/70">
+                                        {category.label}
+                                    </h4>
+                                </div>
+                            </div>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-helios-slate/40">
+                                {category.themes.length} themes
+                            </span>
                         </div>
 
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="grid gap-4 pt-5 sm:grid-cols-2 xl:grid-cols-3">
                             {category.themes.map((theme) => {
                                 const isActive = theme.id === activeThemeId;
                                 const isSaving = savingThemeId === theme.id;
@@ -229,22 +338,22 @@ export default function AppearanceSettings() {
                                         onClick={() => handleSelect(theme.id)}
                                         disabled={isActive || Boolean(savingThemeId)}
                                         className={cn(
-                                            "group relative flex flex-col items-start gap-4 rounded-3xl border p-5 text-left transition-all duration-300 outline-none",
+                                            "group relative flex flex-col items-start gap-4 rounded-2xl border p-4 text-left transition-all duration-300 outline-none",
                                             isActive
-                                                ? "border-helios-solar bg-helios-solar/5 shadow-[0_0_20px_rgba(var(--accent-primary),0.1)] ring-1 ring-helios-solar/30"
-                                                : "border-helios-line/40 bg-helios-surface hover:border-helios-solar/40 hover:bg-helios-surface/80 hover:shadow-xl hover:shadow-black/5"
+                                                ? "border-helios-solar bg-helios-solar/10 shadow-[0_0_20px_rgba(var(--accent-primary),0.12)] ring-1 ring-helios-solar/30"
+                                                : "border-helios-line/40 bg-helios-surface/80 hover:border-helios-solar/40 hover:bg-helios-surface hover:shadow-xl hover:shadow-black/10"
                                         )}
                                     >
                                         <div className="flex w-full items-center justify-between gap-3">
                                             <div
-                                                className="h-12 w-12 rounded-2xl border border-white/5 shadow-inner flex-shrink-0 flex items-center justify-center relative overflow-hidden"
+                                                className="h-12 w-12 rounded-2xl border border-white/10 shadow-inner flex-shrink-0 flex items-center justify-center relative overflow-hidden"
                                                 data-color-profile={theme.id}
                                                 style={{
-                                                    background: `linear-gradient(135deg, rgb(var(--bg-main)), rgb(var(--bg-panel)))`,
+                                                    background: `linear-gradient(140deg, rgb(var(--bg-main)), rgb(var(--bg-panel)))`,
                                                 }}
                                             >
                                                 <div
-                                                    className="absolute inset-0 opacity-20"
+                                                    className="absolute inset-0 opacity-30"
                                                     style={{
                                                         background: `linear-gradient(to bottom right, rgb(var(--accent-primary)), transparent)`
                                                     }}
@@ -254,13 +363,6 @@ export default function AppearanceSettings() {
                                                     style={{ backgroundColor: `rgb(var(--accent-primary))` }}
                                                 />
                                             </div>
-
-                                            {isActive && (
-                                                <div className="flex-shrink-0 flex items-center gap-1.5 bg-helios-solar text-helios-mist px-2.5 py-1 rounded-full">
-                                                    <CheckCircle2 size={12} />
-                                                    <span className="text-[9px] font-bold uppercase tracking-widest">Active</span>
-                                                </div>
-                                            )}
 
                                             {isSaving && (
                                                 <Loader2 size={16} className="animate-spin text-helios-solar" />
@@ -285,11 +387,10 @@ export default function AppearanceSettings() {
                                             <div className="h-1.5 flex-1 rounded-full opacity-40" style={{ backgroundColor: 'rgb(var(--accent-primary))' }} />
                                         </div>
 
-                                        {!isActive && !savingThemeId && (
-                                            <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <div className="p-1.5 bg-helios-line/10 rounded-full text-helios-slate">
-                                                    <Palette size={14} />
-                                                </div>
+                                        {isActive && (
+                                            <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-helios-solar text-helios-mist px-2.5 py-1 rounded-full shadow">
+                                                <CheckCircle2 size={12} />
+                                                <span className="text-[9px] font-bold uppercase tracking-widest">Active</span>
                                             </div>
                                         )}
                                     </button>

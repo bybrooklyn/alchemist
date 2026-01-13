@@ -1,5 +1,6 @@
 /**
- * Authenticated fetch utility - automatically adds Bearer token from localStorage
+ * Authenticated fetch utility - uses cookie auth by default and adds Bearer
+ * token only if one is explicitly present in localStorage.
  */
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
     let token: string | null = null;
@@ -35,6 +36,7 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
         const response = await fetch(url, {
             ...options,
             headers,
+            credentials: options.credentials ?? 'same-origin',
             signal: controller.signal,
         });
 

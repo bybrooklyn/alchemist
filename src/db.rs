@@ -1,5 +1,6 @@
 use crate::error::Result;
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
@@ -1207,8 +1208,9 @@ impl Db {
         token: &str,
         expires_at: DateTime<Utc>,
     ) -> Result<()> {
+        let token_hash = hash_session_token(token);
         sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
-            .bind(token)
+            .bind(token_hash)
             .bind(user_id)
             .bind(expires_at)
             .execute(&self.pool)
@@ -1217,13 +1219,44 @@ impl Db {
     }
 
     pub async fn get_session(&self, token: &str) -> Result<Option<Session>> {
-        let session = sqlx::query_as::<_, Session>(
+        let token_hash = hash_session_token(token);
+        if let Some(session) = sqlx::query_as::<_, Session>(
+            "SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            return Ok(Some(session));
+        }
+
+        let mut session = sqlx::query_as::<_, Session>(
             "SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP",
         )
         .bind(token)
         .fetch_optional(&self.pool)
         .await?;
+
+        if let Some(existing) = session.as_mut() {
+            let _ = sqlx::query("UPDATE sessions SET token = ? WHERE token = ?")
+                .bind(&token_hash)
+                .bind(token)
+                .execute(&self.pool)
+                .await;
+            existing.token = token_hash;
+        }
+
         Ok(session)
+    }
+
+    pub async fn delete_session(&self, token: &str) -> Result<()> {
+        let token_hash = hash_session_token(token);
+        sqlx::query("DELETE FROM sessions WHERE token = ? OR token = ?")
+            .bind(&token_hash)
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn cleanup_sessions(&self) -> Result<()> {
@@ -1262,6 +1295,18 @@ pub struct Session {
     pub user_id: i64,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+}
+
+fn hash_session_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{:02x}", byte);
+    }
+    out
 }
 
 #[cfg(test)]

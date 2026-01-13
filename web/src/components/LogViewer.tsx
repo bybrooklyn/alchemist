@@ -59,13 +59,8 @@ export default function LogViewer() {
 
         let eventSource: EventSource | null = null;
         const connect = () => {
-            const token = localStorage.getItem('alchemist_token') || '';
-            if (!token) {
-                setStreamError("Log stream requires authentication. Please log in.");
-                return;
-            }
             setStreamError(null);
-            eventSource = new EventSource(`/api/events?token=${token}`);
+            eventSource = new EventSource('/api/events');
 
             const handleMsg = (msg: string, level: string, job_id?: number) => {
                 if (pausedRef.current) return;
@@ -123,11 +118,7 @@ export default function LogViewer() {
 
             eventSource.onerror = () => {
                 eventSource?.close();
-                const nextToken = localStorage.getItem('alchemist_token') || '';
-                if (!nextToken) {
-                    setStreamError("Log stream stopped due to missing token.");
-                    return;
-                }
+                setStreamError("Log stream unavailable. Please check authentication.");
                 setTimeout(connect, 3000);
             };
         };

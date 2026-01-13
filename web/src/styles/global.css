@@ -54,6 +54,28 @@
         --border-subtle: 74 50 58;
     }
 
+    [data-color-profile="citrus"] {
+        --bg-main: 12 10 6;
+        --bg-panel: 22 18 10;
+        --bg-elevated: 32 26 14;
+        --accent-primary: 255 172 50;
+        --accent-secondary: 170 220 90;
+        --text-primary: 247 238 220;
+        --text-muted: 186 170 140;
+        --border-subtle: 76 60 34;
+    }
+
+    [data-color-profile="ember"] {
+        --bg-main: 18 8 6;
+        --bg-panel: 28 12 10;
+        --bg-elevated: 38 18 14;
+        --accent-primary: 255 120 60;
+        --accent-secondary: 255 170 110;
+        --text-primary: 250 236 226;
+        --text-muted: 190 165 150;
+        --border-subtle: 90 55 45;
+    }
+
     [data-color-profile="deep-blue"] {
         --bg-main: 8 10 20;
         --bg-panel: 15 20 35;
@@ -87,6 +109,39 @@
         --border-subtle: 30 70 40;
     }
 
+    [data-color-profile="glacier"] {
+        --bg-main: 6 12 20;
+        --bg-panel: 12 20 32;
+        --bg-elevated: 18 28 44;
+        --accent-primary: 120 200 255;
+        --accent-secondary: 180 230 255;
+        --text-primary: 230 245 255;
+        --text-muted: 150 170 190;
+        --border-subtle: 40 70 100;
+    }
+
+    [data-color-profile="fjord"] {
+        --bg-main: 6 14 18;
+        --bg-panel: 12 22 28;
+        --bg-elevated: 18 32 38;
+        --accent-primary: 70 160 200;
+        --accent-secondary: 120 200 230;
+        --text-primary: 225 245 250;
+        --text-muted: 150 175 185;
+        --border-subtle: 40 70 80;
+    }
+
+    [data-color-profile="aurora"] {
+        --bg-main: 6 16 14;
+        --bg-panel: 12 26 22;
+        --bg-elevated: 18 36 30;
+        --accent-primary: 100 220 180;
+        --accent-secondary: 160 240 210;
+        --text-primary: 230 250 245;
+        --text-muted: 150 180 175;
+        --border-subtle: 40 80 70;
+    }
+
     [data-color-profile="lavender"] {
         --bg-main: 15 15 25;
         --bg-panel: 25 25 35;
@@ -107,6 +162,116 @@
         --text-primary: 250 230 255;
         --text-muted: 180 160 200;
         --border-subtle: 80 40 100;
+    }
+
+    [data-color-profile="rose"] {
+        --bg-main: 18 10 14;
+        --bg-panel: 28 16 20;
+        --bg-elevated: 38 22 28;
+        --accent-primary: 230 120 140;
+        --accent-secondary: 245 170 185;
+        --text-primary: 250 235 240;
+        --text-muted: 190 160 170;
+        --border-subtle: 90 55 65;
+    }
+
+    [data-color-profile="blush"] {
+        --bg-main: 22 14 16;
+        --bg-panel: 32 20 24;
+        --bg-elevated: 42 26 32;
+        --accent-primary: 220 130 150;
+        --accent-secondary: 240 180 195;
+        --text-primary: 250 235 238;
+        --text-muted: 190 160 170;
+        --border-subtle: 95 60 70;
+    }
+
+    [data-color-profile="pearl"] {
+        --bg-main: 20 20 26;
+        --bg-panel: 30 30 38;
+        --bg-elevated: 40 40 50;
+        --accent-primary: 190 190 240;
+        --accent-secondary: 220 210 250;
+        --text-primary: 245 242 255;
+        --text-muted: 175 170 190;
+        --border-subtle: 85 80 100;
+    }
+
+    [data-color-profile="dusk"] {
+        --bg-main: 18 16 24;
+        --bg-panel: 28 24 36;
+        --bg-elevated: 38 32 48;
+        --accent-primary: 140 120 220;
+        --accent-secondary: 190 170 240;
+        --text-primary: 235 230 250;
+        --text-muted: 170 160 190;
+        --border-subtle: 75 65 95;
+    }
+
+    [data-color-profile="ivory"] {
+        --bg-main: 247 243 235;
+        --bg-panel: 255 252 246;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 200 120 50;
+        --accent-secondary: 240 180 120;
+        --text-primary: 40 32 24;
+        --text-muted: 110 96 84;
+        --border-subtle: 220 208 190;
+    }
+
+    [data-color-profile="cloud"] {
+        --bg-main: 236 242 248;
+        --bg-panel: 246 250 255;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 70 140 220;
+        --accent-secondary: 130 190 255;
+        --text-primary: 28 40 56;
+        --text-muted: 88 102 120;
+        --border-subtle: 200 214 232;
+    }
+
+    [data-color-profile="mint"] {
+        --bg-main: 235 248 242;
+        --bg-panel: 246 255 252;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 70 170 140;
+        --accent-secondary: 140 220 190;
+        --text-primary: 28 44 36;
+        --text-muted: 90 112 100;
+        --border-subtle: 198 220 210;
+    }
+
+    [data-color-profile="linen"] {
+        --bg-main: 248 244 238;
+        --bg-panel: 255 253 248;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 210 150 80;
+        --accent-secondary: 240 200 140;
+        --text-primary: 48 40 32;
+        --text-muted: 120 105 90;
+        --border-subtle: 225 210 195;
+    }
+
+    [data-color-profile="sunlit"] {
+        --bg-main: 250 248 236;
+        --bg-panel: 255 253 242;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 235 170 70;
+        --accent-secondary: 250 210 130;
+        --text-primary: 50 42 30;
+        --text-muted: 122 108 90;
+        --border-subtle: 230 215 190;
+    }
+
+    [data-color-profile="sage"] {
+        --bg-main: 238 246 242;
+        --bg-panel: 248 252 250;
+        --bg-elevated: 255 255 255;
+        --accent-primary: 110 170 140;
+        --accent-secondary: 170 210 185;
+        --text-primary: 38 52 44;
+        --text-muted: 100 118 108;
+        --border-subtle: 205 220 212;
     }
 
     [data-color-profile="midnight"] {
@@ -131,17 +296,49 @@
         --border-subtle: 60 60 60;
     }
 
-    [data-color-profile="dracula"] {
-        --bg-main: 40 42 54;
-        --bg-panel: 68 71 90;
-        --bg-elevated: 98 114 164;
-        --accent-primary: 255 121 198;
-        --accent-secondary: 189 147 249;
-        --text-primary: 248 248 242;
-        --text-muted: 98 114 164;
-        --border-subtle: 98 114 164;
+    [data-color-profile="carbon"] {
+        --bg-main: 8 10 12;
+        --bg-panel: 16 18 22;
+        --bg-elevated: 24 28 34;
+        --accent-primary: 150 170 190;
+        --accent-secondary: 210 220 230;
+        --text-primary: 230 235 240;
+        --text-muted: 150 160 170;
+        --border-subtle: 48 58 68;
     }
 
+    [data-color-profile="obsidian"] {
+        --bg-main: 4 6 8;
+        --bg-panel: 10 12 14;
+        --bg-elevated: 16 18 22;
+        --accent-primary: 100 140 200;
+        --accent-secondary: 160 190 230;
+        --text-primary: 230 235 240;
+        --text-muted: 140 150 160;
+        --border-subtle: 40 48 56;
+    }
+
+    [data-color-profile="graphite"] {
+        --bg-main: 14 14 16;
+        --bg-panel: 22 22 26;
+        --bg-elevated: 30 30 36;
+        --accent-primary: 170 180 190;
+        --accent-secondary: 210 220 230;
+        --text-primary: 230 235 240;
+        --text-muted: 150 160 170;
+        --border-subtle: 55 60 70;
+    }
+
+    [data-color-profile="ink"] {
+        --bg-main: 6 8 14;
+        --bg-panel: 12 14 22;
+        --bg-elevated: 18 20 30;
+        --accent-primary: 120 130 220;
+        --accent-secondary: 170 180 240;
+        --text-primary: 230 235 250;
+        --text-muted: 145 150 175;
+        --border-subtle: 45 50 75;
+    }
     html,
     body {
         height: 100%;

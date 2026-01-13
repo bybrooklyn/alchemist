@@ -74,12 +74,17 @@ import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify(data)
             });
             
             if (res.ok) {
-                const { token } = await res.json();
-                localStorage.setItem('alchemist_token', token);
+                const payload = await res.json();
+                if (payload?.token) {
+                    localStorage.setItem('alchemist_token', payload.token);
+                } else {
+                    localStorage.removeItem('alchemist_token');
+                }
                 window.location.href = '/';
             } else {
                 errorMsg?.classList.remove('hidden');
