@@ -1,6 +1,7 @@
 use crate::config::{CpuPreset, QualityProfile};
 use crate::error::{AlchemistError, Result};
 use crate::media::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress};
+use crate::media::pipeline::{Encoder, RateControl};
 use crate::system::hardware::HardwareInfo;
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,7 +21,6 @@ pub struct TranscodeRequest<'a> {
     pub hw_info: Option<&'a HardwareInfo>,
     pub quality_profile: QualityProfile,
     pub cpu_preset: CpuPreset,
-    pub target_codec: crate::config::OutputCodec,
     pub threads: usize,
     pub allow_fallback: bool,
     pub hdr_mode: crate::config::HdrMode,
@@ -29,6 +29,8 @@ pub struct TranscodeRequest<'a> {
     pub tonemap_desat: f32,
     pub dry_run: bool,
     pub metadata: &'a crate::media::pipeline::MediaMetadata,
+    pub encoder: Option<Encoder>,
+    pub rate_control: Option<RateControl>,
     pub event_target: Option<(i64, Arc<broadcast::Sender<crate::db::AlchemistEvent>>)>,
 }
 
@@ -94,9 +96,10 @@ impl Transcoder {
             .with_hardware(request.hw_info)
             .with_profile(request.quality_profile)
             .with_cpu_preset(request.cpu_preset)
-            .with_codec(request.target_codec)
             .with_threads(request.threads)
             .with_allow_fallback(request.allow_fallback)
+            .with_encoder(request.encoder)
+            .with_rate_control(request.rate_control)
             .with_hdr_settings(
                 request.hdr_mode,
                 request.tonemap_algorithm,

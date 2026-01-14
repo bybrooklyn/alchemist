@@ -1220,7 +1220,7 @@ A:
 
 ## Changelog
 
-### v0.2.7
+### v0.2.8
 - ✅ Default server mode; explicit CLI with `--cli --dir ...` and new `--reset-auth` flow
 - ✅ Login redirects to setup when no users exist
 - ✅ Startup banner now includes version/build info
@@ -1288,4 +1288,4 @@ Alchemist is licensed under the **GPL-3.0 License**. See `LICENSE` for details.
 
 ---
 
-*Documentation for Alchemist v0.2.7*
+*Documentation for Alchemist v0.2.8*

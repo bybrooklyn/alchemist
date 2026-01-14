@@ -30,13 +30,15 @@ interface JobMetadata {
     codec_name: string;
     width: number;
     height: number;
-    bit_depth: number;
+    bit_depth?: number;
     size_bytes: number;
-    bit_rate: number;
+    video_bitrate_bps?: number;
+    container_bitrate_bps?: number;
     fps: number;
     container: string;
     audio_codec?: string;
     audio_channels?: number;
+    dynamic_range?: string;
 }
 
 interface EncodeStats {
@@ -538,7 +540,7 @@ export default function JobManager() {
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             onClick={() => setFocusedJob(null)}
-                            className="fixed inset-0 bg-helios-ink/40 backdrop-blur-md z-[100]"
+                            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
                         />
                         <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[101]">
                             <motion.div
@@ -581,7 +583,7 @@ export default function JobManager() {
                                                 {focusedJob.metadata?.codec_name || "Unknown"}
                                             </p>
                                             <p className="text-[10px] text-helios-slate">
-                                                {focusedJob.metadata?.bit_depth}-bit • {focusedJob.metadata?.container.toUpperCase()}
+                                                {(focusedJob.metadata?.bit_depth ? `${focusedJob.metadata.bit_depth}-bit` : "Unknown bit depth")} • {focusedJob.metadata?.container.toUpperCase()}
                                             </p>
                                         </div>
 
@@ -623,7 +625,9 @@ export default function JobManager() {
                                                 <div className="flex justify-between items-center text-xs">
                                                     <span className="text-helios-slate font-medium">Video Bitrate</span>
                                                     <span className="text-helios-ink font-bold">
-                                                        {focusedJob.metadata ? `${(focusedJob.metadata.bit_rate / 1000).toFixed(0)} kbps` : "-"}
+                                                        {focusedJob.metadata && (focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps)
+                                                            ? `${(((focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps) as number) / 1000).toFixed(0)} kbps`
+                                                            : "-"}
                                                     </span>
                                                 </div>
                                                 <div className="flex justify-between items-center text-xs">
@@ -750,7 +754,7 @@ export default function JobManager() {
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             onClick={() => setConfirmState(null)}
-                            className="fixed inset-0 bg-helios-ink/40 backdrop-blur-md z-[120]"
+                            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120]"
                         />
                         <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[121]">
                             <motion.div

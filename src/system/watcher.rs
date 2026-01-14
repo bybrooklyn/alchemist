@@ -44,31 +44,17 @@ impl FileWatcher {
                     }
                     _ = tokio::time::sleep(Duration::from_millis(debounce_ms)) => {
                         if !pending.is_empty() && last_process.elapsed().as_millis() >= debounce_ms as u128 {
-                            let settings = match db_clone.get_file_settings().await {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    error!("Failed to fetch file settings, using defaults: {}", e);
-                                    crate::db::FileSettings {
-                                        id: 1,
-                                        delete_source: false,
-                                        output_extension: "mkv".to_string(),
-                                        output_suffix: "-alchemist".to_string(),
-                                        replace_strategy: "keep".to_string(),
-                                    }
-                                }
-                            };
                             for path in pending.drain() {
                                 if path.exists() {
                                     debug!("Auto-enqueuing new file: {:?}", path);
                                     let mtime = std::fs::metadata(&path)
                                         .and_then(|m| m.modified())
                                         .unwrap_or(std::time::SystemTime::now());
-                                    let output_path = settings.output_path_for(&path);
-                                    if output_path.exists() && !settings.should_replace_existing_output() {
-                                        continue;
-                                    }
-
-                                    if let Err(e) = db_clone.enqueue_job(&path, &output_path, mtime).await {
+                                    let discovered = crate::media::pipeline::DiscoveredMedia {
+                                        path: path.clone(),
+                                        mtime,
+                                    };
+                                    if let Err(e) = crate::media::pipeline::enqueue_discovered_with_db(&db_clone, discovered).await {
                                         error!("Failed to auto-enqueue {:?}: {}", path, e);
                                     } else {
                                         info!("Auto-enqueued: {:?}", path);

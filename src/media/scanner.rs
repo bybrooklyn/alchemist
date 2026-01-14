@@ -5,11 +5,7 @@ use std::time::SystemTime;
 use tracing::{debug, error, info};
 use walkdir::WalkDir;
 
-#[derive(Clone)]
-pub struct ScannedFile {
-    pub path: PathBuf,
-    pub mtime: SystemTime,
-}
+use crate::media::pipeline::DiscoveredMedia;
 
 pub struct Scanner {
     pub extensions: Vec<String>,
@@ -34,12 +30,12 @@ impl Scanner {
         }
     }
 
-    pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<ScannedFile> {
+    pub fn scan(&self, directories: Vec<PathBuf>) -> Vec<DiscoveredMedia> {
         let entries = directories.into_iter().map(|dir| (dir, true)).collect();
         self.scan_with_recursion(entries)
     }
 
-    pub fn scan_with_recursion(&self, directories: Vec<(PathBuf, bool)>) -> Vec<ScannedFile> {
+    pub fn scan_with_recursion(&self, directories: Vec<(PathBuf, bool)>) -> Vec<DiscoveredMedia> {
         let files = Arc::new(Mutex::new(Vec::new()));
 
         directories.into_par_iter().for_each(|(dir, recursive)| {
@@ -59,7 +55,7 @@ impl Scanner {
                                 .metadata()
                                 .map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH))
                                 .unwrap_or(SystemTime::UNIX_EPOCH);
-                            local_files.push(ScannedFile {
+                            local_files.push(DiscoveredMedia {
                                 path: entry.path().to_path_buf(),
                                 mtime,
                             });
