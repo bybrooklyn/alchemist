@@ -67,20 +67,6 @@ impl LibraryScanner {
                 }
             };
 
-            let settings = match db.get_file_settings().await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to fetch file settings, using defaults: {}", e);
-                    crate::db::FileSettings {
-                        id: 1,
-                        delete_source: false,
-                        output_extension: "mkv".to_string(),
-                        output_suffix: "-alchemist".to_string(),
-                        replace_strategy: "keep".to_string(),
-                    }
-                }
-            };
-
             let config_dirs = {
                 let cfg = config.read().await;
                 cfg.scanner.directories.clone()
@@ -124,17 +110,14 @@ impl LibraryScanner {
             let mut added = 0;
             for file in all_scanned {
                 let path_str = file.path.to_string_lossy().to_string();
-                let output_path = settings.output_path_for(&file.path);
-
-                if output_path.exists() && !settings.should_replace_existing_output() {
-                    continue;
-                }
 
                 // Check if already exists
                 match db.get_job_by_input_path(&path_str).await {
                     Ok(Some(_)) => continue,
                     Ok(None) => {
-                        if let Err(e) = db.enqueue_job(&file.path, &output_path, file.mtime).await {
+                        if let Err(e) =
+                            crate::media::pipeline::enqueue_discovered_with_db(&db, file).await
+                        {
                             error!("Failed to add job during scan: {}", e);
                         } else {
                             added += 1;

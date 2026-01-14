@@ -546,11 +546,12 @@ async fn setup_complete_handler(
     // Save Config
     let mut config_lock = state.config.write().await;
     let mut next_config = config_lock.clone();
+    let setup_directories = payload.directories.clone();
     next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
     next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
     next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
     next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    next_config.scanner.directories = payload.directories;
+    next_config.scanner.directories = setup_directories.clone();
     next_config.system.enable_telemetry = payload.enable_telemetry;
 
     if let Err(e) = next_config.validate() {
@@ -579,6 +580,19 @@ async fn setup_complete_handler(
             format!("Failed to write config.toml: {}", e),
         )
             .into_response();
+    }
+
+    // Ensure setup directories are reflected in watch_dirs for Settings UI.
+    if let Ok(existing) = state.db.get_watch_dirs().await {
+        let mut existing_paths = std::collections::HashSet::new();
+        for wd in existing {
+            existing_paths.insert(wd.path);
+        }
+        for dir in &setup_directories {
+            if !existing_paths.contains(dir) {
+                let _ = state.db.add_watch_dir(dir, true).await;
+            }
+        }
     }
 
     // Update Setup State (Hot Reload)
@@ -1562,13 +1576,21 @@ async fn get_job_detail_handler(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    // Try to get metadata
-    let analyzer = crate::media::analyzer::FfmpegAnalyzer;
-    use crate::media::pipeline::Analyzer;
-    let metadata = analyzer
-        .analyze(std::path::Path::new(&job.input_path))
-        .await
-        .ok();
+    // Avoid long probes while the job is still active.
+    let metadata = match job.status {
+        crate::db::JobState::Queued
+        | crate::db::JobState::Analyzing
+        | crate::db::JobState::Encoding => None,
+        _ => {
+            let analyzer = crate::media::analyzer::FfmpegAnalyzer;
+            use crate::media::pipeline::Analyzer;
+            analyzer
+                .analyze(std::path::Path::new(&job.input_path))
+                .await
+                .ok()
+                .map(|analysis| analysis.metadata)
+        }
+    };
 
     // Try to get encode stats (using the subquery result or a specific query)
     // For now we'll just query the encode_stats table if completed
