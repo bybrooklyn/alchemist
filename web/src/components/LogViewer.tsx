@@ -23,6 +23,7 @@ export default function LogViewer() {
     const [streamError, setStreamError] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const pausedRef = useRef(paused);
+    const reconnectTimeoutRef = useRef<number | null>(null);
     const maxLogs = 1000;
 
     // Sync ref
@@ -58,8 +59,14 @@ export default function LogViewer() {
         fetchHistory();
 
         let eventSource: EventSource | null = null;
+        let cancelled = false;
         const connect = () => {
+            if (cancelled) return;
             setStreamError(null);
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
             eventSource = new EventSource('/api/events');
 
             const handleMsg = (msg: string, level: string, job_id?: number) => {
@@ -118,13 +125,24 @@ export default function LogViewer() {
 
             eventSource.onerror = () => {
                 eventSource?.close();
+                eventSource = null;
                 setStreamError("Log stream unavailable. Please check authentication.");
-                setTimeout(connect, 3000);
+                if (reconnectTimeoutRef.current) {
+                    window.clearTimeout(reconnectTimeoutRef.current);
+                }
+                reconnectTimeoutRef.current = window.setTimeout(connect, 3000);
             };
         };
 
         connect();
-        return () => eventSource?.close();
+        return () => {
+            cancelled = true;
+            if (reconnectTimeoutRef.current) {
+                window.clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+            eventSource?.close();
+        };
     }, []);
 
     // Auto-scroll
