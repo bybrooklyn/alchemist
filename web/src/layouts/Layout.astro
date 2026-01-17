@@ -40,7 +40,15 @@ const { title } = Astro.props;
                 const isAuthPage = window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/setup');
                 if (isAuthPage) return;
 
-                fetch('/api/engine/status', { credentials: 'same-origin' })
+                const headers = {};
+                try {
+                    const token = localStorage.getItem("alchemist_token");
+                    if (token) {
+                        headers.Authorization = `Bearer ${token}`;
+                    }
+                } catch {}
+
+                fetch('/api/engine/status', { credentials: 'same-origin', headers })
                     .then(res => {
                         if (res.status !== 401) return;
                         return fetch('/api/setup/status')

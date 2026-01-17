@@ -39,16 +39,18 @@ export default function Dashboard() {
             try {
                 const [statsRes, jobsRes] = await Promise.all([
                     apiFetch("/api/stats"),
-                    apiFetch("/api/jobs/table")
+                    apiFetch(`/api/jobs/table?${new URLSearchParams({
+                        limit: "5",
+                        sort: "created_at",
+                        sort_desc: "true",
+                    })}`)
                 ]);
 
                 if (statsRes.ok) {
                     setStats(await statsRes.json());
                 }
                 if (jobsRes.ok) {
-                    const allJobs = await jobsRes.json();
-                    // Get 5 most recent
-                    setJobs(allJobs.slice(0, 5));
+                    setJobs(await jobsRes.json());
                 }
             } catch (e) {
                 console.error("Dashboard fetch error", e);
@@ -212,28 +214,31 @@ export default function Dashboard() {
                         ) : jobs.length === 0 ? (
                             <div className="text-center py-8 text-helios-slate/60 italic">No recent activity found.</div>
                         ) : (
-                            jobs.map(job => (
-                                <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft hover:bg-white/5 transition-colors border border-transparent hover:border-helios-line/20">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                        <div className={`w-2 h-2 rounded-full shrink-0 ${job.status === 'Completed' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' :
-                                            job.status === 'Failed' ? 'bg-red-500' :
-                                                job.status === 'Encoding' ? 'bg-amber-500 animate-pulse' :
-                                                    'bg-helios-slate'
-                                            }`} />
-                                        <div className="flex flex-col min-w-0">
-                                            <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
-                                                {job.input_path.split(/[/\\]/).pop()}
-                                            </span>
-                                            <span className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
-                                                {job.status} · {formatRelativeTime(job.created_at)}
-                                            </span>
+                            jobs.map((job) => {
+                                const status = (job.status || "").toLowerCase();
+                                return (
+                                    <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft hover:bg-white/5 transition-colors border border-transparent hover:border-helios-line/20">
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className={`w-2 h-2 rounded-full shrink-0 ${status === 'completed' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' :
+                                                status === 'failed' ? 'bg-red-500' :
+                                                    status === 'encoding' || status === 'analyzing' ? 'bg-amber-500 animate-pulse' :
+                                                        'bg-helios-slate'
+                                                }`} />
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
+                                                    {job.input_path.split(/[/\\]/).pop()}
+                                                </span>
+                                                <span className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
+                                                    {job.status} · {formatRelativeTime(job.created_at)}
+                                                </span>
+                                            </div>
                                         </div>
+                                        <span className="text-xs font-mono text-helios-slate/60 whitespace-nowrap ml-4">
+                                            #{job.id}
+                                        </span>
                                     </div>
-                                    <span className="text-xs font-mono text-helios-slate/60 whitespace-nowrap ml-4">
-                                        #{job.id}
-                                    </span>
-                                </div>
-                            ))
+                                );
+                            })
                         )}
                     </div>
                 </div>
