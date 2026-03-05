@@ -39,7 +39,7 @@ export default function TranscodeSettings() {
     const [success, setSuccess] = useState(false);
 
     useEffect(() => {
-        fetchSettings();
+        void fetchSettings();
     }, []);
 
     const fetchSettings = async () => {

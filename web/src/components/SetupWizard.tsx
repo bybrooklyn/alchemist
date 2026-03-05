@@ -2,13 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowRight,
-    Settings,
     Cpu,
     FolderOpen,
     CheckCircle,
-    AlertTriangle,
-    Server,
-    Save,
     User,
     Lock,
     Video,
@@ -50,7 +46,7 @@ export default function SetupWizard() {
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [success, setSuccess] = useState(false);
+    const [_success, _setSuccess] = useState(false);
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
     const scanIntervalRef = useRef<number | null>(null);
@@ -84,7 +80,7 @@ export default function SetupWizard() {
             }
         };
 
-        loadSetupDefaults();
+        void loadSetupDefaults();
     }, []);
 
     useEffect(() => {
@@ -145,7 +141,7 @@ export default function SetupWizard() {
             if (!res.ok) {
                 throw new Error(await res.text());
             }
-            pollScanStatus();
+            await pollScanStatus();
         } catch (e) {
             console.error("Failed to start scan", e);
             setError("Failed to start scan. Please check authentication.");
@@ -225,7 +221,7 @@ export default function SetupWizard() {
             await res.json();
 
             setStep(5); // Move to Scan Progress
-            startScan();
+            await startScan();
 
         } catch (err: any) {
             setError(err.message || "Failed to save configuration");

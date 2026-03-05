@@ -302,7 +302,7 @@ export default function AppearanceSettings() {
                 return;
             }
 
-            const previousTheme = activeThemeId;
+            const _previousTheme = activeThemeId;
             setActiveThemeId(themeId);
             setSavingThemeId(themeId);
             setError("");

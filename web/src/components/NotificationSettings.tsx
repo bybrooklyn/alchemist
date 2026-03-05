@@ -26,7 +26,7 @@ export default function NotificationSettings() {
     const [newEvents, setNewEvents] = useState<string[]>(["completed", "failed"]);
 
     useEffect(() => {
-        fetchTargets();
+        void fetchTargets();
     }, []);
 
     const fetchTargets = async () => {
@@ -63,7 +63,7 @@ export default function NotificationSettings() {
                 setNewName("");
                 setNewUrl("");
                 setNewToken("");
-                fetchTargets();
+                await fetchTargets();
             }
         } catch (e) {
             console.error(e);
@@ -74,7 +74,7 @@ export default function NotificationSettings() {
         if (!confirm("Remove this notification target?")) return;
         try {
             await apiFetch(`/api/settings/notifications/${id}`, { method: "DELETE" });
-            fetchTargets();
+            await fetchTargets();
         } catch (e) {
             console.error(e);
         }

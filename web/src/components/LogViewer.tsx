@@ -56,7 +56,7 @@ export default function LogViewer() {
     };
 
     useEffect(() => {
-        fetchHistory();
+        void fetchHistory();
 
         let eventSource: EventSource | null = null;
         let cancelled = false;
