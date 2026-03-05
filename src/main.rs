@@ -472,7 +472,7 @@ async fn run() -> Result<()> {
                                 info!("Config file changed. Reloading...");
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                                match alchemist::config::Config::load(std::path::Path::new(
+                                match config::Config::load(std::path::Path::new(
                                     "config.toml",
                                 )) {
                                     Ok(new_config) => {

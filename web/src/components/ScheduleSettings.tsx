@@ -14,7 +14,7 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function ScheduleSettings() {
     const [windows, setWindows] = useState<ScheduleWindow[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [_loading, setLoading] = useState(true);
 
     const [newStart, setNewStart] = useState("00:00");
     const [newEnd, setNewEnd] = useState("08:00");
@@ -22,7 +22,7 @@ export default function ScheduleSettings() {
     const [showForm, setShowForm] = useState(false);
 
     useEffect(() => {
-        fetchSchedule();
+        void fetchSchedule();
     }, []);
 
     const fetchSchedule = async () => {
@@ -54,7 +54,7 @@ export default function ScheduleSettings() {
             });
             if (res.ok) {
                 setShowForm(false);
-                fetchSchedule();
+                await fetchSchedule();
             }
         } catch (e) {
             console.error(e);
@@ -65,7 +65,7 @@ export default function ScheduleSettings() {
         if (!confirm("Remove this schedule?")) return;
         try {
             await apiFetch(`/api/settings/schedule/${id}`, { method: "DELETE" });
-            fetchSchedule();
+            await fetchSchedule();
         } catch (e) {
             console.error(e);
         }

@@ -54,7 +54,7 @@ export default function ResourceMonitor() {
             }
         };
 
-        fetchStats();
+        void fetchStats();
         const interval = setInterval(fetchStats, pollInterval);
         return () => clearInterval(interval);
     }, [pollInterval]);

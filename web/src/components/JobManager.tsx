@@ -68,7 +68,7 @@ export default function JobManager() {
     const [page, setPage] = useState(1);
     const [refreshing, setRefreshing] = useState(false);
     const [focusedJob, setFocusedJob] = useState<JobDetail | null>(null);
-    const [detailLoading, setDetailLoading] = useState(false);
+    const [_detailLoading, setDetailLoading] = useState(false);
     const [menuJobId, setMenuJobId] = useState<number | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const [confirmState, setConfirmState] = useState<{
@@ -121,7 +121,7 @@ export default function JobManager() {
     }, [activeTab, search, page]);
 
     useEffect(() => {
-        fetchJobs();
+        void fetchJobs();
         const interval = setInterval(fetchJobs, 5000); // Auto-refresh every 5s
         return () => clearInterval(interval);
     }, [fetchJobs]);
@@ -166,7 +166,7 @@ export default function JobManager() {
 
             if (res.ok) {
                 setSelected(new Set());
-                fetchJobs();
+                await fetchJobs();
             }
         } catch (e) {
             console.error("Batch action failed", e);
@@ -175,7 +175,7 @@ export default function JobManager() {
 
     const clearCompleted = async () => {
         await apiFetch("/api/jobs/clear-completed", { method: "POST" });
-        fetchJobs();
+        await fetchJobs();
     };
 
     const fetchJobDetails = async (id: number) => {
@@ -198,8 +198,8 @@ export default function JobManager() {
             const res = await apiFetch(`/api/jobs/${id}/${action}`, { method: "POST" });
             if (res.ok) {
                 if (action === "delete") setFocusedJob(null);
-                else fetchJobDetails(id);
-                fetchJobs();
+                else await fetchJobDetails(id);
+                await fetchJobs();
             }
         } catch (e) {
             console.error(`Action ${action} failed`, e);
@@ -446,7 +446,7 @@ export default function JobManager() {
                                                         <button
                                                             onClick={() => {
                                                                 setMenuJobId(null);
-                                                                fetchJobDetails(job.id);
+                                                                void fetchJobDetails(job.id);
                                                             }}
                                                             className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
                                                         >

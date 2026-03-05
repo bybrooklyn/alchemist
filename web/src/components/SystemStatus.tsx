@@ -1,13 +1,7 @@
 import { useState, useEffect, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, X, Zap, CheckCircle2, AlertTriangle, Database } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { apiFetch } from "../lib/api";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
 
 interface Stats {
     active: number;
@@ -46,7 +40,7 @@ export default function SystemStatus() {
             }
         };
 
-        fetchStats();
+        void fetchStats();
         const interval = setInterval(fetchStats, 5000);
         return () => clearInterval(interval);
     }, []);

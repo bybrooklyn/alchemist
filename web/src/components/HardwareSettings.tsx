@@ -23,8 +23,8 @@ export default function HardwareSettings() {
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        fetchHardware();
-        fetchSettings();
+        void fetchHardware();
+        void fetchSettings();
     }, []);
 
     const fetchHardware = async () => {
