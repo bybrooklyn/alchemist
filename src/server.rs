@@ -23,10 +23,12 @@ use futures::stream::Stream;
 use rand::rngs::OsRng;
 use rand::Rng;
 use reqwest::Url;
+#[cfg(feature = "embed-web")]
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -40,9 +42,22 @@ use tokio_stream::StreamExt;
 use tracing::{error, info};
 use uuid::Uuid;
 
+#[cfg(feature = "embed-web")]
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
 struct Assets;
+
+fn load_static_asset(path: &str) -> Option<Vec<u8>> {
+    sanitize_asset_path(path)?;
+
+    #[cfg(feature = "embed-web")]
+    if let Some(content) = Assets::get(path) {
+        return Some(content.data.into_owned());
+    }
+
+    let full_path = PathBuf::from("web/dist").join(path);
+    fs::read(full_path).ok()
+}
 
 pub struct AppState {
     pub db: Arc<Db>,
@@ -58,7 +73,7 @@ pub struct AppState {
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
     login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
-    global_rate_limiter: Mutex<RateLimitEntry>,
+    global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
 }
 
 pub struct RunServerArgs {
@@ -117,10 +132,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         file_watcher,
         library_scanner,
         login_rate_limiter: Mutex::new(HashMap::new()),
-        global_rate_limiter: Mutex::new(RateLimitEntry {
-            tokens: GLOBAL_RATE_LIMIT_CAPACITY,
-            last_refill: Instant::now(),
-        }),
+        global_rate_limiter: Mutex::new(HashMap::new()),
     });
 
     let cleanup_db = state.db.clone();
@@ -239,8 +251,8 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .await
-        .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
+    .await
+    .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
 
     Ok(())
 }
@@ -491,7 +503,6 @@ struct SetupConfig {
 
 async fn setup_complete_handler(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<IncludeTokenQuery>,
     axum::Json(payload): axum::Json<SetupConfig>,
 ) -> impl IntoResponse {
     if !state.setup_required.load(Ordering::Relaxed) {
@@ -617,15 +628,9 @@ async fn setup_complete_handler(
     info!("Configuration saved via web setup. Auth info created.");
 
     let cookie = build_session_cookie(&token);
-    let include_token = query.include_token.unwrap_or(false);
-    let body = if include_token {
-        serde_json::json!({ "status": "saved", "token": token })
-    } else {
-        serde_json::json!({ "status": "saved" })
-    };
     (
         [(header::SET_COOKIE, cookie)],
-        axum::Json(body),
+        axum::Json(serde_json::json!({ "status": "saved" })),
     )
         .into_response()
 }
@@ -665,23 +670,42 @@ async fn index_handler() -> impl IntoResponse {
 }
 
 async fn static_handler(uri: Uri) -> impl IntoResponse {
-    let mut path = uri.path().trim_start_matches('/').to_string();
-    if path.is_empty() {
-        path = "index.html".to_string();
-    }
+    let raw_path = uri.path().trim_start_matches('/');
+    let path = match sanitize_asset_path(raw_path) {
+        Some(path) => path,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
 
-    if let Some(content) = Assets::get(&path) {
+    if let Some(content) = load_static_asset(&path) {
         let mime = mime_guess::from_path(&path).first_or_octet_stream();
-        return ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response();
+        return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
     }
 
     // Attempt to serve index.html for directory paths (e.g. /jobs -> jobs/index.html)
     if !path.contains('.') {
         let index_path = format!("{}/index.html", path);
-        if let Some(content) = Assets::get(&index_path) {
+        if let Some(content) = load_static_asset(&index_path) {
             let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-            return ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response();
+            return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
         }
+    }
+
+    if path == "index.html" {
+        const MISSING_WEB_BUILD_PAGE: &str = r#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Alchemist UI Not Built</title></head>
+<body>
+<h1>Alchemist UI is not built</h1>
+<p>The backend is running, but frontend assets are missing.</p>
+<p>Run <code>cd web && bun install && bun run build</code>, then restart Alchemist.</p>
+</body>
+</html>"#;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            MISSING_WEB_BUILD_PAGE,
+        )
+            .into_response();
     }
 
     // Default fallback to 404 for missing files, except for the SPA root fallback if intended.
@@ -871,15 +895,9 @@ struct LoginPayload {
     password: String,
 }
 
-#[derive(serde::Deserialize)]
-struct IncludeTokenQuery {
-    include_token: Option<bool>,
-}
-
 async fn login_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    Query(query): Query<IncludeTokenQuery>,
     axum::Json(payload): axum::Json<LoginPayload>,
 ) -> impl IntoResponse {
     if !allow_login_attempt(&state, addr.ip()).await {
@@ -923,15 +941,9 @@ async fn login_handler(
     }
 
     let cookie = build_session_cookie(&token);
-    let include_token = query.include_token.unwrap_or(false);
-    let body = if include_token {
-        serde_json::json!({ "token": token })
-    } else {
-        serde_json::json!({ "status": "ok" })
-    };
     (
         [(header::SET_COOKIE, cookie)],
-        axum::Json(body),
+        axum::Json(serde_json::json!({ "status": "ok" })),
     )
         .into_response()
 }
@@ -1006,7 +1018,8 @@ async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    if !allow_global_request(&state).await {
+    let ip = request_ip(&req).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    if !allow_global_request(&state, ip).await {
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
     }
     next.run(req).await
@@ -1103,7 +1116,10 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
             Ok(sys) => sys,
             Err(e) => {
                 error!("System monitor lock poisoned: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "System monitor unavailable")
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "System monitor unavailable",
+                )
                     .into_response();
             }
         };
@@ -1141,10 +1157,9 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
     let config = state.config.read().await;
 
     // Query GPU utilization (using spawn_blocking to avoid blocking)
-    let (gpu_utilization, gpu_memory_percent) =
-        tokio::task::spawn_blocking(query_gpu_utilization)
-            .await
-            .unwrap_or((None, None));
+    let (gpu_utilization, gpu_memory_percent) = tokio::task::spawn_blocking(query_gpu_utilization)
+        .await
+        .unwrap_or((None, None));
 
     axum::Json(SystemResources {
         cpu_percent,
@@ -1229,7 +1244,7 @@ async fn logs_history_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LogParams>,
 ) -> impl IntoResponse {
-    let limit = params.limit.unwrap_or(50).min(200);
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
@@ -1260,7 +1275,7 @@ async fn jobs_table_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<JobTableParams>,
 ) -> impl IntoResponse {
-    let limit = params.limit.unwrap_or(50).min(200);
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
@@ -1437,10 +1452,7 @@ async fn add_schedule_handler(
     axum::Json(payload): axum::Json<AddSchedulePayload>,
 ) -> impl IntoResponse {
     if payload.days_of_week.is_empty()
-        || payload
-            .days_of_week
-            .iter()
-            .any(|day| *day < 0 || *day > 6)
+        || payload.days_of_week.iter().any(|day| *day < 0 || *day > 6)
     {
         return (
             StatusCode::BAD_REQUEST,
@@ -1463,12 +1475,7 @@ async fn add_schedule_handler(
     let days_json = serde_json::to_string(&payload.days_of_week).unwrap_or_default();
     match state
         .db
-        .add_schedule_window(
-            &start_time,
-            &end_time,
-            &days_json,
-            payload.enabled,
-        )
+        .add_schedule_window(&start_time, &end_time, &days_json, payload.enabled)
         .await
     {
         Ok(w) => axum::Json(serde_json::json!(w)).into_response(),
@@ -1708,7 +1715,10 @@ async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Respon
             Ok(sys) => sys,
             Err(e) => {
                 error!("System monitor lock poisoned: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "System monitor unavailable")
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "System monitor unavailable",
+                )
                     .into_response();
             }
         };
@@ -1739,7 +1749,12 @@ async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Respon
 
 async fn get_hardware_info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.read().await;
-    match crate::system::hardware::detect_hardware_async(config.hardware.allow_cpu_fallback).await {
+    match crate::system::hardware::detect_hardware_async_with_preference(
+        config.hardware.allow_cpu_fallback,
+        config.hardware.preferred_vendor.clone(),
+    )
+    .await
+    {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1783,9 +1798,15 @@ async fn allow_login_attempt(state: &AppState, ip: IpAddr) -> bool {
     }
 }
 
-async fn allow_global_request(state: &AppState) -> bool {
-    let mut entry = state.global_rate_limiter.lock().await;
+async fn allow_global_request(state: &AppState, ip: IpAddr) -> bool {
+    let mut limiter = state.global_rate_limiter.lock().await;
     let now = Instant::now();
+    let cleanup_after = Duration::from_secs(60 * 60);
+    limiter.retain(|_, entry| now.duration_since(entry.last_refill) <= cleanup_after);
+    let entry = limiter.entry(ip).or_insert(RateLimitEntry {
+        tokens: GLOBAL_RATE_LIMIT_CAPACITY,
+        last_refill: now,
+    });
 
     let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
     if elapsed > 0.0 {
@@ -1803,14 +1824,22 @@ async fn allow_global_request(state: &AppState) -> bool {
 }
 
 fn build_session_cookie(token: &str) -> String {
-    format!(
+    let mut cookie = format!(
         "alchemist_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
         token
-    )
+    );
+    if secure_cookie_enabled() {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
 fn build_clear_session_cookie() -> String {
-    "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string()
+    let mut cookie = "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string();
+    if secure_cookie_enabled() {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
 fn get_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -1826,6 +1855,43 @@ fn get_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
+fn request_ip(req: &Request) -> Option<IpAddr> {
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip())
+}
+
+fn secure_cookie_enabled() -> bool {
+    match std::env::var("ALCHEMIST_COOKIE_SECURE") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => !cfg!(debug_assertions),
+    }
+}
+
+fn sanitize_asset_path(raw: &str) -> Option<String> {
+    let normalized = raw.replace('\\', "/");
+    let mut segments = Vec::new();
+
+    for segment in normalized.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            return None;
+        }
+        segments.push(segment);
+    }
+
+    if segments.is_empty() {
+        Some("index.html".to_string())
+    } else {
+        Some(segments.join("/"))
+    }
+}
+
 fn validate_notification_url(raw: &str) -> std::result::Result<(), &'static str> {
     let url = Url::parse(raw).map_err(|_| "endpoint_url must be a valid URL")?;
     match url.scheme() {
@@ -1833,9 +1899,7 @@ fn validate_notification_url(raw: &str) -> std::result::Result<(), &'static str>
         _ => return Err("endpoint_url must use http or https"),
     }
 
-    let host = url
-        .host_str()
-        .ok_or("endpoint_url must include a host")?;
+    let host = url.host_str().ok_or("endpoint_url must include a host")?;
 
     if host.eq_ignore_ascii_case("localhost") {
         return Err("endpoint_url host is not allowed");

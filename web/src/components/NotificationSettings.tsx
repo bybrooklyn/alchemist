@@ -83,11 +83,15 @@ export default function NotificationSettings() {
     const handleTest = async (target: NotificationTarget) => {
         setTestingId(target.id);
         try {
-            // We reconstruct payload from target to send to test endpoint
-            // Or test endpoint could take ID if we implemented that.
-            // But we implemented endpoint taking Payload.
-            // So we send current target data.
-            const events = JSON.parse(target.events);
+            let events: string[] = [];
+            try {
+                const parsed = JSON.parse(target.events);
+                if (Array.isArray(parsed)) {
+                    events = parsed;
+                }
+            } catch {
+                events = [];
+            }
 
             const res = await apiFetch("/api/settings/notifications/test", {
                 method: "POST",

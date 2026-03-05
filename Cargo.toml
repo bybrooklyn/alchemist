@@ -3,6 +3,11 @@ name = "alchemist"
 version = "0.2.8"
 edition = "2021"
 license = "GPL-3.0"
+build = "build.rs"
+
+[features]
+default = ["embed-web"]
+embed-web = []
 
 [lib]
 name = "alchemist"

@@ -7,12 +7,12 @@ use crate::orchestrator::Transcoder;
 use crate::system::hardware::HardwareInfo;
 use crate::telemetry::{encoder_label, hardware_label, resolution_bucket, TelemetryEvent};
 use async_trait::async_trait;
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::{broadcast, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -88,7 +88,10 @@ pub enum DynamicRange {
 
 impl DynamicRange {
     pub fn is_hdr(&self) -> bool {
-        matches!(self, DynamicRange::Hdr10 | DynamicRange::Hlg | DynamicRange::DolbyVision)
+        matches!(
+            self,
+            DynamicRange::Hdr10 | DynamicRange::Hlg | DynamicRange::DolbyVision
+        )
     }
 }
 
@@ -287,7 +290,9 @@ impl Pipeline {
                 .db
                 .add_decision(job.id, "skip", "Output path matches input path")
                 .await;
-            let _ = self.update_job_state(job.id, crate::db::JobState::Skipped).await;
+            let _ = self
+                .update_job_state(job.id, crate::db::JobState::Skipped)
+                .await;
             return Ok(());
         }
 
@@ -300,7 +305,9 @@ impl Pipeline {
                 .db
                 .add_decision(job.id, "skip", "Output already exists")
                 .await;
-            let _ = self.update_job_state(job.id, crate::db::JobState::Skipped).await;
+            let _ = self
+                .update_job_state(job.id, crate::db::JobState::Skipped)
+                .await;
             return Ok(());
         }
 
@@ -330,7 +337,9 @@ impl Pipeline {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!("Job {}: Probing failed: {}", job.id, e);
-                let _ = self.update_job_state(job.id, crate::db::JobState::Failed).await;
+                let _ = self
+                    .update_job_state(job.id, crate::db::JobState::Failed)
+                    .await;
                 return Err(JobFailure::MediaCorrupt);
             }
         };
@@ -367,7 +376,9 @@ impl Pipeline {
             Ok(plan) => plan,
             Err(e) => {
                 tracing::error!("Job {}: Planner failed: {}", job.id, e);
-                let _ = self.update_job_state(job.id, crate::db::JobState::Failed).await;
+                let _ = self
+                    .update_job_state(job.id, crate::db::JobState::Failed)
+                    .await;
                 return Err(JobFailure::PlannerBug);
             }
         };
@@ -385,7 +396,9 @@ impl Pipeline {
         if !should_encode {
             tracing::info!("Decision: SKIP Job {} - {}", job.id, &reason);
             let _ = self.db.add_decision(job.id, "skip", &reason).await;
-            let _ = self.update_job_state(job.id, crate::db::JobState::Skipped).await;
+            let _ = self
+                .update_job_state(job.id, crate::db::JobState::Skipped)
+                .await;
             return Ok(());
         }
 
@@ -432,7 +445,9 @@ impl Pipeline {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
                     tracing::error!("Job {}: Encoder fallback detected and not allowed.", job.id);
-                    let _ = self.update_job_state(job.id, crate::db::JobState::Failed).await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
@@ -473,26 +488,28 @@ impl Pipeline {
                 .await;
 
                 if let crate::error::AlchemistError::Cancelled = e {
-                    let _ = self.update_job_state(job.id, crate::db::JobState::Cancelled).await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Cancelled)
+                        .await;
                 } else {
                     tracing::error!("Job {}: Transcode failed: {}", job.id, e);
-                    let _ = self.update_job_state(job.id, crate::db::JobState::Failed).await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
                 }
                 Err(map_failure(&e))
             }
         }
     }
 
-    async fn update_job_state(
-        &self,
-        job_id: i64,
-        status: crate::db::JobState,
-    ) -> Result<()> {
+    async fn update_job_state(&self, job_id: i64, status: crate::db::JobState) -> Result<()> {
         if let Err(e) = self.db.update_job_status(job_id, status).await {
             tracing::error!("Failed to update job {} status {:?}: {}", job_id, status, e);
             return Err(e);
         }
-        let _ = self.tx.send(crate::db::AlchemistEvent::JobStateChanged { job_id, status });
+        let _ = self
+            .tx
+            .send(crate::db::AlchemistEvent::JobStateChanged { job_id, status });
         Ok(())
     }
 

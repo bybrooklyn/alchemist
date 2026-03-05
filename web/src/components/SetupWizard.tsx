@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowRight,
@@ -53,6 +53,7 @@ export default function SetupWizard() {
     const [success, setSuccess] = useState(false);
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+    const scanIntervalRef = useRef<number | null>(null);
 
     const [config, setConfig] = useState<ConfigState>({
         username: '',
@@ -68,11 +69,6 @@ export default function SetupWizard() {
     });
 
     const [dirInput, setDirInput] = useState('');
-
-    const getAuthHeaders = () => {
-        const token = localStorage.getItem('alchemist_token');
-        return token ? { Authorization: `Bearer ${token}` } : {};
-    };
 
     useEffect(() => {
         const loadSetupDefaults = async () => {
@@ -91,6 +87,15 @@ export default function SetupWizard() {
         loadSetupDefaults();
     }, []);
 
+    useEffect(() => {
+        return () => {
+            if (scanIntervalRef.current !== null) {
+                window.clearInterval(scanIntervalRef.current);
+                scanIntervalRef.current = null;
+            }
+        };
+    }, []);
+
     const handleNext = async () => {
         if (step === 1 && (!config.username || !config.password)) {
             setError("Please fill in both username and password.");
@@ -103,7 +108,6 @@ export default function SetupWizard() {
                 setLoading(true);
                 try {
                     const res = await fetch('/api/system/hardware', {
-                        headers: getAuthHeaders(),
                         credentials: 'same-origin'
                     });
                     if (!res.ok) {
@@ -132,10 +136,10 @@ export default function SetupWizard() {
     const handleBack = () => setStep(s => Math.max(s - 1, 1));
 
     const startScan = async () => {
+        setLoading(true);
         try {
             const res = await fetch('/api/scan/start', {
                 method: 'POST',
-                headers: getAuthHeaders(),
                 credentials: 'same-origin'
             });
             if (!res.ok) {
@@ -149,10 +153,14 @@ export default function SetupWizard() {
     };
 
     const pollScanStatus = async () => {
-        const interval = setInterval(async () => {
+        if (scanIntervalRef.current !== null) {
+            window.clearInterval(scanIntervalRef.current);
+            scanIntervalRef.current = null;
+        }
+
+        scanIntervalRef.current = window.setInterval(async () => {
             try {
                 const res = await fetch('/api/scan/status', {
-                    headers: getAuthHeaders(),
                     credentials: 'same-origin'
                 });
                 if (!res.ok) {
@@ -161,13 +169,19 @@ export default function SetupWizard() {
                 const data = await res.json();
                 setScanStatus(data);
                 if (!data.is_running) {
-                    clearInterval(interval);
+                    if (scanIntervalRef.current !== null) {
+                        window.clearInterval(scanIntervalRef.current);
+                        scanIntervalRef.current = null;
+                    }
                     setLoading(false);
                 }
             } catch (e) {
                 console.error("Polling failed", e);
                 setError("Scan status unavailable. Please refresh and try again.");
-                clearInterval(interval);
+                if (scanIntervalRef.current !== null) {
+                    window.clearInterval(scanIntervalRef.current);
+                    scanIntervalRef.current = null;
+                }
                 setLoading(false);
             }
         }, 1000);
@@ -208,12 +222,7 @@ export default function SetupWizard() {
                 throw new Error(text);
             }
 
-            const data = await res.json();
-            if (data.token) {
-                localStorage.setItem('alchemist_token', data.token);
-            } else {
-                localStorage.removeItem('alchemist_token');
-            }
+            await res.json();
 
             setStep(5); // Move to Scan Progress
             startScan();

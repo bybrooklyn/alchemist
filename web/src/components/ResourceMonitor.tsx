@@ -30,7 +30,10 @@ export default function ResourceMonitor() {
         apiFetch('/api/settings/system')
             .then(res => res.json())
             .then((data: SystemSettings) => {
-                setPollInterval(data.monitoring_poll_interval * 1000);
+                const seconds = Number(data?.monitoring_poll_interval);
+                if (!Number.isFinite(seconds)) return;
+                const intervalMs = Math.round(seconds * 1000);
+                setPollInterval(Math.min(10000, Math.max(500, intervalMs)));
             })
             .catch(err => console.error('Failed to load system settings', err));
     }, []);

@@ -285,7 +285,9 @@ export default function StatsCharts() {
                             <tbody>
                                 {detailedStats.slice(0, 10).map((job) => {
                                     const saved = job.input_size_bytes - job.output_size_bytes;
-                                    const savedPercent = ((saved / job.input_size_bytes) * 100).toFixed(1);
+                                    const savedPercent = job.input_size_bytes > 0
+                                        ? ((saved / job.input_size_bytes) * 100).toFixed(1)
+                                        : "0.0";
                                     const filename = job.input_path.split(/[/\\]/).pop() || job.input_path;
                                     return (
                                         <tr key={job.job_id} className="border-b border-helios-line/20 hover:bg-helios-surface-soft transition-colors">
