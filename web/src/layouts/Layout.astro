@@ -40,20 +40,16 @@ const { title } = Astro.props;
                 const isAuthPage = window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/setup');
                 if (isAuthPage) return;
 
-                const headers = {};
-                try {
-                    const token = localStorage.getItem("alchemist_token");
-                    if (token) {
-                        headers.Authorization = `Bearer ${token}`;
-                    }
-                } catch {}
-
-                fetch('/api/engine/status', { credentials: 'same-origin', headers })
+                fetch('/api/engine/status', { credentials: 'same-origin' })
                     .then(res => {
                         if (res.status !== 401) return;
                         return fetch('/api/setup/status')
-                            .then(statusRes => statusRes.json())
+                            .then(statusRes => {
+                                if (!statusRes.ok) return null;
+                                return statusRes.json();
+                            })
                             .then(data => {
+                                if (!data) return;
                                 if (data.setup_required) {
                                     window.location.href = '/setup';
                                 } else {
@@ -62,11 +58,7 @@ const { title } = Astro.props;
                             });
                     })
                     .catch(() => {
-                        // If API fails (server down?), maybe just stay? Or go to login?
-                        // Safest to go to login, but only if not already there
-                        if (!window.location.pathname.startsWith('/login')) {
-                            window.location.href = '/login';
-                        }
+                        // Keep user on current page on transient backend/network failures.
                     });
             }
             

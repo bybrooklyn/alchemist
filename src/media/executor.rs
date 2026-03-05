@@ -89,8 +89,7 @@ impl Executor for FfmpegExecutor {
             })
             .await?;
 
-        let (fallback_occurred, used_encoder) =
-            self.verify_encoder(&output_path, encoder).await;
+        let (fallback_occurred, used_encoder) = self.verify_encoder(&output_path, encoder).await;
 
         Ok(ExecutionResult {
             used_encoder,

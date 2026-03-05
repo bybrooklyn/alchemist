@@ -223,7 +223,14 @@ mod tests {
         let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
         let manager = NotificationManager::new(db);
 
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Some CI/sandbox environments deny opening loopback sockets.
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
         let addr = listener.local_addr()?;
 
         tokio::spawn(async move {

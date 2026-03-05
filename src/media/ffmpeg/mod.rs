@@ -291,7 +291,11 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 warn!(
                     "No suitable encoder found for {} (fallbacks {}). Encoding may fail.",
                     self.target_codec.as_str(),
-                    if self.allow_fallback { "allowed" } else { "disabled" }
+                    if self.allow_fallback {
+                        "allowed"
+                    } else {
+                        "disabled"
+                    }
                 );
                 self.apply_cpu_params(&mut cmd);
             }
@@ -341,13 +345,28 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 );
             }
             Encoder::Av1Nvenc => {
-                nvenc::apply(cmd, encoder, rate_control.clone(), self.profile.nvenc_preset());
+                nvenc::apply(
+                    cmd,
+                    encoder,
+                    rate_control.clone(),
+                    self.profile.nvenc_preset(),
+                );
             }
             Encoder::HevcNvenc => {
-                nvenc::apply(cmd, encoder, rate_control.clone(), self.profile.nvenc_preset());
+                nvenc::apply(
+                    cmd,
+                    encoder,
+                    rate_control.clone(),
+                    self.profile.nvenc_preset(),
+                );
             }
             Encoder::H264Nvenc => {
-                nvenc::apply(cmd, encoder, rate_control.clone(), self.profile.nvenc_preset());
+                nvenc::apply(
+                    cmd,
+                    encoder,
+                    rate_control.clone(),
+                    self.profile.nvenc_preset(),
+                );
             }
             Encoder::Av1Vaapi => {
                 vaapi::apply(cmd, encoder, self.hw_info);
@@ -463,7 +482,11 @@ impl<'a> FFmpegCommandBuilder<'a> {
                     Encoder::Av1Vaapi
                 },
                 crate::config::OutputCodec::Av1,
-                caps.has_video_encoder(if cfg!(target_os = "windows") { "av1_amf" } else { "av1_vaapi" }),
+                caps.has_video_encoder(if cfg!(target_os = "windows") {
+                    "av1_amf"
+                } else {
+                    "av1_vaapi"
+                }),
                 "Hardware AV1 (AMF/VAAPI)",
             )),
             _ => {}
@@ -482,7 +505,12 @@ impl<'a> FFmpegCommandBuilder<'a> {
         ));
     }
 
-    fn push_hevc_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities, reason: &str) {
+    fn push_hevc_candidates(
+        &self,
+        out: &mut Vec<EncoderCandidate>,
+        caps: &EncoderCapabilities,
+        reason: &str,
+    ) {
         match self.hw_info.map(|h| h.vendor) {
             Some(Vendor::Apple) => out.push(EncoderCandidate::new(
                 Encoder::HevcVideotoolbox,
@@ -509,7 +537,11 @@ impl<'a> FFmpegCommandBuilder<'a> {
                     Encoder::HevcVaapi
                 },
                 crate::config::OutputCodec::Hevc,
-                caps.has_video_encoder(if cfg!(target_os = "windows") { "hevc_amf" } else { "hevc_vaapi" }),
+                caps.has_video_encoder(if cfg!(target_os = "windows") {
+                    "hevc_amf"
+                } else {
+                    "hevc_vaapi"
+                }),
                 reason,
             )),
             _ => {}
@@ -522,7 +554,12 @@ impl<'a> FFmpegCommandBuilder<'a> {
         ));
     }
 
-    fn push_h264_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities, reason: &str) {
+    fn push_h264_candidates(
+        &self,
+        out: &mut Vec<EncoderCandidate>,
+        caps: &EncoderCapabilities,
+        reason: &str,
+    ) {
         match self.hw_info.map(|h| h.vendor) {
             Some(Vendor::Apple) => out.push(EncoderCandidate::new(
                 Encoder::H264Videotoolbox,
@@ -549,7 +586,11 @@ impl<'a> FFmpegCommandBuilder<'a> {
                     Encoder::H264Vaapi
                 },
                 crate::config::OutputCodec::H264,
-                caps.has_video_encoder(if cfg!(target_os = "windows") { "h264_amf" } else { "h264_vaapi" }),
+                caps.has_video_encoder(if cfg!(target_os = "windows") {
+                    "h264_amf"
+                } else {
+                    "h264_vaapi"
+                }),
                 reason,
             )),
             _ => {}
@@ -853,8 +894,7 @@ impl QualityScore {
         let value: Value = serde_json::from_str(json_str).ok()?;
         let pooled = value.get("pooled_metrics")?;
         let vmaf = pooled.get("vmaf")?;
-        vmaf
-            .get("mean")
+        vmaf.get("mean")
             .and_then(|v| v.as_f64())
             .or_else(|| vmaf.get("harmonic_mean").and_then(|v| v.as_f64()))
     }

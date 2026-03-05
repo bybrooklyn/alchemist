@@ -65,6 +65,202 @@ fn check_encoder_support(encoder: &str) -> bool {
     }
 }
 
+fn parse_preferred_vendor(value: &str) -> Option<Vendor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "nvidia" => Some(Vendor::Nvidia),
+        "amd" => Some(Vendor::Amd),
+        "intel" => Some(Vendor::Intel),
+        "apple" => Some(Vendor::Apple),
+        "cpu" => Some(Vendor::Cpu),
+        _ => None,
+    }
+}
+
+fn try_detect_apple() -> Option<HardwareInfo> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    let mut codecs = Vec::new();
+    if check_encoder_support("av1_videotoolbox") {
+        codecs.push("av1".to_string());
+    }
+    if check_encoder_support("hevc_videotoolbox") {
+        codecs.push("hevc".to_string());
+    }
+    if check_encoder_support("h264_videotoolbox") {
+        codecs.push("h264".to_string());
+    }
+
+    Some(HardwareInfo {
+        vendor: Vendor::Apple,
+        device_path: None,
+        supported_codecs: codecs,
+    })
+}
+
+fn try_detect_nvidia() -> Option<HardwareInfo> {
+    let nvidia_likely = if cfg!(target_os = "windows") {
+        true
+    } else {
+        Path::new("/dev/nvidiactl").exists()
+    };
+
+    if !nvidia_likely {
+        return None;
+    }
+
+    let output = Command::new("nvidia-smi").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut codecs = Vec::new();
+    if check_encoder_support("av1_nvenc") {
+        codecs.push("av1".to_string());
+    }
+    if check_encoder_support("hevc_nvenc") {
+        codecs.push("hevc".to_string());
+    }
+    if check_encoder_support("h264_nvenc") {
+        codecs.push("h264".to_string());
+    }
+
+    Some(HardwareInfo {
+        vendor: Vendor::Nvidia,
+        device_path: None,
+        supported_codecs: codecs,
+    })
+}
+
+fn try_detect_intel() -> Option<HardwareInfo> {
+    if Path::new("/dev/dri/renderD129").exists() {
+        let mut codecs = Vec::new();
+        if check_encoder_support("av1_qsv") {
+            codecs.push("av1".to_string());
+        }
+        if check_encoder_support("hevc_qsv") {
+            codecs.push("hevc".to_string());
+        }
+        if check_encoder_support("h264_qsv") {
+            codecs.push("h264".to_string());
+        }
+        return Some(HardwareInfo {
+            vendor: Vendor::Intel,
+            device_path: Some("/dev/dri/renderD129".to_string()),
+            supported_codecs: codecs,
+        });
+    }
+
+    if !Path::new("/dev/dri/renderD128").exists() {
+        return None;
+    }
+
+    let vendor_id = std::fs::read_to_string("/sys/class/drm/renderD128/device/vendor")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let looks_intel = vendor_id.contains("0x8086");
+    if !looks_intel {
+        return None;
+    }
+
+    let mut codecs = Vec::new();
+    if check_encoder_support("av1_qsv") {
+        codecs.push("av1".to_string());
+    }
+    if check_encoder_support("hevc_qsv") {
+        codecs.push("hevc".to_string());
+    }
+    if check_encoder_support("h264_qsv") {
+        codecs.push("h264".to_string());
+    }
+
+    Some(HardwareInfo {
+        vendor: Vendor::Intel,
+        device_path: Some("/dev/dri/renderD128".to_string()),
+        supported_codecs: codecs,
+    })
+}
+
+fn try_detect_amd() -> Option<HardwareInfo> {
+    if !Path::new("/dev/dri/renderD128").exists() {
+        return None;
+    }
+
+    let vendor_id = std::fs::read_to_string("/sys/class/drm/renderD128/device/vendor")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if !vendor_id.contains("0x1002") {
+        return None;
+    }
+
+    let mut codecs = Vec::new();
+    if check_encoder_support("av1_amf") || check_encoder_support("av1_vaapi") {
+        codecs.push("av1".to_string());
+    }
+    if check_encoder_support("hevc_amf") || check_encoder_support("hevc_vaapi") {
+        codecs.push("hevc".to_string());
+    }
+    if check_encoder_support("h264_amf") || check_encoder_support("h264_vaapi") {
+        codecs.push("h264".to_string());
+    }
+
+    Some(HardwareInfo {
+        vendor: Vendor::Amd,
+        device_path: Some("/dev/dri/renderD128".to_string()),
+        supported_codecs: codecs,
+    })
+}
+
+fn detect_preferred_hardware(preferred_vendor: Vendor) -> Option<HardwareInfo> {
+    match preferred_vendor {
+        Vendor::Nvidia => try_detect_nvidia(),
+        Vendor::Amd => try_detect_amd(),
+        Vendor::Intel => try_detect_intel(),
+        Vendor::Apple => try_detect_apple(),
+        Vendor::Cpu => Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+        }),
+    }
+}
+
+pub fn detect_hardware_with_preference(
+    allow_cpu_fallback: bool,
+    preferred_vendor: Option<String>,
+) -> Result<HardwareInfo> {
+    if let Some(preferred_vendor) = preferred_vendor {
+        if let Some(parsed_vendor) = parse_preferred_vendor(&preferred_vendor) {
+            if parsed_vendor == Vendor::Cpu && !allow_cpu_fallback {
+                warn!(
+                    "Preferred vendor '{}' requested but CPU fallback is disabled.",
+                    preferred_vendor
+                );
+            } else if let Some(info) = detect_preferred_hardware(parsed_vendor) {
+                info!(
+                    "✓ Using preferred vendor '{}' ({})",
+                    preferred_vendor, info.vendor
+                );
+                return Ok(info);
+            }
+            warn!(
+                "Preferred vendor '{}' is unavailable. Falling back to auto detection.",
+                preferred_vendor
+            );
+        } else {
+            warn!(
+                "Unknown preferred vendor '{}'. Falling back to auto detection.",
+                preferred_vendor
+            );
+        }
+    }
+
+    detect_hardware(allow_cpu_fallback)
+}
+
 pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
     info!("=== Hardware Detection Starting ===");
     info!("OS: {}", std::env::consts::OS);
@@ -250,4 +446,15 @@ pub async fn detect_hardware_async(allow_cpu_fallback: bool) -> Result<HardwareI
         .map_err(|e| {
             crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e))
         })?
+}
+
+pub async fn detect_hardware_async_with_preference(
+    allow_cpu_fallback: bool,
+    preferred_vendor: Option<String>,
+) -> Result<HardwareInfo> {
+    tokio::task::spawn_blocking(move || {
+        detect_hardware_with_preference(allow_cpu_fallback, preferred_vendor)
+    })
+    .await
+    .map_err(|e| crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e)))?
 }

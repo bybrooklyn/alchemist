@@ -10,7 +10,7 @@ impl ConfigWizard {
     /// Run the configuration wizard and create config.toml
     pub fn run(config_path: &Path) -> Result<Config> {
         println!("\n╔═══════════════════════════════════════════════════════════════╗");
-        println!("║              ⚗️  ALCHEMIST CONFIGURATION WIZARD              ║");
+        println!("║                  ALCHEMIST CONFIGURATION WIZARD              ║");
         println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
         println!("Welcome! This wizard will help you configure Alchemist.");

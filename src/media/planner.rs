@@ -168,10 +168,15 @@ fn should_transcode(
     };
     let video_bitrate_available = metadata.video_bitrate_bps.is_some();
     let bitrate = metadata.video_bitrate_bps.or_else(|| {
-        if matches!(analysis.confidence, crate::media::pipeline::AnalysisConfidence::High) {
+        if matches!(
+            analysis.confidence,
+            crate::media::pipeline::AnalysisConfidence::High
+        ) {
             None
         } else {
-            metadata.container_bitrate_bps.or(estimated_container_bitrate)
+            metadata
+                .container_bitrate_bps
+                .or(estimated_container_bitrate)
         }
     });
     let width = metadata.width as f64;
@@ -203,7 +208,9 @@ fn should_transcode(
     // Heuristic via config (only if bitrate/fps are known)
     let mut threshold = match analysis.confidence {
         crate::media::pipeline::AnalysisConfidence::High => config.transcode.min_bpp_threshold,
-        crate::media::pipeline::AnalysisConfidence::Medium => config.transcode.min_bpp_threshold * 0.7,
+        crate::media::pipeline::AnalysisConfidence::Medium => {
+            config.transcode.min_bpp_threshold * 0.7
+        }
         crate::media::pipeline::AnalysisConfidence::Low => config.transcode.min_bpp_threshold * 0.5,
     };
     if target_codec == crate::config::OutputCodec::Av1 {
@@ -336,17 +343,20 @@ fn select_encoder(
 
 fn default_rate_control(encoder: &Encoder, config: &Config) -> RateControl {
     match encoder {
-        Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => {
-            RateControl::QsvQuality {
-                value: parse_quality_u8(config.transcode.quality_profile.qsv_quality(), 23),
+        Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => RateControl::QsvQuality {
+            value: parse_quality_u8(config.transcode.quality_profile.qsv_quality(), 23),
+        },
+        Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => {
+            RateControl::Cq { value: 25 }
+        }
+        Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
+            RateControl::Cq {
+                value: parse_quality_u8(
+                    config.transcode.quality_profile.videotoolbox_quality(),
+                    65,
+                ),
             }
         }
-        Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => RateControl::Cq { value: 25 },
-        Encoder::Av1Videotoolbox
-        | Encoder::HevcVideotoolbox
-        | Encoder::H264Videotoolbox => RateControl::Cq {
-            value: parse_quality_u8(config.transcode.quality_profile.videotoolbox_quality(), 65),
-        },
         _ => {
             let (_, crf) = config.hardware.cpu_preset.params();
             RateControl::Crf {
@@ -367,20 +377,30 @@ pub fn build_hardware_capabilities(
     let mut encoders = Vec::new();
 
     let has = |name: &str| caps.has_video_encoder(name);
+    let supports_vendor_encoder = |encoder_vendor: Vendor| match hw_info {
+        Some(info) => match info.vendor {
+            Vendor::Cpu => false,
+            Vendor::Nvidia => encoder_vendor == Vendor::Nvidia,
+            Vendor::Intel => encoder_vendor == Vendor::Intel,
+            Vendor::Apple => encoder_vendor == Vendor::Apple,
+            Vendor::Amd => encoder_vendor == Vendor::Amd,
+        },
+        None => true,
+    };
 
-    if has("av1_videotoolbox") {
+    if supports_vendor_encoder(Vendor::Apple) && has("av1_videotoolbox") {
         encoders.push(Encoder::Av1Videotoolbox);
     }
-    if has("av1_qsv") {
+    if supports_vendor_encoder(Vendor::Intel) && has("av1_qsv") {
         encoders.push(Encoder::Av1Qsv);
     }
-    if has("av1_nvenc") {
+    if supports_vendor_encoder(Vendor::Nvidia) && has("av1_nvenc") {
         encoders.push(Encoder::Av1Nvenc);
     }
-    if has("av1_vaapi") {
+    if supports_vendor_encoder(Vendor::Amd) && has("av1_vaapi") {
         encoders.push(Encoder::Av1Vaapi);
     }
-    if has("av1_amf") {
+    if supports_vendor_encoder(Vendor::Amd) && has("av1_amf") {
         encoders.push(Encoder::Av1Amf);
     }
     if has("libsvtav1") {
@@ -389,37 +409,37 @@ pub fn build_hardware_capabilities(
     if has("libaom-av1") {
         encoders.push(Encoder::Av1Aom);
     }
-    if has("hevc_videotoolbox") {
+    if supports_vendor_encoder(Vendor::Apple) && has("hevc_videotoolbox") {
         encoders.push(Encoder::HevcVideotoolbox);
     }
-    if has("hevc_qsv") {
+    if supports_vendor_encoder(Vendor::Intel) && has("hevc_qsv") {
         encoders.push(Encoder::HevcQsv);
     }
-    if has("hevc_nvenc") {
+    if supports_vendor_encoder(Vendor::Nvidia) && has("hevc_nvenc") {
         encoders.push(Encoder::HevcNvenc);
     }
-    if has("hevc_vaapi") {
+    if supports_vendor_encoder(Vendor::Amd) && has("hevc_vaapi") {
         encoders.push(Encoder::HevcVaapi);
     }
-    if has("hevc_amf") {
+    if supports_vendor_encoder(Vendor::Amd) && has("hevc_amf") {
         encoders.push(Encoder::HevcAmf);
     }
     if has("libx265") {
         encoders.push(Encoder::HevcX265);
     }
-    if has("h264_videotoolbox") {
+    if supports_vendor_encoder(Vendor::Apple) && has("h264_videotoolbox") {
         encoders.push(Encoder::H264Videotoolbox);
     }
-    if has("h264_qsv") {
+    if supports_vendor_encoder(Vendor::Intel) && has("h264_qsv") {
         encoders.push(Encoder::H264Qsv);
     }
-    if has("h264_nvenc") {
+    if supports_vendor_encoder(Vendor::Nvidia) && has("h264_nvenc") {
         encoders.push(Encoder::H264Nvenc);
     }
-    if has("h264_vaapi") {
+    if supports_vendor_encoder(Vendor::Amd) && has("h264_vaapi") {
         encoders.push(Encoder::H264Vaapi);
     }
-    if has("h264_amf") {
+    if supports_vendor_encoder(Vendor::Amd) && has("h264_amf") {
         encoders.push(Encoder::H264Amf);
     }
     if has("libx264") {
@@ -451,7 +471,11 @@ fn encoder_available_for_codec(
                 || matches!(hw_vendor, Some(Vendor::Nvidia))
                     && encoder_caps.has_video_encoder("av1_nvenc")
                 || matches!(hw_vendor, Some(Vendor::Amd))
-                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "av1_amf" } else { "av1_vaapi" })
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") {
+                        "av1_amf"
+                    } else {
+                        "av1_vaapi"
+                    })
                 || encoder_caps.has_libsvtav1()
                 || encoder_caps.has_video_encoder("libaom-av1")
         }
@@ -463,7 +487,11 @@ fn encoder_available_for_codec(
                 || matches!(hw_vendor, Some(Vendor::Nvidia))
                     && encoder_caps.has_video_encoder("hevc_nvenc")
                 || matches!(hw_vendor, Some(Vendor::Amd))
-                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "hevc_amf" } else { "hevc_vaapi" })
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") {
+                        "hevc_amf"
+                    } else {
+                        "hevc_vaapi"
+                    })
                 || encoder_caps.has_libx265()
         }
         crate::config::OutputCodec::H264 => {
@@ -474,7 +502,11 @@ fn encoder_available_for_codec(
                 || matches!(hw_vendor, Some(Vendor::Nvidia))
                     && encoder_caps.has_video_encoder("h264_nvenc")
                 || matches!(hw_vendor, Some(Vendor::Amd))
-                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") { "h264_amf" } else { "h264_vaapi" })
+                    && encoder_caps.has_video_encoder(if cfg!(target_os = "windows") {
+                        "h264_amf"
+                    } else {
+                        "h264_vaapi"
+                    })
                 || encoder_caps.has_libx264()
         }
     }

@@ -1,7 +1,7 @@
 use crate::error::Result;
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
     Row, SqlitePool,
@@ -793,7 +793,11 @@ impl Db {
             "1"
         };
 
-        let enabled_filter = if has_enabled { "WHERE enabled = 1 " } else { "" };
+        let enabled_filter = if has_enabled {
+            "WHERE enabled = 1 "
+        } else {
+            ""
+        };
         let query = format!(
             "SELECT id, path, {} as is_recursive, created_at FROM watch_dirs {}ORDER BY path ASC",
             recursive_expr, enabled_filter
@@ -1281,7 +1285,9 @@ impl Db {
     }
 
     pub async fn reset_auth(&self) -> Result<()> {
-        sqlx::query("DELETE FROM sessions").execute(&self.pool).await?;
+        sqlx::query("DELETE FROM sessions")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("DELETE FROM users").execute(&self.pool).await?;
         Ok(())
     }
@@ -1399,13 +1405,13 @@ mod tests {
         let first = db
             .claim_next_job()
             .await?
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "missing job 1"))?;
+            .ok_or_else(|| std::io::Error::other("missing job 1"))?;
         assert_eq!(first.status, JobState::Analyzing);
 
         let second = db
             .claim_next_job()
             .await?
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "missing job 2"))?;
+            .ok_or_else(|| std::io::Error::other("missing job 2"))?;
         assert_ne!(first.id, second.id);
 
         let none = db.claim_next_job().await?;

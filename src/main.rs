@@ -225,7 +225,11 @@ async fn run() -> Result<()> {
     } else {
         config.hardware.allow_cpu_fallback
     };
-    let hw_info = hardware::detect_hardware_async(allow_cpu_fallback).await?;
+    let hw_info = hardware::detect_hardware_async_with_preference(
+        allow_cpu_fallback,
+        config.hardware.preferred_vendor.clone(),
+    )
+    .await?;
     info!(
         target: "startup",
         "Hardware detection completed in {} ms",
@@ -293,59 +297,58 @@ async fn run() -> Result<()> {
         proc.run_loop().await;
     });
 
-        if is_server_mode {
-            info!("Starting web server...");
+    if is_server_mode {
+        info!("Starting web server...");
 
-            // Start Log Persistence Task
-            let log_db = db.clone();
-            let mut log_rx = tx.subscribe();
-            tokio::spawn(async move {
-                while let Ok(event) = log_rx.recv().await {
-                    if let alchemist::db::AlchemistEvent::Log {
-                        level,
-                        job_id,
-                        message,
-                        ..
-                    } = event
-                    {
-                        if let Err(e) = log_db.add_log(&level, job_id, &message).await {
-                            eprintln!("Failed to persist log: {}", e);
-                        }
+        // Start Log Persistence Task
+        let log_db = db.clone();
+        let mut log_rx = tx.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = log_rx.recv().await {
+                if let alchemist::db::AlchemistEvent::Log {
+                    level,
+                    job_id,
+                    message,
+                    ..
+                } = event
+                {
+                    if let Err(e) = log_db.add_log(&level, job_id, &message).await {
+                        eprintln!("Failed to persist log: {}", e);
                     }
                 }
-            });
+            }
+        });
 
-            // Persist progress so the UI can render accurate job updates.
-            let progress_db = db.clone();
-            let mut progress_rx = tx.subscribe();
-            tokio::spawn(async move {
-                let mut last: HashMap<i64, (f64, Instant)> = HashMap::new();
-                let min_step = 0.5;
-                let min_interval = std::time::Duration::from_secs(2);
+        // Persist progress so the UI can render accurate job updates.
+        let progress_db = db.clone();
+        let mut progress_rx = tx.subscribe();
+        tokio::spawn(async move {
+            let mut last: HashMap<i64, (f64, Instant)> = HashMap::new();
+            let min_step = 0.5;
+            let min_interval = std::time::Duration::from_secs(2);
 
-                while let Ok(event) = progress_rx.recv().await {
-                    if let alchemist::db::AlchemistEvent::Progress {
-                        job_id,
-                        percentage,
-                        ..
-                    } = event
-                    {
-                        let pct = percentage.clamp(0.0, 100.0);
-                        let now = Instant::now();
-                        let should_update = match last.get(&job_id) {
-                            Some((last_pct, last_time)) => {
-                                pct >= *last_pct + min_step || now.duration_since(*last_time) >= min_interval
-                            }
-                            None => true,
-                        };
-
-                        if should_update {
-                            let _ = progress_db.update_job_progress(job_id, pct).await;
-                            last.insert(job_id, (pct, now));
+            while let Ok(event) = progress_rx.recv().await {
+                if let alchemist::db::AlchemistEvent::Progress {
+                    job_id, percentage, ..
+                } = event
+                {
+                    let pct = percentage.clamp(0.0, 100.0);
+                    let now = Instant::now();
+                    let should_update = match last.get(&job_id) {
+                        Some((last_pct, last_time)) => {
+                            pct >= *last_pct + min_step
+                                || now.duration_since(*last_time) >= min_interval
                         }
+                        None => true,
+                    };
+
+                    if should_update {
+                        let _ = progress_db.update_job_progress(job_id, pct).await;
+                        last.insert(job_id, (pct, now));
                     }
                 }
-            });
+            }
+        });
 
         // Initialize File Watcher
         let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(db.clone()));

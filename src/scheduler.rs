@@ -44,15 +44,13 @@ impl Scheduler {
         let now = Local::now();
         let current_minutes = now.hour() * 60 + now.minute();
         let current_day = now.weekday().num_days_from_sunday() as i32; // 0=Sun, 6=Sat
+        let previous_day = (current_day + 6) % 7;
 
         let mut in_window = false;
 
         for window in enabled_windows {
             // Parse days
             let days: Vec<i32> = serde_json::from_str(&window.days_of_week).unwrap_or_default();
-            if !days.contains(&current_day) {
-                continue;
-            }
 
             let start_minutes = match parse_schedule_minutes(&window.start_time) {
                 Some(value) => value,
@@ -69,17 +67,22 @@ impl Scheduler {
                 }
             };
 
-            // Check time
-            // Handle cross-day windows (e.g. 23:00 to 02:00)
             if start_minutes <= end_minutes {
-                // Normal window
-                if current_minutes >= start_minutes && current_minutes < end_minutes {
+                // Normal same-day window.
+                if days.contains(&current_day)
+                    && current_minutes >= start_minutes
+                    && current_minutes < end_minutes
+                {
                     in_window = true;
                     break;
                 }
             } else {
-                // Split window
-                if current_minutes >= start_minutes || current_minutes < end_minutes {
+                // Overnight window split across two calendar days.
+                let in_late_segment =
+                    days.contains(&current_day) && current_minutes >= start_minutes;
+                let in_early_segment =
+                    days.contains(&previous_day) && current_minutes < end_minutes;
+                if in_late_segment || in_early_segment {
                     in_window = true;
                     break;
                 }

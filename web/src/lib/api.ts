@@ -1,20 +1,8 @@
 /**
- * Authenticated fetch utility - uses cookie auth by default and adds Bearer
- * token only if one is explicitly present in localStorage.
+ * Authenticated fetch utility using cookie auth.
  */
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-    let token: string | null = null;
-    try {
-        token = localStorage.getItem('alchemist_token');
-    } catch {
-        token = null;
-    }
-
     const headers = new Headers(options.headers);
-
-    if (token) {
-        headers.set('Authorization', `Bearer ${token}`);
-    }
 
     if (!headers.has('Content-Type') && typeof options.body === 'string') {
         headers.set('Content-Type', 'application/json');
@@ -41,11 +29,6 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
         });
 
         if (response.status === 401) {
-            try {
-                localStorage.removeItem('alchemist_token');
-            } catch {
-                // Ignore storage failures (e.g., restricted environments)
-            }
             if (typeof window !== 'undefined') {
                 const path = window.location.pathname;
                 const isAuthPage = path.startsWith('/login') || path.startsWith('/setup');

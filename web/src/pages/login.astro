@@ -88,12 +88,6 @@ import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
             });
             
             if (res.ok) {
-                const payload = await res.json();
-                if (payload?.token) {
-                    localStorage.setItem('alchemist_token', payload.token);
-                } else {
-                    localStorage.removeItem('alchemist_token');
-                }
                 window.location.href = '/';
             } else {
                 errorMsg?.classList.remove('hidden');

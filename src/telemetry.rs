@@ -152,9 +152,7 @@ pub async fn send_event(event: TelemetryEvent) {
     let backoff_iter = TELEMETRY_BACKOFF_MS
         .iter()
         .copied()
-        .chain(std::iter::once(
-            *TELEMETRY_BACKOFF_MS.last().unwrap_or(&0),
-        ))
+        .chain(std::iter::once(*TELEMETRY_BACKOFF_MS.last().unwrap_or(&0)))
         .enumerate()
         .take(TELEMETRY_MAX_RETRIES + 1);
     for (attempt, backoff_ms) in backoff_iter {

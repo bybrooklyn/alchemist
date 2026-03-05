@@ -10,9 +10,8 @@ export default function HeaderActions() {
         try {
             await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
         } catch {
-            // Ignore logout failures and clear local state anyway.
+            // Ignore logout failures and continue redirecting to login.
         } finally {
-            localStorage.removeItem('alchemist_token');
             window.location.href = '/login';
         }
     };
