@@ -3,7 +3,6 @@ import {
     Activity,
     CheckCircle2,
     AlertCircle,
-    Clock,
     HardDrive,
     Database,
     Zap,
@@ -32,7 +31,7 @@ export default function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const lastJob = jobs[0];
+    const _lastJob = jobs[0];
 
     useEffect(() => {
         const fetchData = async () => {
@@ -59,7 +58,7 @@ export default function Dashboard() {
             }
         };
 
-        fetchData();
+        void fetchData();
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
     }, []);

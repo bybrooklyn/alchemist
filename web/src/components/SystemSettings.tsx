@@ -15,7 +15,7 @@ export default function SystemSettings() {
     const [success, setSuccess] = useState(false);
 
     useEffect(() => {
-        fetchSettings();
+        void fetchSettings();
     }, []);
 
     const fetchSettings = async () => {

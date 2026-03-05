@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Info, X, Terminal, Server, Cpu, Activity, ShieldCheck } from "lucide-react";
+import { X, Terminal, Server, Cpu, Activity, ShieldCheck } from "lucide-react";
 import { apiFetch } from "../lib/api";
 
 interface SystemInfo {

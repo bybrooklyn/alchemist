@@ -29,7 +29,7 @@ export default function WatchFolders() {
     };
 
     useEffect(() => {
-        fetchDirs();
+        void fetchDirs();
     }, []);
 
     const triggerScan = async () => {
@@ -56,7 +56,7 @@ export default function WatchFolders() {
 
             if (res.ok) {
                 setPath("");
-                fetchDirs();
+                await fetchDirs();
             }
         } catch (e) {
             console.error("Failed to add directory", e);
@@ -72,7 +72,7 @@ export default function WatchFolders() {
             });
 
             if (res.ok) {
-                fetchDirs();
+                await fetchDirs();
             }
         } catch (e) {
             console.error("Failed to remove directory", e);

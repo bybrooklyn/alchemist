@@ -691,7 +691,7 @@ Alchemist auto-detects available hardware encoders at startup.
 
 ### Docker GPU Passthrough
 
-See [docs/GPU_PASSTHROUGH.md](docs/GPU_PASSTHROUGH.md) for detailed instructions on:
+See [GPU_PASSTHROUGH.md](GPU_PASSTHROUGH.md) for detailed instructions on:
 - NVIDIA Container Toolkit setup
 - Intel QSV passthrough
 - AMD ROCm configuration
@@ -925,41 +925,45 @@ docker build --platform linux/amd64 -t alchemist .
 ### Adding a New API Endpoint
 
 1. **Add route** in `src/server.rs`:
-```rust
-.route("/api/my/endpoint", get(my_handler))
-```
+
+   ```rust
+   .route("/api/my/endpoint", get(my_handler))
+   ```
 
 2. **Implement handler**:
-```rust
-async fn my_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Your logic here
-    axum::Json(serde_json::json!({"ok": true}))
-}
-```
+
+   ```rust
+   async fn my_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+       // Your logic here
+       axum::Json(serde_json::json!({"ok": true}))
+   }
+   ```
 
 3. **Update documentation** in `docs/Documentation.md`
 
 ### Adding a New Database Table
 
 1. **Create migration** in `migrations/`:
-```sql
--- migrations/20260110000000_add_my_table.sql
-CREATE TABLE IF NOT EXISTS my_table (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+
+   ```sql
+   -- migrations/20260110000000_add_my_table.sql
+   CREATE TABLE IF NOT EXISTS my_table (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name TEXT NOT NULL,
+       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+   );
+   ```
 
 2. **Add struct** in `src/db.rs`:
-```rust
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MyRecord {
-    pub id: i64,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-}
-```
+
+   ```rust
+   #[derive(Debug, Serialize, Deserialize)]
+   pub struct MyRecord {
+       pub id: i64,
+       pub name: String,
+       pub created_at: DateTime<Utc>,
+   }
+   ```
 
 3. **Follow migration policy** (see `migrations/MIGRATIONS.md`)
 
