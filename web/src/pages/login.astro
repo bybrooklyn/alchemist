@@ -1,6 +1,6 @@
 ---
 import Layout from "../layouts/Layout.astro";
-import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 ---
 
 <Layout title="Alchemist | Login">
@@ -17,9 +17,10 @@ import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
             <form id="login-form" class="space-y-6">
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-helios-slate mb-2">Username</label>
+                        <label for="username" class="block text-sm font-medium text-helios-slate mb-2">Username</label>
                         <div class="relative">
                             <input
+                                id="username"
                                 type="text"
                                 name="username"
                                 required
@@ -29,9 +30,10 @@ import { User, Lock, ArrowRight, AlertTriangle } from "lucide-react";
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-helios-slate mb-2">Password</label>
+                        <label for="password" class="block text-sm font-medium text-helios-slate mb-2">Password</label>
                         <div class="relative">
                              <input
+                                id="password"
                                 type="password"
                                 name="password"
                                 required

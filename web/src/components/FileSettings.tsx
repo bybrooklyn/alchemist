@@ -16,11 +16,11 @@ export default function FileSettings() {
         output_suffix: "-alchemist",
         replace_strategy: "keep"
     });
-    const [loading, setLoading] = useState(true);
+    const [_loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        fetchSettings();
+        void fetchSettings();
     }, []);
 
     const fetchSettings = async () => {

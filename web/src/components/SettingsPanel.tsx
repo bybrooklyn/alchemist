@@ -28,7 +28,7 @@ export default function SettingsPanel() {
         const requested = params.get("tab");
         return requested && TABS.some((tab) => tab.id === requested) ? requested : "watch";
     });
-    const [[page, direction], setPage] = useState([0, 0]);
+    const [[_page, direction], setPage] = useState([0, 0]);
 
     const activeIndex = TABS.findIndex(t => t.id === activeTab);
 

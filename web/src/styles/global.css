@@ -456,7 +456,6 @@
     }
 
     html {
-        background-color: rgb(var(--bg-main));
         background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.05), transparent 65%),
             linear-gradient(180deg, rgb(var(--bg-main)), rgb(var(--bg-panel)));
     }
@@ -487,11 +486,6 @@
         @apply flex-1 flex flex-col h-full min-w-0 overflow-x-hidden;
         background: inherit;
         -webkit-overflow-scrolling: touch;
-    }
-
-    /* Add other utility classes from Helios as needed */
-    .btn {
-        @apply px-4 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity;
     }
 }
 

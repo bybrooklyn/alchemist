@@ -49,7 +49,7 @@ export default function StatsCharts() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetchAllStats();
+        void fetchAllStats();
     }, []);
 
     const fetchAllStats = async () => {
