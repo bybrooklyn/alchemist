@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { Clock, Plus, Trash2, Calendar } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
+import ConfirmDialog from "./ui/ConfirmDialog";
 
 interface ScheduleWindow {
     id: number;
-    start_time: string; // HH:MM
-    end_time: string;   // HH:MM
-    days_of_week: string; // JSON array of ints
+    start_time: string;
+    end_time: string;
+    days_of_week: string;
     enabled: boolean;
 }
 
@@ -14,12 +16,14 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function ScheduleSettings() {
     const [windows, setWindows] = useState<ScheduleWindow[]>([]);
-    const [_loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     const [newStart, setNewStart] = useState("00:00");
     const [newEnd, setNewEnd] = useState("08:00");
     const [selectedDays, setSelectedDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
     const [showForm, setShowForm] = useState(false);
+    const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
     useEffect(() => {
         void fetchSchedule();
@@ -27,13 +31,12 @@ export default function ScheduleSettings() {
 
     const fetchSchedule = async () => {
         try {
-            const res = await apiFetch("/api/settings/schedule");
-            if (res.ok) {
-                const data = await res.json();
-                setWindows(data);
-            }
+            const data = await apiJson<ScheduleWindow[]>("/api/settings/schedule");
+            setWindows(data);
+            setError(null);
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to load schedule windows";
+            setError(message);
         } finally {
             setLoading(false);
         }
@@ -42,32 +45,37 @@ export default function ScheduleSettings() {
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const res = await apiFetch("/api/settings/schedule", {
+            await apiAction("/api/settings/schedule", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     start_time: newStart,
                     end_time: newEnd,
                     days_of_week: selectedDays,
-                    enabled: true
-                })
+                    enabled: true,
+                }),
             });
-            if (res.ok) {
-                setShowForm(false);
-                await fetchSchedule();
-            }
+            setShowForm(false);
+            setError(null);
+            await fetchSchedule();
+            showToast({ kind: "success", title: "Schedule", message: "Schedule added." });
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to add schedule";
+            setError(message);
+            showToast({ kind: "error", title: "Schedule", message });
         }
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm("Remove this schedule?")) return;
         try {
-            await apiFetch(`/api/settings/schedule/${id}`, { method: "DELETE" });
+            await apiAction(`/api/settings/schedule/${id}`, { method: "DELETE" });
+            setError(null);
             await fetchSchedule();
+            showToast({ kind: "success", title: "Schedule", message: "Schedule removed." });
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to remove schedule";
+            setError(message);
+            showToast({ kind: "error", title: "Schedule", message });
         }
     };
 
@@ -88,7 +96,7 @@ export default function ScheduleSettings() {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" aria-live="polite">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-helios-solar/10 rounded-lg">
@@ -108,7 +116,15 @@ export default function ScheduleSettings() {
                 </button>
             </div>
 
-            {windows.length > 0 ? (
+            {error && (
+                <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                    {error}
+                </div>
+            )}
+
+            {loading ? (
+                <div className="text-sm text-helios-slate animate-pulse">Loading schedules…</div>
+            ) : windows.length > 0 ? (
                 <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl mb-4">
                     <p className="text-xs text-yellow-600 dark:text-yellow-400 font-medium flex items-center gap-2">
                         <Calendar size={14} />
@@ -157,10 +173,11 @@ export default function ScheduleSettings() {
                                     key={day}
                                     type="button"
                                     onClick={() => toggleDay(idx)}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${selectedDays.includes(idx)
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                                        selectedDays.includes(idx)
                                             ? "bg-helios-solar text-helios-main"
                                             : "bg-helios-surface border border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
-                                        }`}
+                                    }`}
                                 >
                                     {day}
                                 </button>
@@ -192,7 +209,7 @@ export default function ScheduleSettings() {
                                 {DAYS.map((day, idx) => {
                                     const active = parseDays(win.days_of_week).includes(idx);
                                     return (
-                                        <span key={day} className={`text-[10px] font-bold px-1.5 rounded ${active ? 'text-helios-solar bg-helios-solar/10' : 'text-helios-slate/30'}`}>
+                                        <span key={day} className={`text-[10px] font-bold px-1.5 rounded ${active ? "text-helios-solar bg-helios-solar/10" : "text-helios-slate/30"}`}>
                                             {day}
                                         </span>
                                     );
@@ -200,14 +217,28 @@ export default function ScheduleSettings() {
                             </div>
                         </div>
                         <button
-                            onClick={() => handleDelete(win.id)}
+                            onClick={() => setPendingDeleteId(win.id)}
                             className="p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                            aria-label={`Delete schedule ${win.start_time}-${win.end_time}`}
                         >
                             <Trash2 size={16} />
                         </button>
                     </div>
                 ))}
             </div>
+
+            <ConfirmDialog
+                open={pendingDeleteId !== null}
+                title="Remove schedule"
+                description="Remove this schedule window?"
+                confirmLabel="Remove"
+                tone="danger"
+                onClose={() => setPendingDeleteId(null)}
+                onConfirm={async () => {
+                    if (pendingDeleteId === null) return;
+                    await handleDelete(pendingDeleteId);
+                }}
+            />
         </div>
     );
 }

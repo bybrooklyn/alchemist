@@ -1,7 +1,7 @@
 # Stage 1: Build Frontend with Bun
 FROM oven/bun:1 AS frontend-builder
 WORKDIR /app
-COPY web/package.json web/bun.lockb* ./
+COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY web/ .
 RUN bun run build
@@ -30,6 +30,7 @@ RUN cargo build --release
 # Stage 4: Runtime
 FROM debian:testing-slim AS runtime
 WORKDIR /app
+RUN mkdir -p /app/config /app/data
 
 # Install runtime dependencies
 RUN apt-get update && \
@@ -66,6 +67,8 @@ COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 # Set environment variables
 ENV LIBVA_DRIVER_NAME=iHD
 ENV RUST_LOG=info
+ENV ALCHEMIST_CONFIG_PATH=/app/config/config.toml
+ENV ALCHEMIST_DB_PATH=/app/data/alchemist.db
 EXPOSE 3000
 
 ENTRYPOINT ["alchemist"]

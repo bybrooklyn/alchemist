@@ -1,6 +1,8 @@
 use crate::error::Result;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +34,27 @@ pub struct HardwareInfo {
     pub vendor: Vendor,
     pub device_path: Option<String>,
     pub supported_codecs: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct HardwareState {
+    inner: Arc<RwLock<Option<HardwareInfo>>>,
+}
+
+impl HardwareState {
+    pub fn new(initial: Option<HardwareInfo>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(initial)),
+        }
+    }
+
+    pub async fn snapshot(&self) -> Option<HardwareInfo> {
+        self.inner.read().await.clone()
+    }
+
+    pub async fn replace(&self, next: Option<HardwareInfo>) {
+        *self.inner.write().await = next;
+    }
 }
 
 fn check_encoder_support(encoder: &str) -> bool {
@@ -457,4 +480,45 @@ pub async fn detect_hardware_async_with_preference(
     })
     .await
     .map_err(|e| crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e)))?
+}
+
+pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Result<HardwareInfo> {
+    let info = detect_hardware_async_with_preference(
+        config.hardware.allow_cpu_fallback,
+        config.hardware.preferred_vendor.clone(),
+    )
+    .await?;
+
+    if info.vendor == Vendor::Cpu && !config.hardware.allow_cpu_encoding {
+        return Err(crate::error::AlchemistError::Config(
+            "CPU encoding disabled".into(),
+        ));
+    }
+
+    Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hardware_state_updates_snapshot() {
+        let state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Nvidia,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string()],
+        }));
+        assert_eq!(state.snapshot().await.unwrap().vendor, Vendor::Nvidia);
+
+        state
+            .replace(Some(HardwareInfo {
+                vendor: Vendor::Cpu,
+                device_path: None,
+                supported_codecs: vec!["av1".to_string(), "hevc".to_string()],
+            }))
+            .await;
+
+        assert_eq!(state.snapshot().await.unwrap().vendor, Vendor::Cpu);
+    }
 }

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { apiFetch } from '../lib/api';
-import { Activity, Cpu, HardDrive, Clock, Layers } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from "react";
+import { apiJson, isApiError } from "../lib/api";
+import { Activity, Cpu, HardDrive, Clock, Layers } from "lucide-react";
+import { motion } from "framer-motion";
 
 interface SystemResources {
     cpu_percent: number;
@@ -20,43 +20,84 @@ interface SystemSettings {
     monitoring_poll_interval: number;
 }
 
+const MIN_INTERVAL_MS = 500;
+const MAX_INTERVAL_MS = 10000;
+
 export default function ResourceMonitor() {
     const [stats, setStats] = useState<SystemResources | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [pollInterval, setPollInterval] = useState<number>(2000);
 
-    // Fetch settings once on mount
     useEffect(() => {
-        apiFetch('/api/settings/system')
-            .then(res => res.json())
-            .then((data: SystemSettings) => {
+        void apiJson<SystemSettings>("/api/settings/system")
+            .then((data) => {
                 const seconds = Number(data?.monitoring_poll_interval);
-                if (!Number.isFinite(seconds)) return;
+                if (!Number.isFinite(seconds)) {
+                    return;
+                }
                 const intervalMs = Math.round(seconds * 1000);
-                setPollInterval(Math.min(10000, Math.max(500, intervalMs)));
+                setPollInterval(Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, intervalMs)));
             })
-            .catch(err => console.error('Failed to load system settings', err));
+            .catch(() => {
+                // Keep default poll interval if settings endpoint is unavailable.
+            });
     }, []);
 
     useEffect(() => {
-        const fetchStats = async () => {
+        let timer: number | null = null;
+        let mounted = true;
+
+        const run = async () => {
+            if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+                schedule(pollInterval * 3);
+                return;
+            }
+
             try {
-                const res = await apiFetch('/api/system/resources');
-                if (res.ok) {
-                    const data = await res.json();
-                    setStats(data);
-                    setError(null);
-                } else {
-                    setError('Failed to fetch resources');
+                const data = await apiJson<SystemResources>("/api/system/resources");
+                if (!mounted) {
+                    return;
                 }
-            } catch (e) {
-                setError('Connection error');
+                setStats(data);
+                setError(null);
+            } catch (err) {
+                if (!mounted) {
+                    return;
+                }
+                setError(isApiError(err) ? err.message : "Connection error");
+            } finally {
+                schedule(pollInterval);
             }
         };
 
-        void fetchStats();
-        const interval = setInterval(fetchStats, pollInterval);
-        return () => clearInterval(interval);
+        const schedule = (delayMs: number) => {
+            if (!mounted) {
+                return;
+            }
+            if (timer !== null) {
+                window.clearTimeout(timer);
+            }
+            timer = window.setTimeout(() => {
+                void run();
+            }, delayMs);
+        };
+
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                void run();
+            }
+        };
+
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        void run();
+
+        return () => {
+            mounted = false;
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+            if (timer !== null) {
+                window.clearTimeout(timer);
+            }
+        };
     }, [pollInterval]);
 
     const formatUptime = (seconds: number) => {
@@ -70,35 +111,32 @@ export default function ResourceMonitor() {
     };
 
     const getUsageColor = (percent: number) => {
-        if (percent > 90) return 'text-red-500 bg-red-500/10';
-        if (percent > 70) return 'text-yellow-500 bg-yellow-500/10';
-        return 'text-green-500 bg-green-500/10';
+        if (percent > 90) return "text-red-500 bg-red-500/10";
+        if (percent > 70) return "text-yellow-500 bg-yellow-500/10";
+        return "text-green-500 bg-green-500/10";
     };
 
     const getBarColor = (percent: number) => {
-        if (percent > 90) return 'bg-red-500';
-        if (percent > 70) return 'bg-yellow-500';
-        return 'bg-green-500';
+        if (percent > 90) return "bg-red-500";
+        if (percent > 70) return "bg-yellow-500";
+        return "bg-green-500";
     };
 
-    if (!stats) return (
-        <div className={`p-6 rounded-2xl bg-white/5 border border-white/10 h-48 flex items-center justify-center ${error ? "" : "animate-pulse"}`}>
-            <div className="text-center">
-                <div className={`text-sm ${error ? "text-red-400" : "text-white/40"}`}>
-                    {error ? "Unable to load system stats." : "Loading system stats..."}
-                </div>
-                {error && (
-                    <div className="text-[10px] text-white/40 mt-2">
-                        {error} Retrying automatically...
+    if (!stats) {
+        return (
+            <div className={`p-6 rounded-2xl bg-white/5 border border-white/10 h-48 flex items-center justify-center ${error ? "" : "animate-pulse"}`}>
+                <div className="text-center" aria-live="polite">
+                    <div className={`text-sm ${error ? "text-red-400" : "text-white/40"}`}>
+                        {error ? "Unable to load system stats." : "Loading system stats..."}
                     </div>
-                )}
+                    {error && <div className="text-[10px] text-white/40 mt-2">{error} Retrying automatically...</div>}
+                </div>
             </div>
-        </div>
-    );
+        );
+    }
 
     return (
-        <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3">
-            {/* CPU Usage */}
+        <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3" aria-live="polite">
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -126,7 +164,6 @@ export default function ResourceMonitor() {
                 </div>
             </motion.div>
 
-            {/* Memory Usage */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -155,7 +192,6 @@ export default function ResourceMonitor() {
                 </div>
             </motion.div>
 
-            {/* Active Jobs */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -166,23 +202,22 @@ export default function ResourceMonitor() {
                     <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
                         <Layers size={16} /> Active Jobs
                     </div>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400`}>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
                         {stats.active_jobs} / {stats.concurrent_limit}
                     </span>
                 </div>
                 <div className="flex items-end gap-1 h-8 mt-2">
-                    {/* Visual representation of job slots */}
                     {Array.from({ length: stats.concurrent_limit }).map((_, i) => (
                         <div
                             key={i}
-                            className={`flex-1 rounded-sm transition-all duration-300 ${i < stats.active_jobs ? 'bg-blue-500 h-6' : 'bg-white/10 h-2'
-                                }`}
+                            className={`flex-1 rounded-sm transition-all duration-300 ${
+                                i < stats.active_jobs ? "bg-blue-500 h-6" : "bg-white/10 h-2"
+                            }`}
                         />
                     ))}
                 </div>
             </motion.div>
 
-            {/* GPU Usage */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -198,9 +233,7 @@ export default function ResourceMonitor() {
                             {stats.gpu_utilization.toFixed(1)}%
                         </span>
                     ) : (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/10 text-white/40">
-                            N/A
-                        </span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/10 text-white/40">N/A</span>
                     )}
                 </div>
                 <div className="space-y-1">
@@ -219,7 +252,6 @@ export default function ResourceMonitor() {
                 </div>
             </motion.div>
 
-            {/* Uptime */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -232,12 +264,8 @@ export default function ResourceMonitor() {
                     </div>
                     <Activity size={14} className="text-green-500 animate-pulse" />
                 </div>
-                <div className="text-2xl font-bold text-white/90">
-                    {formatUptime(stats.uptime_seconds)}
-                </div>
+                <div className="text-2xl font-bold text-white/90">{formatUptime(stats.uptime_seconds)}</div>
             </motion.div>
-
-
         </div>
     );
 }

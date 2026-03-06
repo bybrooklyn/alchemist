@@ -1,9 +1,9 @@
 use alchemist::error::Result;
 use alchemist::system::hardware;
-use alchemist::{config, db, Agent, Transcoder};
+use alchemist::{config, db, runtime, Agent, Transcoder};
 use clap::Parser;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -28,9 +28,6 @@ struct Args {
     #[arg(short, long)]
     dry_run: bool,
 
-    /// Output directory (optional, defaults to same as input with .av1)
-    #[arg(short, long)]
-    output_dir: Option<PathBuf>,
     /// Reset admin user/password and sessions (forces setup mode)
     #[arg(long)]
     reset_auth: bool,
@@ -61,6 +58,85 @@ async fn main() -> Result<()> {
             Err(e)
         }
     }
+}
+
+async fn persist_log_events(db: Arc<db::Db>, mut rx: broadcast::Receiver<db::AlchemistEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(db::AlchemistEvent::Log {
+                level,
+                job_id,
+                message,
+            }) => {
+                if let Err(e) = db.add_log(&level, job_id, &message).await {
+                    eprintln!("Failed to persist log: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!("Log persistence lagged; skipped {skipped} events");
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+async fn persist_progress_events(db: Arc<db::Db>, mut rx: broadcast::Receiver<db::AlchemistEvent>) {
+    let mut last: HashMap<i64, (f64, Instant)> = HashMap::new();
+    let min_step = 0.5;
+    let min_interval = std::time::Duration::from_secs(2);
+
+    loop {
+        match rx.recv().await {
+            Ok(db::AlchemistEvent::Progress {
+                job_id, percentage, ..
+            }) => {
+                let pct = percentage.clamp(0.0, 100.0);
+                let now = Instant::now();
+                let should_update = match last.get(&job_id) {
+                    Some((last_pct, last_time)) => {
+                        pct >= *last_pct + min_step
+                            || now.duration_since(*last_time) >= min_interval
+                    }
+                    None => true,
+                };
+
+                if should_update {
+                    let _ = db.update_job_progress(job_id, pct).await;
+                    last.insert(job_id, (pct, now));
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!("Progress persistence lagged; skipped {skipped} events");
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+async fn apply_reloaded_config(
+    config_path: &Path,
+    config_state: &Arc<RwLock<config::Config>>,
+    agent: &Arc<Agent>,
+    hardware_state: &hardware::HardwareState,
+) -> Result<hardware::HardwareInfo> {
+    let new_config = config::Config::load(config_path)
+        .map_err(|err| alchemist::error::AlchemistError::Config(err.to_string()))?;
+    let detected_hardware = hardware::detect_hardware_for_config(&new_config).await?;
+    let new_limit = new_config.transcode.concurrent_jobs;
+
+    {
+        let mut config_guard = config_state.write().await;
+        *config_guard = new_config;
+    }
+
+    hardware_state
+        .replace(Some(detected_hardware.clone()))
+        .await;
+    agent.set_concurrent_jobs(new_limit).await;
+
+    Ok(detected_hardware)
 }
 
 async fn run() -> Result<()> {
@@ -102,11 +178,10 @@ async fn run() -> Result<()> {
     let args = Args::parse();
     info!(
         target: "startup",
-        "Parsed CLI args: cli_mode={}, reset_auth={}, dry_run={}, output_dir={:?}, directories={}",
+        "Parsed CLI args: cli_mode={}, reset_auth={}, dry_run={}, directories={}",
         args.cli,
         args.reset_auth,
         args.dry_run,
-        args.output_dir,
         args.directories.len()
     );
 
@@ -120,13 +195,16 @@ async fn run() -> Result<()> {
 
     // 0. Load Configuration
     let config_start = Instant::now();
-    let config_path = std::path::Path::new("config.toml");
+    let config_path = runtime::config_path();
+    let db_path = runtime::db_path();
+    let config_mutable = runtime::config_mutable();
     let config_exists = config_path.exists();
     let (config, mut setup_mode) = if !config_exists {
         let cwd = std::env::current_dir().ok();
         info!(
             target: "startup",
-            "config.toml not found (cwd={:?})",
+            "Config file not found at {:?} (cwd={:?})",
+            config_path,
             cwd
         );
         if is_server_mode {
@@ -138,10 +216,13 @@ async fn run() -> Result<()> {
             (config::Config::default(), false)
         }
     } else {
-        match config::Config::load(config_path) {
+        match config::Config::load(config_path.as_path()) {
             Ok(c) => (c, false),
             Err(e) => {
-                warn!("Failed to load config.toml: {}. Using defaults.", e);
+                warn!(
+                    "Failed to load config file at {:?}: {}. Using defaults.",
+                    config_path, e
+                );
                 if is_server_mode {
                     warn!("Config load failed in server mode. Entering Setup Mode (Web UI).");
                     (config::Config::default(), true)
@@ -153,18 +234,26 @@ async fn run() -> Result<()> {
     };
     info!(
         target: "startup",
-        "Config loaded (exists={} setup_mode={}) in {} ms",
+        "Config loaded (path={:?}, exists={}, mutable={}, setup_mode={}) in {} ms",
+        config_path,
         config_exists,
+        config_mutable,
         setup_mode,
         config_start.elapsed().as_millis()
     );
 
     // 1. Initialize Database
     let db_start = Instant::now();
-    let db = Arc::new(db::Db::new("alchemist.db").await?);
+    if let Some(parent) = db_path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
+        }
+    }
+    let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);
     info!(
         target: "startup",
-        "Database initialized in {} ms",
+        "Database initialized at {:?} in {} ms",
+        db_path,
         db_start.elapsed().as_millis()
     );
     if args.reset_auth {
@@ -247,7 +336,10 @@ async fn run() -> Result<()> {
         if !config.hardware.allow_cpu_encoding {
             // In setup mode, we might not have set this yet, so don't error out.
             error!("CPU encoding is disabled in configuration.");
-            error!("Set hardware.allow_cpu_encoding = true in config.toml to enable CPU fallback.");
+            error!(
+                "Set hardware.allow_cpu_encoding = true in {:?} to enable CPU fallback.",
+                config_path
+            );
             return Err(alchemist::error::AlchemistError::Config(
                 "CPU encoding disabled".into(),
             ));
@@ -267,13 +359,14 @@ async fn run() -> Result<()> {
     notification_manager.start_listener(tx.subscribe());
 
     let transcoder = Arc::new(Transcoder::new());
+    let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
     let config = Arc::new(RwLock::new(config));
     let agent = Arc::new(
         Agent::new(
             db.clone(),
             transcoder.clone(),
             config.clone(),
-            Some(hw_info),
+            hardware_state.clone(),
             tx.clone(),
             args.dry_run,
         )
@@ -302,52 +395,16 @@ async fn run() -> Result<()> {
 
         // Start Log Persistence Task
         let log_db = db.clone();
-        let mut log_rx = tx.subscribe();
+        let log_rx = tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = log_rx.recv().await {
-                if let alchemist::db::AlchemistEvent::Log {
-                    level,
-                    job_id,
-                    message,
-                    ..
-                } = event
-                {
-                    if let Err(e) = log_db.add_log(&level, job_id, &message).await {
-                        eprintln!("Failed to persist log: {}", e);
-                    }
-                }
-            }
+            persist_log_events(log_db, log_rx).await;
         });
 
         // Persist progress so the UI can render accurate job updates.
         let progress_db = db.clone();
-        let mut progress_rx = tx.subscribe();
+        let progress_rx = tx.subscribe();
         tokio::spawn(async move {
-            let mut last: HashMap<i64, (f64, Instant)> = HashMap::new();
-            let min_step = 0.5;
-            let min_interval = std::time::Duration::from_secs(2);
-
-            while let Ok(event) = progress_rx.recv().await {
-                if let alchemist::db::AlchemistEvent::Progress {
-                    job_id, percentage, ..
-                } = event
-                {
-                    let pct = percentage.clamp(0.0, 100.0);
-                    let now = Instant::now();
-                    let should_update = match last.get(&job_id) {
-                        Some((last_pct, last_time)) => {
-                            pct >= *last_pct + min_step
-                                || now.duration_since(*last_time) >= min_interval
-                        }
-                        None => true,
-                    };
-
-                    if should_update {
-                        let _ = progress_db.update_job_progress(job_id, pct).await;
-                        last.insert(job_id, (pct, now));
-                    }
-                }
-            }
+            persist_progress_events(progress_db, progress_rx).await;
         });
 
         // Initialize File Watcher
@@ -437,6 +494,8 @@ async fn run() -> Result<()> {
         let config_watcher_arc = config.clone();
         let reload_watcher_clone = reload_watcher.clone();
         let agent_for_config = agent.clone();
+        let hardware_state_for_config = hardware_state.clone();
+        let config_watch_path = config_path.clone();
 
         // Channel for file events
         let (tx_notify, mut rx_notify) = tokio::sync::mpsc::unbounded_channel();
@@ -452,11 +511,10 @@ async fn run() -> Result<()> {
 
         match watcher_res {
             Ok(mut watcher) => {
-                if let Err(e) = watcher.watch(
-                    std::path::Path::new("config.toml"),
-                    RecursiveMode::NonRecursive,
-                ) {
-                    error!("Failed to watch config.toml: {}", e);
+                if let Err(e) =
+                    watcher.watch(config_watch_path.as_path(), RecursiveMode::NonRecursive)
+                {
+                    error!("Failed to watch config file {:?}: {}", config_watch_path, e);
                 } else {
                     // Prevent watcher from dropping by keeping it in the spawn if needed,
                     // or just spawning the processing loop.
@@ -472,23 +530,25 @@ async fn run() -> Result<()> {
                                 info!("Config file changed. Reloading...");
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                                match config::Config::load(std::path::Path::new(
-                                    "config.toml",
-                                )) {
-                                    Ok(new_config) => {
-                                        let new_limit = new_config.transcode.concurrent_jobs;
-                                        {
-                                            let mut w = config_watcher_arc.write().await;
-                                            *w = new_config;
-                                        }
+                                match apply_reloaded_config(
+                                    config_watch_path.as_path(),
+                                    &config_watcher_arc,
+                                    &agent_for_config,
+                                    &hardware_state_for_config,
+                                )
+                                .await
+                                {
+                                    Ok(detected_hardware) => {
                                         info!("Configuration reloaded successfully.");
-
-                                        agent_for_config.set_concurrent_jobs(new_limit).await;
-
-                                        // Trigger watcher update (merges DB + New Config)
+                                        info!(
+                                            "Runtime hardware reloaded: {}",
+                                            detected_hardware.vendor
+                                        );
                                         reload_watcher_clone(false).await;
                                     }
-                                    Err(e) => error!("Failed to reload config: {}", e),
+                                    Err(e) => {
+                                        error!("Failed to reload config: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -510,6 +570,9 @@ async fn run() -> Result<()> {
             transcoder,
             tx,
             setup_required: setup_mode,
+            config_path: config_path.clone(),
+            config_mutable,
+            hardware_state,
             notification_manager: notification_manager.clone(),
             file_watcher,
         })
@@ -517,7 +580,10 @@ async fn run() -> Result<()> {
     } else {
         // CLI Mode
         if setup_mode {
-            error!("Configuration required. Run without --cli to use the web-based setup wizard, or create config.toml manually.");
+            error!(
+                "Configuration required. Run without --cli to use the web-based setup wizard, or create {:?} manually.",
+                config_path
+            );
 
             // CLI early exit - error
             // (Caller will handle pause-on-exit if needed)
@@ -560,4 +626,171 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::Path;
+    use std::time::SystemTime;
+
+    fn temp_db_path(prefix: &str) -> PathBuf {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("{prefix}_{}.db", rand::random::<u64>()));
+        db_path
+    }
+
+    fn temp_config_path(prefix: &str) -> PathBuf {
+        let mut config_path = std::env::temp_dir();
+        config_path.push(format!("{prefix}_{}.toml", rand::random::<u64>()));
+        config_path
+    }
+
+    #[test]
+    fn args_reject_removed_output_dir_flag() {
+        assert!(Args::try_parse_from(["alchemist", "--output-dir", "/tmp/out"]).is_err());
+    }
+
+    #[tokio::test]
+    async fn log_persistence_worker_survives_lag(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_log_worker");
+        let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let (tx, rx) = broadcast::channel(1);
+
+        tx.send(db::AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "first".to_string(),
+        })?;
+        tx.send(db::AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "second".to_string(),
+        })?;
+        tx.send(db::AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "third".to_string(),
+        })?;
+        drop(tx);
+
+        persist_log_events(db.clone(), rx).await;
+
+        let logs = db.get_logs(10, 0).await?;
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].message, "third");
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn progress_persistence_worker_survives_lag(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_progress_worker");
+        let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(
+                Path::new("input.mkv"),
+                Path::new("output.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let job = db.get_job_by_input_path("input.mkv").await?.unwrap();
+        let (tx, rx) = broadcast::channel(1);
+
+        tx.send(db::AlchemistEvent::Progress {
+            job_id: job.id,
+            percentage: 10.0,
+            time: "00:00:01".to_string(),
+        })?;
+        tx.send(db::AlchemistEvent::Progress {
+            job_id: job.id,
+            percentage: 55.0,
+            time: "00:00:05".to_string(),
+        })?;
+        tx.send(db::AlchemistEvent::Progress {
+            job_id: job.id,
+            percentage: 80.0,
+            time: "00:00:08".to_string(),
+        })?;
+        drop(tx);
+
+        persist_progress_events(db.clone(), rx).await;
+
+        let updated = db.get_job(job.id).await?.unwrap();
+        assert_eq!(updated.progress, 80.0);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_reload_refreshes_runtime_hardware_state(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_config_reload");
+        let config_path = temp_config_path("alchemist_config_reload");
+        let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);
+
+        let initial_config = config::Config::default();
+        initial_config.save(&config_path)?;
+        let config_state = Arc::new(RwLock::new(initial_config.clone()));
+        let hardware_state = hardware::HardwareState::new(Some(hardware::HardwareInfo {
+            vendor: hardware::Vendor::Nvidia,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string()],
+        }));
+        let transcoder = Arc::new(Transcoder::new());
+        let (tx, _rx) = broadcast::channel(8);
+        let agent = Arc::new(
+            Agent::new(
+                db.clone(),
+                transcoder,
+                config_state.clone(),
+                hardware_state.clone(),
+                tx,
+                true,
+            )
+            .await,
+        );
+
+        let mut reloaded_config = initial_config;
+        reloaded_config.hardware.preferred_vendor = Some("cpu".to_string());
+        reloaded_config.hardware.allow_cpu_fallback = true;
+        reloaded_config.hardware.allow_cpu_encoding = true;
+        reloaded_config.transcode.concurrent_jobs = 2;
+        reloaded_config.save(&config_path)?;
+
+        let detected = apply_reloaded_config(
+            config_path.as_path(),
+            &config_state,
+            &agent,
+            &hardware_state,
+        )
+        .await?;
+
+        assert_eq!(detected.vendor, hardware::Vendor::Cpu);
+        assert_eq!(
+            hardware_state.snapshot().await.unwrap().vendor,
+            hardware::Vendor::Cpu
+        );
+
+        let config_guard = config_state.read().await;
+        assert_eq!(
+            config_guard.hardware.preferred_vendor.as_deref(),
+            Some("cpu")
+        );
+        assert_eq!(config_guard.transcode.concurrent_jobs, 2);
+        drop(config_guard);
+
+        drop(agent);
+        drop(db);
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
 }

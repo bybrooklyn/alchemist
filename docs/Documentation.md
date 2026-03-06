@@ -203,7 +203,9 @@ On first launch, Alchemist runs an interactive setup wizard to:
 
 ## Configuration
 
-Configuration is stored in `config.toml`. On first run, the setup wizard creates this file.
+Configuration is stored at `config.toml` by default. Set `ALCHEMIST_CONFIG_PATH` to override the path.
+Database is stored at `alchemist.db` by default. Set `ALCHEMIST_DB_PATH` to override the path.
+If `ALCHEMIST_CONFIG_MUTABLE=false`, settings/setup endpoints will return HTTP `409` for config write attempts.
 
 ### Full Configuration Reference
 
@@ -291,9 +293,11 @@ host = "0.0.0.0"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ALCHEMIST_CONFIG` | Path to config file | `./config.toml` |
-| `ALCHEMIST_DATA_DIR` | Data directory path | `./data` |
-| `ALCHEMIST_LOG_LEVEL` | Log verbosity | `info` |
+| `ALCHEMIST_CONFIG_PATH` | Primary config file path | `./config.toml` |
+| `ALCHEMIST_CONFIG` | Legacy alias for config path | unset |
+| `ALCHEMIST_DB_PATH` | SQLite database file path | `./alchemist.db` |
+| `ALCHEMIST_DATA_DIR` | Legacy data dir fallback for DB (`<dir>/alchemist.db`) | unset |
+| `ALCHEMIST_CONFIG_MUTABLE` | Enable/disable runtime config writes | `true` |
 
 ---
 

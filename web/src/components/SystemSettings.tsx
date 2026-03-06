@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Activity, Save } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 interface SystemSettingsPayload {
     monitoring_poll_interval: number;
@@ -20,13 +21,11 @@ export default function SystemSettings() {
 
     const fetchSettings = async () => {
         try {
-            const res = await apiFetch("/api/settings/system");
-            if (!res.ok) throw new Error("Failed to load settings");
-            const data = await res.json();
+            const data = await apiJson<SystemSettingsPayload>("/api/settings/system");
             setSettings(data);
+            setError("");
         } catch (err) {
-            setError("Unable to load system settings.");
-            console.error(err);
+            setError(isApiError(err) ? err.message : "Unable to load system settings.");
         } finally {
             setLoading(false);
         }
@@ -39,15 +38,17 @@ export default function SystemSettings() {
         setSuccess(false);
 
         try {
-            const res = await apiFetch("/api/settings/system", {
+            await apiAction("/api/settings/system", {
                 method: "POST",
                 body: JSON.stringify(settings),
             });
-            if (!res.ok) throw new Error("Failed to save settings");
             setSuccess(true);
+            showToast({ kind: "success", title: "System", message: "System settings saved." });
             setTimeout(() => setSuccess(false), 3000);
         } catch (err) {
-            setError("Failed to save settings.");
+            const message = isApiError(err) ? err.message : "Failed to save settings.";
+            setError(message);
+            showToast({ kind: "error", title: "System", message });
         } finally {
             setSaving(false);
         }
@@ -62,7 +63,7 @@ export default function SystemSettings() {
     }
 
     return (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-6" aria-live="polite">
             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
                     <h3 className="text-base font-bold text-helios-ink tracking-tight uppercase tracking-[0.1em]">System Monitoring</h3>
@@ -74,9 +75,7 @@ export default function SystemSettings() {
             </div>
 
             {error && (
-                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-sm font-semibold">
-                    {error}
-                </div>
+                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-sm font-semibold">{error}</div>
             )}
 
             {success && (
@@ -103,7 +102,9 @@ export default function SystemSettings() {
                         {settings.monitoring_poll_interval.toFixed(1)}s
                     </span>
                 </div>
-                <p className="text-[10px] text-helios-slate ml-1 pt-1">Determine how frequently the dashboard updates system stats. Lower values update faster but use slightly more CPU. Default is 2.0s.</p>
+                <p className="text-[10px] text-helios-slate ml-1 pt-1">
+                    Determine how frequently the dashboard updates system stats. Lower values update faster but use slightly more CPU. Default is 2.0s.
+                </p>
             </div>
 
             <div className="pt-4 border-t border-helios-line/10">

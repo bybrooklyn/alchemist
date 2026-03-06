@@ -89,11 +89,15 @@ impl Executor for FfmpegExecutor {
             })
             .await?;
 
-        let (fallback_occurred, used_encoder) = self.verify_encoder(&output_path, encoder).await;
+        let (fallback_occurred, used_encoder, actual_codec, actual_encoder_name) =
+            self.verify_encoder(&output_path, encoder).await;
 
         Ok(ExecutionResult {
+            requested_encoder: encoder,
             used_encoder,
             fallback_occurred,
+            actual_output_codec: actual_codec,
+            actual_encoder_name,
             stats: ExecutionStats {
                 encode_time_secs: 0.0, // Pipeline calculates this
                 input_size: 0,
@@ -130,17 +134,41 @@ impl FfmpegExecutor {
         }
     }
 
-    async fn verify_encoder(&self, output_path: &Path, requested: Encoder) -> (bool, Encoder) {
+    async fn verify_encoder(
+        &self,
+        output_path: &Path,
+        requested: Encoder,
+    ) -> (
+        bool,
+        Encoder,
+        Option<crate::config::OutputCodec>,
+        Option<String>,
+    ) {
         let expected_codec = encoder_codec_name(requested);
-        let actual_codec = crate::media::analyzer::Analyzer::probe_video_codec(output_path)
+        let probe = crate::media::analyzer::Analyzer::probe_output_details(output_path)
             .await
-            .unwrap_or_default();
+            .ok();
+        let actual_codec_name = probe
+            .as_ref()
+            .map(|p| p.codec_name.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let actual_codec = output_codec_from_name(&actual_codec_name);
+        let actual_encoder_name = probe.and_then(|p| p.encoder_tag);
+        let codec_matches =
+            actual_codec_name.is_empty() || actual_codec_name.eq_ignore_ascii_case(expected_codec);
+        let encoder_matches = actual_encoder_name
+            .as_deref()
+            .map(|name| encoder_tag_matches(requested, name))
+            .unwrap_or(true);
+        let fallback_occurred = !(codec_matches && encoder_matches);
 
-        if actual_codec.is_empty() || actual_codec.eq_ignore_ascii_case(expected_codec) {
-            (false, requested)
-        } else {
-            (true, requested)
-        }
+        (
+            fallback_occurred,
+            requested,
+            actual_codec,
+            actual_encoder_name,
+        )
     }
 }
 
@@ -165,5 +193,78 @@ fn encoder_codec_name(encoder: Encoder) -> &'static str {
         | Encoder::H264Videotoolbox
         | Encoder::H264Amf
         | Encoder::H264X264 => "h264",
+    }
+}
+
+fn output_codec_from_name(codec: &str) -> Option<crate::config::OutputCodec> {
+    if codec.eq_ignore_ascii_case("av1") {
+        Some(crate::config::OutputCodec::Av1)
+    } else if codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265") {
+        Some(crate::config::OutputCodec::Hevc)
+    } else if codec.eq_ignore_ascii_case("h264") || codec.eq_ignore_ascii_case("avc") {
+        Some(crate::config::OutputCodec::H264)
+    } else {
+        None
+    }
+}
+
+fn encoder_tag_matches(requested: Encoder, encoder_tag: &str) -> bool {
+    let tag = encoder_tag.to_ascii_lowercase();
+    let expected_markers: &[&str] = match requested {
+        Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => &["qsv"],
+        Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => &["nvenc"],
+        Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => &["vaapi"],
+        Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
+            &["videotoolbox"]
+        }
+        Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => &["amf"],
+        Encoder::Av1Svt => &["svtav1", "svt-av1", "libsvtav1"],
+        Encoder::Av1Aom => &["libaom", "aom"],
+        Encoder::HevcX265 => &["x265", "libx265"],
+        Encoder::H264X264 => &["x264", "libx264"],
+    };
+
+    expected_markers.iter().any(|marker| tag.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_codec_mapping_handles_common_aliases() {
+        assert_eq!(
+            output_codec_from_name("av1"),
+            Some(crate::config::OutputCodec::Av1)
+        );
+        assert_eq!(
+            output_codec_from_name("hevc"),
+            Some(crate::config::OutputCodec::Hevc)
+        );
+        assert_eq!(
+            output_codec_from_name("h265"),
+            Some(crate::config::OutputCodec::Hevc)
+        );
+        assert_eq!(
+            output_codec_from_name("h264"),
+            Some(crate::config::OutputCodec::H264)
+        );
+        assert_eq!(
+            output_codec_from_name("avc"),
+            Some(crate::config::OutputCodec::H264)
+        );
+        assert_eq!(output_codec_from_name("vp9"), None);
+    }
+
+    #[test]
+    fn encoder_tag_matching_detects_mismatch() {
+        assert!(encoder_tag_matches(
+            Encoder::Av1Nvenc,
+            "Lavc61.3.100 av1_nvenc"
+        ));
+        assert!(!encoder_tag_matches(
+            Encoder::Av1Nvenc,
+            "Lavc61.3.100 libsvtav1"
+        ));
     }
 }

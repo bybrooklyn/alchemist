@@ -1,6 +1,6 @@
 [package]
 name = "alchemist"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 license = "GPL-3.0"
 build = "build.rs"
@@ -45,3 +45,7 @@ rand = "0.8"
 sysinfo = "0.32"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

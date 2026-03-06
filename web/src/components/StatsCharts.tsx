@@ -8,9 +8,10 @@ import {
     Activity,
     Gauge,
     FileVideo,
-    Timer
+    Timer,
+    type LucideIcon,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiJson, isApiError } from "../lib/api";
 
 interface AggregatedStats {
     total_input_bytes: number;
@@ -47,6 +48,7 @@ export default function StatsCharts() {
     const [dailyStats, setDailyStats] = useState<DailyStats[]>([]);
     const [detailedStats, setDetailedStats] = useState<DetailedStats[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         void fetchAllStats();
@@ -54,17 +56,17 @@ export default function StatsCharts() {
 
     const fetchAllStats = async () => {
         try {
-            const [aggRes, dailyRes, detailedRes] = await Promise.all([
-                apiFetch("/api/stats/aggregated"),
-                apiFetch("/api/stats/daily"),
-                apiFetch("/api/stats/detailed")
+            const [aggData, dailyData, detailedData] = await Promise.all([
+                apiJson<AggregatedStats>("/api/stats/aggregated"),
+                apiJson<DailyStats[]>("/api/stats/daily"),
+                apiJson<DetailedStats[]>("/api/stats/detailed")
             ]);
-
-            if (aggRes.ok) setStats(await aggRes.json());
-            if (dailyRes.ok) setDailyStats(await dailyRes.json());
-            if (detailedRes.ok) setDetailedStats(await detailedRes.json());
+            setStats(aggData);
+            setDailyStats(dailyData);
+            setDetailedStats(detailedData);
+            setError(null);
         } catch (e) {
-            console.error("Failed to fetch stats", e);
+            setError(isApiError(e) ? e.message : "Failed to fetch statistics");
         } finally {
             setLoading(false);
         }
@@ -128,7 +130,15 @@ export default function StatsCharts() {
     // Find max for bar chart scaling
     const maxDailyJobs = Math.max(...dailyStats.map(d => d.jobs_completed), 1);
 
-    const StatCard = ({ icon: Icon, label, value, subtext, colorClass }: any) => (
+    interface StatCardProps {
+        icon: LucideIcon;
+        label: string;
+        value: string;
+        subtext?: string;
+        colorClass: string;
+    }
+
+    const StatCard = ({ icon: Icon, label, value, subtext, colorClass }: StatCardProps) => (
         <div className="p-6 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm">
             <div className="flex items-start justify-between">
                 <div>
@@ -143,7 +153,14 @@ export default function StatsCharts() {
         </div>
     );
 
-    const MetricCard = ({ icon: Icon, label, value, colorClass }: any) => (
+    interface MetricCardProps {
+        icon: LucideIcon;
+        label: string;
+        value: string;
+        colorClass: string;
+    }
+
+    const MetricCard = ({ icon: Icon, label, value, colorClass }: MetricCardProps) => (
         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/20 flex items-center gap-3">
             <div className={`p-2 rounded-lg ${colorClass} bg-opacity-10`}>
                 <Icon size={18} className={colorClass} />
@@ -157,6 +174,11 @@ export default function StatsCharts() {
 
     return (
         <div className="space-y-6">
+            {error && (
+                <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                    {error}
+                </div>
+            )}
             {/* Main Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard

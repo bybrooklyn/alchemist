@@ -7,6 +7,7 @@ alchemist.db
 web/node_modules
 web/dist
 web/.astro
+web/package-lock.json
 web.zip
 .DS_Store
 alchemist.db-shm

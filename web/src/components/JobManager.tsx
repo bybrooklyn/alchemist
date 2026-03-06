@@ -3,13 +3,31 @@ import {
     Search, RefreshCw, Trash2, Ban,
     Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { useDebouncedValue } from "../lib/useDebouncedValue";
+import { showToast } from "../lib/toast";
+import ConfirmDialog from "./ui/ConfirmDialog";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { motion, AnimatePresence } from "framer-motion";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
+}
+
+function focusableElements(root: HTMLElement): HTMLElement[] {
+    const selector = [
+        "a[href]",
+        "button:not([disabled])",
+        "input:not([disabled])",
+        "select:not([disabled])",
+        "textarea:not([disabled])",
+        "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
+        (element) => !element.hasAttribute("disabled")
+    );
 }
 
 interface Job {
@@ -64,13 +82,18 @@ export default function JobManager() {
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState<Set<number>>(new Set());
     const [activeTab, setActiveTab] = useState<TabType>("all");
-    const [search, setSearch] = useState("");
+    const [searchInput, setSearchInput] = useState("");
+    const debouncedSearch = useDebouncedValue(searchInput, 350);
     const [page, setPage] = useState(1);
     const [refreshing, setRefreshing] = useState(false);
     const [focusedJob, setFocusedJob] = useState<JobDetail | null>(null);
-    const [_detailLoading, setDetailLoading] = useState(false);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
     const [menuJobId, setMenuJobId] = useState<number | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const detailDialogRef = useRef<HTMLDivElement | null>(null);
+    const detailLastFocusedRef = useRef<HTMLElement | null>(null);
+    const confirmOpenRef = useRef(false);
     const [confirmState, setConfirmState] = useState<{
         title: string;
         body: string;
@@ -90,8 +113,10 @@ export default function JobManager() {
         }
     };
 
-    const fetchJobs = useCallback(async () => {
-        setRefreshing(true);
+    const fetchJobs = useCallback(async (silent = false) => {
+        if (!silent) {
+            setRefreshing(true);
+        }
         try {
             const params = new URLSearchParams({
                 limit: "50",
@@ -103,28 +128,53 @@ export default function JobManager() {
             if (activeTab !== "all") {
                 params.set("status", getStatusFilter(activeTab));
             }
-            if (search) {
-                params.set("search", search);
+            if (debouncedSearch) {
+                params.set("search", debouncedSearch);
             }
 
-            const res = await apiFetch(`/api/jobs/table?${params}`);
-            if (res.ok) {
-                const data = await res.json();
-                setJobs(data);
-            }
+            const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
+            setJobs(data);
+            setActionError(null);
         } catch (e) {
-            console.error("Failed to fetch jobs", e);
+            const message = isApiError(e) ? e.message : "Failed to fetch jobs";
+            setActionError(message);
+            if (!silent) {
+                showToast({ kind: "error", title: "Jobs", message });
+            }
         } finally {
             setLoading(false);
-            setRefreshing(false);
+            if (!silent) {
+                setRefreshing(false);
+            }
         }
-    }, [activeTab, search, page]);
+    }, [activeTab, debouncedSearch, page]);
+
+    const fetchJobsRef = useRef<() => Promise<void>>(async () => undefined);
 
     useEffect(() => {
-        void fetchJobs();
-        const interval = setInterval(fetchJobs, 5000); // Auto-refresh every 5s
-        return () => clearInterval(interval);
+        fetchJobsRef.current = async () => {
+            await fetchJobs(true);
+        };
     }, [fetchJobs]);
+
+    useEffect(() => {
+        void fetchJobs(false);
+    }, [fetchJobs]);
+
+    useEffect(() => {
+        const pollVisible = () => {
+            if (document.visibilityState === "visible") {
+                void fetchJobsRef.current();
+            }
+        };
+
+        const interval = window.setInterval(pollVisible, 5000);
+        document.addEventListener("visibilitychange", pollVisible);
+        return () => {
+            window.clearInterval(interval);
+            document.removeEventListener("visibilitychange", pollVisible);
+        };
+    }, []);
 
     useEffect(() => {
         if (!menuJobId) return;
@@ -136,6 +186,76 @@ export default function JobManager() {
         document.addEventListener("mousedown", handleClick);
         return () => document.removeEventListener("mousedown", handleClick);
     }, [menuJobId]);
+
+    useEffect(() => {
+        confirmOpenRef.current = confirmState !== null;
+    }, [confirmState]);
+
+    useEffect(() => {
+        if (!focusedJob) {
+            return;
+        }
+
+        detailLastFocusedRef.current = document.activeElement as HTMLElement | null;
+
+        const root = detailDialogRef.current;
+        if (root) {
+            const focusables = focusableElements(root);
+            if (focusables.length > 0) {
+                focusables[0].focus();
+            } else {
+                root.focus();
+            }
+        }
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!focusedJob || confirmOpenRef.current) {
+                return;
+            }
+
+            if (event.key === "Escape") {
+                event.preventDefault();
+                setFocusedJob(null);
+                return;
+            }
+
+            if (event.key !== "Tab") {
+                return;
+            }
+
+            const dialogRoot = detailDialogRef.current;
+            if (!dialogRoot) {
+                return;
+            }
+
+            const focusables = focusableElements(dialogRoot);
+            if (focusables.length === 0) {
+                event.preventDefault();
+                dialogRoot.focus();
+                return;
+            }
+
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const current = document.activeElement as HTMLElement | null;
+
+            if (event.shiftKey && current === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && current === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            if (detailLastFocusedRef.current) {
+                detailLastFocusedRef.current.focus();
+            }
+        };
+    }, [focusedJob]);
 
     const toggleSelect = (id: number) => {
         const newSet = new Set(selected);
@@ -154,55 +274,77 @@ export default function JobManager() {
 
     const handleBatch = async (action: "cancel" | "restart" | "delete") => {
         if (selected.size === 0) return;
+        setActionError(null);
 
         try {
-            const res = await apiFetch("/api/jobs/batch", {
+            await apiAction("/api/jobs/batch", {
                 method: "POST",
                 body: JSON.stringify({
                     action,
                     ids: Array.from(selected)
                 })
             });
-
-            if (res.ok) {
-                setSelected(new Set());
-                await fetchJobs();
-            }
+            setSelected(new Set());
+            showToast({
+                kind: "success",
+                title: "Jobs",
+                message: `${action[0].toUpperCase()}${action.slice(1)} request sent for selected jobs.`,
+            });
+            await fetchJobs();
         } catch (e) {
-            console.error("Batch action failed", e);
+            const message = isApiError(e) ? e.message : "Batch action failed";
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
         }
     };
 
     const clearCompleted = async () => {
-        await apiFetch("/api/jobs/clear-completed", { method: "POST" });
-        await fetchJobs();
+        setActionError(null);
+        try {
+            await apiAction("/api/jobs/clear-completed", { method: "POST" });
+            showToast({ kind: "success", title: "Jobs", message: "Completed jobs cleared." });
+            await fetchJobs();
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to clear completed jobs";
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
+        }
     };
 
     const fetchJobDetails = async (id: number) => {
+        setActionError(null);
         setDetailLoading(true);
         try {
-            const res = await apiFetch(`/api/jobs/${id}/details`);
-            if (res.ok) {
-                const data = await res.json();
-                setFocusedJob(data);
-            }
+            const data = await apiJson<JobDetail>(`/api/jobs/${id}/details`);
+            setFocusedJob(data);
         } catch (e) {
-            console.error("Failed to fetch job details", e);
+            const message = isApiError(e) ? e.message : "Failed to fetch job details";
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
         } finally {
             setDetailLoading(false);
         }
     };
 
     const handleAction = async (id: number, action: "cancel" | "restart" | "delete") => {
+        setActionError(null);
         try {
-            const res = await apiFetch(`/api/jobs/${id}/${action}`, { method: "POST" });
-            if (res.ok) {
-                if (action === "delete") setFocusedJob(null);
-                else await fetchJobDetails(id);
-                await fetchJobs();
+            await apiAction(`/api/jobs/${id}/${action}`, { method: "POST" });
+            if (action === "delete") {
+                setFocusedJob((current) => (current?.job.id === id ? null : current));
+            } else if (focusedJob?.job.id === id) {
+                await fetchJobDetails(id);
             }
+            await fetchJobs();
+            showToast({
+                kind: "success",
+                title: "Jobs",
+                message: `Job ${action} request completed.`,
+            });
         } catch (e) {
-            console.error(`Action ${action} failed`, e);
+            const message = isApiError(e) ? e.message : `Job ${action} failed`;
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
         }
     };
 
@@ -275,19 +417,25 @@ export default function JobManager() {
                         <input
                             type="text"
                             placeholder="Search files..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
+                            value={searchInput}
+                            onChange={(e) => setSearchInput(e.target.value)}
                             className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
                         />
                     </div>
                     <button
-                        onClick={() => fetchJobs()}
+                        onClick={() => void fetchJobs()}
                         className={cn("p-2 rounded-lg border border-helios-line/20 hover:bg-helios-surface-soft", refreshing && "animate-spin")}
                     >
                         <RefreshCw size={16} />
                     </button>
                 </div>
             </div>
+
+            {actionError && (
+                <div role="alert" aria-live="polite" className="rounded-xl border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error">
+                    {actionError}
+                </div>
+            )}
 
             {/* Batch Actions Bar */}
             {selected.size > 0 && (
@@ -374,7 +522,7 @@ export default function JobManager() {
                             jobs.map((job) => (
                                 <tr
                                     key={job.id}
-                                    onClick={() => fetchJobDetails(job.id)}
+                                    onClick={() => void fetchJobDetails(job.id)}
                                     className={cn(
                                         "group hover:bg-helios-surface/80 transition-all cursor-pointer",
                                         selected.has(job.id) && "bg-helios-surface-soft",
@@ -549,6 +697,12 @@ export default function JobManager() {
                                 animate={{ opacity: 1, scale: 1, y: 0 }}
                                 exit={{ opacity: 0, scale: 0.95, y: 10 }}
                                 transition={{ duration: 0.2 }}
+                                ref={detailDialogRef}
+                                role="dialog"
+                                aria-modal="true"
+                                aria-labelledby="job-details-title"
+                                aria-describedby="job-details-path"
+                                tabIndex={-1}
                                 className="w-full max-w-2xl bg-helios-surface border border-helios-line/20 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden mx-4"
                             >
                                 {/* Header */}
@@ -558,10 +712,10 @@ export default function JobManager() {
                                             {getStatusBadge(focusedJob.job.status)}
                                             <span className="text-[10px] uppercase font-bold tracking-widest text-helios-slate">Job ID #{focusedJob.job.id}</span>
                                         </div>
-                                        <h2 className="text-lg font-bold text-helios-ink truncate" title={focusedJob.job.input_path}>
+                                        <h2 id="job-details-title" className="text-lg font-bold text-helios-ink truncate" title={focusedJob.job.input_path}>
                                             {focusedJob.job.input_path.split(/[/\\]/).pop()}
                                         </h2>
-                                        <p className="text-xs text-helios-slate truncate opacity-60">{focusedJob.job.input_path}</p>
+                                        <p id="job-details-path" className="text-xs text-helios-slate truncate opacity-60">{focusedJob.job.input_path}</p>
                                     </div>
                                     <button
                                         onClick={() => setFocusedJob(null)}
@@ -572,6 +726,9 @@ export default function JobManager() {
                                 </div>
 
                                 <div className="p-6 space-y-8 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                                    {detailLoading && (
+                                        <p className="text-xs text-helios-slate" aria-live="polite">Loading job details...</p>
+                                    )}
                                     {/* Stats Grid */}
                                     <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                                         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
@@ -745,56 +902,20 @@ export default function JobManager() {
                 )}
             </AnimatePresence>
 
-            {/* Confirm Modal */}
-            <AnimatePresence>
-                {confirmState && (
-                    <>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setConfirmState(null)}
-                            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120]"
-                        />
-                        <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[121]">
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.96, y: 12 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.96, y: 12 }}
-                                className="w-full max-w-sm bg-helios-surface border border-helios-line/20 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden mx-4"
-                            >
-                                <div className="p-6 space-y-2">
-                                    <h3 className="text-lg font-bold text-helios-ink">{confirmState.title}</h3>
-                                    <p className="text-sm text-helios-slate">{confirmState.body}</p>
-                                </div>
-                                <div className="flex items-center justify-end gap-2 px-6 pb-6">
-                                    <button
-                                        onClick={() => setConfirmState(null)}
-                                        className="px-4 py-2 text-sm font-semibold text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft rounded-lg"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={async () => {
-                                            const action = confirmState.onConfirm;
-                                            setConfirmState(null);
-                                            await action();
-                                        }}
-                                        className={cn(
-                                            "px-4 py-2 text-sm font-semibold rounded-lg",
-                                            confirmState.confirmTone === "danger"
-                                                ? "bg-red-500/15 text-red-500 hover:bg-red-500/25"
-                                                : "bg-helios-solar text-helios-main hover:brightness-110"
-                                        )}
-                                    >
-                                        {confirmState.confirmLabel}
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </div>
-                    </>
-                )}
-            </AnimatePresence>
+            <ConfirmDialog
+                open={confirmState !== null}
+                title={confirmState?.title ?? ""}
+                description={confirmState?.body ?? ""}
+                confirmLabel={confirmState?.confirmLabel ?? "Confirm"}
+                tone={confirmState?.confirmTone ?? "primary"}
+                onClose={() => setConfirmState(null)}
+                onConfirm={async () => {
+                    if (!confirmState) {
+                        return;
+                    }
+                    await confirmState.onConfirm();
+                }}
+            />
         </div>
     );
 }

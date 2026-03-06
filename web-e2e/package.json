@@ -1,0 +1,16 @@
+{
+  "name": "alchemist-web-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:reliability": "playwright test tests/settings-nonok.spec.ts tests/setup-recovery.spec.ts tests/stats-poller.spec.ts tests/jobs-actions-nonok.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2"
+  }
+}

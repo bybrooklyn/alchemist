@@ -1,29 +1,34 @@
 import { useState, useEffect } from "react";
 import { Bell, Plus, Trash2, Zap } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
+import ConfirmDialog from "./ui/ConfirmDialog";
 
 interface NotificationTarget {
     id: number;
     name: string;
-    target_type: 'gotify' | 'discord' | 'webhook';
+    target_type: "gotify" | "discord" | "webhook";
     endpoint_url: string;
     auth_token?: string;
-    events: string; // JSON string
+    events: string;
     enabled: boolean;
 }
+
+const TARGET_TYPES: NotificationTarget["target_type"][] = ["discord", "gotify", "webhook"];
 
 export default function NotificationSettings() {
     const [targets, setTargets] = useState<NotificationTarget[]>([]);
     const [loading, setLoading] = useState(true);
     const [testingId, setTestingId] = useState<number | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
-    // Form state
     const [showForm, setShowForm] = useState(false);
     const [newName, setNewName] = useState("");
-    const [newType, setNewType] = useState<NotificationTarget['target_type']>("discord");
+    const [newType, setNewType] = useState<NotificationTarget["target_type"]>("discord");
     const [newUrl, setNewUrl] = useState("");
     const [newToken, setNewToken] = useState("");
     const [newEvents, setNewEvents] = useState<string[]>(["completed", "failed"]);
+    const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
     useEffect(() => {
         void fetchTargets();
@@ -31,13 +36,12 @@ export default function NotificationSettings() {
 
     const fetchTargets = async () => {
         try {
-            const res = await apiFetch("/api/settings/notifications");
-            if (res.ok) {
-                const data = await res.json();
-                setTargets(data);
-            }
+            const data = await apiJson<NotificationTarget[]>("/api/settings/notifications");
+            setTargets(data);
+            setError(null);
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to load notification targets";
+            setError(message);
         } finally {
             setLoading(false);
         }
@@ -46,7 +50,7 @@ export default function NotificationSettings() {
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const res = await apiFetch("/api/settings/notifications", {
+            await apiAction("/api/settings/notifications", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -55,28 +59,33 @@ export default function NotificationSettings() {
                     endpoint_url: newUrl,
                     auth_token: newToken || null,
                     events: newEvents,
-                    enabled: true
-                })
+                    enabled: true,
+                }),
             });
-            if (res.ok) {
-                setShowForm(false);
-                setNewName("");
-                setNewUrl("");
-                setNewToken("");
-                await fetchTargets();
-            }
+            setShowForm(false);
+            setNewName("");
+            setNewUrl("");
+            setNewToken("");
+            setError(null);
+            await fetchTargets();
+            showToast({ kind: "success", title: "Notifications", message: "Target added." });
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to add notification target";
+            setError(message);
+            showToast({ kind: "error", title: "Notifications", message });
         }
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm("Remove this notification target?")) return;
         try {
-            await apiFetch(`/api/settings/notifications/${id}`, { method: "DELETE" });
+            await apiAction(`/api/settings/notifications/${id}`, { method: "DELETE" });
+            setError(null);
             await fetchTargets();
+            showToast({ kind: "success", title: "Notifications", message: "Target removed." });
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to remove target";
+            setError(message);
+            showToast({ kind: "error", title: "Notifications", message });
         }
     };
 
@@ -93,7 +102,7 @@ export default function NotificationSettings() {
                 events = [];
             }
 
-            const res = await apiFetch("/api/settings/notifications/test", {
+            await apiAction("/api/settings/notifications/test", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -101,19 +110,16 @@ export default function NotificationSettings() {
                     target_type: target.target_type,
                     endpoint_url: target.endpoint_url,
                     auth_token: target.auth_token,
-                    events: events,
-                    enabled: target.enabled
-                })
+                    events,
+                    enabled: target.enabled,
+                }),
             });
 
-            if (res.ok) {
-                alert("Test notification sent!");
-            } else {
-                alert("Test failed.");
-            }
+            showToast({ kind: "success", title: "Notifications", message: "Test notification sent." });
         } catch (e) {
-            console.error(e);
-            alert("Test error");
+            const message = isApiError(e) ? e.message : "Test notification failed";
+            setError(message);
+            showToast({ kind: "error", title: "Notifications", message });
         } finally {
             setTestingId(null);
         }
@@ -128,7 +134,7 @@ export default function NotificationSettings() {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" aria-live="polite">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-helios-solar/10 rounded-lg">
@@ -148,6 +154,12 @@ export default function NotificationSettings() {
                 </button>
             </div>
 
+            {error && (
+                <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                    {error}
+                </div>
+            )}
+
             {showForm && (
                 <form onSubmit={handleAdd} className="bg-helios-surface-soft p-4 rounded-xl space-y-4 border border-helios-line/20 mb-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -165,12 +177,14 @@ export default function NotificationSettings() {
                             <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Type</label>
                             <select
                                 value={newType}
-                                onChange={e => setNewType(e.target.value as any)}
+                                onChange={e => setNewType(e.target.value as NotificationTarget["target_type"])}
                                 className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
                             >
-                                <option value="discord">Discord Webhook</option>
-                                <option value="gotify">Gotify</option>
-                                <option value="webhook">Generic Webhook</option>
+                                {TARGET_TYPES.map((type) => (
+                                    <option key={type} value={type}>
+                                        {type === "discord" ? "Discord Webhook" : type === "gotify" ? "Gotify" : "Generic Webhook"}
+                                    </option>
+                                ))}
                             </select>
                         </div>
                     </div>
@@ -199,7 +213,7 @@ export default function NotificationSettings() {
                     <div>
                         <label className="block text-xs font-bold uppercase text-helios-slate mb-2">Events</label>
                         <div className="flex gap-4 flex-wrap">
-                            {['completed', 'failed', 'queued'].map(evt => (
+                            {["completed", "failed", "queued"].map(evt => (
                                 <label key={evt} className="flex items-center gap-2 text-sm text-helios-ink cursor-pointer">
                                     <input
                                         type="checkbox"
@@ -219,50 +233,60 @@ export default function NotificationSettings() {
                 </form>
             )}
 
-            <div className="space-y-3">
-                {targets.map(target => (
-                    <div key={target.id} className="flex items-center justify-between p-4 bg-helios-surface border border-helios-line/10 rounded-xl group/item">
-                        <div className="flex items-center gap-4">
-                            <div className="p-2 bg-helios-surface-soft rounded-lg text-helios-slate">
-                                <Zap size={18} />
-                            </div>
-                            <div>
-                                <h3 className="font-bold text-sm text-helios-ink">{target.name}</h3>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                    <span className="text-[10px] uppercase font-bold tracking-wider text-helios-slate bg-helios-surface-soft px-1.5 rounded">
-                                        {target.target_type}
-                                    </span>
-                                    <span className="text-xs text-helios-slate truncate max-w-[200px]">
-                                        {target.endpoint_url}
-                                    </span>
+            {loading ? (
+                <div className="text-sm text-helios-slate animate-pulse">Loading targets…</div>
+            ) : (
+                <div className="space-y-3">
+                    {targets.map(target => (
+                        <div key={target.id} className="flex items-center justify-between p-4 bg-helios-surface border border-helios-line/10 rounded-xl group/item">
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 bg-helios-surface-soft rounded-lg text-helios-slate">
+                                    <Zap size={18} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-sm text-helios-ink">{target.name}</h3>
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                        <span className="text-[10px] uppercase font-bold tracking-wider text-helios-slate bg-helios-surface-soft px-1.5 rounded">
+                                            {target.target_type}
+                                        </span>
+                                        <span className="text-xs text-helios-slate truncate max-w-[200px]">{target.endpoint_url}</span>
+                                    </div>
                                 </div>
                             </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => void handleTest(target)}
+                                    disabled={testingId === target.id}
+                                    className="p-2 text-helios-slate hover:text-helios-solar hover:bg-helios-solar/10 rounded-lg transition-colors"
+                                    title="Test Notification"
+                                >
+                                    <Zap size={16} className={testingId === target.id ? "animate-pulse" : ""} />
+                                </button>
+                                <button
+                                    onClick={() => setPendingDeleteId(target.id)}
+                                    className="p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                                    aria-label={`Delete notification target ${target.name}`}
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={() => handleTest(target)}
-                                disabled={testingId === target.id}
-                                className="p-2 text-helios-slate hover:text-helios-solar hover:bg-helios-solar/10 rounded-lg transition-colors"
-                                title="Test Notification"
-                            >
-                                <Zap size={16} className={testingId === target.id ? "animate-pulse" : ""} />
-                            </button>
-                            <button
-                                onClick={() => handleDelete(target.id)}
-                                className="p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-                            >
-                                <Trash2 size={16} />
-                            </button>
-                        </div>
-                    </div>
-                ))}
+                    ))}
+                </div>
+            )}
 
-                {targets.length === 0 && !loading && (
-                    <div className="text-center py-8 text-helios-slate text-sm">
-                        No notification targets configured.
-                    </div>
-                )}
-            </div>
+            <ConfirmDialog
+                open={pendingDeleteId !== null}
+                title="Remove notification target"
+                description="Remove this notification target?"
+                confirmLabel="Remove"
+                tone="danger"
+                onClose={() => setPendingDeleteId(null)}
+                onConfirm={async () => {
+                    if (pendingDeleteId === null) return;
+                    await handleDelete(pendingDeleteId);
+                }}
+            />
         </div>
     );
 }

@@ -4,7 +4,7 @@ use crate::media::analyzer::FfmpegAnalyzer;
 use crate::media::executor::FfmpegExecutor;
 use crate::media::planner::{build_hardware_capabilities, BasicPlanner};
 use crate::orchestrator::Transcoder;
-use crate::system::hardware::HardwareInfo;
+use crate::system::hardware::HardwareState;
 use crate::telemetry::{encoder_label, hardware_label, resolution_bucket, TelemetryEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -158,8 +158,11 @@ pub struct ExecutionPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
+    pub requested_encoder: Encoder,
     pub used_encoder: Encoder,
     pub fallback_occurred: bool,
+    pub actual_output_codec: Option<crate::config::OutputCodec>,
+    pub actual_encoder_name: Option<String>,
     pub stats: ExecutionStats,
 }
 
@@ -201,7 +204,7 @@ pub struct Pipeline {
     db: Arc<crate::db::Db>,
     orchestrator: Arc<Transcoder>,
     config: Arc<RwLock<crate::config::Config>>,
-    hw_info: Arc<Option<HardwareInfo>>,
+    hardware_state: HardwareState,
     tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
     dry_run: bool,
 }
@@ -211,7 +214,7 @@ impl Pipeline {
         db: Arc<crate::db::Db>,
         orchestrator: Arc<Transcoder>,
         config: Arc<RwLock<crate::config::Config>>,
-        hw_info: Arc<Option<HardwareInfo>>,
+        hardware_state: HardwareState,
         tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
         dry_run: bool,
     ) -> Self {
@@ -219,34 +222,34 @@ impl Pipeline {
             db,
             orchestrator,
             config,
-            hw_info,
+            hardware_state,
             tx,
             dry_run,
         }
     }
 
     pub async fn enqueue_discovered(&self, discovered: DiscoveredMedia) -> Result<()> {
-        enqueue_discovered_with_db(&self.db, discovered).await
+        let _ = enqueue_discovered_with_db(&self.db, discovered).await?;
+        Ok(())
     }
 }
 
 pub async fn enqueue_discovered_with_db(
     db: &crate::db::Db,
     discovered: DiscoveredMedia,
-) -> Result<()> {
+) -> Result<bool> {
     let settings = match db.get_file_settings().await {
         Ok(settings) => settings,
         Err(e) => {
             tracing::error!("Failed to fetch file settings, using defaults: {}", e);
-            crate::db::FileSettings {
-                id: 1,
-                delete_source: false,
-                output_extension: "mkv".to_string(),
-                output_suffix: "-alchemist".to_string(),
-                replace_strategy: "keep".to_string(),
-            }
+            default_file_settings()
         }
     };
+
+    if let Some(reason) = skip_reason_for_discovered_path(db, &discovered.path, &settings).await? {
+        tracing::info!("Skipping {:?} ({})", discovered.path, reason);
+        return Ok(false);
+    }
 
     let output_path = settings.output_path_for(&discovered.path);
     if output_path.exists() && !settings.should_replace_existing_output() {
@@ -254,11 +257,61 @@ pub async fn enqueue_discovered_with_db(
             "Skipping {:?} (output exists, replace_strategy = keep)",
             discovered.path
         );
-        return Ok(());
+        return Ok(false);
     }
 
     db.enqueue_job(&discovered.path, &output_path, discovered.mtime)
         .await
+}
+
+fn default_file_settings() -> crate::db::FileSettings {
+    crate::db::FileSettings {
+        id: 1,
+        delete_source: false,
+        output_extension: "mkv".to_string(),
+        output_suffix: "-alchemist".to_string(),
+        replace_strategy: "keep".to_string(),
+    }
+}
+
+fn matches_generated_output_pattern(path: &Path, settings: &crate::db::FileSettings) -> bool {
+    let expected_extension = settings.output_extension.trim_start_matches('.');
+    if !expected_extension.is_empty() {
+        let actual_extension = match path.extension().and_then(|extension| extension.to_str()) {
+            Some(extension) => extension,
+            None => return false,
+        };
+        if !actual_extension.eq_ignore_ascii_case(expected_extension) {
+            return false;
+        }
+    }
+
+    let suffix = if settings.output_suffix.is_empty() {
+        "-alchemist"
+    } else {
+        settings.output_suffix.as_str()
+    };
+
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.ends_with(suffix))
+}
+
+async fn skip_reason_for_discovered_path(
+    db: &crate::db::Db,
+    path: &Path,
+    settings: &crate::db::FileSettings,
+) -> Result<Option<&'static str>> {
+    if matches_generated_output_pattern(path, settings) {
+        return Ok(Some("matches generated output naming pattern"));
+    }
+
+    let path_string = path.to_string_lossy();
+    if db.has_job_with_output_path(path_string.as_ref()).await? {
+        return Ok(Some("already tracked as a job output"));
+    }
+
+    Ok(None)
 }
 
 impl Pipeline {
@@ -269,13 +322,7 @@ impl Pipeline {
             Ok(settings) => settings,
             Err(e) => {
                 tracing::error!("Failed to fetch file settings, using defaults: {}", e);
-                crate::db::FileSettings {
-                    id: 1,
-                    delete_source: false,
-                    output_extension: "mkv".to_string(),
-                    output_suffix: "-alchemist".to_string(),
-                    replace_strategy: "keep".to_string(),
-                }
+                default_file_settings()
             }
         };
 
@@ -361,14 +408,14 @@ impl Pipeline {
         tracing::info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
         let config_snapshot = self.config.read().await.clone();
+        let hw_info = self.hardware_state.snapshot().await;
         let encoder_caps = Arc::new(crate::media::ffmpeg::encoder_caps_clone());
         let planner = BasicPlanner::new(
             Arc::new(config_snapshot.clone()),
-            self.hw_info.as_ref().clone(),
+            hw_info.clone(),
             encoder_caps.clone(),
         );
-        let hardware_caps =
-            build_hardware_capabilities(&encoder_caps, self.hw_info.as_ref().as_ref());
+        let hardware_caps = build_hardware_capabilities(&encoder_caps, hw_info.as_ref());
         let mut plan = match planner
             .plan(&analysis, &hardware_caps, &file_settings.output_extension)
             .await
@@ -422,6 +469,7 @@ impl Pipeline {
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled: config_snapshot.system.enable_telemetry,
             output_codec: config_snapshot.transcode.output_codec,
+            encoder_override: None,
             metadata,
             event_type: "job_started",
             status: None,
@@ -436,7 +484,7 @@ impl Pipeline {
         let executor = FfmpegExecutor::new(
             self.orchestrator.clone(),
             Arc::new(config_snapshot.clone()),
-            self.hw_info.as_ref().clone(),
+            hw_info.clone(),
             self.tx.clone(),
             self.dry_run,
         );
@@ -451,7 +499,7 @@ impl Pipeline {
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
-                self.finalize_job(job, &file_path, &output_path, start_time, metadata)
+                self.finalize_job(job, &file_path, &output_path, start_time, metadata, &result)
                     .await
                     .map_err(|_| JobFailure::Transient)
             }
@@ -476,6 +524,7 @@ impl Pipeline {
                 self.emit_telemetry_event(TelemetryEventParams {
                     telemetry_enabled: config_snapshot.system.enable_telemetry,
                     output_codec: config_snapshot.transcode.output_codec,
+                    encoder_override: None,
                     metadata,
                     event_type: "job_finished",
                     status: Some("failure"),
@@ -526,6 +575,7 @@ impl Pipeline {
         output_path: &Path,
         start_time: std::time::Instant,
         metadata: &MediaMetadata,
+        execution_result: &ExecutionResult,
     ) -> Result<()> {
         let job_id = job.id;
         let input_metadata = std::fs::metadata(input_path)?;
@@ -546,7 +596,6 @@ impl Pipeline {
 
         let config = self.config.read().await;
         let telemetry_enabled = config.system.enable_telemetry;
-        let output_codec = config.transcode.output_codec;
 
         if output_size == 0 || reduction < config.transcode.size_reduction_threshold {
             tracing::warn!(
@@ -662,7 +711,10 @@ impl Pipeline {
 
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled,
-            output_codec,
+            output_codec: execution_result
+                .actual_output_codec
+                .unwrap_or(config.transcode.output_codec),
+            encoder_override: execution_result.actual_encoder_name.as_deref(),
             metadata,
             event_type: "job_finished",
             status: Some("success"),
@@ -690,14 +742,20 @@ impl Pipeline {
             return;
         }
 
-        let hw = self.hw_info.as_ref().as_ref();
+        let hw_snapshot = self.hardware_state.snapshot().await;
+        let hw = hw_snapshot.as_ref();
         let event = TelemetryEvent {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             event_type: params.event_type.to_string(),
             status: params.status.map(str::to_string),
             failure_reason: params.failure_reason.map(str::to_string),
             hardware_model: hardware_label(hw),
-            encoder: Some(encoder_label(hw, params.output_codec)),
+            encoder: Some(
+                params
+                    .encoder_override
+                    .map(str::to_string)
+                    .unwrap_or_else(|| encoder_label(hw, params.output_codec)),
+            ),
             video_codec: Some(params.output_codec.as_str().to_string()),
             resolution: resolution_bucket(params.metadata.width, params.metadata.height),
             duration_ms: params.duration_ms,
@@ -713,6 +771,7 @@ impl Pipeline {
 struct TelemetryEventParams<'a> {
     telemetry_enabled: bool,
     output_codec: crate::config::OutputCodec,
+    encoder_override: Option<&'a str>,
     metadata: &'a MediaMetadata,
     event_type: &'a str,
     status: Option<&'a str>,
@@ -729,5 +788,56 @@ fn map_failure(error: &crate::error::AlchemistError) -> JobFailure {
         crate::error::AlchemistError::Analyzer(_) => JobFailure::MediaCorrupt,
         crate::error::AlchemistError::Config(_) => JobFailure::PlannerBug,
         _ => JobFailure::Transient,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    #[test]
+    fn generated_output_pattern_matches_default_suffix() {
+        let settings = default_file_settings();
+        assert!(matches_generated_output_pattern(
+            Path::new("/media/movie-alchemist.mkv"),
+            &settings,
+        ));
+        assert!(!matches_generated_output_pattern(
+            Path::new("/media/movie.mkv"),
+            &settings,
+        ));
+    }
+
+    #[tokio::test]
+    async fn enqueue_discovered_rejects_known_output_paths(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!(
+            "alchemist_output_filter_{}.db",
+            rand::random::<u64>()
+        ));
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        db.update_file_settings(false, "mkv", "", "keep").await?;
+
+        let input = Path::new("/library/movie.mkv");
+        let output = Path::new("/library/movie-alchemist.mkv");
+        let _ = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+
+        let changed = enqueue_discovered_with_db(
+            &db,
+            DiscoveredMedia {
+                path: output.to_path_buf(),
+                mtime: SystemTime::UNIX_EPOCH,
+            },
+        )
+        .await?;
+        assert!(!changed);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

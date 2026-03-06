@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { FileOutput, AlertTriangle, Save } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 interface FileSettings {
     delete_source: boolean;
@@ -14,10 +15,11 @@ export default function FileSettings() {
         delete_source: false,
         output_extension: "mkv",
         output_suffix: "-alchemist",
-        replace_strategy: "keep"
+        replace_strategy: "keep",
     });
-    const [_loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         void fetchSettings();
@@ -25,29 +27,38 @@ export default function FileSettings() {
 
     const fetchSettings = async () => {
         try {
-            const res = await apiFetch("/api/settings/files");
-            if (res.ok) setSettings(await res.json());
-        } catch (e) { console.error(e); }
-        finally { setLoading(false); }
+            const data = await apiJson<FileSettings>("/api/settings/files");
+            setSettings(data);
+            setError(null);
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to load file settings";
+            setError(message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleSave = async () => {
         setSaving(true);
+        setError(null);
         try {
-            await apiFetch("/api/settings/files", {
+            await apiAction("/api/settings/files", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(settings)
+                body: JSON.stringify(settings),
             });
+            showToast({ kind: "success", title: "Files", message: "File settings saved." });
         } catch (e) {
-            console.error(e);
+            const message = isApiError(e) ? e.message : "Failed to save file settings";
+            setError(message);
+            showToast({ kind: "error", title: "Files", message });
         } finally {
             setSaving(false);
         }
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" aria-live="polite">
             <div className="flex items-center gap-3 mb-6">
                 <div className="p-2 bg-helios-solar/10 rounded-lg">
                     <FileOutput className="text-helios-solar" size={20} />
@@ -58,66 +69,77 @@ export default function FileSettings() {
                 </div>
             </div>
 
-            <div className="space-y-4">
-                {/* Naming */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Output Suffix</label>
-                        <input
-                            type="text"
-                            value={settings.output_suffix}
-                            onChange={e => setSettings({ ...settings, output_suffix: e.target.value })}
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
-                            placeholder="-alchemist"
-                        />
-                        <p className="text-[10px] text-helios-slate mt-1">Appended to filename (e.g. video<span className="text-helios-solar">{settings.output_suffix}</span>.{settings.output_extension})</p>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Extension</label>
-                        <select
-                            value={settings.output_extension}
-                            onChange={e => setSettings({ ...settings, output_extension: e.target.value })}
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
-                        >
-                            <option value="mkv">mkv</option>
-                            <option value="mp4">mp4</option>
-                        </select>
-                    </div>
+            {error && (
+                <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                    {error}
                 </div>
+            )}
 
-                {/* Deletion Policy */}
-                <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-xl space-y-3">
-                    <div className="flex items-start gap-3">
-                        <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={16} />
-                        <div className="flex-1">
-                            <h3 className="text-sm font-bold text-red-600 dark:text-red-400">Destructive Policy</h3>
-                            <p className="text-xs text-helios-slate mt-1 mb-3">
-                                Enabling "Delete Source" will permanently remove the original file after a successful transcode. This action cannot be undone.
+            {loading ? (
+                <div className="text-sm text-helios-slate animate-pulse">Loading settings…</div>
+            ) : (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Output Suffix</label>
+                            <input
+                                type="text"
+                                value={settings.output_suffix}
+                                onChange={e => setSettings({ ...settings, output_suffix: e.target.value })}
+                                className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
+                                placeholder="-alchemist"
+                            />
+                            <p className="text-[10px] text-helios-slate mt-1">
+                                Appended to filename (e.g. video
+                                <span className="text-helios-solar">{settings.output_suffix}</span>.{settings.output_extension})
                             </p>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.delete_source}
-                                    onChange={e => setSettings({ ...settings, delete_source: e.target.checked })}
-                                    className="rounded border-red-500/30 text-red-500 focus:ring-red-500 bg-red-500/10"
-                                />
-                                <span className="text-sm font-medium text-helios-ink">Delete source file after success</span>
-                            </label>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Extension</label>
+                            <select
+                                value={settings.output_extension}
+                                onChange={e => setSettings({ ...settings, output_extension: e.target.value })}
+                                className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
+                            >
+                                <option value="mkv">mkv</option>
+                                <option value="mp4">mp4</option>
+                            </select>
                         </div>
                     </div>
-                </div>
 
-                <div className="flex justify-end pt-2">
-                    <button
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="flex items-center gap-2 px-6 py-2 bg-helios-solar text-helios-main font-bold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-                    >
-                        <Save size={16} />
-                        {saving ? "Saving..." : "Save Settings"}
-                    </button>
+                    <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-xl space-y-3">
+                        <div className="flex items-start gap-3">
+                            <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={16} />
+                            <div className="flex-1">
+                                <h3 className="text-sm font-bold text-red-600 dark:text-red-400">Destructive Policy</h3>
+                                <p className="text-xs text-helios-slate mt-1 mb-3">
+                                    Enabling "Delete Source" will permanently remove the original file after a successful transcode. This action cannot be undone.
+                                </p>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.delete_source}
+                                        onChange={e => setSettings({ ...settings, delete_source: e.target.checked })}
+                                        className="rounded border-red-500/30 text-red-500 focus:ring-red-500 bg-red-500/10"
+                                    />
+                                    <span className="text-sm font-medium text-helios-ink">Delete source file after success</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                        <button
+                            onClick={handleSave}
+                            disabled={saving}
+                            className="flex items-center gap-2 px-6 py-2 bg-helios-solar text-helios-main font-bold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                        >
+                            <Save size={16} />
+                            {saving ? "Saving..." : "Save Settings"}
+                        </button>
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 }
