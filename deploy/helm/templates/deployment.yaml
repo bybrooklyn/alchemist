@@ -51,7 +51,7 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /app/config.toml
+              mountPath: {{ .Values.runtime.configPath | quote }}
               subPath: config.toml
             - name: data
               mountPath: /app/data
@@ -62,6 +62,12 @@ spec:
           env:
             - name: RUST_LOG
               value: "info"
+            - name: ALCHEMIST_CONFIG_PATH
+              value: {{ .Values.runtime.configPath | quote }}
+            - name: ALCHEMIST_DB_PATH
+              value: {{ .Values.runtime.dbPath | quote }}
+            - name: ALCHEMIST_CONFIG_MUTABLE
+              value: {{ .Values.runtime.configMutable | quote }}
       volumes:
         - name: config
           configMap:

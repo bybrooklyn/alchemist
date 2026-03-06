@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::{AlchemistError, Result};
+use crate::system::hardware::HardwareState;
 use crate::Agent;
 use crate::Transcoder;
 use argon2::{
@@ -19,7 +20,10 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use futures::stream::Stream;
+use futures::{
+    stream::{self, Stream},
+    StreamExt,
+};
 use rand::rngs::OsRng;
 use rand::Rng;
 use reqwest::Url;
@@ -29,17 +33,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::net::lookup_host;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::time::Duration;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[cfg(feature = "embed-web")]
@@ -72,6 +75,9 @@ pub struct AppState {
     pub sys: std::sync::Mutex<sysinfo::System>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
+    pub config_path: PathBuf,
+    pub config_mutable: bool,
+    pub hardware_state: HardwareState,
     login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
 }
@@ -83,6 +89,9 @@ pub struct RunServerArgs {
     pub transcoder: Arc<Transcoder>,
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: bool,
+    pub config_path: PathBuf,
+    pub config_mutable: bool,
+    pub hardware_state: HardwareState,
     pub notification_manager: Arc<crate::notifications::NotificationManager>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
 }
@@ -105,6 +114,9 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         transcoder,
         tx,
         setup_required,
+        config_path,
+        config_mutable,
+        hardware_state,
         notification_manager,
         file_watcher,
     } = args;
@@ -131,6 +143,9 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         sys: std::sync::Mutex::new(sys),
         file_watcher,
         library_scanner,
+        config_path,
+        config_mutable,
+        hardware_state,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
     });
@@ -145,7 +160,25 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         }
     });
 
-    let app = Router::new()
+    let app = app_router(state);
+
+    let addr = "0.0.0.0:3000";
+    info!("listening on http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(AlchemistError::Io)?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
+
+    Ok(())
+}
+
+fn app_router(state: Arc<AppState>) -> Router {
+    Router::new()
         // API Routes
         .route("/api/scan/start", post(start_scan_handler))
         .route("/api/scan/status", get(get_scan_status_handler))
@@ -240,21 +273,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
             state.clone(),
             rate_limit_middleware,
         ))
-        .with_state(state);
-
-    let addr = "0.0.0.0:3000";
-    info!("listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(AlchemistError::Io)?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
-
-    Ok(())
+        .with_state(state)
 }
 
 async fn refresh_file_watcher(state: &AppState) {
@@ -310,8 +329,130 @@ async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoRe
     let config = state.config.read().await;
     axum::Json(serde_json::json!({
         "setup_required": state.setup_required.load(Ordering::Relaxed),
-        "enable_telemetry": config.system.enable_telemetry
+        "enable_telemetry": config.system.enable_telemetry,
+        "config_mutable": state.config_mutable
     }))
+}
+
+fn config_write_blocked_response(config_path: &FsPath) -> Response {
+    (
+        StatusCode::CONFLICT,
+        format!(
+            "Configuration updates are disabled (ALCHEMIST_CONFIG_MUTABLE=false). \
+Set ALCHEMIST_CONFIG_MUTABLE=true and ensure {:?} is writable.",
+            config_path
+        ),
+    )
+        .into_response()
+}
+
+fn config_save_error_to_response(config_path: &FsPath, err: &anyhow::Error) -> Response {
+    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+        let read_only = io_err
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("read-only");
+        if io_err.kind() == std::io::ErrorKind::PermissionDenied || read_only {
+            return (
+                StatusCode::CONFLICT,
+                format!(
+                    "Configuration file {:?} is not writable: {}",
+                    config_path, io_err
+                ),
+            )
+                .into_response();
+        }
+    }
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Failed to save config at {:?}: {}", config_path, err),
+    )
+        .into_response()
+}
+
+fn save_config_or_response(
+    state: &AppState,
+    config: &Config,
+) -> std::result::Result<(), Box<Response>> {
+    if !state.config_mutable {
+        return Err(Box::new(config_write_blocked_response(&state.config_path)));
+    }
+
+    if let Some(parent) = state.config_path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                return Err(config_save_error_to_response(
+                    &state.config_path,
+                    &anyhow::Error::new(err),
+                )
+                .into());
+            }
+        }
+    }
+
+    if let Err(err) = config.save(state.config_path.as_path()) {
+        return Err(config_save_error_to_response(&state.config_path, &err).into());
+    }
+
+    Ok(())
+}
+
+fn config_read_error_response(context: &str, err: &AlchemistError) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Failed to {context}: {err}"),
+    )
+        .into_response()
+}
+
+fn hardware_error_response(err: &AlchemistError) -> Response {
+    let status = match err {
+        AlchemistError::Config(_) | AlchemistError::Hardware(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, err.to_string()).into_response()
+}
+
+fn validate_transcode_payload(
+    payload: &TranscodeSettingsPayload,
+) -> std::result::Result<(), &'static str> {
+    if payload.concurrent_jobs == 0 {
+        return Err("concurrent_jobs must be > 0");
+    }
+    if !(0.0..=1.0).contains(&payload.size_reduction_threshold) {
+        return Err("size_reduction_threshold must be 0.0-1.0");
+    }
+    if payload.min_bpp_threshold < 0.0 {
+        return Err("min_bpp_threshold must be >= 0.0");
+    }
+    if payload.threads > 512 {
+        return Err("threads must be <= 512");
+    }
+    if !(50.0..=1000.0).contains(&payload.tonemap_peak) {
+        return Err("tonemap_peak must be between 50 and 1000");
+    }
+    if !(0.0..=1.0).contains(&payload.tonemap_desat) {
+        return Err("tonemap_desat must be between 0.0 and 1.0");
+    }
+    Ok(())
+}
+
+fn normalize_setup_directories(
+    directories: &[String],
+) -> std::result::Result<Vec<String>, &'static str> {
+    let mut normalized = Vec::new();
+    for value in directories {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains('\0') {
+            return Err("directory paths must not contain null bytes");
+        }
+        normalized.push(trimmed.to_string());
+    }
+    Ok(normalized)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -358,39 +499,35 @@ async fn update_transcode_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<TranscodeSettingsPayload>,
 ) -> impl IntoResponse {
-    let mut config = state.config.write().await;
-
-    // Validate
-    if payload.concurrent_jobs == 0 {
-        return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
-    }
-    if payload.size_reduction_threshold < 0.0 || payload.size_reduction_threshold > 1.0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "size_reduction_threshold must be 0.0-1.0",
-        )
-            .into_response();
+    if let Err(msg) = validate_transcode_payload(&payload) {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
-    config.transcode.concurrent_jobs = payload.concurrent_jobs;
-    config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
-    config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
-    config.transcode.min_file_size_mb = payload.min_file_size_mb;
-    config.transcode.output_codec = payload.output_codec;
-    config.transcode.quality_profile = payload.quality_profile;
-    config.transcode.threads = payload.threads;
-    config.transcode.allow_fallback = payload.allow_fallback;
-    config.transcode.hdr_mode = payload.hdr_mode;
-    config.transcode.tonemap_algorithm = payload.tonemap_algorithm;
-    config.transcode.tonemap_peak = payload.tonemap_peak;
-    config.transcode.tonemap_desat = payload.tonemap_desat;
+    let mut next_config = state.config.read().await.clone();
+    next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
+    next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+    next_config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
+    next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
+    next_config.transcode.output_codec = payload.output_codec;
+    next_config.transcode.quality_profile = payload.quality_profile;
+    next_config.transcode.threads = payload.threads;
+    next_config.transcode.allow_fallback = payload.allow_fallback;
+    next_config.transcode.hdr_mode = payload.hdr_mode;
+    next_config.transcode.tonemap_algorithm = payload.tonemap_algorithm;
+    next_config.transcode.tonemap_peak = payload.tonemap_peak;
+    next_config.transcode.tonemap_desat = payload.tonemap_desat;
 
-    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save config: {}", e),
-        )
-            .into_response();
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+
+    if let Err(response) = save_config_or_response(&state, &next_config) {
+        return *response;
+    }
+
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
     }
 
     state
@@ -423,26 +560,38 @@ async fn update_hardware_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<HardwareSettingsPayload>,
 ) -> impl IntoResponse {
-    let mut config = state.config.write().await;
+    let mut next_config = state.config.read().await.clone();
 
-    config.hardware.allow_cpu_fallback = payload.allow_cpu_fallback;
-    config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    config.hardware.cpu_preset = match payload.cpu_preset.to_lowercase().as_str() {
+    next_config.hardware.allow_cpu_fallback = payload.allow_cpu_fallback;
+    next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+    next_config.hardware.cpu_preset = match payload.cpu_preset.to_lowercase().as_str() {
         "slow" => crate::config::CpuPreset::Slow,
         "medium" => crate::config::CpuPreset::Medium,
         "fast" => crate::config::CpuPreset::Fast,
         "faster" => crate::config::CpuPreset::Faster,
         _ => crate::config::CpuPreset::Medium,
     };
-    config.hardware.preferred_vendor = payload.preferred_vendor;
+    next_config.hardware.preferred_vendor = payload.preferred_vendor;
 
-    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save config: {}", e),
-        )
-            .into_response();
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
+
+    let hardware_info =
+        match crate::system::hardware::detect_hardware_for_config(&next_config).await {
+            Ok(info) => info,
+            Err(err) => return hardware_error_response(&err),
+        };
+
+    if let Err(response) = save_config_or_response(&state, &next_config) {
+        return *response;
+    }
+
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    state.hardware_state.replace(Some(hardware_info)).await;
 
     StatusCode::OK.into_response()
 }
@@ -465,8 +614,6 @@ async fn update_system_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<SystemSettingsPayload>,
 ) -> impl IntoResponse {
-    let mut config = state.config.write().await;
-
     if payload.monitoring_poll_interval < 0.5 || payload.monitoring_poll_interval > 10.0 {
         return (
             StatusCode::BAD_REQUEST,
@@ -475,15 +622,21 @@ async fn update_system_settings_handler(
             .into_response();
     }
 
-    config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
-    config.system.enable_telemetry = payload.enable_telemetry;
+    let mut next_config = state.config.read().await.clone();
+    next_config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
+    next_config.system.enable_telemetry = payload.enable_telemetry;
 
-    if let Err(e) = config.save(std::path::Path::new("config.toml")) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save config: {}", e),
-        )
-            .into_response();
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+
+    if let Err(response) = save_config_or_response(&state, &next_config) {
+        return *response;
+    }
+
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
     }
 
     (StatusCode::OK, "Settings updated").into_response()
@@ -494,11 +647,21 @@ struct SetupConfig {
     username: String,
     password: String,
     size_reduction_threshold: f64,
+    #[serde(default = "default_setup_min_bpp")]
+    min_bpp_threshold: f64,
     min_file_size_mb: u64,
     concurrent_jobs: usize,
     directories: Vec<String>,
     allow_cpu_encoding: bool,
     enable_telemetry: bool,
+    #[serde(default)]
+    output_codec: crate::config::OutputCodec,
+    #[serde(default)]
+    quality_profile: crate::config::QualityProfile,
+}
+
+fn default_setup_min_bpp() -> f64 {
+    0.1
 }
 
 async fn setup_complete_handler(
@@ -509,7 +672,74 @@ async fn setup_complete_handler(
         return (StatusCode::FORBIDDEN, "Setup already completed").into_response();
     }
 
-    // Create User
+    let username = payload.username.trim();
+    if username.len() < 3 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "username must be at least 3 characters",
+        )
+            .into_response();
+    }
+    if payload.password.len() < 8 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters",
+        )
+            .into_response();
+    }
+    if payload.concurrent_jobs == 0 {
+        return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
+    }
+    if !(0.0..=1.0).contains(&payload.size_reduction_threshold) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "size_reduction_threshold must be 0.0-1.0",
+        )
+            .into_response();
+    }
+    if payload.min_bpp_threshold < 0.0 {
+        return (StatusCode::BAD_REQUEST, "min_bpp_threshold must be >= 0.0").into_response();
+    }
+
+    let setup_directories = match normalize_setup_directories(&payload.directories) {
+        Ok(paths) => paths,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
+
+    if !state.config_mutable {
+        return config_write_blocked_response(state.config_path.as_path());
+    }
+
+    let mut next_config = state.config.read().await.clone();
+    next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
+    next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+    next_config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
+    next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
+    next_config.transcode.output_codec = payload.output_codec;
+    next_config.transcode.quality_profile = payload.quality_profile;
+    next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+    next_config.scanner.directories = setup_directories.clone();
+    next_config.system.enable_telemetry = payload.enable_telemetry;
+
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+
+    let hardware_info =
+        match crate::system::hardware::detect_hardware_for_config(&next_config).await {
+            Ok(info) => info,
+            Err(err) => return hardware_error_response(&err),
+        };
+
+    if let Err(response) = save_config_or_response(&state, &next_config) {
+        return *response;
+    }
+    {
+        let mut config_lock = state.config.write().await;
+        *config_lock = next_config;
+    }
+
+    // Create User and Initial Session after config persistence succeeds.
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
@@ -523,11 +753,7 @@ async fn setup_complete_handler(
         }
     };
 
-    let user_id = match state
-        .db
-        .create_user(&payload.username, &password_hash)
-        .await
-    {
+    let user_id = match state.db.create_user(username, &password_hash).await {
         Ok(id) => id,
         Err(e) => {
             return (
@@ -538,7 +764,6 @@ async fn setup_complete_handler(
         }
     };
 
-    // Create Initial Session
     let token: String = OsRng
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(64)
@@ -550,45 +775,6 @@ async fn setup_complete_handler(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create session: {}", e),
-        )
-            .into_response();
-    }
-
-    // Save Config
-    let mut config_lock = state.config.write().await;
-    let mut next_config = config_lock.clone();
-    let setup_directories = payload.directories.clone();
-    next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
-    next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
-    next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
-    next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    next_config.scanner.directories = setup_directories.clone();
-    next_config.system.enable_telemetry = payload.enable_telemetry;
-
-    if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
-    }
-
-    *config_lock = next_config;
-
-    // Serialize to TOML
-    let toml_string = match toml::to_string_pretty(&*config_lock) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize config: {}", e),
-            )
-                .into_response()
-        }
-    };
-    drop(config_lock);
-
-    // Write to file
-    if let Err(e) = std::fs::write("config.toml", toml_string) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write config.toml: {}", e),
         )
             .into_response();
     }
@@ -612,6 +798,7 @@ async fn setup_complete_handler(
         .agent
         .set_concurrent_jobs(payload.concurrent_jobs)
         .await;
+    state.hardware_state.replace(Some(hardware_info)).await;
     state.agent.resume();
     refresh_file_watcher(&state).await;
 
@@ -641,12 +828,10 @@ struct UiPreferences {
 }
 
 async fn get_preferences_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let active_theme_id = state
-        .db
-        .get_preference("active_theme_id")
-        .await
-        .unwrap_or(None);
-    axum::Json(UiPreferences { active_theme_id })
+    match state.db.get_preference("active_theme_id").await {
+        Ok(active_theme_id) => axum::Json(UiPreferences { active_theme_id }).into_response(),
+        Err(err) => config_read_error_response("load UI preferences", &err),
+    }
 }
 
 async fn update_preferences_handler(
@@ -721,11 +906,8 @@ struct StatsData {
     concurrent_limit: usize,
 }
 
-async fn get_stats_data(db: &Db, config: &Config) -> StatsData {
-    let s = db
-        .get_stats()
-        .await
-        .unwrap_or_else(|_| serde_json::json!({}));
+async fn get_stats_data(db: &Db, config: &Config) -> Result<StatsData> {
+    let s = db.get_stats().await?;
     let total = s
         .as_object()
         .map(|m| m.values().filter_map(|v| v.as_i64()).sum::<i64>())
@@ -742,25 +924,28 @@ async fn get_stats_data(db: &Db, config: &Config) -> StatsData {
         .unwrap_or(0);
     let failed = s.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    StatsData {
+    Ok(StatsData {
         total,
         completed,
         active,
         failed,
         concurrent_limit: config.transcode.concurrent_jobs,
-    }
+    })
 }
 
 async fn stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.read().await;
-    let stats = get_stats_data(&state.db, &config).await;
-    axum::Json(serde_json::json!({
-        "total": stats.total,
-        "completed": stats.completed,
-        "active": stats.active,
-        "failed": stats.failed,
-        "concurrent_limit": stats.concurrent_limit
-    }))
+    match get_stats_data(&state.db, &config).await {
+        Ok(stats) => axum::Json(serde_json::json!({
+            "total": stats.total,
+            "completed": stats.completed,
+            "active": stats.active,
+            "failed": stats.failed,
+            "concurrent_limit": stats.concurrent_limit
+        }))
+        .into_response(),
+        Err(err) => config_read_error_response("load job stats", &err),
+    }
 }
 
 async fn aggregated_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -775,29 +960,23 @@ async fn aggregated_stats_handler(State(state): State<Arc<AppState>>) -> impl In
                 "total_jobs": stats.completed_jobs,
                 "avg_vmaf": stats.avg_vmaf.unwrap_or(0.0)
             }))
+            .into_response()
         }
-        Err(_) => axum::Json(serde_json::json!({
-            "total_input_bytes": 0,
-            "total_output_bytes": 0,
-            "total_savings_bytes": 0,
-            "total_time_seconds": 0,
-            "total_jobs": 0,
-            "avg_vmaf": 0.0
-        })),
+        Err(err) => config_read_error_response("load aggregated stats", &err),
     }
 }
 
 async fn daily_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_daily_stats(30).await {
         Ok(stats) => axum::Json(serde_json::json!(stats)).into_response(),
-        Err(_) => axum::Json(serde_json::json!([])).into_response(),
+        Err(err) => config_read_error_response("load daily stats", &err),
     }
 }
 
 async fn detailed_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_detailed_encode_stats(50).await {
         Ok(stats) => axum::Json(serde_json::json!(stats)).into_response(),
-        Err(_) => axum::Json(serde_json::json!([])).into_response(),
+        Err(err) => config_read_error_response("load detailed stats", &err),
     }
 }
 
@@ -1025,64 +1204,102 @@ async fn rate_limit_middleware(
     next.run(req).await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SseMessage {
+    event_name: &'static str,
+    data: String,
+}
+
+impl From<SseMessage> for AxumEvent {
+    fn from(message: SseMessage) -> Self {
+        AxumEvent::default()
+            .event(message.event_name)
+            .data(message.data)
+    }
+}
+
+fn sse_message_for_event(event: &AlchemistEvent) -> SseMessage {
+    match event {
+        AlchemistEvent::Log {
+            level,
+            job_id,
+            message,
+        } => SseMessage {
+            event_name: "log",
+            data: serde_json::json!({
+                "level": level,
+                "job_id": job_id,
+                "message": message
+            })
+            .to_string(),
+        },
+        AlchemistEvent::Progress {
+            job_id,
+            percentage,
+            time,
+        } => SseMessage {
+            event_name: "progress",
+            data: serde_json::json!({
+                "job_id": job_id,
+                "percentage": percentage,
+                "time": time
+            })
+            .to_string(),
+        },
+        AlchemistEvent::JobStateChanged { job_id, status } => SseMessage {
+            event_name: "status",
+            data: serde_json::json!({
+                "job_id": job_id,
+                "status": status
+            })
+            .to_string(),
+        },
+        AlchemistEvent::Decision {
+            job_id,
+            action,
+            reason,
+        } => SseMessage {
+            event_name: "decision",
+            data: serde_json::json!({
+                "job_id": job_id,
+                "action": action,
+                "reason": reason
+            })
+            .to_string(),
+        },
+    }
+}
+
+fn sse_lagged_message(skipped: u64) -> SseMessage {
+    SseMessage {
+        event_name: "lagged",
+        data: serde_json::json!({ "skipped": skipped }).to_string(),
+    }
+}
+
+fn sse_message_stream(
+    rx: broadcast::Receiver<AlchemistEvent>,
+) -> impl Stream<Item = std::result::Result<SseMessage, Infallible>> {
+    stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => return Some((Ok(sse_message_for_event(&event)), rx)),
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!("SSE subscriber lagged; skipped {skipped} events");
+                    return Some((Ok(sse_lagged_message(skipped)), rx));
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+}
+
 async fn sse_handler(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>> {
-    let rx = state.tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
-        Ok(event) => {
-            let (event_name, data) = match &event {
-                AlchemistEvent::Log {
-                    level,
-                    job_id,
-                    message,
-                } => (
-                    "log",
-                    serde_json::json!({
-                        "level": level,
-                        "job_id": job_id,
-                        "message": message
-                    })
-                    .to_string(),
-                ),
-                AlchemistEvent::Progress {
-                    job_id,
-                    percentage,
-                    time,
-                } => (
-                    "progress",
-                    serde_json::json!({
-                        "job_id": job_id,
-                        "percentage": percentage,
-                        "time": time
-                    })
-                    .to_string(),
-                ),
-                AlchemistEvent::JobStateChanged { job_id, status } => (
-                    "status",
-                    serde_json::json!({
-                        "job_id": job_id,
-                        "status": status // Uses serde impl (lowercase)
-                    })
-                    .to_string(),
-                ),
-                AlchemistEvent::Decision {
-                    job_id,
-                    action,
-                    reason,
-                } => (
-                    "decision",
-                    serde_json::json!({
-                        "job_id": job_id,
-                        "action": action,
-                        "reason": reason
-                    })
-                    .to_string(),
-                ),
-            };
-            Some(Ok(AxumEvent::default().event(event_name).data(data)))
-        }
-        Err(_) => None,
+    let stream = sse_message_stream(state.tx.subscribe()).map(|message| match message {
+        Ok(message) => Ok(message.into()),
+        Err(never) => match never {},
     });
 
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
@@ -1153,7 +1370,10 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
     let uptime_seconds = state.start_time.elapsed().as_secs();
 
     // Active jobs from database
-    let stats = state.db.get_job_stats().await.unwrap_or_default();
+    let stats = match state.db.get_job_stats().await {
+        Ok(stats) => stats,
+        Err(err) => return config_read_error_response("load system resource stats", &err),
+    };
     let config = state.config.read().await;
 
     // Query GPU utilization (using spawn_blocking to avoid blocking)
@@ -1359,7 +1579,7 @@ async fn add_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url) {
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
@@ -1395,7 +1615,7 @@ async fn test_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url) {
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
@@ -1730,7 +1950,10 @@ async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Respon
     let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let is_docker = std::path::Path::new("/.dockerenv").exists();
     let uptime_seconds = state.start_time.elapsed().as_secs();
-    let stats = state.db.get_job_stats().await.unwrap_or_default();
+    let stats = match state.db.get_job_stats().await {
+        Ok(stats) => stats,
+        Err(err) => return config_read_error_response("load telemetry stats", &err),
+    };
 
     axum::Json(TelemetryPayload {
         runtime_id: state.telemetry_runtime_id.clone(),
@@ -1748,15 +1971,13 @@ async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Respon
 }
 
 async fn get_hardware_info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let config = state.config.read().await;
-    match crate::system::hardware::detect_hardware_async_with_preference(
-        config.hardware.allow_cpu_fallback,
-        config.hardware.preferred_vendor.clone(),
-    )
-    .await
-    {
-        Ok(info) => axum::Json(info).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match state.hardware_state.snapshot().await {
+        Some(info) => axum::Json(info).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Hardware state unavailable",
+        )
+            .into_response(),
     }
 }
 
@@ -1892,40 +2113,49 @@ fn sanitize_asset_path(raw: &str) -> Option<String> {
     }
 }
 
-fn validate_notification_url(raw: &str) -> std::result::Result<(), &'static str> {
-    let url = Url::parse(raw).map_err(|_| "endpoint_url must be a valid URL")?;
+async fn validate_notification_url(raw: &str) -> std::result::Result<(), String> {
+    let url = Url::parse(raw).map_err(|_| "endpoint_url must be a valid URL".to_string())?;
     match url.scheme() {
         "http" | "https" => {}
-        _ => return Err("endpoint_url must use http or https"),
+        _ => return Err("endpoint_url must use http or https".to_string()),
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("endpoint_url must not contain embedded credentials".to_string());
+    }
+    if url.fragment().is_some() {
+        return Err("endpoint_url must not include a URL fragment".to_string());
     }
 
-    let host = url.host_str().ok_or("endpoint_url must include a host")?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| "endpoint_url must include a host".to_string())?;
 
     if host.eq_ignore_ascii_case("localhost") {
-        return Err("endpoint_url host is not allowed");
+        return Err("endpoint_url host is not allowed".to_string());
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_private_ip(ip) {
-            return Err("endpoint_url host is not allowed");
+            return Err("endpoint_url host is not allowed".to_string());
         }
     } else {
         let port = url
             .port_or_known_default()
-            .ok_or("endpoint_url must include a port")?;
+            .ok_or_else(|| "endpoint_url must include a port".to_string())?;
         let host_port = format!("{}:{}", host, port);
         let mut resolved = false;
-        let addrs = host_port
-            .to_socket_addrs()
-            .map_err(|_| "endpoint_url host could not be resolved")?;
+        let addrs = tokio::time::timeout(Duration::from_secs(3), lookup_host(host_port))
+            .await
+            .map_err(|_| "endpoint_url host resolution timed out".to_string())?
+            .map_err(|_| "endpoint_url host could not be resolved".to_string())?;
         for addr in addrs {
             resolved = true;
             if is_private_ip(addr.ip()) {
-                return Err("endpoint_url host is not allowed");
+                return Err("endpoint_url host is not allowed".to_string());
             }
         }
         if !resolved {
-            return Err("endpoint_url host could not be resolved");
+            return Err("endpoint_url host could not be resolved".to_string());
         }
     }
 
@@ -1949,5 +2179,412 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || v6.is_multicast()
                 || v6.is_unspecified()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header, Method, Request},
+    };
+    use futures::StreamExt;
+    use http_body_util::BodyExt;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use tower::util::ServiceExt;
+
+    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("{prefix}_{}.{}", rand::random::<u64>(), extension));
+        path
+    }
+
+    async fn build_test_app<F>(
+        setup_required: bool,
+        tx_capacity: usize,
+        configure: F,
+    ) -> std::result::Result<(Arc<AppState>, Router, PathBuf, PathBuf), Box<dyn std::error::Error>>
+    where
+        F: FnOnce(&mut crate::config::Config),
+    {
+        let db_path = temp_path("alchemist_server_test", "db");
+        let config_path = temp_path("alchemist_server_test", "toml");
+
+        let mut config_value = crate::config::Config::default();
+        configure(&mut config_value);
+        config_value.save(&config_path)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let config = Arc::new(RwLock::new(config_value));
+        let hardware_state = HardwareState::new(Some(crate::system::hardware::HardwareInfo {
+            vendor: crate::system::hardware::Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+        }));
+        let (tx, _rx) = broadcast::channel(tx_capacity);
+        let transcoder = Arc::new(Transcoder::new());
+        let agent = Arc::new(
+            Agent::new(
+                db.clone(),
+                transcoder.clone(),
+                config.clone(),
+                hardware_state.clone(),
+                tx.clone(),
+                true,
+            )
+            .await,
+        );
+        let file_watcher = Arc::new(crate::system::watcher::FileWatcher::new(db.clone()));
+
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+
+        let state = Arc::new(AppState {
+            db: db.clone(),
+            config: config.clone(),
+            agent,
+            transcoder,
+            tx,
+            setup_required: Arc::new(AtomicBool::new(setup_required)),
+            start_time: Instant::now(),
+            telemetry_runtime_id: "test-runtime".to_string(),
+            notification_manager: Arc::new(crate::notifications::NotificationManager::new(
+                db.as_ref().clone(),
+            )),
+            sys: std::sync::Mutex::new(sys),
+            file_watcher,
+            library_scanner: Arc::new(crate::system::scanner::LibraryScanner::new(db, config)),
+            config_path: config_path.clone(),
+            config_mutable: true,
+            hardware_state,
+            login_rate_limiter: Mutex::new(HashMap::new()),
+            global_rate_limiter: Mutex::new(HashMap::new()),
+        });
+
+        Ok((state.clone(), app_router(state), config_path, db_path))
+    }
+
+    async fn create_session(db: &Db) -> std::result::Result<String, Box<dyn std::error::Error>> {
+        let user_id = db.create_user("tester", "hash").await?;
+        let token = format!("test-session-{}", rand::random::<u64>());
+        db.create_session(user_id, &token, Utc::now() + chrono::Duration::days(1))
+            .await?;
+        Ok(token)
+    }
+
+    fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, format!("alchemist_session={token}"))
+            .body(body)
+            .unwrap()
+    }
+
+    fn auth_json_request(
+        method: Method,
+        uri: &str,
+        token: &str,
+        body: serde_json::Value,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, format!("alchemist_session={token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn body_text(response: Response) -> String {
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn cleanup_paths(paths: &[PathBuf]) {
+        for path in paths {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    fn sample_transcode_payload() -> TranscodeSettingsPayload {
+        TranscodeSettingsPayload {
+            concurrent_jobs: 1,
+            size_reduction_threshold: 0.3,
+            min_bpp_threshold: 0.1,
+            min_file_size_mb: 50,
+            output_codec: crate::config::OutputCodec::Av1,
+            quality_profile: crate::config::QualityProfile::Balanced,
+            threads: 0,
+            allow_fallback: true,
+            hdr_mode: crate::config::HdrMode::Preserve,
+            tonemap_algorithm: crate::config::TonemapAlgorithm::Hable,
+            tonemap_peak: 100.0,
+            tonemap_desat: 0.2,
+        }
+    }
+
+    #[test]
+    fn validate_transcode_payload_rejects_invalid_values() {
+        let mut payload = sample_transcode_payload();
+        payload.concurrent_jobs = 0;
+        assert!(validate_transcode_payload(&payload).is_err());
+
+        let mut payload = sample_transcode_payload();
+        payload.size_reduction_threshold = 1.5;
+        assert!(validate_transcode_payload(&payload).is_err());
+
+        let mut payload = sample_transcode_payload();
+        payload.tonemap_peak = 10.0;
+        assert!(validate_transcode_payload(&payload).is_err());
+
+        let mut payload = sample_transcode_payload();
+        payload.tonemap_desat = 2.0;
+        assert!(validate_transcode_payload(&payload).is_err());
+    }
+
+    #[test]
+    fn normalize_setup_directories_trims_and_filters() {
+        let input = vec![
+            " /media/movies ".to_string(),
+            "".to_string(),
+            "   ".to_string(),
+            "/media/tv".to_string(),
+        ];
+
+        let normalized = normalize_setup_directories(&input).expect("normalize");
+        assert_eq!(
+            normalized,
+            vec!["/media/movies".to_string(), "/media/tv".to_string()]
+        );
+    }
+
+    #[test]
+    fn config_write_blocked_returns_409() {
+        let response = config_write_blocked_response(FsPath::new("/tmp/config.toml"));
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn config_save_permission_error_maps_to_409() {
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
+        let response = config_save_error_to_response(
+            FsPath::new("/tmp/config.toml"),
+            &anyhow::Error::new(err),
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn config_save_other_errors_map_to_500() {
+        let err = anyhow::anyhow!("something failed");
+        let response = config_save_error_to_response(FsPath::new("/tmp/config.toml"), &err);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn sse_message_stream_emits_lagged_event_and_recovers() {
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "first".to_string(),
+        })
+        .unwrap();
+        tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "second".to_string(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let mut stream = Box::pin(sse_message_stream(rx));
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.event_name, "lagged");
+        assert!(first.data.contains("\"skipped\":1"));
+
+        let second = stream.next().await.unwrap().unwrap();
+        assert_eq!(second.event_name, "log");
+        assert!(second.data.contains("\"second\""));
+    }
+
+    #[tokio::test]
+    async fn hardware_settings_route_updates_runtime_state(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/settings/hardware",
+                &token,
+                json!({
+                    "allow_cpu_fallback": true,
+                    "allow_cpu_encoding": true,
+                    "cpu_preset": "medium",
+                    "preferred_vendor": "cpu"
+                }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let hardware = state.hardware_state.snapshot().await.unwrap();
+        assert_eq!(hardware.vendor, crate::system::hardware::Vendor::Cpu);
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/system/hardware",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"vendor\":\"cpu\""));
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert_eq!(persisted.hardware.preferred_vendor.as_deref(), Some("cpu"));
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn setup_complete_updates_runtime_hardware_and_watch_dirs(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let watch_dir = temp_path("alchemist_setup_watch", "dir");
+        std::fs::create_dir_all(&watch_dir)?;
+
+        let (state, app, config_path, db_path) = build_test_app(true, 8, |config| {
+            config.hardware.preferred_vendor = Some("cpu".to_string());
+        })
+        .await?;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/setup/complete")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "admin",
+                            "password": "password123",
+                            "size_reduction_threshold": 0.3,
+                            "min_bpp_threshold": 0.1,
+                            "min_file_size_mb": 50,
+                            "concurrent_jobs": 1,
+                            "directories": [watch_dir.to_string_lossy().to_string()],
+                            "allow_cpu_encoding": true,
+                            "enable_telemetry": false,
+                            "output_codec": "av1",
+                            "quality_profile": "balanced"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let set_cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        assert!(!state.setup_required.load(Ordering::Relaxed));
+        assert_eq!(
+            state.hardware_state.snapshot().await.unwrap().vendor,
+            crate::system::hardware::Vendor::Cpu
+        );
+
+        let watch_dirs = state.db.get_watch_dirs().await?;
+        assert!(watch_dirs
+            .iter()
+            .any(|dir| dir.path == watch_dir.to_string_lossy()));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/system/hardware")
+                    .header(header::COOKIE, set_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"vendor\":\"cpu\""));
+
+        cleanup_paths(&[watch_dir, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sse_route_emits_lagged_event_and_recovers(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 1, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/events",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        state.tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "first".to_string(),
+        })?;
+        state.tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: None,
+            message: "second".to_string(),
+        })?;
+
+        let mut body = response.into_body();
+        let mut rendered = String::new();
+
+        while rendered.matches("event:").count() < 2 {
+            let maybe_frame =
+                tokio::time::timeout(tokio::time::Duration::from_secs(2), body.frame()).await?;
+            let Some(frame) = maybe_frame else {
+                break;
+            };
+            let frame = frame?;
+            if let Ok(data) = frame.into_data() {
+                rendered.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+
+        assert!(rendered.contains("event: lagged"));
+        assert!(rendered.contains("event: log"));
+        assert!(rendered.contains("\"second\""));
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
     }
 }

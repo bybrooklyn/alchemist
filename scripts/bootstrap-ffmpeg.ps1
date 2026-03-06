@@ -44,6 +44,6 @@ try {
     Write-Error "Failed to download or install FFmpeg: $_"
 } finally {
     if (Test-Path $tempDir) {
-        Remove-Item -Recurit -Force $tempDir
+        Remove-Item -Recurse -Force $tempDir
     }
 }

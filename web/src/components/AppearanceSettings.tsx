@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { apiFetch } from "../lib/api";
+import { apiAction, isApiError } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -284,14 +284,12 @@ const applyRootTheme = (themeId: string) => {
 };
 
 export default function AppearanceSettings() {
-    // Initialize from local storage or default
     const [activeThemeId, setActiveThemeId] = useState(
         () => (typeof window !== 'undefined' ? localStorage.getItem("theme") : null) || getRootTheme() || "helios-orange"
     );
     const [savingThemeId, setSavingThemeId] = useState<string | null>(null);
     const [error, setError] = useState("");
 
-    // Effect to ensure theme is applied on mount (if mismatched)
     useEffect(() => {
         applyRootTheme(activeThemeId);
     }, [activeThemeId]);
@@ -302,33 +300,21 @@ export default function AppearanceSettings() {
                 return;
             }
 
-            const _previousTheme = activeThemeId;
             setActiveThemeId(themeId);
             setSavingThemeId(themeId);
             setError("");
             applyRootTheme(themeId);
 
             try {
-                // Determine API endpoint. 
-                // Since we don't have the full Helios API, we'll implement a simple one or just use local storage for now if backend isn't ready.
-                // But the plan says "Implement PUT /api/ui/preferences".
-                // We'll try to fetch it.
-                const response = await apiFetch("/api/ui/preferences", {
+                await apiAction("/api/ui/preferences", {
                     method: "POST",
                     body: JSON.stringify({ active_theme_id: themeId }),
                 });
-
-                if (!response.ok) {
-                    // If backend doesn't support it yet, we just rely on LocalStorage, which we already set in applyRootTheme.
-                    // So we might warn but not revert UI, or just suppress error if 404.
-                    if (response.status !== 404) {
-                        throw new Error("Failed to save preference");
-                    }
-                }
             } catch (saveError) {
-                console.warn("Theme save failed, using local storage fallback", saveError);
-                // We don't revert here because we want the UI to update immediately and persist locally at least.
-                // setError("Unable to save theme preference to server.");
+                if (isApiError(saveError) && saveError.status === 404) {
+                    return;
+                }
+                setError("Unable to save theme preference to server.");
             } finally {
                 setSavingThemeId(null);
             }

@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Terminal, Server, Cpu, Activity, ShieldCheck } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { X, Terminal, Server, Cpu, Activity, ShieldCheck, type LucideIcon } from "lucide-react";
+import { apiJson } from "../lib/api";
 
 interface SystemInfo {
     version: string;
@@ -16,17 +16,99 @@ interface AboutDialogProps {
     onClose: () => void;
 }
 
+function focusableElements(root: HTMLElement): HTMLElement[] {
+    const selector = [
+        "a[href]",
+        "button:not([disabled])",
+        "input:not([disabled])",
+        "select:not([disabled])",
+        "textarea:not([disabled])",
+        "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
+        (element) => !element.hasAttribute("disabled")
+    );
+}
+
 export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
     const [info, setInfo] = useState<SystemInfo | null>(null);
+    const dialogRef = useRef<HTMLDivElement | null>(null);
+    const lastFocusedRef = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
         if (isOpen && !info) {
-            apiFetch("/api/system/info")
-                .then(res => res.json())
+            apiJson<SystemInfo>("/api/system/info")
                 .then(setInfo)
                 .catch(console.error);
         }
-    }, [isOpen]);
+    }, [isOpen, info]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        lastFocusedRef.current = document.activeElement as HTMLElement | null;
+
+        const dialog = dialogRef.current;
+        if (dialog) {
+            const focusables = focusableElements(dialog);
+            if (focusables.length > 0) {
+                focusables[0].focus();
+            } else {
+                dialog.focus();
+            }
+        }
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!isOpen) {
+                return;
+            }
+
+            if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+                return;
+            }
+
+            if (event.key !== "Tab") {
+                return;
+            }
+
+            const root = dialogRef.current;
+            if (!root) {
+                return;
+            }
+
+            const focusables = focusableElements(root);
+            if (focusables.length === 0) {
+                event.preventDefault();
+                root.focus();
+                return;
+            }
+
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const current = document.activeElement as HTMLElement | null;
+
+            if (event.shiftKey && current === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && current === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            if (lastFocusedRef.current) {
+                lastFocusedRef.current.focus();
+            }
+        };
+    }, [isOpen, onClose]);
 
     return (
         <AnimatePresence>
@@ -44,6 +126,11 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: 20 }}
                             onClick={e => e.stopPropagation()}
+                            ref={dialogRef}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="about-dialog-title"
+                            tabIndex={-1}
                             className="w-full max-w-md bg-helios-surface border border-helios-line/30 rounded-3xl shadow-2xl overflow-hidden relative"
                         >
                             <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-helios-solar/10 to-transparent pointer-events-none" />
@@ -64,7 +151,7 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                                 </div>
 
                                 <div className="mb-8">
-                                    <h2 className="text-2xl font-bold text-helios-ink tracking-tight">Alchemist</h2>
+                                    <h2 id="about-dialog-title" className="text-2xl font-bold text-helios-ink tracking-tight">Alchemist</h2>
                                     <p className="text-helios-slate font-medium">Media Transcoding Agent</p>
                                 </div>
 
@@ -97,7 +184,13 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
     );
 }
 
-function InfoRow({ icon: Icon, label, value }: { icon: any, label: string, value: string }) {
+interface InfoRowProps {
+    icon: LucideIcon;
+    label: string;
+    value: string;
+}
+
+function InfoRow({ icon: Icon, label, value }: InfoRowProps) {
     return (
         <div className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft border border-helios-line/10">
             <div className="flex items-center gap-3">

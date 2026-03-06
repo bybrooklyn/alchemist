@@ -85,3 +85,8 @@ config:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+runtime:
+  configPath: /app/config/config.toml
+  dbPath: /app/data/alchemist.db
+  configMutable: false

@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "alchemist"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "argon2",
@@ -35,6 +35,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "http-body-util",
  "inquire",
  "mime_guess",
  "notify",
@@ -52,6 +53,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "uuid",

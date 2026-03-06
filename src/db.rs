@@ -371,7 +371,7 @@ impl Db {
         input_path: &Path,
         output_path: &Path,
         mtime: std::time::SystemTime,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if input_path == output_path {
             return Err(crate::error::AlchemistError::Config(
                 "Output path matches input path".into(),
@@ -390,7 +390,7 @@ impl Db {
             Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
         };
 
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO jobs (input_path, output_path, status, mtime_hash, updated_at) 
              VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP)
              ON CONFLICT(input_path) DO UPDATE SET
@@ -406,7 +406,7 @@ impl Db {
         .execute(&self.pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn add_job(&self, job: Job) -> Result<()> {
@@ -826,6 +826,15 @@ impl Db {
         .await?;
 
         Ok(job)
+    }
+
+    pub async fn has_job_with_output_path(&self, path: &str) -> Result<bool> {
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM jobs WHERE output_path = ? LIMIT 1")
+                .bind(path)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.is_some())
     }
 
     pub async fn add_watch_dir(&self, path: &str, is_recursive: bool) -> Result<WatchDir> {
@@ -1384,6 +1393,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_enqueue_job_reports_change_state(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_enqueue_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let input = Path::new("input.mkv");
+        let output = Path::new("output.mkv");
+        let changed = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+        assert!(changed);
+
+        let unchanged = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+        assert!(!unchanged);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_claim_next_job_marks_analyzing(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
@@ -1394,12 +1429,14 @@ mod tests {
 
         let input1 = Path::new("input1.mkv");
         let output1 = Path::new("output1.mkv");
-        db.enqueue_job(input1, output1, SystemTime::UNIX_EPOCH)
+        let _ = db
+            .enqueue_job(input1, output1, SystemTime::UNIX_EPOCH)
             .await?;
 
         let input2 = Path::new("input2.mkv");
         let output2 = Path::new("output2.mkv");
-        db.enqueue_job(input2, output2, SystemTime::UNIX_EPOCH)
+        let _ = db
+            .enqueue_job(input2, output2, SystemTime::UNIX_EPOCH)
             .await?;
 
         let first = db

@@ -4,6 +4,7 @@ pub mod error;
 pub mod media;
 pub mod notifications;
 pub mod orchestrator;
+pub mod runtime;
 pub mod scheduler;
 pub mod server;
 pub mod system;

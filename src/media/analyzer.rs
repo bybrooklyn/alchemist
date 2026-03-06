@@ -205,6 +205,12 @@ impl AnalyzerTrait for FfmpegAnalyzer {
 
 pub struct Analyzer;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputProbe {
+    pub codec_name: String,
+    pub encoder_tag: Option<String>,
+}
+
 impl Analyzer {
     /// Async version of probe that doesn't block the runtime
     pub async fn probe_async(path: &Path) -> Result<FfprobeMetadata> {
@@ -267,6 +273,69 @@ impl Analyzer {
             }
 
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        })
+        .await
+        .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    pub async fn probe_output_details(path: &Path) -> Result<OutputProbe> {
+        #[derive(Debug, Deserialize)]
+        struct ProbeData {
+            streams: Vec<ProbeStream>,
+            #[serde(default)]
+            format: ProbeFormat,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ProbeStream {
+            codec_name: Option<String>,
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ProbeFormat {
+            #[serde(default)]
+            tags: ProbeTags,
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ProbeTags {
+            encoder: Option<String>,
+        }
+
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let output = Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-print_format",
+                    "json",
+                    "-show_entries",
+                    "stream=codec_name:format_tags=encoder",
+                ])
+                .arg(&path)
+                .output()
+                .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
+
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
+            }
+
+            let parsed: ProbeData = serde_json::from_slice(&output.stdout).map_err(|e| {
+                AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+            })?;
+            let codec_name = parsed
+                .streams
+                .first()
+                .and_then(|s| s.codec_name.clone())
+                .unwrap_or_default();
+            Ok(OutputProbe {
+                codec_name,
+                encoder_tag: parsed.format.tags.encoder,
+            })
         })
         .await
         .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?

@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { FolderOpen, Trash2, Plus, Folder, Play } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
+import ConfirmDialog from "./ui/ConfirmDialog";
 
 interface WatchDir {
     id: number;
@@ -13,16 +15,17 @@ export default function WatchFolders() {
     const [path, setPath] = useState("");
     const [loading, setLoading] = useState(true);
     const [scanning, setScanning] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
 
     const fetchDirs = async () => {
         try {
-            const res = await apiFetch("/api/settings/watch-dirs");
-            if (res.ok) {
-                const data = await res.json();
-                setDirs(data);
-            }
+            const data = await apiJson<WatchDir[]>("/api/settings/watch-dirs");
+            setDirs(data);
+            setError(null);
         } catch (e) {
-            console.error("Failed to fetch watch dirs", e);
+            const message = isApiError(e) ? e.message : "Failed to fetch watch directories";
+            setError(message);
         } finally {
             setLoading(false);
         }
@@ -34,12 +37,16 @@ export default function WatchFolders() {
 
     const triggerScan = async () => {
         setScanning(true);
+        setError(null);
         try {
-            await apiFetch("/api/scan/start", { method: "POST" });
+            await apiAction("/api/scan/start", { method: "POST" });
+            showToast({ kind: "success", title: "Scan", message: "Library scan started." });
         } catch (e) {
-            console.error("Failed to start scan", e);
+            const message = isApiError(e) ? e.message : "Failed to start scan";
+            setError(message);
+            showToast({ kind: "error", title: "Scan", message });
         } finally {
-            setTimeout(() => setScanning(false), 2000);
+            window.setTimeout(() => setScanning(false), 1200);
         }
     };
 
@@ -48,39 +55,40 @@ export default function WatchFolders() {
         if (!path.trim()) return;
 
         try {
-            const res = await apiFetch("/api/settings/watch-dirs", {
+            await apiAction("/api/settings/watch-dirs", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: path.trim(), is_recursive: true })
+                body: JSON.stringify({ path: path.trim(), is_recursive: true }),
             });
 
-            if (res.ok) {
-                setPath("");
-                await fetchDirs();
-            }
+            setPath("");
+            setError(null);
+            await fetchDirs();
+            showToast({ kind: "success", title: "Watch Folders", message: "Folder added." });
         } catch (e) {
-            console.error("Failed to add directory", e);
+            const message = isApiError(e) ? e.message : "Failed to add directory";
+            setError(message);
+            showToast({ kind: "error", title: "Watch Folders", message });
         }
     };
 
     const removeDir = async (id: number) => {
-        if (!confirm("Stop watching this folder?")) return;
-
         try {
-            const res = await apiFetch(`/api/settings/watch-dirs/${id}`, {
-                method: "DELETE"
+            await apiAction(`/api/settings/watch-dirs/${id}`, {
+                method: "DELETE",
             });
-
-            if (res.ok) {
-                await fetchDirs();
-            }
+            setError(null);
+            await fetchDirs();
+            showToast({ kind: "success", title: "Watch Folders", message: "Folder removed." });
         } catch (e) {
-            console.error("Failed to remove directory", e);
+            const message = isApiError(e) ? e.message : "Failed to remove directory";
+            setError(message);
+            showToast({ kind: "error", title: "Watch Folders", message });
         }
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" aria-live="polite">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-helios-solar/10 rounded-lg">
@@ -92,7 +100,7 @@ export default function WatchFolders() {
                     </div>
                 </div>
                 <button
-                    onClick={triggerScan}
+                    onClick={() => void triggerScan()}
                     disabled={scanning}
                     className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
                 >
@@ -100,6 +108,12 @@ export default function WatchFolders() {
                     {scanning ? "Scanning..." : "Scan Now"}
                 </button>
             </div>
+
+            {error && (
+                <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                    {error}
+                </div>
+            )}
 
             <form onSubmit={addDir} className="flex gap-2">
                 <div className="relative flex-1">
@@ -133,7 +147,7 @@ export default function WatchFolders() {
                             </span>
                         </div>
                         <button
-                            onClick={() => removeDir(dir.id)}
+                            onClick={() => setPendingRemoveId(dir.id)}
                             className="p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                             title="Stop watching"
                         >
@@ -156,6 +170,19 @@ export default function WatchFolders() {
                     </div>
                 )}
             </div>
+
+            <ConfirmDialog
+                open={pendingRemoveId !== null}
+                title="Stop watching folder"
+                description="Stop watching this folder for new media?"
+                confirmLabel="Stop Watching"
+                tone="danger"
+                onClose={() => setPendingRemoveId(null)}
+                onConfirm={async () => {
+                    if (pendingRemoveId === null) return;
+                    await removeDir(pendingRemoveId);
+                }}
+            />
         </div>
     );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 interface HardwareInfo {
     vendor: "Nvidia" | "Amd" | "Intel" | "Apple" | "Cpu";
@@ -23,33 +24,27 @@ export default function HardwareSettings() {
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        void fetchHardware();
-        void fetchSettings();
+        void Promise.all([fetchHardware(), fetchSettings()]).finally(() => setLoading(false));
     }, []);
 
     const fetchHardware = async () => {
         try {
-            const res = await apiFetch("/api/system/hardware");
-            if (!res.ok) throw new Error("Failed to detect hardware");
-            const data = await res.json();
+            const data = await apiJson<HardwareInfo>("/api/system/hardware");
             setInfo(data);
+            setError("");
         } catch (err) {
-            setError("Unable to detect hardware acceleration support.");
-            console.error(err);
-        } finally {
-            setLoading(false);
+            setError(isApiError(err) ? err.message : "Unable to detect hardware acceleration support.");
         }
     };
 
     const fetchSettings = async () => {
         try {
-            const res = await apiFetch("/api/settings/hardware");
-            if (res.ok) {
-                const data = await res.json();
-                setSettings(data);
-            }
+            const data = await apiJson<HardwareSettings>("/api/settings/hardware");
+            setSettings(data);
         } catch (err) {
-            console.error("Failed to fetch hardware settings:", err);
+            if (!error) {
+                setError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
+            }
         }
     };
 
@@ -57,16 +52,18 @@ export default function HardwareSettings() {
         if (!settings) return;
         setSaving(true);
         try {
-            const res = await apiFetch("/api/settings/hardware", {
+            await apiAction("/api/settings/hardware", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ ...settings, allow_cpu_encoding: enabled }),
             });
-            if (res.ok) {
-                setSettings({ ...settings, allow_cpu_encoding: enabled });
-            }
+            setSettings({ ...settings, allow_cpu_encoding: enabled });
+            setError("");
+            showToast({ kind: "success", title: "Hardware", message: "Hardware settings saved." });
         } catch (err) {
-            console.error("Failed to update CPU encoding:", err);
+            const message = isApiError(err) ? err.message : "Failed to update CPU encoding";
+            setError(message);
+            showToast({ kind: "error", title: "Hardware", message });
         } finally {
             setSaving(false);
         }
@@ -83,7 +80,7 @@ export default function HardwareSettings() {
 
     if (error || !info) {
         return (
-            <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center gap-3">
+            <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center gap-3" aria-live="polite">
                 <AlertCircle size={20} />
                 <span className="font-semibold">{error || "Hardware detection failed."}</span>
             </div>
@@ -103,7 +100,7 @@ export default function HardwareSettings() {
     const details = getVendorDetails(info.vendor);
 
     return (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-6" aria-live="polite">
             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
                     <h3 className="text-base font-bold text-helios-ink tracking-tight uppercase tracking-[0.1em]">Transcoding Hardware</h3>
@@ -176,7 +173,6 @@ export default function HardwareSettings() {
                 </div>
             )}
 
-            {/* CPU Encoding Toggle */}
             {settings && (
                 <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm">
                     <div className="flex items-center justify-between">
@@ -192,15 +188,11 @@ export default function HardwareSettings() {
                             </div>
                         </div>
                         <button
-                            onClick={() => updateCpuEncoding(!settings.allow_cpu_encoding)}
+                            onClick={() => void updateCpuEncoding(!settings.allow_cpu_encoding)}
                             disabled={saving}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.allow_cpu_encoding ? 'bg-emerald-500' : 'bg-helios-line/50'
-                                } ${saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.allow_cpu_encoding ? "bg-emerald-500" : "bg-helios-line/50"} ${saving ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
                         >
-                            <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.allow_cpu_encoding ? 'translate-x-6' : 'translate-x-1'
-                                    }`}
-                            />
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.allow_cpu_encoding ? "translate-x-6" : "translate-x-1"}`} />
                         </button>
                     </div>
                 </div>

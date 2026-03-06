@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
     Activity,
     CheckCircle2,
@@ -6,16 +6,13 @@ import {
     HardDrive,
     Database,
     Zap,
-    Terminal
+    Terminal,
+    type LucideIcon,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
-
-interface Stats {
-    total: number;
-    completed: number;
-    active: number;
-    failed: number;
-}
+import { apiJson, isApiError } from "../lib/api";
+import { useSharedStats } from "../lib/statsStore";
+import { showToast } from "../lib/toast";
+import ResourceMonitor from "./ResourceMonitor";
 
 interface Job {
     id: number;
@@ -24,43 +21,94 @@ interface Job {
     created_at: string;
 }
 
-import ResourceMonitor from "./ResourceMonitor";
+interface StatCardProps {
+    label: string;
+    value: number;
+    icon: LucideIcon;
+    colorClass: string;
+}
+
+interface QuickStartItem {
+    title: string;
+    body: ReactNode;
+    icon: LucideIcon;
+    tone: string;
+    bg: string;
+}
+
+const DEFAULT_STATS = {
+    total: 0,
+    completed: 0,
+    active: 0,
+    failed: 0,
+    concurrent_limit: 1,
+};
+
+function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
+    return (
+        <div className="p-5 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden group hover:bg-helios-surface-soft transition-colors">
+            <div className={`absolute -top-2 -right-2 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${colorClass}`}>
+                <Icon size={64} />
+            </div>
+            <div className="relative z-10 flex flex-col gap-1">
+                <span className="text-xs font-bold uppercase tracking-wider text-helios-slate">{label}</span>
+                <span className={`text-3xl font-bold font-mono tracking-tight ${colorClass}`}>{value}</span>
+            </div>
+        </div>
+    );
+}
 
 export default function Dashboard() {
-    const [stats, setStats] = useState<Stats>({ total: 0, completed: 0, active: 0, failed: 0 });
     const [jobs, setJobs] = useState<Job[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    const _lastJob = jobs[0];
+    const [jobsLoading, setJobsLoading] = useState(true);
+    const { stats: sharedStats, error: statsError } = useSharedStats();
+    const stats = sharedStats ?? DEFAULT_STATS;
 
     useEffect(() => {
-        const fetchData = async () => {
+        if (!statsError) {
+            return;
+        }
+        showToast({
+            kind: "error",
+            title: "Stats",
+            message: statsError,
+        });
+    }, [statsError]);
+
+    useEffect(() => {
+        const fetchJobs = async () => {
             try {
-                const [statsRes, jobsRes] = await Promise.all([
-                    apiFetch("/api/stats"),
-                    apiFetch(`/api/jobs/table?${new URLSearchParams({
+                const data = await apiJson<Job[]>(
+                    `/api/jobs/table?${new URLSearchParams({
                         limit: "5",
                         sort: "created_at",
                         sort_desc: "true",
-                    })}`)
-                ]);
-
-                if (statsRes.ok) {
-                    setStats(await statsRes.json());
-                }
-                if (jobsRes.ok) {
-                    setJobs(await jobsRes.json());
-                }
-            } catch (e) {
-                console.error("Dashboard fetch error", e);
+                    })}`
+                );
+                setJobs(data);
+            } catch (error) {
+                const message = isApiError(error) ? error.message : "Failed to fetch jobs";
+                showToast({ kind: "error", title: "Dashboard", message });
             } finally {
-                setLoading(false);
+                setJobsLoading(false);
             }
         };
 
-        void fetchData();
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
+        void fetchJobs();
+
+        const pollVisible = () => {
+            if (document.visibilityState === "visible") {
+                void fetchJobs();
+            }
+        };
+
+        const intervalId = window.setInterval(pollVisible, 5000);
+        document.addEventListener("visibilitychange", pollVisible);
+
+        return () => {
+            window.clearInterval(intervalId);
+            document.removeEventListener("visibilitychange", pollVisible);
+        };
     }, []);
 
     const formatRelativeTime = (iso?: string) => {
@@ -77,8 +125,9 @@ export default function Dashboard() {
         return `${days}d ago`;
     };
 
-    const quickStartItems = useMemo(() => {
-        const items = [];
+    const quickStartItems = useMemo<QuickStartItem[]>(() => {
+        const items: QuickStartItem[] = [];
+
         if (stats.total === 0) {
             items.push({
                 title: "Connect Your Library",
@@ -100,6 +149,7 @@ export default function Dashboard() {
                 bg: "bg-helios-solar/10",
             });
         }
+
         if (stats.failed > 0) {
             items.push({
                 title: "Review Failures",
@@ -117,6 +167,7 @@ export default function Dashboard() {
                 bg: "bg-red-500/10",
             });
         }
+
         if (stats.active === 0 && stats.total > 0) {
             items.push({
                 title: "Queue New Work",
@@ -134,6 +185,7 @@ export default function Dashboard() {
                 bg: "bg-emerald-500/10",
             });
         }
+
         if (items.length === 0) {
             items.push({
                 title: "Optimize Throughput",
@@ -151,53 +203,20 @@ export default function Dashboard() {
                 bg: "bg-amber-500/10",
             });
         }
+
         return items.slice(0, 3);
     }, [stats.active, stats.failed, stats.total]);
 
-    const StatCard = ({ label, value, icon: Icon, colorClass }: any) => (
-        <div className="p-5 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden group hover:bg-helios-surface-soft transition-colors">
-            <div className={`absolute -top-2 -right-2 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${colorClass}`}>
-                <Icon size={64} />
-            </div>
-            <div className="relative z-10 flex flex-col gap-1">
-                <span className="text-xs font-bold uppercase tracking-wider text-helios-slate">{label}</span>
-                <span className={`text-3xl font-bold font-mono tracking-tight ${colorClass.replace("text-", "text-")}`}>{value}</span>
-            </div>
-        </div>
-    );
-
     return (
         <div className="flex flex-col gap-6 flex-1 min-h-0 overflow-hidden">
-            {/* Stats Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard
-                    label="Active Jobs"
-                    value={stats.active}
-                    icon={Zap}
-                    colorClass="text-amber-500"
-                />
-                <StatCard
-                    label="Completed"
-                    value={stats.completed}
-                    icon={CheckCircle2}
-                    colorClass="text-emerald-500"
-                />
-                <StatCard
-                    label="Failed"
-                    value={stats.failed}
-                    icon={AlertCircle}
-                    colorClass="text-red-500"
-                />
-                <StatCard
-                    label="Total Processed"
-                    value={stats.total}
-                    icon={Database}
-                    colorClass="text-helios-solar"
-                />
+                <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-amber-500" />
+                <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-emerald-500" />
+                <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-red-500" />
+                <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-                {/* Recent Activity */}
                 <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">
                     <div className="flex items-center justify-between mb-6">
                         <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
@@ -208,7 +227,7 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex flex-col gap-3">
-                        {loading && jobs.length === 0 ? (
+                        {jobsLoading && jobs.length === 0 ? (
                             <div className="text-center py-8 text-helios-slate animate-pulse">Loading activity...</div>
                         ) : jobs.length === 0 ? (
                             <div className="text-center py-8 text-helios-slate/60 italic">No recent activity found.</div>
@@ -218,10 +237,13 @@ export default function Dashboard() {
                                 return (
                                     <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft hover:bg-white/5 transition-colors border border-transparent hover:border-helios-line/20">
                                         <div className="flex items-center gap-3 min-w-0">
-                                            <div className={`w-2 h-2 rounded-full shrink-0 ${status === 'completed' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' :
-                                                status === 'failed' ? 'bg-red-500' :
-                                                    status === 'encoding' || status === 'analyzing' ? 'bg-amber-500 animate-pulse' :
-                                                        'bg-helios-slate'
+                                            <div className={`w-2 h-2 rounded-full shrink-0 ${status === "completed"
+                                                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                                : status === "failed"
+                                                    ? "bg-red-500"
+                                                    : status === "encoding" || status === "analyzing"
+                                                        ? "bg-amber-500 animate-pulse"
+                                                        : "bg-helios-slate"
                                                 }`} />
                                             <div className="flex flex-col min-w-0">
                                                 <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
@@ -242,7 +264,6 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* Getting Started Tips */}
                 <div className="p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm h-full">
                     <h3 className="text-lg font-bold text-helios-ink mb-6 flex items-center gap-2">
                         <Zap size={20} className="text-helios-solar" />
@@ -256,9 +277,7 @@ export default function Dashboard() {
                                 </div>
                                 <div>
                                     <h4 className="text-sm font-bold text-helios-ink">{title}</h4>
-                                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                                        {body}
-                                    </p>
+                                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">{body}</p>
                                 </div>
                             </div>
                         ))}

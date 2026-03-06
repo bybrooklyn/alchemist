@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.9] - 2026-03-06
+- Runtime reliability pass: watcher/scanner hardening, resilient event consumers, config reload improvements, and live hardware refresh.
+- Admin UX refresh across dashboard, settings, setup, logs, jobs, charts, and system status with stronger error handling and feedback.
+- Frontend workflow standardized on Bun, Playwright reliability coverage added under `web-e2e`, and deploy/docs/container updates shipped together.
+
 ## [v0.2.8] - 2026-01-12
 - Setup wizard auth fixes, scheduler time validation, and watcher reliability improvements.
 - DB stability pass (WAL, FK enforcement, indexes, session cleanup, legacy watch_dirs compatibility).

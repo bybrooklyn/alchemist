@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowRight,
@@ -10,6 +10,8 @@ import {
     Video,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { apiAction, apiJson, isApiError } from '../lib/api';
+import { showToast } from '../lib/toast';
 
 interface ConfigState {
     // Auth
@@ -46,9 +48,9 @@ export default function SetupWizard() {
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [_success, _setSuccess] = useState(false);
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+    const [scanError, setScanError] = useState<string | null>(null);
     const scanIntervalRef = useRef<number | null>(null);
 
     const [config, setConfig] = useState<ConfigState>({
@@ -69,14 +71,17 @@ export default function SetupWizard() {
     useEffect(() => {
         const loadSetupDefaults = async () => {
             try {
-                const res = await fetch('/api/setup/status', { credentials: 'same-origin' });
-                if (!res.ok) return;
-                const data = await res.json();
-                if (typeof data.enable_telemetry === 'boolean') {
-                    setConfig(prev => ({ ...prev, enable_telemetry: data.enable_telemetry }));
+                const data = await apiJson<{ enable_telemetry?: boolean }>('/api/setup/status');
+                const telemetryEnabled = data.enable_telemetry;
+                if (typeof telemetryEnabled === 'boolean') {
+                    setConfig(prev => ({ ...prev, enable_telemetry: telemetryEnabled }));
                 }
             } catch (e) {
-                console.error("Failed to load setup defaults", e);
+                showToast({
+                    kind: "info",
+                    title: "Setup",
+                    message: "Unable to load setup defaults; using built-in defaults.",
+                });
             }
         };
 
@@ -92,6 +97,13 @@ export default function SetupWizard() {
         };
     }, []);
 
+    const clearScanPolling = () => {
+        if (scanIntervalRef.current !== null) {
+            window.clearInterval(scanIntervalRef.current);
+            scanIntervalRef.current = null;
+        }
+    };
+
     const handleNext = async () => {
         if (step === 1 && (!config.username || !config.password)) {
             setError("Please fill in both username and password.");
@@ -103,16 +115,11 @@ export default function SetupWizard() {
             if (!hardware) {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/system/hardware', {
-                        credentials: 'same-origin'
-                    });
-                    if (!res.ok) {
-                        throw new Error(`Hardware detection failed (${res.status})`);
-                    }
-                    const data = await res.json();
+                    const data = await apiJson<HardwareInfo>('/api/system/hardware');
                     setHardware(data);
                 } catch (e) {
-                    console.error("Hardware detection failed", e);
+                    const message = isApiError(e) ? e.message : "Hardware detection failed";
+                    setError(message);
                 } finally {
                     setLoading(false);
                 }
@@ -131,56 +138,45 @@ export default function SetupWizard() {
 
     const handleBack = () => setStep(s => Math.max(s - 1, 1));
 
-    const startScan = async () => {
-        setLoading(true);
-        try {
-            const res = await fetch('/api/scan/start', {
-                method: 'POST',
-                credentials: 'same-origin'
-            });
-            if (!res.ok) {
-                throw new Error(await res.text());
-            }
-            await pollScanStatus();
-        } catch (e) {
-            console.error("Failed to start scan", e);
-            setError("Failed to start scan. Please check authentication.");
-        }
-    };
-
     const pollScanStatus = async () => {
-        if (scanIntervalRef.current !== null) {
-            window.clearInterval(scanIntervalRef.current);
-            scanIntervalRef.current = null;
-        }
+        clearScanPolling();
 
-        scanIntervalRef.current = window.setInterval(async () => {
+        const poll = async () => {
             try {
-                const res = await fetch('/api/scan/status', {
-                    credentials: 'same-origin'
-                });
-                if (!res.ok) {
-                    throw new Error(await res.text());
-                }
-                const data = await res.json();
+                const data = await apiJson<ScanStatus>('/api/scan/status');
                 setScanStatus(data);
+                setScanError(null);
                 if (!data.is_running) {
-                    if (scanIntervalRef.current !== null) {
-                        window.clearInterval(scanIntervalRef.current);
-                        scanIntervalRef.current = null;
-                    }
+                    clearScanPolling();
                     setLoading(false);
                 }
             } catch (e) {
-                console.error("Polling failed", e);
-                setError("Scan status unavailable. Please refresh and try again.");
-                if (scanIntervalRef.current !== null) {
-                    window.clearInterval(scanIntervalRef.current);
-                    scanIntervalRef.current = null;
-                }
+                const message = isApiError(e) ? e.message : "Scan status unavailable";
+                setScanError(message);
+                clearScanPolling();
                 setLoading(false);
             }
+        };
+
+        await poll();
+        scanIntervalRef.current = window.setInterval(() => {
+            void poll();
         }, 1000);
+    };
+
+    const startScan = async () => {
+        setLoading(true);
+        setScanError(null);
+        try {
+            await apiAction('/api/scan/start', {
+                method: 'POST',
+            });
+            await pollScanStatus();
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to start scan";
+            setScanError(message);
+            setLoading(false);
+        }
     };
 
     const addDirectory = () => {
@@ -204,27 +200,22 @@ export default function SetupWizard() {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch('/api/setup/complete', {
+            await apiAction('/api/setup/complete', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                credentials: 'same-origin',
                 body: JSON.stringify(config)
             });
 
-            if (!res.ok) {
-                const text = await res.text();
-                throw new Error(text);
-            }
-
-            await res.json();
-
             setStep(5); // Move to Scan Progress
+            setScanStatus(null);
+            setScanError(null);
             await startScan();
 
-        } catch (err: any) {
-            setError(err.message || "Failed to save configuration");
+        } catch (err) {
+            const message = isApiError(err) ? err.message : "Failed to save configuration";
+            setError(message);
         } finally {
             setLoading(false);
         }
@@ -472,6 +463,7 @@ export default function SetupWizard() {
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             className="space-y-8 py-10 text-center"
+                            aria-live="polite"
                         >
                             <div className="flex justify-center">
                                 <div className="relative">
@@ -485,6 +477,32 @@ export default function SetupWizard() {
                                 <h2 className="text-xl font-bold text-helios-ink mb-2">Primary Library Scan</h2>
                                 <p className="text-sm text-helios-slate">Building your transcoding queue. This might take a moment.</p>
                             </div>
+
+                            {scanError && (
+                                <div className="p-4 rounded-xl border border-status-error/30 bg-status-error/10 text-status-error text-sm space-y-3">
+                                    <p className="font-semibold">Scan failed or became unavailable.</p>
+                                    <p>{scanError}</p>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <button
+                                            onClick={() => void startScan()}
+                                            disabled={loading}
+                                            className="flex-1 py-2 rounded-lg bg-status-error/20 hover:bg-status-error/30 transition-colors"
+                                        >
+                                            Retry Scan
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                clearScanPolling();
+                                                setScanError(null);
+                                                setStep(4);
+                                            }}
+                                            className="flex-1 py-2 rounded-lg border border-status-error/40 hover:bg-status-error/10 transition-colors"
+                                        >
+                                            Back to Review
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             {scanStatus && (
                                 <div className="space-y-3">
@@ -540,7 +558,7 @@ export default function SetupWizard() {
                             disabled={loading}
                             className="flex items-center gap-2 px-6 py-2 rounded-lg bg-helios-solar text-helios-main font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
                         >
-                            {loading ? "Searching..." : step === 4 ? "Build Engine" : "Next"}
+                            {loading ? "Working..." : step === 4 ? "Build Engine" : "Next"}
                             {!loading && <ArrowRight size={18} />}
                         </button>
                     </div>

@@ -2,15 +2,20 @@ import { useState } from "react";
 import { Info, LogOut } from "lucide-react";
 import { motion } from "framer-motion";
 import AboutDialog from "./AboutDialog";
+import { apiAction } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 export default function HeaderActions() {
     const [showAbout, setShowAbout] = useState(false);
 
     const handleLogout = async () => {
         try {
-            await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+            await apiAction("/api/auth/logout", { method: "POST" });
         } catch {
-            // Ignore logout failures and continue redirecting to login.
+            showToast({
+                kind: "error",
+                message: "Logout request failed. Redirecting to login.",
+            });
         } finally {
             window.location.href = '/login';
         }

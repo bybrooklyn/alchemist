@@ -46,8 +46,13 @@ docker build -t alchemist .
 # Run the container
 docker run -d \
   -p 3000:3000 \
+  -v /path/to/config.toml:/app/config/config.toml:ro \
   -v /path/to/media:/media \
   -v /path/to/output:/output \
+  -v /path/to/data:/app/data \
+  -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
+  -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
+  -e ALCHEMIST_CONFIG_MUTABLE=false \
   --name alchemist \
   alchemist
 ```
@@ -76,6 +81,12 @@ directories = [                  # Auto-scan directories
     "/media/tvshows"
 ]
 ```
+
+Runtime environment variables:
+
+- `ALCHEMIST_CONFIG_PATH` config file path (default: `./config.toml`)
+- `ALCHEMIST_DB_PATH` SQLite database path (default: `./alchemist.db`)
+- `ALCHEMIST_CONFIG_MUTABLE` allow runtime config writes (`true`/`false`, default: `true`)
 
 ## Supported Platforms
 

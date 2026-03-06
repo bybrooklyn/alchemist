@@ -3,7 +3,7 @@ use crate::db::{AlchemistEvent, Db};
 use crate::error::Result;
 use crate::media::pipeline::Pipeline;
 use crate::media::scanner::Scanner;
-use crate::system::hardware::HardwareInfo;
+use crate::system::hardware::HardwareState;
 use crate::Transcoder;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,7 +15,7 @@ pub struct Agent {
     db: Arc<Db>,
     orchestrator: Arc<Transcoder>,
     config: Arc<RwLock<Config>>,
-    hw_info: Arc<Option<HardwareInfo>>,
+    hardware_state: HardwareState,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
     semaphore: Arc<Semaphore>,
     semaphore_limit: Arc<AtomicUsize>,
@@ -30,7 +30,7 @@ impl Agent {
         db: Arc<Db>,
         orchestrator: Arc<Transcoder>,
         config: Arc<RwLock<Config>>,
-        hw_info: Option<HardwareInfo>,
+        hardware_state: HardwareState,
         tx: broadcast::Sender<AlchemistEvent>,
         dry_run: bool,
     ) -> Self {
@@ -43,7 +43,7 @@ impl Agent {
             db,
             orchestrator,
             config,
-            hw_info: Arc::new(hw_info),
+            hardware_state,
             tx: Arc::new(tx),
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
             semaphore_limit: Arc::new(AtomicUsize::new(concurrent_jobs)),
@@ -56,8 +56,12 @@ impl Agent {
 
     pub async fn scan_and_enqueue(&self, directories: Vec<PathBuf>) -> Result<()> {
         info!("Starting manual scan of directories: {:?}", directories);
-        let scanner = Scanner::new();
-        let files = scanner.scan(directories);
+        let files = tokio::task::spawn_blocking(move || {
+            let scanner = Scanner::new();
+            scanner.scan(directories)
+        })
+        .await
+        .map_err(|e| crate::error::AlchemistError::Unknown(format!("scan task failed: {}", e)))?;
 
         let pipeline = self.pipeline();
 
@@ -220,7 +224,7 @@ impl Agent {
             self.db.clone(),
             self.orchestrator.clone(),
             self.config.clone(),
-            self.hw_info.clone(),
+            self.hardware_state.clone(),
             self.tx.clone(),
             self.dry_run,
         )

@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { apiFetch } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -44,13 +45,11 @@ export default function TranscodeSettings() {
 
     const fetchSettings = async () => {
         try {
-            const res = await apiFetch("/api/settings/transcode");
-            if (!res.ok) throw new Error("Failed to load settings");
-            const data = await res.json();
+            const data = await apiJson<TranscodeSettingsPayload>("/api/settings/transcode");
             setSettings(data);
+            setError("");
         } catch (err) {
-            setError("Unable to load current settings.");
-            console.error(err);
+            setError(isApiError(err) ? err.message : "Unable to load current settings.");
         } finally {
             setLoading(false);
         }
@@ -63,15 +62,17 @@ export default function TranscodeSettings() {
         setSuccess(false);
 
         try {
-            const res = await apiFetch("/api/settings/transcode", {
+            await apiAction("/api/settings/transcode", {
                 method: "POST",
                 body: JSON.stringify(settings),
             });
-            if (!res.ok) throw new Error("Failed to save settings");
             setSuccess(true);
+            showToast({ kind: "success", title: "Transcoding", message: "Transcode settings saved." });
             setTimeout(() => setSuccess(false), 3000);
         } catch (err) {
-            setError("Failed to save settings.");
+            const message = isApiError(err) ? err.message : "Failed to save settings.";
+            setError(message);
+            showToast({ kind: "error", title: "Transcoding", message });
         } finally {
             setSaving(false);
         }

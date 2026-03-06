@@ -1,6 +1,9 @@
 use crate::db::{AlchemistEvent, Db, NotificationTarget};
-use reqwest::Client;
+use reqwest::{redirect::Policy, Client, Url};
 use serde_json::json;
+use std::net::IpAddr;
+use std::time::Duration;
+use tokio::net::lookup_host;
 use tokio::sync::broadcast;
 use tracing::{error, warn};
 
@@ -14,7 +17,11 @@ impl NotificationManager {
     pub fn new(db: Db) -> Self {
         Self {
             db,
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_else(|_| Client::new()),
         }
     }
 
@@ -96,6 +103,8 @@ impl NotificationManager {
         event: &AlchemistEvent,
         status: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        ensure_public_endpoint(&target.endpoint_url).await?;
+
         match target.target_type.as_str() {
             "discord" => self.send_discord(target, event, status).await,
             "gotify" => self.send_gotify(target, event, status).await,
@@ -204,6 +213,63 @@ impl NotificationManager {
 
         req.send().await?.error_for_status()?;
         Ok(())
+    }
+}
+
+async fn ensure_public_endpoint(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let url = Url::parse(raw)?;
+    let host = match url.host_str() {
+        Some(value) => value,
+        None => return Err("notification endpoint host is missing".into()),
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err("notification endpoint host is not allowed".into());
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_private_ip(ip) {
+            return Err("notification endpoint host is not allowed".into());
+        }
+        return Ok(());
+    }
+
+    let port = match url.port_or_known_default() {
+        Some(value) => value,
+        None => return Err("notification endpoint port is missing".into()),
+    };
+    let host_port = format!("{}:{}", host, port);
+    let mut resolved = false;
+    let addrs = tokio::time::timeout(Duration::from_secs(3), lookup_host(host_port)).await??;
+    for addr in addrs {
+        resolved = true;
+        if is_private_ip(addr.ip()) {
+            return Err("notification endpoint host is not allowed".into());
+        }
+    }
+    if !resolved {
+        return Err("notification endpoint host could not be resolved".into());
+    }
+
+    Ok(())
+}
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+        }
     }
 }
 
