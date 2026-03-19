@@ -21,6 +21,14 @@ interface Job {
     created_at: string;
 }
 
+interface SettingsBundleResponse {
+    settings: {
+        scanner: { directories: string[] };
+        notifications: { targets: Array<unknown> };
+        schedule: { windows: Array<unknown> };
+    };
+}
+
 interface StatCardProps {
     label: string;
     value: number;
@@ -61,6 +69,8 @@ function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
 export default function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [jobsLoading, setJobsLoading] = useState(true);
+    const [bundle, setBundle] = useState<SettingsBundleResponse | null>(null);
+    const [engineStatus, setEngineStatus] = useState<"paused" | "running">("paused");
     const { stats: sharedStats, error: statsError } = useSharedStats();
     const stats = sharedStats ?? DEFAULT_STATS;
 
@@ -95,6 +105,12 @@ export default function Dashboard() {
         };
 
         void fetchJobs();
+        void apiJson<SettingsBundleResponse>("/api/settings/bundle")
+            .then(setBundle)
+            .catch(() => undefined);
+        void apiJson<{ status: "paused" | "running" }>("/api/engine/status")
+            .then((data) => setEngineStatus(data.status))
+            .catch(() => undefined);
 
         const pollVisible = () => {
             if (document.visibilityState === "visible") {
@@ -127,21 +143,20 @@ export default function Dashboard() {
 
     const quickStartItems = useMemo<QuickStartItem[]>(() => {
         const items: QuickStartItem[] = [];
+        const libraryRoots = bundle?.settings.scanner.directories.length ?? 0;
+        const notificationTargets = bundle?.settings.notifications.targets.length ?? 0;
+        const schedules = bundle?.settings.schedule.windows.length ?? 0;
 
-        if (stats.total === 0) {
+        if (libraryRoots === 0) {
             items.push({
-                title: "Connect Your Library",
+                title: "Finish Library Setup",
                 body: (
                     <>
-                        Map your media to{" "}
-                        <code className="bg-black/20 px-1.5 py-0.5 rounded font-mono text-[10px] text-helios-solar">
-                            /data
-                        </code>{" "}
-                        and set Watch Folders in{" "}
+                        No canonical server library roots are configured yet. Use{" "}
                         <a href="/settings" className="underline hover:text-helios-ink transition-colors">
                             Settings
                         </a>
-                        .
+                        {" "}or re-run setup to point Alchemist at the right server folders.
                     </>
                 ),
                 icon: HardDrive,
@@ -168,34 +183,12 @@ export default function Dashboard() {
             });
         }
 
-        if (stats.active === 0 && stats.total > 0) {
+        if (notificationTargets === 0 || schedules === 0) {
             items.push({
-                title: "Queue New Work",
+                title: "Complete Automation",
                 body: (
                     <>
-                        No active jobs right now. Add items in{" "}
-                        <a href="/jobs" className="underline hover:text-helios-ink transition-colors">
-                            Jobs
-                        </a>{" "}
-                        or drop files into your watched folders.
-                    </>
-                ),
-                icon: Activity,
-                tone: "text-emerald-500",
-                bg: "bg-emerald-500/10",
-            });
-        }
-
-        if (items.length === 0) {
-            items.push({
-                title: "Optimize Throughput",
-                body: (
-                    <>
-                        Tune Hardware Acceleration and Thread Allocation in{" "}
-                        <a href="/settings" className="underline hover:text-helios-ink transition-colors">
-                            Settings
-                        </a>{" "}
-                        to squeeze out more FPS.
+                        {notificationTargets === 0 ? "Notifications" : "Schedule windows"} still need attention if you want a true set-it-and-forget-it workflow.
                     </>
                 ),
                 icon: Zap,
@@ -204,17 +197,59 @@ export default function Dashboard() {
             });
         }
 
+        if (stats.active === 0 && stats.total > 0) {
+            items.push({
+                title: "Queue Is Idle",
+                body: (
+                    <>
+                        No jobs are active right now. Review the queue in{" "}
+                        <a href="/jobs" className="underline hover:text-helios-ink transition-colors">Jobs</a>{" "}
+                        or verify that your watched server folders are correct.
+                    </>
+                ),
+                icon: Activity,
+                tone: "text-emerald-500",
+                bg: "bg-emerald-500/10",
+            });
+        }
+
         return items.slice(0, 3);
-    }, [stats.active, stats.failed, stats.total]);
+    }, [bundle, stats.active, stats.failed, stats.total]);
 
     return (
         <div className="flex flex-col gap-6 flex-1 min-h-0 overflow-hidden">
+            {engineStatus === "paused" && (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-5 py-4">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Engine Paused</div>
+                    <div className="mt-2 text-sm text-helios-ink">
+                        The queue can still fill up, but Alchemist will not start encoding until you click <span className="font-bold">Start</span> in the header.
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-amber-500" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-emerald-500" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-red-500" />
                 <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
             </div>
+
+            {bundle && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Library Roots</div>
+                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.scanner.directories.length}</div>
+                    </div>
+                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Notification Targets</div>
+                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.notifications.targets.length}</div>
+                    </div>
+                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Schedule Windows</div>
+                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.schedule.windows.length}</div>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
                 <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">

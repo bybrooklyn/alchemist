@@ -1,15 +1,15 @@
 use crate::media::pipeline::Encoder;
 
-pub fn apply(cmd: &mut tokio::process::Command, encoder: Encoder) {
+pub fn append_args(args: &mut Vec<String>, encoder: Encoder) {
     match encoder {
         Encoder::Av1Amf => {
-            cmd.arg("-c:v").arg("av1_amf");
+            args.extend(["-c:v".to_string(), "av1_amf".to_string()]);
         }
         Encoder::HevcAmf => {
-            cmd.arg("-c:v").arg("hevc_amf");
+            args.extend(["-c:v".to_string(), "hevc_amf".to_string()]);
         }
         Encoder::H264Amf => {
-            cmd.arg("-c:v").arg("h264_amf");
+            args.extend(["-c:v".to_string(), "h264_amf".to_string()]);
         }
         _ => {}
     }

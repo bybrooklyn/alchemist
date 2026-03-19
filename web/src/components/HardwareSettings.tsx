@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle } from "lucide-react";
+import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle, Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -14,6 +14,7 @@ interface HardwareSettings {
     allow_cpu_encoding: boolean;
     cpu_preset: string;
     preferred_vendor: string | null;
+    device_path: string | null;
 }
 
 export default function HardwareSettings() {
@@ -22,6 +23,7 @@ export default function HardwareSettings() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [saving, setSaving] = useState(false);
+    const [draftDevicePath, setDraftDevicePath] = useState("");
 
     useEffect(() => {
         void Promise.all([fetchHardware(), fetchSettings()]).finally(() => setLoading(false));
@@ -41,6 +43,7 @@ export default function HardwareSettings() {
         try {
             const data = await apiJson<HardwareSettings>("/api/settings/hardware");
             setSettings(data);
+            setDraftDevicePath(data.device_path ?? "");
         } catch (err) {
             if (!error) {
                 setError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
@@ -48,25 +51,37 @@ export default function HardwareSettings() {
         }
     };
 
-    const updateCpuEncoding = async (enabled: boolean) => {
-        if (!settings) return;
+    const persistSettings = async (nextSettings: HardwareSettings, message: string) => {
         setSaving(true);
         try {
             await apiAction("/api/settings/hardware", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ...settings, allow_cpu_encoding: enabled }),
+                body: JSON.stringify(nextSettings),
             });
-            setSettings({ ...settings, allow_cpu_encoding: enabled });
             setError("");
-            showToast({ kind: "success", title: "Hardware", message: "Hardware settings saved." });
+            await Promise.all([fetchHardware(), fetchSettings()]);
+            showToast({ kind: "success", title: "Hardware", message });
         } catch (err) {
-            const message = isApiError(err) ? err.message : "Failed to update CPU encoding";
-            setError(message);
-            showToast({ kind: "error", title: "Hardware", message });
+            const errorMessage = isApiError(err) ? err.message : "Failed to update hardware settings";
+            setError(errorMessage);
+            showToast({ kind: "error", title: "Hardware", message: errorMessage });
         } finally {
             setSaving(false);
         }
+    };
+
+    const updateCpuEncoding = async (enabled: boolean) => {
+        if (!settings) return;
+        await persistSettings({ ...settings, allow_cpu_encoding: enabled }, "Hardware settings saved.");
+    };
+
+    const saveAllSettings = async () => {
+        if (!settings) return;
+        await persistSettings(
+            { ...settings, device_path: draftDevicePath.trim() || null },
+            "Hardware settings saved.",
+        );
     };
 
     if (loading) {
@@ -174,7 +189,7 @@ export default function HardwareSettings() {
             )}
 
             {settings && (
-                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm">
+                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm space-y-5">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
@@ -194,6 +209,83 @@ export default function HardwareSettings() {
                         >
                             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.allow_cpu_encoding ? "translate-x-6" : "translate-x-1"}`} />
                         </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-helios-line/10 pt-5">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Preferred Vendor</label>
+                            <select
+                                value={settings.preferred_vendor ?? ""}
+                                onChange={(e) => setSettings({
+                                    ...settings,
+                                    preferred_vendor: e.target.value || null,
+                                })}
+                                className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            >
+                                <option value="">Auto-detect</option>
+                                <option value="nvidia">NVIDIA</option>
+                                <option value="amd">AMD</option>
+                                <option value="intel">Intel</option>
+                                <option value="apple">Apple</option>
+                                <option value="cpu">CPU</option>
+                            </select>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">CPU Preset</label>
+                            <select
+                                value={settings.cpu_preset}
+                                onChange={(e) => setSettings({ ...settings, cpu_preset: e.target.value })}
+                                className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            >
+                                <option value="slow">Slow</option>
+                                <option value="medium">Medium</option>
+                                <option value="fast">Fast</option>
+                                <option value="faster">Faster</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow CPU Fallback</p>
+                            <p className="text-[10px] text-helios-slate mt-1">Permit software encoding when the preferred GPU path is unavailable.</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={settings.allow_cpu_fallback}
+                                onChange={(e) => setSettings({ ...settings, allow_cpu_fallback: e.target.checked })}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
+                        </label>
+                    </div>
+
+                    <div className="border-t border-helios-line/10 pt-5 space-y-3">
+                        <div>
+                            <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Explicit Device Path</h4>
+                            <p className="text-[10px] text-helios-slate font-bold mt-1">
+                                Pin Linux QSV or VAAPI detection to a specific render node. Leave blank to auto-detect.
+                            </p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <input
+                                type="text"
+                                value={draftDevicePath}
+                                onChange={(e) => setDraftDevicePath(e.target.value)}
+                                placeholder="/dev/dri/renderD128"
+                                className="flex-1 bg-helios-surface-soft border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink font-mono text-sm focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            />
+                            <button
+                                onClick={() => void saveAllSettings()}
+                                disabled={saving}
+                                className="flex items-center justify-center gap-2 bg-helios-solar text-helios-main font-bold px-5 py-3 rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50"
+                            >
+                                <Save size={16} />
+                                {saving ? "Saving..." : "Apply"}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

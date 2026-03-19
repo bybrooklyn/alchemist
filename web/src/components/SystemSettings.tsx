@@ -6,6 +6,7 @@ import { showToast } from "../lib/toast";
 interface SystemSettingsPayload {
     monitoring_poll_interval: number;
     enable_telemetry: boolean;
+    watch_enabled: boolean;
 }
 
 export default function SystemSettings() {
@@ -105,6 +106,24 @@ export default function SystemSettings() {
                 <p className="text-[10px] text-helios-slate ml-1 pt-1">
                     Determine how frequently the dashboard updates system stats. Lower values update faster but use slightly more CPU. Default is 2.0s.
                 </p>
+            </div>
+
+            <div className="pt-4 border-t border-helios-line/10">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-helios-slate">Watch Library Folders</h4>
+                        <p className="text-[10px] text-helios-slate mt-1">Automatically watch the library folders configured during setup. Custom watch folders remain active separately.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={settings.watch_enabled}
+                            onChange={(e) => setSettings({ ...settings, watch_enabled: e.target.checked })}
+                            className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
+                    </label>
+                </div>
             </div>
 
             <div className="pt-4 border-t border-helios-line/10">

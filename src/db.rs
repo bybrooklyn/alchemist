@@ -133,11 +133,16 @@ pub struct FileSettings {
     pub output_extension: String,
     pub output_suffix: String,
     pub replace_strategy: String,
+    pub output_root: Option<String>,
 }
 
 impl FileSettings {
     pub fn output_path_for(&self, input_path: &Path) -> PathBuf {
-        let mut output_path = input_path.to_path_buf();
+        self.output_path_for_source(input_path, None)
+    }
+
+    pub fn output_path_for_source(&self, input_path: &Path, source_root: Option<&Path>) -> PathBuf {
+        let mut output_path = self.output_base_path(input_path, source_root);
         let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
         let extension = self.output_extension.trim_start_matches('.');
         let suffix = self.output_suffix.as_str();
@@ -170,6 +175,31 @@ impl FileSettings {
             output_path.set_file_name(safe_name);
         }
 
+        output_path
+    }
+
+    fn output_base_path(&self, input_path: &Path, source_root: Option<&Path>) -> PathBuf {
+        let Some(output_root) = self
+            .output_root
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return input_path.to_path_buf();
+        };
+
+        let Some(root) = source_root else {
+            return input_path.to_path_buf();
+        };
+
+        let Ok(relative_path) = input_path.strip_prefix(root) else {
+            return input_path.to_path_buf();
+        };
+
+        let mut output_path = PathBuf::from(output_root);
+        if let Some(parent) = relative_path.parent() {
+            output_path.push(parent);
+        }
+        output_path.push(relative_path.file_name().unwrap_or_default());
         output_path
     }
 
@@ -465,11 +495,18 @@ impl Db {
     }
 
     pub async fn update_job_status(&self, id: i64, status: JobState) -> Result<()> {
-        sqlx::query("UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(status)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result =
+            sqlx::query("UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(status)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
 
         Ok(())
     }
@@ -532,29 +569,45 @@ impl Db {
 
     /// Update job progress (for resume support)
     pub async fn update_job_progress(&self, id: i64, progress: f64) -> Result<()> {
-        sqlx::query("UPDATE jobs SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(progress)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE jobs SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(progress)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
 
         Ok(())
     }
 
     /// Set job priority
     pub async fn set_job_priority(&self, id: i64, priority: i32) -> Result<()> {
-        sqlx::query("UPDATE jobs SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(priority)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE jobs SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(priority)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
 
         Ok(())
     }
 
     /// Save encode statistics
     pub async fn save_encode_stats(&self, stats: EncodeStatsInput) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO encode_stats 
              (job_id, input_size_bytes, output_size_bytes, compression_ratio, 
               encode_time_seconds, encode_speed, avg_bitrate_kbps, vmaf_score)
@@ -578,6 +631,12 @@ impl Db {
         .bind(stats.vmaf_score)
         .execute(&self.pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
 
         Ok(())
     }
@@ -749,11 +808,43 @@ impl Db {
         Ok(job)
     }
 
+    pub async fn get_jobs_by_ids(&self, ids: &[i64]) -> Result<Vec<Job>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT j.id, j.input_path, j.output_path, j.status, 
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority, 
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE j.id IN (",
+        );
+        let mut separated = qb.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+        qb.push(" ORDER BY j.updated_at DESC");
+
+        let jobs = qb.build_query_as::<Job>().fetch_all(&self.pool).await?;
+        Ok(jobs)
+    }
+
     pub async fn delete_job(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM jobs WHERE id = ?")
+        let result = sqlx::query("DELETE FROM jobs WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
             .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
         Ok(())
     }
 
@@ -868,6 +959,40 @@ impl Db {
         Ok(row)
     }
 
+    pub async fn replace_watch_dirs(
+        &self,
+        watch_dirs: &[crate::config::WatchDirConfig],
+    ) -> Result<()> {
+        let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
+        let has_recursive = self.has_column("watch_dirs", "recursive").await?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM watch_dirs")
+            .execute(&mut *tx)
+            .await?;
+        for watch_dir in watch_dirs {
+            if has_is_recursive {
+                sqlx::query("INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?)")
+                    .bind(&watch_dir.path)
+                    .bind(watch_dir.is_recursive)
+                    .execute(&mut *tx)
+                    .await?;
+            } else if has_recursive {
+                sqlx::query("INSERT INTO watch_dirs (path, recursive) VALUES (?, ?)")
+                    .bind(&watch_dir.path)
+                    .bind(watch_dir.is_recursive)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("INSERT INTO watch_dirs (path) VALUES (?)")
+                    .bind(&watch_dir.path)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn remove_watch_dir(&self, id: i64) -> Result<()> {
         let res = sqlx::query("DELETE FROM watch_dirs WHERE id = ?")
             .bind(id)
@@ -925,6 +1050,31 @@ impl Db {
         Ok(())
     }
 
+    pub async fn replace_notification_targets(
+        &self,
+        targets: &[crate::config::NotificationTargetConfig],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM notification_targets")
+            .execute(&mut *tx)
+            .await?;
+        for target in targets {
+            sqlx::query(
+                "INSERT INTO notification_targets (name, target_type, endpoint_url, auth_token, events, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&target.name)
+            .bind(&target.target_type)
+            .bind(&target.endpoint_url)
+            .bind(target.auth_token.as_deref())
+            .bind(serde_json::to_string(&target.events).unwrap_or_else(|_| "[]".to_string()))
+            .bind(target.enabled)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_schedule_windows(&self) -> Result<Vec<ScheduleWindow>> {
         let windows = sqlx::query_as::<_, ScheduleWindow>("SELECT * FROM schedule_windows")
             .fetch_all(&self.pool)
@@ -967,6 +1117,29 @@ impl Db {
         Ok(())
     }
 
+    pub async fn replace_schedule_windows(
+        &self,
+        windows: &[crate::config::ScheduleWindowConfig],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM schedule_windows")
+            .execute(&mut *tx)
+            .await?;
+        for window in windows {
+            sqlx::query(
+                "INSERT INTO schedule_windows (start_time, end_time, days_of_week, enabled) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&window.start_time)
+            .bind(&window.end_time)
+            .bind(serde_json::to_string(&window.days_of_week).unwrap_or_else(|_| "[]".to_string()))
+            .bind(window.enabled)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_file_settings(&self) -> Result<FileSettings> {
         // Migration ensures row 1 exists, but we handle missing just in case
         let row = sqlx::query_as::<_, FileSettings>("SELECT * FROM file_settings WHERE id = 1")
@@ -983,6 +1156,7 @@ impl Db {
                     output_extension: "mkv".to_string(),
                     output_suffix: "-alchemist".to_string(),
                     replace_strategy: "keep".to_string(),
+                    output_root: None,
                 })
             }
         }
@@ -994,10 +1168,11 @@ impl Db {
         output_extension: &str,
         output_suffix: &str,
         replace_strategy: &str,
+        output_root: Option<&str>,
     ) -> Result<FileSettings> {
         let row = sqlx::query_as::<_, FileSettings>(
             "UPDATE file_settings 
-            SET delete_source = ?, output_extension = ?, output_suffix = ?, replace_strategy = ?
+            SET delete_source = ?, output_extension = ?, output_suffix = ?, replace_strategy = ?, output_root = ?
             WHERE id = 1
             RETURNING *",
         )
@@ -1005,9 +1180,24 @@ impl Db {
         .bind(output_extension)
         .bind(output_suffix)
         .bind(replace_strategy)
+        .bind(output_root)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    pub async fn replace_file_settings_projection(
+        &self,
+        settings: &crate::config::FileSettingsConfig,
+    ) -> Result<FileSettings> {
+        self.update_file_settings(
+            settings.delete_source,
+            &settings.output_extension,
+            &settings.output_suffix,
+            &settings.replace_strategy,
+            settings.output_root.as_deref(),
+        )
+        .await
     }
 
     pub async fn get_aggregated_stats(&self) -> Result<AggregatedStats> {
@@ -1153,6 +1343,14 @@ impl Db {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(row.map(|r| r.0))
+    }
+
+    pub async fn delete_preference(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM ui_preferences WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn get_job_stats(&self) -> Result<JobStats> {
@@ -1358,6 +1556,7 @@ mod tests {
             output_extension: "mkv".to_string(),
             output_suffix: "-alchemist".to_string(),
             replace_strategy: "keep".to_string(),
+            output_root: None,
         };
         let input = Path::new("video.mp4");
         let output = settings.output_path_for(input);
@@ -1372,10 +1571,44 @@ mod tests {
             output_extension: "mkv".to_string(),
             output_suffix: "".to_string(),
             replace_strategy: "keep".to_string(),
+            output_root: None,
         };
         let input = Path::new("video.mkv");
         let output = settings.output_path_for(input);
         assert_ne!(output, input);
+    }
+
+    #[test]
+    fn test_output_path_mirrors_source_root_under_output_root() {
+        let settings = FileSettings {
+            id: 1,
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "-alchemist".to_string(),
+            replace_strategy: "keep".to_string(),
+            output_root: Some("/encoded".to_string()),
+        };
+        let input = Path::new("/library/movies/action/video.mp4");
+        let output = settings.output_path_for_source(input, Some(Path::new("/library")));
+        assert_eq!(
+            output,
+            PathBuf::from("/encoded/movies/action/video-alchemist.mkv")
+        );
+    }
+
+    #[test]
+    fn test_output_path_falls_back_when_source_root_does_not_match() {
+        let settings = FileSettings {
+            id: 1,
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "-alchemist".to_string(),
+            replace_strategy: "keep".to_string(),
+            output_root: Some("/encoded".to_string()),
+        };
+        let input = Path::new("/library/movies/video.mp4");
+        let output = settings.output_path_for_source(input, Some(Path::new("/other")));
+        assert_eq!(output, PathBuf::from("/library/movies/video-alchemist.mkv"));
     }
 
     #[test]
@@ -1386,6 +1619,7 @@ mod tests {
             output_extension: "mkv".to_string(),
             output_suffix: "-alchemist".to_string(),
             replace_strategy: "keep".to_string(),
+            output_root: None,
         };
         assert!(!settings.should_replace_existing_output());
         settings.replace_strategy = "replace".to_string();

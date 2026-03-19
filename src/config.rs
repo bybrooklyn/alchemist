@@ -4,15 +4,27 @@ use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
     pub transcode: TranscodeConfig,
     pub hardware: HardwareConfig,
     pub scanner: ScannerConfig,
     #[serde(default)]
     pub notifications: NotificationsConfig,
     #[serde(default)]
+    pub files: FileSettingsConfig,
+    #[serde(default)]
+    pub schedule: ScheduleConfig,
+    #[serde(default)]
     pub quality: QualityConfig,
     #[serde(default)]
     pub system: SystemConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AppearanceConfig {
+    #[serde(default)]
+    pub active_theme_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +215,15 @@ pub struct ScannerConfig {
     pub directories: Vec<String>,
     #[serde(default)]
     pub watch_enabled: bool,
+    #[serde(default)]
+    pub extra_watch_dirs: Vec<WatchDirConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct WatchDirConfig {
+    pub path: String,
+    #[serde(default = "default_true")]
+    pub is_recursive: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -265,10 +286,67 @@ pub(crate) fn default_tonemap_desat() -> f32 {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct NotificationsConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub targets: Vec<NotificationTargetConfig>,
+    #[serde(default)]
     pub webhook_url: Option<String>,
+    #[serde(default)]
     pub discord_webhook: Option<String>,
+    #[serde(default)]
     pub notify_on_complete: bool,
+    #[serde(default)]
     pub notify_on_failure: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct NotificationTargetConfig {
+    pub name: String,
+    pub target_type: String,
+    pub endpoint_url: String,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    #[serde(default)]
+    pub events: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileSettingsConfig {
+    pub delete_source: bool,
+    pub output_extension: String,
+    pub output_suffix: String,
+    pub replace_strategy: String,
+    #[serde(default)]
+    pub output_root: Option<String>,
+}
+
+impl Default for FileSettingsConfig {
+    fn default() -> Self {
+        Self {
+            delete_source: false,
+            output_extension: "mkv".to_string(),
+            output_suffix: "-alchemist".to_string(),
+            replace_strategy: "keep".to_string(),
+            output_root: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ScheduleConfig {
+    #[serde(default)]
+    pub windows: Vec<ScheduleWindowConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ScheduleWindowConfig {
+    pub start_time: String,
+    pub end_time: String,
+    #[serde(default)]
+    pub days_of_week: Vec<i32>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -316,6 +394,7 @@ impl Default for SystemConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            appearance: AppearanceConfig::default(),
             transcode: TranscodeConfig {
                 size_reduction_threshold: 0.3,
                 min_bpp_threshold: 0.1,
@@ -341,8 +420,11 @@ impl Default for Config {
             scanner: ScannerConfig {
                 directories: Vec::new(),
                 watch_enabled: false,
+                extra_watch_dirs: Vec::new(),
             },
             notifications: NotificationsConfig::default(),
+            files: FileSettingsConfig::default(),
+            schedule: ScheduleConfig::default(),
             quality: QualityConfig::default(),
             system: SystemConfig {
                 monitoring_poll_interval: default_poll_interval(),
@@ -358,7 +440,8 @@ impl Config {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        config.migrate_legacy_notifications();
         config.validate()?;
         Ok(config)
     }
@@ -412,6 +495,34 @@ impl Config {
             );
         }
 
+        if self
+            .files
+            .output_extension
+            .chars()
+            .any(|c| c == '/' || c == '\\')
+        {
+            anyhow::bail!("files.output_extension must not contain path separators");
+        }
+
+        if self
+            .files
+            .output_suffix
+            .chars()
+            .any(|c| c == '/' || c == '\\')
+        {
+            anyhow::bail!("files.output_suffix must not contain path separators");
+        }
+
+        for window in &self.schedule.windows {
+            validate_schedule_time(&window.start_time)?;
+            validate_schedule_time(&window.end_time)?;
+            if window.days_of_week.is_empty()
+                || window.days_of_week.iter().any(|day| !(0..=6).contains(day))
+            {
+                anyhow::bail!("schedule.windows days_of_week must contain values 0-6");
+            }
+        }
+
         // Validate VMAF threshold
         if self.quality.min_vmaf_score < 0.0 || self.quality.min_vmaf_score > 100.0 {
             anyhow::bail!(
@@ -425,8 +536,134 @@ impl Config {
 
     /// Save config to file
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self)?;
+        let mut config = self.clone();
+        config.canonicalize_for_save();
+        let content = toml::to_string_pretty(&config)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+
+    pub(crate) fn migrate_legacy_notifications(&mut self) {
+        if !self.notifications.targets.is_empty() {
+            return;
+        }
+
+        let mut targets = Vec::new();
+        let events = [
+            self.notifications
+                .notify_on_complete
+                .then_some("completed".to_string()),
+            self.notifications
+                .notify_on_failure
+                .then_some("failed".to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        if let Some(discord_webhook) = self.notifications.discord_webhook.clone() {
+            targets.push(NotificationTargetConfig {
+                name: "Discord".to_string(),
+                target_type: "discord".to_string(),
+                endpoint_url: discord_webhook,
+                auth_token: None,
+                events: events.clone(),
+                enabled: self.notifications.enabled,
+            });
+        }
+
+        if let Some(webhook_url) = self.notifications.webhook_url.clone() {
+            targets.push(NotificationTargetConfig {
+                name: "Webhook".to_string(),
+                target_type: "webhook".to_string(),
+                endpoint_url: webhook_url,
+                auth_token: None,
+                events,
+                enabled: self.notifications.enabled,
+            });
+        }
+
+        self.notifications.targets = targets;
+    }
+
+    pub(crate) fn canonicalize_for_save(&mut self) {
+        if !self.notifications.targets.is_empty() {
+            self.notifications.webhook_url = None;
+            self.notifications.discord_webhook = None;
+            self.notifications.notify_on_complete = false;
+            self.notifications.notify_on_failure = false;
+        }
+    }
+}
+
+fn validate_schedule_time(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("schedule time must be HH:MM");
+    }
+    let hour: u32 = parts[0].parse()?;
+    let minute: u32 = parts[1].parse()?;
+    if hour > 23 || minute > 59 {
+        anyhow::bail!("schedule time must be HH:MM");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_notification_fields_migrate_into_targets() {
+        let raw = r#"
+            [transcode]
+            size_reduction_threshold = 0.3
+            min_bpp_threshold = 0.1
+            min_file_size_mb = 50
+            concurrent_jobs = 1
+
+            [hardware]
+            preferred_vendor = "cpu"
+            allow_cpu_fallback = true
+
+            [scanner]
+            directories = []
+
+            [notifications]
+            enabled = true
+            discord_webhook = "https://discord.com/api/webhooks/test"
+            notify_on_complete = true
+            notify_on_failure = true
+        "#;
+
+        let mut config: Config = toml::from_str(raw).expect("config");
+        config.migrate_legacy_notifications();
+
+        assert_eq!(config.notifications.targets.len(), 1);
+        assert_eq!(config.notifications.targets[0].target_type, "discord");
+        assert_eq!(
+            config.notifications.targets[0].events,
+            vec!["completed".to_string(), "failed".to_string()]
+        );
+    }
+
+    #[test]
+    fn save_canonicalizes_legacy_notification_fields() {
+        let mut config = Config::default();
+        config.notifications.targets = vec![NotificationTargetConfig {
+            name: "Webhook".to_string(),
+            target_type: "webhook".to_string(),
+            endpoint_url: "https://example.com/webhook".to_string(),
+            auth_token: None,
+            events: vec!["completed".to_string()],
+            enabled: true,
+        }];
+        config.notifications.webhook_url = Some("https://legacy.example.com".to_string());
+        config.notifications.notify_on_complete = true;
+
+        config.canonicalize_for_save();
+        assert!(config.notifications.webhook_url.is_none());
+        assert!(!config.notifications.notify_on_complete);
     }
 }

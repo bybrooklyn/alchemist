@@ -1,10 +1,12 @@
-//! FFmpeg wrapper module for Alchemist
-//! Provides typed FFmpeg commands, encoder detection, and structured progress parsing.
+//! FFmpeg wrapper module for Alchemist.
+//! Provides typed command generation, capability detection, and progress parsing.
 
-use crate::config::{CpuPreset, HdrMode, QualityProfile, TonemapAlgorithm};
 use crate::error::{AlchemistError, Result};
-use crate::media::pipeline::{Encoder, RateControl};
-use crate::system::hardware::{HardwareInfo, Vendor};
+use crate::media::pipeline::{
+    AudioCodec, AudioStreamPlan, Encoder, FilterStep, RateControl, SubtitleStreamPlan,
+    TranscodePlan,
+};
+use crate::system::hardware::{CommandRunner, HardwareInfo, SystemCommandRunner};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -20,25 +22,24 @@ mod qsv;
 mod vaapi;
 mod videotoolbox;
 
-/// Available hardware accelerators detected from FFmpeg
 #[derive(Debug, Clone, Default)]
 pub struct HardwareAccelerators {
     pub available: HashSet<String>,
 }
 
 impl HardwareAccelerators {
-    /// Detect available hardware accelerators via `ffmpeg -hwaccels`
     pub fn detect() -> Result<Self> {
-        let output = Command::new("ffmpeg")
-            .args(["-hide_banner", "-hwaccels"])
-            .output()
-            .map_err(|e| {
-                AlchemistError::FFmpeg(format!("Failed to run ffmpeg -hwaccels: {}", e))
-            })?;
+        Self::detect_with_runner(&SystemCommandRunner)
+    }
+
+    pub fn detect_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Result<Self> {
+        let args = vec!["-hide_banner".to_string(), "-hwaccels".to_string()];
+        let output = runner.output("ffmpeg", &args).map_err(|e| {
+            AlchemistError::FFmpeg(format!("Failed to run ffmpeg -hwaccels: {}", e))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut available = HashSet::new();
-
         for line in stdout.lines().skip(1) {
             let accel = line.trim();
             if !accel.is_empty() {
@@ -49,29 +50,8 @@ impl HardwareAccelerators {
         info!("Detected hardware accelerators: {:?}", available);
         Ok(Self { available })
     }
-
-    pub fn has(&self, accel: &str) -> bool {
-        self.available.contains(accel)
-    }
-
-    pub fn has_qsv(&self) -> bool {
-        self.has("qsv")
-    }
-
-    pub fn has_cuda(&self) -> bool {
-        self.has("cuda")
-    }
-
-    pub fn has_vaapi(&self) -> bool {
-        self.has("vaapi")
-    }
-
-    pub fn has_videotoolbox(&self) -> bool {
-        self.has("videotoolbox")
-    }
 }
 
-/// Available encoders detected from FFmpeg
 #[derive(Debug, Clone, Default)]
 pub struct EncoderCapabilities {
     pub video_encoders: HashSet<String>,
@@ -79,14 +59,15 @@ pub struct EncoderCapabilities {
 }
 
 impl EncoderCapabilities {
-    /// Detect available encoders via `ffmpeg -encoders`
     pub fn detect() -> Result<Self> {
-        let output = Command::new("ffmpeg")
-            .args(["-hide_banner", "-encoders"])
-            .output()
-            .map_err(|e| {
-                AlchemistError::FFmpeg(format!("Failed to run ffmpeg -encoders: {}", e))
-            })?;
+        Self::detect_with_runner(&SystemCommandRunner)
+    }
+
+    pub fn detect_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Result<Self> {
+        let args = vec!["-hide_banner".to_string(), "-encoders".to_string()];
+        let output = runner.output("ffmpeg", &args).map_err(|e| {
+            AlchemistError::FFmpeg(format!("Failed to run ffmpeg -encoders: {}", e))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut video_encoders = HashSet::new();
@@ -131,28 +112,8 @@ impl EncoderCapabilities {
         self.video_encoders.contains(name)
     }
 
-    pub fn has_av1_qsv(&self) -> bool {
-        self.has_video_encoder("av1_qsv")
-    }
-
-    pub fn has_av1_nvenc(&self) -> bool {
-        self.has_video_encoder("av1_nvenc")
-    }
-
-    pub fn has_av1_vaapi(&self) -> bool {
-        self.has_video_encoder("av1_vaapi")
-    }
-
-    pub fn has_av1_videotoolbox(&self) -> bool {
-        self.has_video_encoder("av1_videotoolbox")
-    }
-
     pub fn has_libsvtav1(&self) -> bool {
         self.has_video_encoder("libsvtav1")
-    }
-
-    pub fn has_hevc_videotoolbox(&self) -> bool {
-        self.has_video_encoder("hevc_videotoolbox")
     }
 
     pub fn has_libx265(&self) -> bool {
@@ -164,50 +125,28 @@ impl EncoderCapabilities {
     }
 }
 
-// QualityProfile moved to config.rs
-
 pub struct FFmpegCommandBuilder<'a> {
     input: &'a Path,
     output: &'a Path,
+    metadata: &'a crate::media::pipeline::MediaMetadata,
+    plan: &'a TranscodePlan,
     hw_info: Option<&'a HardwareInfo>,
-    profile: QualityProfile,
-    cpu_preset: CpuPreset,
-    target_codec: crate::config::OutputCodec,
-    threads: usize,
-    allow_fallback: bool,
-    encoder: Option<Encoder>,
-    rate_control: Option<RateControl>,
-    hdr_mode: HdrMode,
-    tonemap_algorithm: TonemapAlgorithm,
-    tonemap_peak: f32,
-    tonemap_desat: f32,
-    metadata: Option<&'a crate::media::pipeline::MediaMetadata>,
 }
 
 impl<'a> FFmpegCommandBuilder<'a> {
-    pub fn new(input: &'a Path, output: &'a Path) -> Self {
+    pub fn new(
+        input: &'a Path,
+        output: &'a Path,
+        metadata: &'a crate::media::pipeline::MediaMetadata,
+        plan: &'a TranscodePlan,
+    ) -> Self {
         Self {
             input,
             output,
+            metadata,
+            plan,
             hw_info: None,
-            profile: QualityProfile::Balanced,
-            cpu_preset: CpuPreset::Medium,
-            target_codec: crate::config::OutputCodec::Av1,
-            threads: 0,
-            allow_fallback: true,
-            encoder: None,
-            rate_control: None,
-            hdr_mode: HdrMode::Preserve,
-            tonemap_algorithm: TonemapAlgorithm::Hable,
-            tonemap_peak: crate::config::default_tonemap_peak(),
-            tonemap_desat: crate::config::default_tonemap_desat(),
-            metadata: None,
         }
-    }
-
-    pub fn with_threads(mut self, threads: usize) -> Self {
-        self.threads = threads;
-        self
     }
 
     pub fn with_hardware(mut self, hw_info: Option<&'a HardwareInfo>) -> Self {
@@ -215,456 +154,276 @@ impl<'a> FFmpegCommandBuilder<'a> {
         self
     }
 
-    pub fn with_profile(mut self, profile: QualityProfile) -> Self {
-        self.profile = profile;
-        self
-    }
-
-    pub fn with_cpu_preset(mut self, preset: CpuPreset) -> Self {
-        self.cpu_preset = preset;
-        self
-    }
-
-    pub fn with_codec(mut self, codec: crate::config::OutputCodec) -> Self {
-        self.target_codec = codec;
-        self
-    }
-
-    pub fn with_allow_fallback(mut self, allow_fallback: bool) -> Self {
-        self.allow_fallback = allow_fallback;
-        self
-    }
-
-    pub fn with_encoder(mut self, encoder: Option<Encoder>) -> Self {
-        self.encoder = encoder;
-        self
-    }
-
-    pub fn with_rate_control(mut self, rate_control: Option<RateControl>) -> Self {
-        self.rate_control = rate_control;
-        self
-    }
-
-    pub fn with_hdr_settings(
-        mut self,
-        hdr_mode: HdrMode,
-        tonemap_algorithm: TonemapAlgorithm,
-        tonemap_peak: f32,
-        tonemap_desat: f32,
-        metadata: Option<&'a crate::media::pipeline::MediaMetadata>,
-    ) -> Self {
-        self.hdr_mode = hdr_mode;
-        self.tonemap_algorithm = tonemap_algorithm;
-        self.tonemap_peak = tonemap_peak;
-        self.tonemap_desat = tonemap_desat;
-        self.metadata = metadata;
-        self
-    }
-
-    pub fn build(self) -> tokio::process::Command {
+    pub fn build(self) -> Result<tokio::process::Command> {
+        let args = self.build_args()?;
         let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.arg("-hide_banner").arg("-y").arg("-i").arg(self.input);
-
-        if let Some(encoder) = self.encoder {
-            self.apply_encoder(&mut cmd, encoder);
-        } else {
-            let caps = encoder_caps();
-            if let Some(selection) = self.select_encoder(caps) {
-                if selection.requested_codec != selection.effective_codec {
-                    info!(
-                        "Requested codec: {} | Effective codec: {} ({:?}). Reason: {}",
-                        selection.requested_codec.as_str(),
-                        selection.effective_codec.as_str(),
-                        selection.encoder,
-                        selection.reason
-                    );
-                } else {
-                    info!(
-                        "Requested codec: {} | Effective codec: {} ({:?})",
-                        selection.requested_codec.as_str(),
-                        selection.effective_codec.as_str(),
-                        selection.encoder
-                    );
-                }
-                self.apply_encoder(&mut cmd, selection.encoder);
-            } else {
-                warn!(
-                    "No suitable encoder found for {} (fallbacks {}). Encoding may fail.",
-                    self.target_codec.as_str(),
-                    if self.allow_fallback {
-                        "allowed"
-                    } else {
-                        "disabled"
-                    }
-                );
-                self.apply_cpu_params(&mut cmd);
-            }
-        }
-
-        self.apply_hdr_settings(&mut cmd);
-
-        if self.threads > 0 {
-            cmd.arg("-threads").arg(self.threads.to_string());
-        }
-
-        cmd.arg("-c:a").arg("copy");
-        cmd.arg("-c:s").arg("copy");
-        cmd.arg(self.output);
-
-        cmd
+        cmd.args(&args);
+        Ok(cmd)
     }
 
-    fn apply_encoder(&self, cmd: &mut tokio::process::Command, encoder: Encoder) {
-        let rate_control = self.rate_control.clone();
+    pub fn build_args(&self) -> Result<Vec<String>> {
+        let encoder = self
+            .plan
+            .encoder
+            .ok_or_else(|| AlchemistError::Config("Transcode plan missing encoder".into()))?;
+        let rate_control = self.plan.rate_control.clone();
+        let mut args = vec![
+            "-hide_banner".to_string(),
+            "-y".to_string(),
+            "-nostats".to_string(),
+            "-progress".to_string(),
+            "pipe:2".to_string(),
+            "-i".to_string(),
+            self.input.display().to_string(),
+            "-map_metadata".to_string(),
+            "0".to_string(),
+            "-map".to_string(),
+            "0:v:0".to_string(),
+        ];
+
+        if !matches!(self.plan.audio, AudioStreamPlan::Drop) {
+            args.push("-map".to_string());
+            args.push("0:a?".to_string());
+        }
+        if matches!(self.plan.subtitles, SubtitleStreamPlan::CopyAllCompatible) {
+            args.push("-map".to_string());
+            args.push("0:s?".to_string());
+        }
+
         match encoder {
-            Encoder::Av1Qsv => {
-                qsv::apply(
-                    cmd,
+            Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => {
+                qsv::append_args(
+                    &mut args,
                     encoder,
                     self.hw_info,
-                    rate_control.clone(),
-                    parse_quality_u8(self.profile.qsv_quality(), 23),
+                    rate_control,
+                    default_quality(&self.plan.rate_control, 23),
                 );
             }
-            Encoder::HevcQsv => {
-                qsv::apply(
-                    cmd,
+            Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => {
+                nvenc::append_args(
+                    &mut args,
                     encoder,
-                    self.hw_info,
-                    rate_control.clone(),
-                    parse_quality_u8(self.profile.qsv_quality(), 23),
+                    rate_control,
+                    self.plan.encoder_preset.as_deref(),
                 );
             }
-            Encoder::H264Qsv => {
-                qsv::apply(
-                    cmd,
+            Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => {
+                vaapi::append_args(&mut args, encoder, self.hw_info);
+            }
+            Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => {
+                amf::append_args(&mut args, encoder);
+            }
+            Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
+                videotoolbox::append_args(
+                    &mut args,
                     encoder,
-                    self.hw_info,
-                    rate_control.clone(),
-                    parse_quality_u8(self.profile.qsv_quality(), 23),
+                    rate_control,
+                    default_quality(&self.plan.rate_control, 65),
                 );
             }
-            Encoder::Av1Nvenc => {
-                nvenc::apply(
-                    cmd,
+            Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
+                cpu::append_args(
+                    &mut args,
                     encoder,
-                    rate_control.clone(),
-                    self.profile.nvenc_preset(),
+                    rate_control,
+                    self.plan.encoder_preset.as_deref(),
                 );
-            }
-            Encoder::HevcNvenc => {
-                nvenc::apply(
-                    cmd,
-                    encoder,
-                    rate_control.clone(),
-                    self.profile.nvenc_preset(),
-                );
-            }
-            Encoder::H264Nvenc => {
-                nvenc::apply(
-                    cmd,
-                    encoder,
-                    rate_control.clone(),
-                    self.profile.nvenc_preset(),
-                );
-            }
-            Encoder::Av1Vaapi => {
-                vaapi::apply(cmd, encoder, self.hw_info);
-            }
-            Encoder::HevcVaapi => {
-                vaapi::apply(cmd, encoder, self.hw_info);
-            }
-            Encoder::H264Vaapi => {
-                vaapi::apply(cmd, encoder, self.hw_info);
-            }
-            Encoder::Av1Amf => {
-                amf::apply(cmd, encoder);
-            }
-            Encoder::HevcAmf => {
-                amf::apply(cmd, encoder);
-            }
-            Encoder::H264Amf => {
-                amf::apply(cmd, encoder);
-            }
-            Encoder::Av1Videotoolbox => {
-                videotoolbox::apply(
-                    cmd,
-                    encoder,
-                    rate_control.clone(),
-                    parse_quality_u8(self.profile.videotoolbox_quality(), 65),
-                );
-            }
-            Encoder::HevcVideotoolbox => {
-                videotoolbox::apply(
-                    cmd,
-                    encoder,
-                    rate_control.clone(),
-                    parse_quality_u8(self.profile.videotoolbox_quality(), 65),
-                );
-            }
-            Encoder::H264Videotoolbox => {
-                videotoolbox::apply(cmd, encoder, rate_control.clone(), 65);
-            }
-            Encoder::Av1Svt => {
-                cpu::apply(cmd, encoder, self.cpu_preset, rate_control.clone());
-            }
-            Encoder::Av1Aom => {
-                cpu::apply(cmd, encoder, self.cpu_preset, rate_control.clone());
-            }
-            Encoder::HevcX265 => {
-                cpu::apply(cmd, encoder, self.cpu_preset, rate_control.clone());
-            }
-            Encoder::H264X264 => {
-                cpu::apply(cmd, encoder, self.cpu_preset, rate_control);
-            }
-        }
-    }
-
-    fn select_encoder(&self, caps: &EncoderCapabilities) -> Option<EncoderSelection> {
-        let preferred = self.target_codec;
-
-        let mut candidates: Vec<EncoderCandidate> = Vec::new();
-        match preferred {
-            crate::config::OutputCodec::Av1 => {
-                self.push_av1_candidates(&mut candidates, caps);
-                if self.allow_fallback {
-                    self.push_hevc_candidates(&mut candidates, caps, "AV1 encoders unavailable");
-                    self.push_h264_candidates(&mut candidates, caps, "HEVC encoders unavailable");
-                }
-            }
-            crate::config::OutputCodec::Hevc => {
-                self.push_hevc_candidates(&mut candidates, caps, "Preferred HEVC");
-                if self.allow_fallback {
-                    self.push_h264_candidates(&mut candidates, caps, "HEVC encoders unavailable");
-                }
-            }
-            crate::config::OutputCodec::H264 => {
-                self.push_h264_candidates(&mut candidates, caps, "Preferred H.264");
-                if self.allow_fallback {
-                    self.push_hevc_candidates(&mut candidates, caps, "H.264 encoders unavailable");
-                }
             }
         }
 
-        let selection = candidates.into_iter().find(|c| c.available);
-        selection.map(|c| EncoderSelection {
-            encoder: c.encoder,
-            requested_codec: preferred,
-            effective_codec: c.effective_codec,
-            reason: c.reason,
-        })
-    }
-
-    fn push_av1_candidates(&self, out: &mut Vec<EncoderCandidate>, caps: &EncoderCapabilities) {
-        match self.hw_info.map(|h| h.vendor) {
-            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
-                Encoder::Av1Videotoolbox,
-                crate::config::OutputCodec::Av1,
-                caps.has_video_encoder("av1_videotoolbox"),
-                "Hardware AV1 (VideoToolbox)",
-            )),
-            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
-                Encoder::Av1Qsv,
-                crate::config::OutputCodec::Av1,
-                caps.has_video_encoder("av1_qsv"),
-                "Hardware AV1 (QSV)",
-            )),
-            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
-                Encoder::Av1Nvenc,
-                crate::config::OutputCodec::Av1,
-                caps.has_video_encoder("av1_nvenc"),
-                "Hardware AV1 (NVENC)",
-            )),
-            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
-                if cfg!(target_os = "windows") {
-                    Encoder::Av1Amf
-                } else {
-                    Encoder::Av1Vaapi
-                },
-                crate::config::OutputCodec::Av1,
-                caps.has_video_encoder(if cfg!(target_os = "windows") {
-                    "av1_amf"
-                } else {
-                    "av1_vaapi"
-                }),
-                "Hardware AV1 (AMF/VAAPI)",
-            )),
-            _ => {}
+        if let Some(filtergraph) = render_filtergraph(self.input, &self.plan.filters) {
+            args.push("-vf".to_string());
+            args.push(filtergraph);
         }
-        out.push(EncoderCandidate::new(
-            Encoder::Av1Svt,
-            crate::config::OutputCodec::Av1,
-            caps.has_libsvtav1(),
-            "CPU AV1 (SVT-AV1)",
-        ));
-        out.push(EncoderCandidate::new(
-            Encoder::Av1Aom,
-            crate::config::OutputCodec::Av1,
-            caps.has_video_encoder("libaom-av1"),
-            "CPU AV1 (libaom)",
-        ));
-    }
 
-    fn push_hevc_candidates(
-        &self,
-        out: &mut Vec<EncoderCandidate>,
-        caps: &EncoderCapabilities,
-        reason: &str,
-    ) {
-        match self.hw_info.map(|h| h.vendor) {
-            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
-                Encoder::HevcVideotoolbox,
-                crate::config::OutputCodec::Hevc,
-                caps.has_hevc_videotoolbox(),
-                reason,
-            )),
-            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
-                Encoder::HevcQsv,
-                crate::config::OutputCodec::Hevc,
-                caps.has_video_encoder("hevc_qsv"),
-                reason,
-            )),
-            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
-                Encoder::HevcNvenc,
-                crate::config::OutputCodec::Hevc,
-                caps.has_video_encoder("hevc_nvenc"),
-                reason,
-            )),
-            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
-                if cfg!(target_os = "windows") {
-                    Encoder::HevcAmf
-                } else {
-                    Encoder::HevcVaapi
-                },
-                crate::config::OutputCodec::Hevc,
-                caps.has_video_encoder(if cfg!(target_os = "windows") {
-                    "hevc_amf"
-                } else {
-                    "hevc_vaapi"
-                }),
-                reason,
-            )),
-            _ => {}
+        if self.plan.threads > 0 {
+            args.push("-threads".to_string());
+            args.push(self.plan.threads.to_string());
         }
-        out.push(EncoderCandidate::new(
-            Encoder::HevcX265,
-            crate::config::OutputCodec::Hevc,
-            caps.has_libx265(),
-            reason,
-        ));
-    }
 
-    fn push_h264_candidates(
-        &self,
-        out: &mut Vec<EncoderCandidate>,
-        caps: &EncoderCapabilities,
-        reason: &str,
-    ) {
-        match self.hw_info.map(|h| h.vendor) {
-            Some(Vendor::Apple) => out.push(EncoderCandidate::new(
-                Encoder::H264Videotoolbox,
-                crate::config::OutputCodec::H264,
-                caps.has_video_encoder("h264_videotoolbox"),
-                reason,
-            )),
-            Some(Vendor::Intel) => out.push(EncoderCandidate::new(
-                Encoder::H264Qsv,
-                crate::config::OutputCodec::H264,
-                caps.has_video_encoder("h264_qsv"),
-                reason,
-            )),
-            Some(Vendor::Nvidia) => out.push(EncoderCandidate::new(
-                Encoder::H264Nvenc,
-                crate::config::OutputCodec::H264,
-                caps.has_video_encoder("h264_nvenc"),
-                reason,
-            )),
-            Some(Vendor::Amd) => out.push(EncoderCandidate::new(
-                if cfg!(target_os = "windows") {
-                    Encoder::H264Amf
-                } else {
-                    Encoder::H264Vaapi
-                },
-                crate::config::OutputCodec::H264,
-                caps.has_video_encoder(if cfg!(target_os = "windows") {
-                    "h264_amf"
-                } else {
-                    "h264_vaapi"
-                }),
-                reason,
-            )),
-            _ => {}
+        apply_audio_plan(&mut args, &self.plan.audio);
+        apply_subtitle_plan(&mut args, &self.plan.subtitles);
+        apply_color_metadata(&mut args, self.metadata, &self.plan.filters);
+
+        if matches!(self.plan.container.as_str(), "mp4" | "m4v" | "mov") {
+            args.push("-movflags".to_string());
+            args.push("+faststart".to_string());
         }
-        out.push(EncoderCandidate::new(
-            Encoder::H264X264,
-            crate::config::OutputCodec::H264,
-            caps.has_libx264(),
-            reason,
-        ));
+
+        args.push("-f".to_string());
+        args.push(output_format_name(&self.plan.container).to_string());
+        args.push(self.output.display().to_string());
+        Ok(args)
     }
 
-    fn apply_hdr_settings(&self, cmd: &mut tokio::process::Command) {
-        let Some(metadata) = self.metadata else {
-            return;
+    pub fn build_subtitle_extract_args(&self) -> Result<Option<Vec<String>>> {
+        let SubtitleStreamPlan::Extract {
+            stream_indices,
+            sidecar_output,
+        } = &self.plan.subtitles
+        else {
+            return Ok(None);
         };
 
-        if metadata.dynamic_range.is_hdr() && self.hdr_mode == HdrMode::Tonemap {
-            let filter = format!(
-                "zscale=t=linear:npl={},tonemap=tonemap={}:desat={},zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
-                self.tonemap_peak,
-                self.tonemap_algorithm.as_str(),
-                self.tonemap_desat
-            );
-            cmd.arg("-vf").arg(filter);
-            cmd.arg("-color_primaries").arg("bt709");
-            cmd.arg("-color_trc").arg("bt709");
-            cmd.arg("-colorspace").arg("bt709");
-            cmd.arg("-color_range").arg("tv");
-            return;
+        let mut args = vec![
+            "-hide_banner".to_string(),
+            "-y".to_string(),
+            "-nostats".to_string(),
+            "-i".to_string(),
+            self.input.display().to_string(),
+            "-map_metadata".to_string(),
+            "0".to_string(),
+            "-vn".to_string(),
+            "-an".to_string(),
+            "-dn".to_string(),
+        ];
+
+        for stream_index in stream_indices {
+            args.push("-map".to_string());
+            args.push(format!("0:s:{stream_index}"));
         }
 
-        if let Some(ref primaries) = metadata.color_primaries {
-            cmd.arg("-color_primaries").arg(primaries);
-        }
-        if let Some(ref transfer) = metadata.color_transfer {
-            cmd.arg("-color_trc").arg(transfer);
-        }
-        if let Some(ref space) = metadata.color_space {
-            cmd.arg("-colorspace").arg(space);
-        }
-        if let Some(ref range) = metadata.color_range {
-            cmd.arg("-color_range").arg(range);
-        }
+        args.extend([
+            "-c:s".to_string(),
+            "copy".to_string(),
+            "-f".to_string(),
+            "matroska".to_string(),
+            sidecar_output.temp_path.display().to_string(),
+        ]);
+
+        Ok(Some(args))
     }
+}
 
-    fn apply_cpu_params(&self, cmd: &mut tokio::process::Command) {
-        let caps = encoder_caps();
-        let fallback = match self.target_codec {
-            crate::config::OutputCodec::Av1 => {
-                if caps.has_libsvtav1() {
-                    Some(Encoder::Av1Svt)
-                } else if caps.has_libx265() {
-                    warn!("libsvtav1 not available. Falling back to libx265.");
-                    Some(Encoder::HevcX265)
-                } else if caps.has_libx264() {
-                    warn!("libsvtav1 not available. Falling back to libx264.");
-                    Some(Encoder::H264X264)
-                } else {
-                    warn!("No AV1/HEVC/H.264 CPU encoder available. Encoding will likely fail.");
-                    Some(Encoder::Av1Svt)
-                }
+fn default_quality(rate_control: &Option<RateControl>, fallback: u8) -> u8 {
+    match rate_control {
+        Some(RateControl::Cq { value }) => *value,
+        Some(RateControl::QsvQuality { value }) => *value,
+        Some(RateControl::Crf { value }) => *value,
+        None => fallback,
+    }
+}
+
+fn apply_audio_plan(args: &mut Vec<String>, plan: &AudioStreamPlan) {
+    match plan {
+        AudioStreamPlan::Copy => {
+            args.extend(["-c:a".to_string(), "copy".to_string()]);
+        }
+        AudioStreamPlan::Transcode {
+            codec,
+            bitrate_kbps,
+        } => {
+            args.extend([
+                "-c:a".to_string(),
+                codec.ffmpeg_name().to_string(),
+                "-b:a".to_string(),
+                format!("{bitrate_kbps}k"),
+            ]);
+            if matches!(codec, AudioCodec::Aac) {
+                args.extend(["-profile:a".to_string(), "aac_low".to_string()]);
             }
-            crate::config::OutputCodec::Hevc => Some(Encoder::HevcX265),
-            crate::config::OutputCodec::H264 => Some(Encoder::H264X264),
-        };
-
-        if let Some(encoder) = fallback {
-            cpu::apply(cmd, encoder, self.cpu_preset, None);
+        }
+        AudioStreamPlan::Drop => {
+            args.push("-an".to_string());
         }
     }
 }
 
-/// Parsed FFmpeg progress from stderr
+fn apply_subtitle_plan(args: &mut Vec<String>, plan: &SubtitleStreamPlan) {
+    match plan {
+        SubtitleStreamPlan::CopyAllCompatible => {
+            args.extend(["-c:s".to_string(), "copy".to_string()]);
+        }
+        SubtitleStreamPlan::Drop
+        | SubtitleStreamPlan::Burn { .. }
+        | SubtitleStreamPlan::Extract { .. } => {
+            args.push("-sn".to_string());
+        }
+    }
+}
+
+fn apply_color_metadata(
+    args: &mut Vec<String>,
+    metadata: &crate::media::pipeline::MediaMetadata,
+    filters: &[FilterStep],
+) {
+    let tonemapped = filters
+        .iter()
+        .any(|step| matches!(step, FilterStep::Tonemap { .. }));
+
+    if tonemapped {
+        args.extend([
+            "-color_primaries".to_string(),
+            "bt709".to_string(),
+            "-color_trc".to_string(),
+            "bt709".to_string(),
+            "-colorspace".to_string(),
+            "bt709".to_string(),
+            "-color_range".to_string(),
+            "tv".to_string(),
+        ]);
+        return;
+    }
+
+    if let Some(ref primaries) = metadata.color_primaries {
+        args.extend(["-color_primaries".to_string(), primaries.clone()]);
+    }
+    if let Some(ref transfer) = metadata.color_transfer {
+        args.extend(["-color_trc".to_string(), transfer.clone()]);
+    }
+    if let Some(ref space) = metadata.color_space {
+        args.extend(["-colorspace".to_string(), space.clone()]);
+    }
+    if let Some(ref range) = metadata.color_range {
+        args.extend(["-color_range".to_string(), range.clone()]);
+    }
+}
+
+fn render_filtergraph(input: &Path, filters: &[FilterStep]) -> Option<String> {
+    if filters.is_empty() {
+        return None;
+    }
+
+    let graph = filters
+        .iter()
+        .map(|step| match step {
+            FilterStep::Tonemap {
+                algorithm,
+                peak,
+                desat,
+            } => format!(
+                "zscale=t=linear:npl={peak},tonemap=tonemap={}:desat={desat},zscale=p=bt709:t=bt709:m=bt709:r=tv,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+                algorithm.as_str()
+            ),
+            FilterStep::Format { pixel_format } => format!("format={pixel_format}"),
+            FilterStep::SubtitleBurn { stream_index } => format!(
+                "subtitles='{}':si={stream_index}",
+                escape_filter_path(input)
+            ),
+            FilterStep::HwUpload => "hwupload".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    Some(graph)
+}
+
+fn escape_filter_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
+}
+
+fn output_format_name(container: &str) -> &str {
+    match container {
+        "mkv" => "matroska",
+        "m4v" => "mp4",
+        other => other,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FFmpegProgress {
     pub frame: u64,
@@ -677,17 +436,12 @@ pub struct FFmpegProgress {
 }
 
 impl FFmpegProgress {
-    /// Parse a line of FFmpeg stderr for progress info
     pub fn parse_line(line: &str) -> Option<Self> {
-        // FFmpeg progress can come in multiple formats.
-        // We look for the standard "frame=... fps=... time=..." format.
         if !line.contains("time=") && !line.contains("out_time=") {
             return None;
         }
 
         let mut progress = Self::default();
-
-        // Clean up the line (remove extra spaces)
         let line = line.replace('=', "= ");
         let parts: Vec<&str> = line.split_whitespace().collect();
 
@@ -735,7 +489,6 @@ impl FFmpegProgress {
         }
     }
 
-    /// Parse time string (HH:MM:SS.ms) to seconds
     fn parse_time(s: &str) -> f64 {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 3 {
@@ -745,11 +498,9 @@ impl FFmpegProgress {
         let hours: f64 = parts[0].parse().unwrap_or(0.0);
         let minutes: f64 = parts[1].parse().unwrap_or(0.0);
         let seconds: f64 = parts[2].parse().unwrap_or(0.0);
-
         hours * 3600.0 + minutes * 60.0 + seconds
     }
 
-    /// Calculate percentage complete given total duration
     pub fn percentage(&self, total_duration: f64) -> f64 {
         if total_duration <= 0.0 {
             return 0.0;
@@ -758,43 +509,55 @@ impl FFmpegProgress {
     }
 }
 
-struct EncoderCandidate {
-    encoder: Encoder,
-    effective_codec: crate::config::OutputCodec,
-    available: bool,
-    reason: String,
+#[derive(Debug, Default)]
+pub struct FFmpegProgressState {
+    current: FFmpegProgress,
 }
 
-impl EncoderCandidate {
-    fn new(
-        encoder: Encoder,
-        effective_codec: crate::config::OutputCodec,
-        available: bool,
-        reason: &str,
-    ) -> Self {
-        Self {
-            encoder,
-            effective_codec,
-            available,
-            reason: reason.to_string(),
+impl FFmpegProgressState {
+    pub fn ingest_line(&mut self, line: &str) -> Option<FFmpegProgress> {
+        if !line.contains(' ') {
+            if let Some((key, value)) = line.split_once('=') {
+                match key {
+                    "frame" => self.current.frame = value.parse().unwrap_or(0),
+                    "fps" => self.current.fps = value.parse().unwrap_or(0.0),
+                    "bitrate" => self.current.bitrate = value.to_string(),
+                    "total_size" => self.current.total_size = value.parse().unwrap_or(0),
+                    "out_time" => {
+                        self.current.time = value.to_string();
+                        self.current.time_seconds = FFmpegProgress::parse_time(value);
+                    }
+                    "out_time_ms" => {
+                        let micros: f64 = value.parse().unwrap_or(0.0);
+                        if self.current.time_seconds == 0.0 && micros > 0.0 {
+                            self.current.time_seconds = micros / 1_000_000.0;
+                        }
+                    }
+                    "speed" => self.current.speed = value.to_string(),
+                    "progress" if matches!(value, "continue" | "end") => {
+                        if self.current.time_seconds > 0.0 || self.current.frame > 0 {
+                            return Some(self.current.clone());
+                        }
+                    }
+                    _ => {}
+                }
+
+                return None;
+            }
         }
-    }
-}
 
-struct EncoderSelection {
-    encoder: Encoder,
-    requested_codec: crate::config::OutputCodec,
-    effective_codec: crate::config::OutputCodec,
-    reason: String,
+        if let Some(progress) = FFmpegProgress::parse_line(line) {
+            self.current = progress.clone();
+            return Some(progress);
+        }
+
+        None
+    }
 }
 
 fn encoder_caps() -> &'static EncoderCapabilities {
     static CAPS: OnceLock<EncoderCapabilities> = OnceLock::new();
     CAPS.get_or_init(|| EncoderCapabilities::detect().unwrap_or_default())
-}
-
-fn parse_quality_u8(value: &str, default_value: u8) -> u8 {
-    value.parse().unwrap_or(default_value)
 }
 
 pub fn encoder_caps_clone() -> EncoderCapabilities {
@@ -810,7 +573,6 @@ pub fn warm_encoder_cache() {
     );
 }
 
-/// VMAF quality score result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityScore {
     pub vmaf: Option<f64>,
@@ -819,11 +581,9 @@ pub struct QualityScore {
 }
 
 impl QualityScore {
-    /// Run VMAF quality comparison between original and encoded file
     pub fn compute(original: &Path, encoded: &Path) -> Result<Self> {
         info!("Computing quality metrics for {:?}", encoded);
 
-        // Use FFmpeg's libvmaf filter
         let output = Command::new("ffmpeg")
             .arg("-hide_banner")
             .arg("-i")
@@ -846,7 +606,6 @@ impl QualityScore {
             )));
         }
 
-        // Parse VMAF score from output
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let vmaf = Self::extract_vmaf_score_json(&stdout)
@@ -860,13 +619,12 @@ impl QualityScore {
 
         Ok(Self {
             vmaf,
-            psnr: None, // Could add PSNR filter too
-            ssim: None, // Could add SSIM filter too
+            psnr: None,
+            ssim: None,
         })
     }
 
     fn extract_vmaf_score_text(output: &str) -> Option<f64> {
-        // Look for "VMAF score:" in the output
         for line in output.lines() {
             if line.contains("VMAF score:") {
                 let parts: Vec<&str> = line.split(':').collect();
@@ -899,20 +657,18 @@ impl QualityScore {
             .or_else(|| vmaf.get("harmonic_mean").and_then(|v| v.as_f64()))
     }
 
-    /// Check if quality is acceptable (VMAF >= threshold)
     pub fn is_acceptable(&self, min_vmaf: f64) -> bool {
         self.vmaf.map(|v| v >= min_vmaf).unwrap_or(true)
     }
 }
 
-/// Encode statistics for a completed job
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncodeStats {
     pub input_size_bytes: u64,
     pub output_size_bytes: u64,
     pub compression_ratio: f64,
     pub encode_time_seconds: f64,
-    pub encode_speed: f64, // x speed
+    pub encode_speed: f64,
     pub avg_bitrate_kbps: f64,
     pub quality_score: Option<QualityScore>,
 }
@@ -959,7 +715,6 @@ impl EncodeStats {
     }
 }
 
-/// Verify FFmpeg is available and return version info
 pub fn verify_ffmpeg() -> Result<String> {
     let output = Command::new("ffmpeg")
         .arg("-version")
@@ -980,15 +735,142 @@ pub fn verify_ffmpeg() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OutputCodec;
+    use crate::media::pipeline::{
+        DynamicRange, MediaMetadata, RateControl, SidecarOutputPlan, SubtitleStreamMetadata,
+        TranscodeDecision,
+    };
+    use crate::system::hardware::CommandRunner;
+    use std::process::Output;
+
+    fn metadata() -> MediaMetadata {
+        MediaMetadata {
+            path: "/tmp/input.mkv".into(),
+            duration_secs: 120.0,
+            codec_name: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            bit_depth: Some(10),
+            color_primaries: Some("bt2020".to_string()),
+            color_transfer: Some("smpte2084".to_string()),
+            color_space: Some("bt2020nc".to_string()),
+            color_range: Some("tv".to_string()),
+            size_bytes: 500 * 1024 * 1024,
+            video_bitrate_bps: Some(8_000_000),
+            container_bitrate_bps: Some(8_500_000),
+            fps: 24.0,
+            container: "matroska".to_string(),
+            audio_codec: Some("aac".to_string()),
+            audio_bitrate_bps: Some(192_000),
+            audio_channels: Some(2),
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            dynamic_range: DynamicRange::Hdr10,
+        }
+    }
+
+    fn plan_for(encoder: Encoder) -> TranscodePlan {
+        let mut filters = vec![FilterStep::Tonemap {
+            algorithm: crate::config::TonemapAlgorithm::Hable,
+            peak: 100.0,
+            desat: 0.2,
+        }];
+        if encoder.backend() == crate::media::pipeline::EncoderBackend::Vaapi {
+            filters.push(FilterStep::Format {
+                pixel_format: "nv12".to_string(),
+            });
+            filters.push(FilterStep::HwUpload);
+        }
+
+        TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            output_path: None,
+            container: "mkv".to_string(),
+            requested_codec: encoder.output_codec(),
+            output_codec: Some(encoder.output_codec()),
+            encoder: Some(encoder),
+            backend: Some(encoder.backend()),
+            rate_control: Some(match encoder {
+                Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => {
+                    RateControl::QsvQuality { value: 23 }
+                }
+                Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
+                    RateControl::Crf { value: 21 }
+                }
+                _ => RateControl::Cq { value: 25 },
+            }),
+            encoder_preset: Some(match encoder {
+                Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => "p4".to_string(),
+                Encoder::Av1Svt => "8".to_string(),
+                Encoder::Av1Aom => "6".to_string(),
+                Encoder::HevcX265 | Encoder::H264X264 => "medium".to_string(),
+                _ => "".to_string(),
+            }),
+            threads: 0,
+            audio: AudioStreamPlan::Copy,
+            subtitles: SubtitleStreamPlan::CopyAllCompatible,
+            filters,
+            allow_fallback: true,
+            fallback: None,
+        }
+    }
+
+    fn hw_info(path: &str) -> HardwareInfo {
+        HardwareInfo {
+            vendor: crate::system::hardware::Vendor::Intel,
+            device_path: Some(path.to_string()),
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: vec![crate::system::hardware::BackendCapability {
+                kind: crate::system::hardware::HardwareBackend::Qsv,
+                codec: "av1".to_string(),
+                encoder: "av1_qsv".to_string(),
+                device_path: Some(path.to_string()),
+            }],
+        }
+    }
+
+    struct FakeRunner {
+        stdout: Vec<u8>,
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn output(&self, _program: &str, _args: &[String]) -> std::io::Result<Output> {
+            Ok(Output {
+                status: exit_status(true),
+                stdout: self.stdout.clone(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn status(
+            &self,
+            _program: &str,
+            _args: &[String],
+        ) -> std::io::Result<std::process::ExitStatus> {
+            Ok(exit_status(true))
+        }
+    }
+
+    fn exit_status(success: bool) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(if success { 0 } else { 1 } << 8)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(if success { 0 } else { 1 })
+        }
+    }
 
     #[test]
     fn test_progress_parsing() {
         let line =
             "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x";
-        let progress = match FFmpegProgress::parse_line(line) {
-            Some(progress) => progress,
-            None => panic!("Expected progress parse to succeed"),
-        };
+        let progress = FFmpegProgress::parse_line(line).expect("expected progress parse");
 
         assert_eq!(progress.frame, 100);
         assert_eq!(progress.fps, 25.0);
@@ -997,19 +879,210 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_profile_cpu_params() {
-        let (preset, crf) = QualityProfile::Quality.cpu_params();
-        assert_eq!(preset, "4");
-        assert_eq!(crf, "24");
+    fn structured_progress_parsing_emits_on_progress_marker() {
+        let mut state = FFmpegProgressState::default();
+        assert!(state.ingest_line("frame=42").is_none());
+        assert!(state.ingest_line("out_time=00:00:01.50").is_none());
+        let progress = state
+            .ingest_line("progress=continue")
+            .expect("expected structured progress");
+        assert_eq!(progress.frame, 42);
+        assert!((progress.time_seconds - 1.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn command_args_cover_cpu_backend() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::H264X264);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(args.contains(&"-progress".to_string()));
+    }
+
+    #[test]
+    fn command_args_cover_nvenc_backend() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::HevcNvenc);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"hevc_nvenc".to_string()));
+        assert!(args.contains(&"p4".to_string()));
+    }
+
+    #[test]
+    fn command_args_cover_qsv_backend() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::Av1Qsv);
+        let hw_info = hw_info("/dev/dri/renderD129");
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        )
+        .with_hardware(Some(&hw_info));
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"av1_qsv".to_string()));
+        assert!(args.contains(&"-init_hw_device".to_string()));
+    }
+
+    #[test]
+    fn command_args_cover_vaapi_backend() {
+        let metadata = metadata();
+        let mut info = hw_info("/dev/dri/renderD128");
+        info.vendor = crate::system::hardware::Vendor::Amd;
+        info.backends = vec![crate::system::hardware::BackendCapability {
+            kind: crate::system::hardware::HardwareBackend::Vaapi,
+            codec: "hevc".to_string(),
+            encoder: "hevc_vaapi".to_string(),
+            device_path: Some("/dev/dri/renderD128".to_string()),
+        }];
+        let plan = plan_for(Encoder::HevcVaapi);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        )
+        .with_hardware(Some(&info));
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"hevc_vaapi".to_string()));
+        assert!(args.iter().any(|arg| arg.contains("format=nv12,hwupload")));
+    }
+
+    #[test]
+    fn command_args_cover_videotoolbox_backend() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::HevcVideotoolbox);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"hevc_videotoolbox".to_string()));
+    }
+
+    #[test]
+    fn command_args_cover_amf_backend() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::HevcAmf);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"hevc_amf".to_string()));
+    }
+
+    #[test]
+    fn mp4_audio_transcode_uses_aac_profile() {
+        let mut plan = plan_for(Encoder::H264X264);
+        plan.container = "mp4".to_string();
+        plan.audio = AudioStreamPlan::Transcode {
+            codec: AudioCodec::Aac,
+            bitrate_kbps: 192,
+        };
+        plan.requested_codec = OutputCodec::H264;
+        let metadata = metadata();
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mp4"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"aac".to_string()));
+        assert!(args.contains(&"aac_low".to_string()));
+        assert!(args.contains(&"+faststart".to_string()));
+    }
+
+    #[test]
+    fn subtitle_extract_command_maps_all_selected_streams() {
+        let mut metadata = metadata();
+        metadata.subtitle_streams = vec![
+            SubtitleStreamMetadata {
+                stream_index: 0,
+                codec_name: "subrip".to_string(),
+                language: Some("eng".to_string()),
+                title: None,
+                default: true,
+                forced: false,
+                burnable: true,
+            },
+            SubtitleStreamMetadata {
+                stream_index: 1,
+                codec_name: "hdmv_pgs_subtitle".to_string(),
+                language: Some("jpn".to_string()),
+                title: None,
+                default: false,
+                forced: false,
+                burnable: false,
+            },
+        ];
+        let mut plan = plan_for(Encoder::H264X264);
+        plan.subtitles = SubtitleStreamPlan::Extract {
+            stream_indices: vec![0, 1],
+            sidecar_output: SidecarOutputPlan {
+                final_path: Path::new("/tmp/out.subs.mks").to_path_buf(),
+                temp_path: Path::new("/tmp/out.subs.mks.alchemist-part").to_path_buf(),
+            },
+        };
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_subtitle_extract_args()
+            .expect("args")
+            .expect("subtitle extract args");
+        assert!(args.contains(&"0:s:0".to_string()));
+        assert!(args.contains(&"0:s:1".to_string()));
+        assert!(args.contains(&"/tmp/out.subs.mks.alchemist-part".to_string()));
+    }
+
+    #[test]
+    fn encoder_capabilities_detect_with_runner_parses_video_and_audio_encoders() {
+        let runner = FakeRunner {
+            stdout: b"Encoders:\n V..... libx264 H.264\n A..... aac AAC\n V..... av1_qsv AV1\n"
+                .to_vec(),
+        };
+        let capabilities = EncoderCapabilities::detect_with_runner(&runner).expect("capabilities");
+        assert!(capabilities.has_video_encoder("libx264"));
+        assert!(capabilities.has_video_encoder("av1_qsv"));
+        assert!(capabilities.audio_encoders.contains("aac"));
+    }
+
+    #[test]
+    fn hardware_accelerators_detect_with_runner_parses_hwaccels() {
+        let runner = FakeRunner {
+            stdout: b"Hardware acceleration methods:\nvaapi\nqsv\n".to_vec(),
+        };
+        let accelerators = HardwareAccelerators::detect_with_runner(&runner).expect("hwaccels");
+        assert!(accelerators.available.contains("vaapi"));
+        assert!(accelerators.available.contains("qsv"));
     }
 
     #[test]
     fn test_vmaf_score_text_parse() {
         let stderr = "Some log\nVMAF score: 93.2\nMore log";
-        let vmaf = match QualityScore::extract_vmaf_score_text(stderr) {
-            Some(vmaf) => vmaf,
-            None => panic!("Expected VMAF score in text"),
-        };
+        let vmaf = QualityScore::extract_vmaf_score_text(stderr).expect("expected vmaf");
         assert!((vmaf - 93.2).abs() < 0.01);
     }
 
@@ -1023,10 +1096,7 @@ mod tests {
                 }
             }
         }"#;
-        let vmaf = match QualityScore::extract_vmaf_score_json(json) {
-            Some(vmaf) => vmaf,
-            None => panic!("Expected VMAF score in JSON"),
-        };
+        let vmaf = QualityScore::extract_vmaf_score_json(json).expect("expected vmaf");
         assert!((vmaf - 87.65).abs() < 0.01);
     }
 }

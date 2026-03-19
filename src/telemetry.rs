@@ -19,6 +19,8 @@ pub struct TelemetryEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hardware_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoder: Option<String>,

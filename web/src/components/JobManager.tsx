@@ -102,10 +102,30 @@ export default function JobManager() {
         onConfirm: () => Promise<void> | void;
     } | null>(null);
 
+    const isJobActive = (job: Job) => ["analyzing", "encoding", "resuming"].includes(job.status);
+
+    const formatJobActionError = (error: unknown, fallback: string) => {
+        if (!isApiError(error)) {
+            return fallback;
+        }
+
+        const blocked = Array.isArray((error.body as { blocked?: unknown } | undefined)?.blocked)
+            ? ((error.body as { blocked?: Array<{ id?: number; status?: string }> }).blocked ?? [])
+            : [];
+        if (blocked.length === 0) {
+            return error.message;
+        }
+
+        const summary = blocked
+            .map((job) => `#${job.id ?? "?"} (${job.status ?? "unknown"})`)
+            .join(", ");
+        return `${error.message}: ${summary}`;
+    };
+
     // Filter mapping
     const getStatusFilter = (tab: TabType) => {
         switch (tab) {
-            case "active": return "analyzing,encoding";
+            case "active": return "analyzing,encoding,resuming";
             case "queued": return "queued";
             case "completed": return "completed";
             case "failed": return "failed,cancelled";
@@ -272,6 +292,12 @@ export default function JobManager() {
         }
     };
 
+    const selectedJobs = jobs.filter((job) => selected.has(job.id));
+    const hasSelectedActiveJobs = selectedJobs.some(isJobActive);
+    const activeCount = jobs.filter((job) => isJobActive(job)).length;
+    const failedCount = jobs.filter((job) => ["failed", "cancelled"].includes(job.status)).length;
+    const completedCount = jobs.filter((job) => job.status === "completed").length;
+
     const handleBatch = async (action: "cancel" | "restart" | "delete") => {
         if (selected.size === 0) return;
         setActionError(null);
@@ -292,7 +318,7 @@ export default function JobManager() {
             });
             await fetchJobs();
         } catch (e) {
-            const message = isApiError(e) ? e.message : "Batch action failed";
+            const message = formatJobActionError(e, "Batch action failed");
             setActionError(message);
             showToast({ kind: "error", title: "Jobs", message });
         }
@@ -342,7 +368,32 @@ export default function JobManager() {
                 message: `Job ${action} request completed.`,
             });
         } catch (e) {
-            const message = isApiError(e) ? e.message : `Job ${action} failed`;
+            const message = formatJobActionError(e, `Job ${action} failed`);
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
+        }
+    };
+
+    const handlePriority = async (job: Job, priority: number, label: string) => {
+        setActionError(null);
+        try {
+            await apiAction(`/api/jobs/${job.id}/priority`, {
+                method: "POST",
+                body: JSON.stringify({ priority }),
+            });
+            if (focusedJob?.job.id === job.id) {
+                setFocusedJob({
+                    ...focusedJob,
+                    job: {
+                        ...focusedJob.job,
+                        priority,
+                    },
+                });
+            }
+            await fetchJobs();
+            showToast({ kind: "success", title: "Jobs", message: `${label} for job #${job.id}.` });
+        } catch (e) {
+            const message = formatJobActionError(e, "Failed to update priority");
             setActionError(message);
             showToast({ kind: "error", title: "Jobs", message });
         }
@@ -372,6 +423,7 @@ export default function JobManager() {
             failed: "bg-red-500/10 text-red-500 border-red-500/20",
             cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
             skipped: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+            resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
         };
         return (
             <span className={cn("px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border", styles[status] || styles.queued)}>
@@ -392,6 +444,21 @@ export default function JobManager() {
 
     return (
         <div className="space-y-6 relative">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Active</div>
+                    <div className="mt-2 text-2xl font-bold text-helios-ink">{activeCount}</div>
+                </div>
+                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Failed</div>
+                    <div className="mt-2 text-2xl font-bold text-red-500">{failedCount}</div>
+                </div>
+                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Completed</div>
+                    <div className="mt-2 text-2xl font-bold text-emerald-500">{completedCount}</div>
+                </div>
+            </div>
+
             {/* Toolbar */}
             <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-helios-surface/50 p-1 rounded-xl border border-helios-line/10">
                 <div className="flex gap-1 p-1 bg-helios-surface border border-helios-line/10 rounded-lg">
@@ -440,9 +507,16 @@ export default function JobManager() {
             {/* Batch Actions Bar */}
             {selected.size > 0 && (
                 <div className="flex items-center justify-between bg-helios-solar/10 border border-helios-solar/20 px-6 py-3 rounded-xl animate-in fade-in slide-in-from-top-2">
-                    <span className="text-sm font-bold text-helios-solar">
-                        {selected.size} jobs selected
-                    </span>
+                    <div>
+                        <span className="text-sm font-bold text-helios-solar">
+                            {selected.size} jobs selected
+                        </span>
+                        {hasSelectedActiveJobs && (
+                            <p className="text-xs text-helios-slate mt-1">
+                                Active jobs must be cancelled before they can be restarted or deleted.
+                            </p>
+                        )}
+                    </div>
                     <div className="flex gap-2">
                         <button
                             onClick={() =>
@@ -453,7 +527,8 @@ export default function JobManager() {
                                     onConfirm: () => handleBatch("restart"),
                                 })
                             }
-                            className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar"
+                            disabled={hasSelectedActiveJobs}
+                            className="p-2 hover:bg-helios-solar/20 rounded-lg text-helios-solar disabled:opacity-40 disabled:hover:bg-transparent"
                             title="Restart"
                         >
                             <RefreshCw size={18} />
@@ -483,7 +558,8 @@ export default function JobManager() {
                                     onConfirm: () => handleBatch("delete"),
                                 })
                             }
-                            className="p-2 hover:bg-red-500/10 rounded-lg text-red-500"
+                            disabled={hasSelectedActiveJobs}
+                            className="p-2 hover:bg-red-500/10 rounded-lg text-red-500 disabled:opacity-40 disabled:hover:bg-transparent"
                             title="Delete"
                         >
                             <Trash2 size={18} />
@@ -541,9 +617,14 @@ export default function JobManager() {
                                             <span className="font-medium text-helios-ink truncate max-w-[300px]" title={job.input_path}>
                                                 {job.input_path.split(/[/\\]/).pop()}
                                             </span>
-                                            <span className="text-[10px] text-helios-slate truncate max-w-[300px]">
-                                                {job.input_path}
-                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] text-helios-slate truncate max-w-[240px]">
+                                                    {job.input_path}
+                                                </span>
+                                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-[10px] font-bold text-helios-slate">
+                                                    P{job.priority}
+                                                </span>
+                                            </div>
                                         </motion.div>
                                     </td>
                                     <td className="px-6 py-4">
@@ -600,6 +681,33 @@ export default function JobManager() {
                                                         >
                                                             View details
                                                         </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setMenuJobId(null);
+                                                                void handlePriority(job, job.priority + 10, "Priority boosted");
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                        >
+                                                            Boost priority (+10)
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setMenuJobId(null);
+                                                                void handlePriority(job, job.priority - 10, "Priority lowered");
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                        >
+                                                            Lower priority (-10)
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setMenuJobId(null);
+                                                                void handlePriority(job, 0, "Priority reset");
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                                                        >
+                                                            Reset priority
+                                                        </button>
                                                         {(job.status === "failed" || job.status === "cancelled") && (
                                                             <button
                                                                 onClick={() => {
@@ -633,21 +741,23 @@ export default function JobManager() {
                                                                 Stop / Cancel
                                                             </button>
                                                         )}
-                                                        <button
-                                                            onClick={() => {
-                                                                setMenuJobId(null);
-                                                                openConfirm({
-                                                                    title: "Delete job",
-                                                                    body: "Delete this job from history?",
-                                                                    confirmLabel: "Delete",
-                                                                    confirmTone: "danger",
-                                                                    onConfirm: () => handleAction(job.id, "delete"),
-                                                                });
-                                                            }}
-                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-red-500 hover:bg-red-500/5"
-                                                        >
-                                                            Delete
-                                                        </button>
+                                                        {!isJobActive(job) && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setMenuJobId(null);
+                                                                    openConfirm({
+                                                                        title: "Delete job",
+                                                                        body: "Delete this job from history?",
+                                                                        confirmLabel: "Delete",
+                                                                        confirmTone: "danger",
+                                                                        onConfirm: () => handleAction(job.id, "delete"),
+                                                                    });
+                                                                }}
+                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-red-500 hover:bg-red-500/5"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        )}
                                                     </motion.div>
                                                 )}
                                             </AnimatePresence>
@@ -708,9 +818,10 @@ export default function JobManager() {
                                 {/* Header */}
                                 <div className="p-6 border-b border-helios-line/10 flex justify-between items-start gap-4 bg-helios-surface-soft/50">
                                     <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-3 mb-1">
+                                    <div className="flex items-center gap-3 mb-1">
                                             {getStatusBadge(focusedJob.job.status)}
                                             <span className="text-[10px] uppercase font-bold tracking-widest text-helios-slate">Job ID #{focusedJob.job.id}</span>
+                                            <span className="text-[10px] uppercase font-bold tracking-widest text-helios-slate">Priority {focusedJob.job.priority}</span>
                                         </div>
                                         <h2 id="job-details-title" className="text-lg font-bold text-helios-ink truncate" title={focusedJob.job.input_path}>
                                             {focusedJob.job.input_path.split(/[/\\]/).pop()}
@@ -848,6 +959,24 @@ export default function JobManager() {
                                     {/* Action Toolbar */}
                                     <div className="flex items-center justify-between pt-4 border-t border-helios-line/10">
                                         <div className="flex gap-2">
+                                            <button
+                                                onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority + 10, "Priority boosted")}
+                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                            >
+                                                Boost +10
+                                            </button>
+                                            <button
+                                                onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority - 10, "Priority lowered")}
+                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                            >
+                                                Lower -10
+                                            </button>
+                                            <button
+                                                onClick={() => void handlePriority(focusedJob.job, 0, "Priority reset")}
+                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                            >
+                                                Reset
+                                            </button>
                                             {(focusedJob.job.status === 'failed' || focusedJob.job.status === 'cancelled') && (
                                                 <button
                                                     onClick={() =>
@@ -880,20 +1009,22 @@ export default function JobManager() {
                                                 </button>
                                             )}
                                         </div>
-                                        <button
-                                            onClick={() =>
-                                                openConfirm({
-                                                    title: "Delete job",
-                                                    body: "Delete this job from history?",
-                                                    confirmLabel: "Delete",
-                                                    confirmTone: "danger",
-                                                    onConfirm: () => handleAction(focusedJob.job.id, 'delete'),
-                                                })
-                                            }
-                                            className="px-4 py-2 text-red-500 hover:bg-red-500/5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
-                                        >
-                                            <Trash2 size={14} /> Delete
-                                        </button>
+                                        {!isJobActive(focusedJob.job) && (
+                                            <button
+                                                onClick={() =>
+                                                    openConfirm({
+                                                        title: "Delete job",
+                                                        body: "Delete this job from history?",
+                                                        confirmLabel: "Delete",
+                                                        confirmTone: "danger",
+                                                        onConfirm: () => handleAction(focusedJob.job.id, 'delete'),
+                                                    })
+                                                }
+                                                className="px-4 py-2 text-red-500 hover:bg-red-500/5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
+                                            >
+                                                <Trash2 size={14} /> Delete
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             </motion.div>

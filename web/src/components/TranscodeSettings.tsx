@@ -30,6 +30,7 @@ interface TranscodeSettingsPayload {
     tonemap_algorithm: "hable" | "mobius" | "reinhard" | "clip";
     tonemap_peak: number;
     tonemap_desat: number;
+    subtitle_mode: "copy" | "burn" | "extract" | "none";
 }
 
 export default function TranscodeSettings() {
@@ -194,6 +195,25 @@ export default function TranscodeSettings() {
                         />
                         <div className="w-10 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
                     </div>
+                </div>
+
+                <div className="md:col-span-2 space-y-3 pt-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                        <Film size={14} /> Subtitle Handling
+                    </label>
+                    <select
+                        value={settings.subtitle_mode}
+                        onChange={(e) => setSettings({ ...settings, subtitle_mode: e.target.value as TranscodeSettingsPayload["subtitle_mode"] })}
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                    >
+                        <option value="copy">Copy subtitles</option>
+                        <option value="none">Drop subtitles</option>
+                        <option value="burn">Burn into video</option>
+                        <option value="extract">Extract sidecar subtitles</option>
+                    </select>
+                    <p className="text-[10px] text-helios-slate ml-1">
+                        `burn` and `extract` are exposed here for planning parity; current jobs will skip until those subtitle paths are implemented end to end.
+                    </p>
                 </div>
 
                 {/* HDR + Tonemapping */}

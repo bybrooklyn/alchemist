@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tracing::{debug, error, info};
@@ -37,10 +37,17 @@ impl Scanner {
 
     pub fn scan_with_recursion(&self, directories: Vec<(PathBuf, bool)>) -> Vec<DiscoveredMedia> {
         let files = Arc::new(Mutex::new(Vec::new()));
+        let source_roots: Arc<Vec<PathBuf>> = Arc::new(
+            directories
+                .iter()
+                .map(|(dir, _)| dir.clone())
+                .collect::<Vec<_>>(),
+        );
 
         directories.into_par_iter().for_each(|(dir, recursive)| {
             info!("Scanning directory: {:?} (recursive: {})", dir, recursive);
             let mut local_files = Vec::new();
+            let source_roots = source_roots.clone();
             let walker = if recursive {
                 WalkDir::new(dir)
             } else {
@@ -58,6 +65,10 @@ impl Scanner {
                             local_files.push(DiscoveredMedia {
                                 path: entry.path().to_path_buf(),
                                 mtime,
+                                source_root: resolve_source_root(
+                                    entry.path(),
+                                    source_roots.as_ref(),
+                                ),
                             });
                         }
                     }
@@ -81,5 +92,26 @@ impl Scanner {
 
         info!("Found {} candidate media files", final_files.len());
         final_files
+    }
+}
+
+fn resolve_source_root(path: &Path, source_roots: &[PathBuf]) -> Option<PathBuf> {
+    source_roots
+        .iter()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_source_root_prefers_longest_matching_root() {
+        let roots = vec![PathBuf::from("/media"), PathBuf::from("/media/movies")];
+        let resolved =
+            resolve_source_root(Path::new("/media/movies/action/example.mkv"), &roots).unwrap();
+        assert_eq!(resolved, PathBuf::from("/media/movies"));
     }
 }

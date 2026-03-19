@@ -2,29 +2,52 @@ use crate::db::Db;
 use crate::Agent;
 use chrono::{Datelike, Local, Timelike};
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tokio::time::Duration;
 use tracing::{error, info, warn};
 
 pub struct Scheduler {
     db: Arc<Db>,
     agent: Arc<Agent>,
+    notify: Arc<Notify>,
+}
+
+#[derive(Clone)]
+pub struct SchedulerHandle {
+    notify: Arc<Notify>,
 }
 
 impl Scheduler {
     pub fn new(db: Arc<Db>, agent: Arc<Agent>) -> Self {
-        Self { db, agent }
+        Self {
+            db,
+            agent,
+            notify: Arc::new(Notify::new()),
+        }
     }
 
-    pub fn start(self) {
+    pub fn handle(&self) -> SchedulerHandle {
+        SchedulerHandle {
+            notify: self.notify.clone(),
+        }
+    }
+
+    pub fn start(self) -> SchedulerHandle {
+        let handle = self.handle();
+        let notify = self.notify.clone();
         tokio::spawn(async move {
             info!("Scheduler started");
             loop {
                 if let Err(e) = self.check_schedule().await {
                     error!("Scheduler check failed: {}", e);
                 }
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                    _ = notify.notified() => {}
+                }
             }
         });
+        handle
     }
 
     async fn check_schedule(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -102,6 +125,12 @@ impl Scheduler {
         }
 
         Ok(())
+    }
+}
+
+impl SchedulerHandle {
+    pub fn trigger(&self) {
+        self.notify.notify_one();
     }
 }
 

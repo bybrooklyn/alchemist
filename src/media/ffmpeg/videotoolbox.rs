@@ -1,7 +1,7 @@
 use crate::media::pipeline::{Encoder, RateControl};
 
-pub fn apply(
-    cmd: &mut tokio::process::Command,
+pub fn append_args(
+    args: &mut Vec<String>,
     encoder: Encoder,
     rate_control: Option<RateControl>,
     default_quality: u8,
@@ -13,20 +13,36 @@ pub fn apply(
 
     match encoder {
         Encoder::Av1Videotoolbox => {
-            cmd.arg("-c:v").arg("av1_videotoolbox");
-            cmd.arg("-b:v").arg("0");
-            cmd.arg("-q:v").arg(cq.to_string());
+            args.extend([
+                "-c:v".to_string(),
+                "av1_videotoolbox".to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
+                "-q:v".to_string(),
+                cq.to_string(),
+            ]);
         }
         Encoder::HevcVideotoolbox => {
-            cmd.arg("-c:v").arg("hevc_videotoolbox");
-            cmd.arg("-b:v").arg("0");
-            cmd.arg("-q:v").arg(cq.to_string());
-            cmd.arg("-tag:v").arg("hvc1");
+            args.extend([
+                "-c:v".to_string(),
+                "hevc_videotoolbox".to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
+                "-q:v".to_string(),
+                cq.to_string(),
+                "-tag:v".to_string(),
+                "hvc1".to_string(),
+            ]);
         }
         Encoder::H264Videotoolbox => {
-            cmd.arg("-c:v").arg("h264_videotoolbox");
-            cmd.arg("-b:v").arg("0");
-            cmd.arg("-q:v").arg(cq.to_string());
+            args.extend([
+                "-c:v".to_string(),
+                "h264_videotoolbox".to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
+                "-q:v".to_string(),
+                cq.to_string(),
+            ]);
         }
         _ => {}
     }
