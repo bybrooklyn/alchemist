@@ -7,6 +7,7 @@ pub mod orchestrator;
 pub mod runtime;
 pub mod scheduler;
 pub mod server;
+pub mod settings;
 pub mod system;
 pub mod telemetry;
 pub mod wizard;

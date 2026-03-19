@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { apiAction, isApiError } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -291,6 +291,18 @@ export default function AppearanceSettings() {
     const [error, setError] = useState("");
 
     useEffect(() => {
+        void apiJson<{ settings: { appearance: { active_theme_id?: string | null } } }>("/api/settings/bundle")
+            .then((bundle) => {
+                const themeId = bundle.settings.appearance.active_theme_id;
+                if (themeId) {
+                    setActiveThemeId(themeId);
+                    applyRootTheme(themeId);
+                }
+            })
+            .catch(() => undefined);
+    }, []);
+
+    useEffect(() => {
         applyRootTheme(activeThemeId);
     }, [activeThemeId]);
 
@@ -306,14 +318,18 @@ export default function AppearanceSettings() {
             applyRootTheme(themeId);
 
             try {
-                await apiAction("/api/ui/preferences", {
-                    method: "POST",
-                    body: JSON.stringify({ active_theme_id: themeId }),
+                const bundle = await apiJson<{ settings: { appearance: { active_theme_id?: string | null } } & Record<string, unknown> }>("/api/settings/bundle");
+                await apiAction("/api/settings/bundle", {
+                    method: "PUT",
+                    body: JSON.stringify({
+                        ...bundle.settings,
+                        appearance: {
+                            ...(bundle.settings.appearance ?? {}),
+                            active_theme_id: themeId,
+                        },
+                    }),
                 });
             } catch (saveError) {
-                if (isApiError(saveError) && saveError.status === 404) {
-                    return;
-                }
                 setError("Unable to save theme preference to server.");
             } finally {
                 setSavingThemeId(null);

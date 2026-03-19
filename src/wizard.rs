@@ -56,6 +56,7 @@ impl ConfigWizard {
 
         // Build config
         let config = Config {
+            appearance: crate::config::AppearanceConfig::default(),
             transcode: crate::config::TranscodeConfig {
                 size_reduction_threshold: size_threshold,
                 min_bpp_threshold: min_bpp,
@@ -81,8 +82,11 @@ impl ConfigWizard {
             scanner: crate::config::ScannerConfig {
                 directories,
                 watch_enabled: false,
+                extra_watch_dirs: Vec::new(),
             },
             notifications: crate::config::NotificationsConfig::default(),
+            files: crate::config::FileSettingsConfig::default(),
+            schedule: crate::config::ScheduleConfig::default(),
             quality: crate::config::QualityConfig::default(),
             system: crate::config::SystemConfig::default(),
         };

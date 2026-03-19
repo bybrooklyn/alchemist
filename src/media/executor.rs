@@ -1,19 +1,19 @@
-use crate::config::Config;
-use crate::db::{AlchemistEvent, Job};
+use crate::db::{AlchemistEvent, Db, Job};
 use crate::error::Result;
 use crate::media::pipeline::{
-    Encoder, ExecutionPlan, ExecutionResult, ExecutionStats, Executor, MediaAnalysis,
+    ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
 };
-use crate::orchestrator::{TranscodeRequest, Transcoder};
+use crate::orchestrator::{ExecutionObserver, TranscodeRequest, Transcoder};
 use crate::system::hardware::HardwareInfo;
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, Mutex};
 
 pub struct FfmpegExecutor {
     transcoder: Arc<Transcoder>,
-    config: Arc<Config>,
+    db: Arc<Db>,
     hw_info: Option<HardwareInfo>,
     event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
     dry_run: bool,
@@ -22,18 +22,89 @@ pub struct FfmpegExecutor {
 impl FfmpegExecutor {
     pub fn new(
         transcoder: Arc<Transcoder>,
-        config: Arc<Config>,
+        db: Arc<Db>,
         hw_info: Option<HardwareInfo>,
         event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
         dry_run: bool,
     ) -> Self {
         Self {
             transcoder,
-            config,
+            db,
             hw_info,
             event_tx,
             dry_run,
         }
+    }
+}
+
+struct JobExecutionObserver {
+    job_id: i64,
+    db: Arc<Db>,
+    event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
+    last_progress: Mutex<Option<(f64, Instant)>>,
+}
+
+impl JobExecutionObserver {
+    fn new(job_id: i64, db: Arc<Db>, event_tx: Arc<broadcast::Sender<AlchemistEvent>>) -> Self {
+        Self {
+            job_id,
+            db,
+            event_tx,
+            last_progress: Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait]
+impl ExecutionObserver for JobExecutionObserver {
+    async fn on_log(&self, message: String) {
+        let _ = self.event_tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(self.job_id),
+            message: message.clone(),
+        });
+        if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
+            tracing::warn!(
+                "Failed to persist transcode log for job {}: {}",
+                self.job_id,
+                err
+            );
+        }
+    }
+
+    async fn on_progress(
+        &self,
+        progress: crate::media::ffmpeg::FFmpegProgress,
+        total_duration: f64,
+    ) {
+        let percentage = progress.percentage(total_duration).clamp(0.0, 100.0);
+        let now = Instant::now();
+        let mut last_progress = self.last_progress.lock().await;
+        let should_persist = match *last_progress {
+            Some((last_pct, last_time)) => {
+                percentage >= last_pct + 0.5
+                    || now.duration_since(last_time) >= Duration::from_secs(2)
+            }
+            None => true,
+        };
+
+        if should_persist {
+            if let Err(err) = self.db.update_job_progress(self.job_id, percentage).await {
+                tracing::warn!(
+                    "Failed to persist progress for job {}: {}",
+                    self.job_id,
+                    err
+                );
+            } else {
+                *last_progress = Some((percentage, now));
+            }
+        }
+
+        let _ = self.event_tx.send(AlchemistEvent::Progress {
+            job_id: self.job_id,
+            percentage,
+            time: progress.time,
+        });
     }
 }
 
@@ -42,7 +113,7 @@ impl Executor for FfmpegExecutor {
     async fn execute(
         &self,
         job: &Job,
-        plan: &ExecutionPlan,
+        plan: &TranscodePlan,
         analysis: &MediaAnalysis,
     ) -> Result<ExecutionResult> {
         let input_path = PathBuf::from(&job.input_path);
@@ -51,148 +122,113 @@ impl Executor for FfmpegExecutor {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| PathBuf::from(&job.output_path));
-
-        let encoder = match plan.encoder {
-            Some(encoder) => encoder,
-            None => {
-                return Err(crate::error::AlchemistError::Config(
-                    "Execution plan missing encoder".into(),
-                ))
-            }
-        };
-
-        if !self.encoder_available(encoder) {
-            return Err(crate::error::AlchemistError::EncoderUnavailable(format!(
-                "Requested encoder {:?} is not available",
-                encoder
-            )));
-        }
+        let encoder = plan.encoder.ok_or_else(|| {
+            crate::error::AlchemistError::Config("Transcode plan missing encoder".into())
+        })?;
+        let planned_output_codec = plan.output_codec.unwrap_or_else(|| encoder.output_codec());
+        let used_backend = plan.backend.unwrap_or_else(|| encoder.backend());
+        let observer: Arc<dyn ExecutionObserver> = Arc::new(JobExecutionObserver::new(
+            job.id,
+            self.db.clone(),
+            self.event_tx.clone(),
+        ));
 
         self.transcoder
             .transcode_media(TranscodeRequest {
+                job_id: Some(job.id),
                 input: &input_path,
                 output: &output_path,
                 hw_info: self.hw_info.as_ref(),
-                quality_profile: self.config.transcode.quality_profile,
-                cpu_preset: self.config.hardware.cpu_preset,
-                threads: self.config.transcode.threads,
-                allow_fallback: self.config.transcode.allow_fallback,
-                hdr_mode: self.config.transcode.hdr_mode,
-                tonemap_algorithm: self.config.transcode.tonemap_algorithm,
-                tonemap_peak: self.config.transcode.tonemap_peak,
-                tonemap_desat: self.config.transcode.tonemap_desat,
                 dry_run: self.dry_run,
                 metadata: &analysis.metadata,
-                encoder: plan.encoder,
-                rate_control: plan.rate_control.clone(),
-                event_target: Some((job.id, self.event_tx.clone())),
+                plan,
+                observer: Some(observer.clone()),
             })
             .await?;
 
-        let (fallback_occurred, used_encoder, actual_codec, actual_encoder_name) =
-            self.verify_encoder(&output_path, encoder).await;
+        if matches!(
+            plan.subtitles,
+            crate::media::pipeline::SubtitleStreamPlan::Extract { .. }
+        ) {
+            self.transcoder
+                .extract_subtitles(TranscodeRequest {
+                    job_id: Some(job.id),
+                    input: &input_path,
+                    output: &output_path,
+                    hw_info: self.hw_info.as_ref(),
+                    dry_run: self.dry_run,
+                    metadata: &analysis.metadata,
+                    plan,
+                    observer: Some(observer),
+                })
+                .await?;
+        }
+
+        let actual_probe = if !self.dry_run && output_path.exists() {
+            crate::media::analyzer::Analyzer::probe_output_details(&output_path)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let actual_output_codec = actual_probe
+            .as_ref()
+            .and_then(|probe| output_codec_from_name(&probe.codec_name));
+        let actual_encoder_name = actual_probe
+            .as_ref()
+            .and_then(|probe| {
+                probe
+                    .stream_encoder_tag
+                    .clone()
+                    .or_else(|| probe.format_encoder_tag.clone())
+            })
+            .or_else(|| Some(encoder.ffmpeg_encoder_name().to_string()));
+        let codec_mismatch = actual_output_codec
+            .is_some_and(|actual_output_codec| actual_output_codec != planned_output_codec);
+        let encoder_mismatch = actual_probe
+            .as_ref()
+            .and_then(|probe| probe.stream_encoder_tag.as_deref())
+            .is_some_and(|tag| !encoder_tag_matches(encoder, tag));
+
+        if codec_mismatch {
+            tracing::warn!(
+                "Job {}: Planned codec {} but output probed as {}",
+                job.id,
+                planned_output_codec.as_str(),
+                actual_output_codec
+                    .expect("codec mismatch implies actual output codec")
+                    .as_str()
+            );
+        }
+
+        if encoder_mismatch {
+            tracing::warn!(
+                "Job {}: Planned encoder {} but stream tag reported {:?}",
+                job.id,
+                encoder.ffmpeg_encoder_name(),
+                actual_probe
+                    .as_ref()
+                    .and_then(|probe| probe.stream_encoder_tag.as_deref())
+            );
+        }
 
         Ok(ExecutionResult {
+            requested_codec: plan.requested_codec,
+            planned_output_codec,
             requested_encoder: encoder,
-            used_encoder,
-            fallback_occurred,
-            actual_output_codec: actual_codec,
+            used_encoder: encoder,
+            used_backend,
+            fallback: plan.fallback.clone(),
+            fallback_occurred: plan.fallback.is_some() || codec_mismatch || encoder_mismatch,
+            actual_output_codec,
             actual_encoder_name,
             stats: ExecutionStats {
-                encode_time_secs: 0.0, // Pipeline calculates this
+                encode_time_secs: 0.0,
                 input_size: 0,
                 output_size: 0,
                 vmaf: None,
             },
         })
-    }
-}
-
-impl FfmpegExecutor {
-    fn encoder_available(&self, encoder: Encoder) -> bool {
-        let caps = crate::media::ffmpeg::encoder_caps_clone();
-        match encoder {
-            Encoder::Av1Qsv => caps.has_video_encoder("av1_qsv"),
-            Encoder::Av1Nvenc => caps.has_video_encoder("av1_nvenc"),
-            Encoder::Av1Vaapi => caps.has_video_encoder("av1_vaapi"),
-            Encoder::Av1Videotoolbox => caps.has_video_encoder("av1_videotoolbox"),
-            Encoder::Av1Amf => caps.has_video_encoder("av1_amf"),
-            Encoder::Av1Svt => caps.has_libsvtav1(),
-            Encoder::Av1Aom => caps.has_video_encoder("libaom-av1"),
-            Encoder::HevcQsv => caps.has_video_encoder("hevc_qsv"),
-            Encoder::HevcNvenc => caps.has_video_encoder("hevc_nvenc"),
-            Encoder::HevcVaapi => caps.has_video_encoder("hevc_vaapi"),
-            Encoder::HevcVideotoolbox => caps.has_video_encoder("hevc_videotoolbox"),
-            Encoder::HevcAmf => caps.has_video_encoder("hevc_amf"),
-            Encoder::HevcX265 => caps.has_libx265(),
-            Encoder::H264Qsv => caps.has_video_encoder("h264_qsv"),
-            Encoder::H264Nvenc => caps.has_video_encoder("h264_nvenc"),
-            Encoder::H264Vaapi => caps.has_video_encoder("h264_vaapi"),
-            Encoder::H264Videotoolbox => caps.has_video_encoder("h264_videotoolbox"),
-            Encoder::H264Amf => caps.has_video_encoder("h264_amf"),
-            Encoder::H264X264 => caps.has_libx264(),
-        }
-    }
-
-    async fn verify_encoder(
-        &self,
-        output_path: &Path,
-        requested: Encoder,
-    ) -> (
-        bool,
-        Encoder,
-        Option<crate::config::OutputCodec>,
-        Option<String>,
-    ) {
-        let expected_codec = encoder_codec_name(requested);
-        let probe = crate::media::analyzer::Analyzer::probe_output_details(output_path)
-            .await
-            .ok();
-        let actual_codec_name = probe
-            .as_ref()
-            .map(|p| p.codec_name.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let actual_codec = output_codec_from_name(&actual_codec_name);
-        let actual_encoder_name = probe.and_then(|p| p.encoder_tag);
-        let codec_matches =
-            actual_codec_name.is_empty() || actual_codec_name.eq_ignore_ascii_case(expected_codec);
-        let encoder_matches = actual_encoder_name
-            .as_deref()
-            .map(|name| encoder_tag_matches(requested, name))
-            .unwrap_or(true);
-        let fallback_occurred = !(codec_matches && encoder_matches);
-
-        (
-            fallback_occurred,
-            requested,
-            actual_codec,
-            actual_encoder_name,
-        )
-    }
-}
-
-fn encoder_codec_name(encoder: Encoder) -> &'static str {
-    match encoder {
-        Encoder::Av1Qsv
-        | Encoder::Av1Nvenc
-        | Encoder::Av1Vaapi
-        | Encoder::Av1Videotoolbox
-        | Encoder::Av1Amf
-        | Encoder::Av1Svt
-        | Encoder::Av1Aom => "av1",
-        Encoder::HevcQsv
-        | Encoder::HevcNvenc
-        | Encoder::HevcVaapi
-        | Encoder::HevcVideotoolbox
-        | Encoder::HevcAmf
-        | Encoder::HevcX265 => "hevc",
-        Encoder::H264Qsv
-        | Encoder::H264Nvenc
-        | Encoder::H264Vaapi
-        | Encoder::H264Videotoolbox
-        | Encoder::H264Amf
-        | Encoder::H264X264 => "h264",
     }
 }
 
@@ -208,20 +244,28 @@ fn output_codec_from_name(codec: &str) -> Option<crate::config::OutputCodec> {
     }
 }
 
-fn encoder_tag_matches(requested: Encoder, encoder_tag: &str) -> bool {
+fn encoder_tag_matches(requested: crate::media::pipeline::Encoder, encoder_tag: &str) -> bool {
     let tag = encoder_tag.to_ascii_lowercase();
     let expected_markers: &[&str] = match requested {
-        Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => &["qsv"],
-        Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => &["nvenc"],
-        Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => &["vaapi"],
-        Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
-            &["videotoolbox"]
-        }
-        Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => &["amf"],
-        Encoder::Av1Svt => &["svtav1", "svt-av1", "libsvtav1"],
-        Encoder::Av1Aom => &["libaom", "aom"],
-        Encoder::HevcX265 => &["x265", "libx265"],
-        Encoder::H264X264 => &["x264", "libx264"],
+        crate::media::pipeline::Encoder::Av1Qsv
+        | crate::media::pipeline::Encoder::HevcQsv
+        | crate::media::pipeline::Encoder::H264Qsv => &["qsv"],
+        crate::media::pipeline::Encoder::Av1Nvenc
+        | crate::media::pipeline::Encoder::HevcNvenc
+        | crate::media::pipeline::Encoder::H264Nvenc => &["nvenc"],
+        crate::media::pipeline::Encoder::Av1Vaapi
+        | crate::media::pipeline::Encoder::HevcVaapi
+        | crate::media::pipeline::Encoder::H264Vaapi => &["vaapi"],
+        crate::media::pipeline::Encoder::Av1Videotoolbox
+        | crate::media::pipeline::Encoder::HevcVideotoolbox
+        | crate::media::pipeline::Encoder::H264Videotoolbox => &["videotoolbox"],
+        crate::media::pipeline::Encoder::Av1Amf
+        | crate::media::pipeline::Encoder::HevcAmf
+        | crate::media::pipeline::Encoder::H264Amf => &["amf"],
+        crate::media::pipeline::Encoder::Av1Svt => &["svtav1", "svt-av1", "libsvtav1"],
+        crate::media::pipeline::Encoder::Av1Aom => &["libaom", "aom"],
+        crate::media::pipeline::Encoder::HevcX265 => &["x265", "libx265"],
+        crate::media::pipeline::Encoder::H264X264 => &["x264", "libx264"],
     };
 
     expected_markers.iter().any(|marker| tag.contains(marker))
@@ -230,6 +274,12 @@ fn encoder_tag_matches(requested: Encoder, encoder_tag: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
+    use crate::media::pipeline::Encoder;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+    use tokio::sync::broadcast;
 
     #[test]
     fn output_codec_mapping_handles_common_aliases() {
@@ -257,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn encoder_tag_matching_detects_mismatch() {
+    fn encoder_tag_matching_uses_stream_encoder_markers() {
         assert!(encoder_tag_matches(
             Encoder::Av1Nvenc,
             "Lavc61.3.100 av1_nvenc"
@@ -266,5 +316,55 @@ mod tests {
             Encoder::Av1Nvenc,
             "Lavc61.3.100 libsvtav1"
         ));
+    }
+
+    fn temp_db_path(prefix: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("{prefix}_{}.db", rand::random::<u64>()));
+        path
+    }
+
+    #[tokio::test]
+    async fn job_execution_observer_persists_logs_and_progress(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_observer");
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(
+                Path::new("input.mkv"),
+                Path::new("output.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let job = db.get_job_by_input_path("input.mkv").await?.expect("job");
+        let (tx, mut rx) = broadcast::channel(8);
+        let observer = JobExecutionObserver::new(job.id, db.clone(), Arc::new(tx));
+
+        observer.on_log("ffmpeg line".to_string()).await;
+        observer
+            .on_progress(
+                crate::media::ffmpeg::FFmpegProgress {
+                    time: "00:00:02.00".to_string(),
+                    time_seconds: 2.0,
+                    ..Default::default()
+                },
+                10.0,
+            )
+            .await;
+
+        let logs = db.get_logs(10, 0).await?;
+        assert_eq!(logs[0].message, "ffmpeg line");
+
+        let updated = db.get_job(job.id).await?.expect("updated");
+        assert!((updated.progress - 20.0).abs() < 0.01);
+
+        let first = rx.recv().await?;
+        assert!(matches!(first, AlchemistEvent::Log { .. }));
+        let second = rx.recv().await?;
+        assert!(matches!(second, AlchemistEvent::Progress { .. }));
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

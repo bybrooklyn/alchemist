@@ -1,31 +1,47 @@
 use crate::media::pipeline::{Encoder, RateControl};
 
-pub fn apply(
-    cmd: &mut tokio::process::Command,
+pub fn append_args(
+    args: &mut Vec<String>,
     encoder: Encoder,
     rate_control: Option<RateControl>,
-    preset: &str,
+    preset: Option<&str>,
 ) {
     let cq = match rate_control {
         Some(RateControl::Cq { value }) => value,
         _ => 25,
     };
+    let preset = preset.unwrap_or("p4").to_string();
 
     match encoder {
         Encoder::Av1Nvenc => {
-            cmd.arg("-c:v").arg("av1_nvenc");
-            cmd.arg("-preset").arg(preset);
-            cmd.arg("-cq").arg(cq.to_string());
+            args.extend([
+                "-c:v".to_string(),
+                "av1_nvenc".to_string(),
+                "-preset".to_string(),
+                preset.clone(),
+                "-cq".to_string(),
+                cq.to_string(),
+            ]);
         }
         Encoder::HevcNvenc => {
-            cmd.arg("-c:v").arg("hevc_nvenc");
-            cmd.arg("-preset").arg(preset);
-            cmd.arg("-cq").arg(cq.to_string());
+            args.extend([
+                "-c:v".to_string(),
+                "hevc_nvenc".to_string(),
+                "-preset".to_string(),
+                preset.clone(),
+                "-cq".to_string(),
+                cq.to_string(),
+            ]);
         }
         Encoder::H264Nvenc => {
-            cmd.arg("-c:v").arg("h264_nvenc");
-            cmd.arg("-preset").arg(preset);
-            cmd.arg("-cq").arg(cq.to_string());
+            args.extend([
+                "-c:v".to_string(),
+                "h264_nvenc".to_string(),
+                "-preset".to_string(),
+                preset,
+                "-cq".to_string(),
+                cq.to_string(),
+            ]);
         }
         _ => {}
     }

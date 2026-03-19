@@ -2,7 +2,7 @@ use crate::db::Job;
 use crate::error::Result;
 use crate::media::analyzer::FfmpegAnalyzer;
 use crate::media::executor::FfmpegExecutor;
-use crate::media::planner::{build_hardware_capabilities, BasicPlanner};
+use crate::media::planner::BasicPlanner;
 use crate::orchestrator::Transcoder;
 use crate::system::hardware::HardwareState;
 use crate::telemetry::{encoder_label, hardware_label, resolution_bucket, TelemetryEvent};
@@ -32,14 +32,29 @@ pub struct MediaMetadata {
     pub fps: f64,
     pub container: String,
     pub audio_codec: Option<String>,
+    pub audio_bitrate_bps: Option<u64>,
     pub audio_channels: Option<u32>,
+    pub audio_is_heavy: bool,
+    pub subtitle_streams: Vec<SubtitleStreamMetadata>,
     pub dynamic_range: DynamicRange,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtitleStreamMetadata {
+    pub stream_index: usize,
+    pub codec_name: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub default: bool,
+    pub forced: bool,
+    pub burnable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredMedia {
     pub path: PathBuf,
     pub mtime: SystemTime,
+    pub source_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +140,95 @@ pub enum Encoder {
     H264X264,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EncoderBackend {
+    Cpu,
+    Qsv,
+    Nvenc,
+    Vaapi,
+    Amf,
+    Videotoolbox,
+}
+
+impl EncoderBackend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Qsv => "qsv",
+            Self::Nvenc => "nvenc",
+            Self::Vaapi => "vaapi",
+            Self::Amf => "amf",
+            Self::Videotoolbox => "videotoolbox",
+        }
+    }
+}
+
+impl Encoder {
+    pub fn backend(self) -> EncoderBackend {
+        match self {
+            Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => EncoderBackend::Qsv,
+            Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => EncoderBackend::Nvenc,
+            Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => EncoderBackend::Vaapi,
+            Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
+                EncoderBackend::Videotoolbox
+            }
+            Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => EncoderBackend::Amf,
+            Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
+                EncoderBackend::Cpu
+            }
+        }
+    }
+
+    pub fn output_codec(self) -> crate::config::OutputCodec {
+        match self {
+            Encoder::Av1Qsv
+            | Encoder::Av1Nvenc
+            | Encoder::Av1Vaapi
+            | Encoder::Av1Videotoolbox
+            | Encoder::Av1Amf
+            | Encoder::Av1Svt
+            | Encoder::Av1Aom => crate::config::OutputCodec::Av1,
+            Encoder::HevcQsv
+            | Encoder::HevcNvenc
+            | Encoder::HevcVaapi
+            | Encoder::HevcVideotoolbox
+            | Encoder::HevcAmf
+            | Encoder::HevcX265 => crate::config::OutputCodec::Hevc,
+            Encoder::H264Qsv
+            | Encoder::H264Nvenc
+            | Encoder::H264Vaapi
+            | Encoder::H264Videotoolbox
+            | Encoder::H264Amf
+            | Encoder::H264X264 => crate::config::OutputCodec::H264,
+        }
+    }
+
+    pub fn ffmpeg_encoder_name(self) -> &'static str {
+        match self {
+            Encoder::Av1Qsv => "av1_qsv",
+            Encoder::Av1Nvenc => "av1_nvenc",
+            Encoder::Av1Vaapi => "av1_vaapi",
+            Encoder::Av1Videotoolbox => "av1_videotoolbox",
+            Encoder::Av1Amf => "av1_amf",
+            Encoder::Av1Svt => "libsvtav1",
+            Encoder::Av1Aom => "libaom-av1",
+            Encoder::HevcQsv => "hevc_qsv",
+            Encoder::HevcNvenc => "hevc_nvenc",
+            Encoder::HevcVaapi => "hevc_vaapi",
+            Encoder::HevcVideotoolbox => "hevc_videotoolbox",
+            Encoder::HevcAmf => "hevc_amf",
+            Encoder::HevcX265 => "libx265",
+            Encoder::H264Qsv => "h264_qsv",
+            Encoder::H264Nvenc => "h264_nvenc",
+            Encoder::H264Vaapi => "h264_vaapi",
+            Encoder::H264Videotoolbox => "h264_videotoolbox",
+            Encoder::H264Amf => "h264_amf",
+            Encoder::H264X264 => "libx264",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncoderLimits {
     pub max_width: Option<u32>,
@@ -146,20 +250,120 @@ pub enum RateControl {
     QsvQuality { value: u8 },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackKind {
+    Codec,
+    Backend,
+    Cpu,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlannedFallback {
+    pub kind: FallbackKind,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioCodec {
+    Aac,
+    Opus,
+}
+
+impl AudioCodec {
+    pub fn ffmpeg_name(&self) -> &'static str {
+        match self {
+            Self::Aac => "aac",
+            Self::Opus => "libopus",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionPlan {
+#[serde(rename_all = "snake_case")]
+pub enum AudioStreamPlan {
+    Copy,
+    Transcode {
+        codec: AudioCodec,
+        bitrate_kbps: u16,
+    },
+    Drop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtitleStreamPlan {
+    CopyAllCompatible,
+    Drop,
+    Burn {
+        stream_index: usize,
+    },
+    Extract {
+        stream_indices: Vec<usize>,
+        sidecar_output: SidecarOutputPlan,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SidecarOutputPlan {
+    pub final_path: PathBuf,
+    pub temp_path: PathBuf,
+}
+
+impl SubtitleStreamPlan {
+    pub fn sidecar_output(&self) -> Option<&SidecarOutputPlan> {
+        match self {
+            SubtitleStreamPlan::Extract { sidecar_output, .. } => Some(sidecar_output),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FilterStep {
+    Tonemap {
+        algorithm: crate::config::TonemapAlgorithm,
+        peak: f32,
+        desat: f32,
+    },
+    Format {
+        pixel_format: String,
+    },
+    SubtitleBurn {
+        stream_index: usize,
+    },
+    HwUpload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscodePlan {
     pub decision: TranscodeDecision,
     pub output_path: Option<PathBuf>,
-    pub target_container: Option<String>,
+    pub container: String,
+    pub requested_codec: crate::config::OutputCodec,
+    pub output_codec: Option<crate::config::OutputCodec>,
     pub encoder: Option<Encoder>,
+    pub backend: Option<EncoderBackend>,
     pub rate_control: Option<RateControl>,
+    pub encoder_preset: Option<String>,
+    pub threads: usize,
+    pub audio: AudioStreamPlan,
+    pub subtitles: SubtitleStreamPlan,
+    pub filters: Vec<FilterStep>,
     pub allow_fallback: bool,
+    pub fallback: Option<PlannedFallback>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
+    pub requested_codec: crate::config::OutputCodec,
+    pub planned_output_codec: crate::config::OutputCodec,
     pub requested_encoder: Encoder,
     pub used_encoder: Encoder,
+    pub used_backend: EncoderBackend,
+    pub fallback: Option<PlannedFallback>,
     pub fallback_occurred: bool,
     pub actual_output_codec: Option<crate::config::OutputCodec>,
     pub actual_encoder_name: Option<String>,
@@ -182,12 +386,7 @@ pub trait Analyzer: Send + Sync {
 
 #[async_trait]
 pub trait Planner: Send + Sync {
-    async fn plan(
-        &self,
-        analysis: &MediaAnalysis,
-        hardware: &HardwareCapabilities,
-        output_extension: &str,
-    ) -> Result<ExecutionPlan>;
+    async fn plan(&self, analysis: &MediaAnalysis, output_path: &Path) -> Result<TranscodePlan>;
 }
 
 #[async_trait]
@@ -195,7 +394,7 @@ pub trait Executor: Send + Sync {
     async fn execute(
         &self,
         job: &Job,
-        plan: &ExecutionPlan,
+        plan: &TranscodePlan,
         analysis: &MediaAnalysis,
     ) -> Result<ExecutionResult>;
 }
@@ -207,6 +406,15 @@ pub struct Pipeline {
     hardware_state: HardwareState,
     tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
     dry_run: bool,
+}
+
+struct FinalizeJobContext<'a> {
+    output_path: &'a Path,
+    temp_output_path: &'a Path,
+    plan: &'a TranscodePlan,
+    start_time: std::time::Instant,
+    metadata: &'a MediaMetadata,
+    execution_result: &'a ExecutionResult,
 }
 
 impl Pipeline {
@@ -251,7 +459,8 @@ pub async fn enqueue_discovered_with_db(
         return Ok(false);
     }
 
-    let output_path = settings.output_path_for(&discovered.path);
+    let output_path =
+        settings.output_path_for_source(&discovered.path, discovered.source_root.as_deref());
     if output_path.exists() && !settings.should_replace_existing_output() {
         tracing::info!(
             "Skipping {:?} (output exists, replace_strategy = keep)",
@@ -271,6 +480,7 @@ fn default_file_settings() -> crate::db::FileSettings {
         output_extension: "mkv".to_string(),
         output_suffix: "-alchemist".to_string(),
         replace_strategy: "keep".to_string(),
+        output_root: None,
     }
 }
 
@@ -314,6 +524,15 @@ async fn skip_reason_for_discovered_path(
     Ok(None)
 }
 
+fn temp_output_path_for(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    parent.join(format!("{filename}.alchemist-part"))
+}
+
 impl Pipeline {
     pub async fn process_job(&self, job: Job) -> std::result::Result<(), JobFailure> {
         let file_path = PathBuf::from(&job.input_path);
@@ -326,7 +545,8 @@ impl Pipeline {
             }
         };
 
-        let mut output_path = file_settings.output_path_for(&file_path);
+        let output_path = PathBuf::from(&job.output_path);
+        let temp_output_path = temp_output_path_for(&output_path);
 
         if file_path == output_path {
             tracing::error!(
@@ -356,6 +576,17 @@ impl Pipeline {
                 .update_job_state(job.id, crate::db::JobState::Skipped)
                 .await;
             return Ok(());
+        }
+
+        if temp_output_path.exists() {
+            if let Err(err) = std::fs::remove_file(&temp_output_path) {
+                tracing::warn!(
+                    "Job {}: Failed to remove stale temp output {:?}: {}",
+                    job.id,
+                    temp_output_path,
+                    err
+                );
+            }
         }
 
         let file_name = file_path.file_name().unwrap_or_default();
@@ -407,19 +638,19 @@ impl Pipeline {
         );
         tracing::info!("[Job {}] Codec: {}", job.id, metadata.codec_name);
 
+        match self.should_stop_job(job.id).await {
+            Ok(true) => {
+                tracing::info!("Job {} was cancelled before encode planning.", job.id);
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(_) => return Err(JobFailure::Transient),
+        }
+
         let config_snapshot = self.config.read().await.clone();
         let hw_info = self.hardware_state.snapshot().await;
-        let encoder_caps = Arc::new(crate::media::ffmpeg::encoder_caps_clone());
-        let planner = BasicPlanner::new(
-            Arc::new(config_snapshot.clone()),
-            hw_info.clone(),
-            encoder_caps.clone(),
-        );
-        let hardware_caps = build_hardware_capabilities(&encoder_caps, hw_info.as_ref());
-        let mut plan = match planner
-            .plan(&analysis, &hardware_caps, &file_settings.output_extension)
-            .await
-        {
+        let planner = BasicPlanner::new(Arc::new(config_snapshot.clone()), hw_info.clone());
+        let mut plan = match planner.plan(&analysis, &output_path).await {
             Ok(plan) => plan,
             Err(e) => {
                 tracing::error!("Job {}: Planner failed: {}", job.id, e);
@@ -431,8 +662,20 @@ impl Pipeline {
         };
 
         if matches!(plan.decision, TranscodeDecision::Transcode { .. }) {
-            output_path = file_settings.output_path_for(&file_path);
-            plan.output_path = Some(output_path.clone());
+            plan.output_path = Some(temp_output_path.clone());
+        }
+
+        if let Some(sidecar_output) = plan.subtitles.sidecar_output() {
+            if sidecar_output.temp_path.exists() {
+                if let Err(err) = std::fs::remove_file(&sidecar_output.temp_path) {
+                    tracing::warn!(
+                        "Job {}: Failed to remove stale subtitle temp output {:?}: {}",
+                        job.id,
+                        sidecar_output.temp_path,
+                        err
+                    );
+                }
+            }
         }
 
         let (should_encode, reason) = match &plan.decision {
@@ -466,10 +709,20 @@ impl Pipeline {
         }
         self.update_job_progress(job.id, 0.0).await;
 
+        match self.should_stop_job(job.id).await {
+            Ok(true) => {
+                tracing::info!("Job {} was cancelled before FFmpeg execution.", job.id);
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(_) => return Err(JobFailure::Transient),
+        }
+
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled: config_snapshot.system.enable_telemetry,
             output_codec: config_snapshot.transcode.output_codec,
             encoder_override: None,
+            fallback: plan.fallback.as_ref(),
             metadata,
             event_type: "job_started",
             status: None,
@@ -483,7 +736,7 @@ impl Pipeline {
 
         let executor = FfmpegExecutor::new(
             self.orchestrator.clone(),
-            Arc::new(config_snapshot.clone()),
+            self.db.clone(),
             hw_info.clone(),
             self.tx.clone(),
             self.dry_run,
@@ -499,23 +752,39 @@ impl Pipeline {
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
-                self.finalize_job(job, &file_path, &output_path, start_time, metadata, &result)
-                    .await
-                    .map_err(|_| JobFailure::Transient)
+                self.finalize_job(
+                    job,
+                    &file_path,
+                    FinalizeJobContext {
+                        output_path: &output_path,
+                        temp_output_path: &temp_output_path,
+                        plan: &plan,
+                        start_time,
+                        metadata,
+                        execution_result: &result,
+                    },
+                )
+                .await
+                .map_err(|_| JobFailure::Transient)
             }
             Err(e) => {
-                if output_path.exists() {
-                    if let Err(err) = tokio::fs::remove_file(&output_path).await {
+                if temp_output_path.exists() {
+                    if let Err(err) = tokio::fs::remove_file(&temp_output_path).await {
                         tracing::warn!(
                             "Job {}: Failed to remove partial output {:?}: {}",
                             job.id,
-                            output_path,
+                            temp_output_path,
                             err
                         );
                     } else {
-                        tracing::info!("Job {}: Removed partial output {:?}", job.id, output_path);
+                        tracing::info!(
+                            "Job {}: Removed partial output {:?}",
+                            job.id,
+                            temp_output_path
+                        );
                     }
                 }
+                cleanup_temp_subtitle_output(job.id, &plan).await;
                 let failure_reason = if let crate::error::AlchemistError::Cancelled = e {
                     "cancelled"
                 } else {
@@ -525,6 +794,7 @@ impl Pipeline {
                     telemetry_enabled: config_snapshot.system.enable_telemetry,
                     output_codec: config_snapshot.transcode.output_codec,
                     encoder_override: None,
+                    fallback: plan.fallback.as_ref(),
                     metadata,
                     event_type: "job_finished",
                     status: Some("failure"),
@@ -565,23 +835,43 @@ impl Pipeline {
     async fn update_job_progress(&self, job_id: i64, progress: f64) {
         if let Err(e) = self.db.update_job_progress(job_id, progress).await {
             tracing::error!("Failed to update job progress: {}", e);
+            return;
         }
+        let _ = self.tx.send(crate::db::AlchemistEvent::Progress {
+            job_id,
+            percentage: progress,
+            time: String::new(),
+        });
+    }
+
+    async fn should_stop_job(&self, job_id: i64) -> Result<bool> {
+        let Some(job) = self.db.get_job_by_id(job_id).await? else {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        };
+        Ok(job.status == crate::db::JobState::Cancelled)
+    }
+
+    fn promote_temp_artifact(&self, temp_path: &Path, final_path: &Path) -> Result<()> {
+        if cfg!(windows) && final_path.exists() {
+            std::fs::remove_file(final_path)?;
+        }
+        std::fs::rename(temp_path, final_path)?;
+        Ok(())
     }
 
     async fn finalize_job(
         &self,
         job: Job,
         input_path: &Path,
-        output_path: &Path,
-        start_time: std::time::Instant,
-        metadata: &MediaMetadata,
-        execution_result: &ExecutionResult,
+        context: FinalizeJobContext<'_>,
     ) -> Result<()> {
         let job_id = job.id;
         let input_metadata = std::fs::metadata(input_path)?;
         let input_size = input_metadata.len();
 
-        let output_metadata = std::fs::metadata(output_path)?;
+        let output_metadata = std::fs::metadata(context.temp_output_path)?;
         let output_size = output_metadata.len();
 
         if input_size == 0 {
@@ -592,7 +882,7 @@ impl Pipeline {
         }
 
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
-        let encode_duration = start_time.elapsed().as_secs_f64();
+        let encode_duration = context.start_time.elapsed().as_secs_f64();
 
         let config = self.config.read().await;
         let telemetry_enabled = config.system.enable_telemetry;
@@ -603,7 +893,8 @@ impl Pipeline {
                 job_id,
                 reduction * 100.0
             );
-            let _ = std::fs::remove_file(output_path);
+            let _ = std::fs::remove_file(context.temp_output_path);
+            cleanup_temp_subtitle_output(job_id, context.plan).await;
             let reason = if output_size == 0 {
                 "Empty output"
             } else {
@@ -619,7 +910,7 @@ impl Pipeline {
         if config.quality.enable_vmaf {
             tracing::info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
             let input_clone = input_path.to_path_buf();
-            let output_clone = output_path.to_path_buf();
+            let output_clone = context.temp_output_path.to_path_buf();
             let vmaf_result = tokio::task::spawn_blocking(move || {
                 crate::media::ffmpeg::QualityScore::compute(&input_clone, &output_clone)
             })
@@ -638,7 +929,8 @@ impl Pipeline {
                                 s,
                                 config.quality.min_vmaf_score
                             );
-                            let _ = std::fs::remove_file(output_path);
+                            let _ = std::fs::remove_file(context.temp_output_path);
+                            cleanup_temp_subtitle_output(job_id, context.plan).await;
                             let _ = self
                                 .db
                                 .add_decision(job_id, "skip", "Low quality (VMAF)")
@@ -658,7 +950,7 @@ impl Pipeline {
             }
         }
 
-        let mut media_duration = metadata.duration_secs;
+        let mut media_duration = context.metadata.duration_secs;
         if media_duration <= 0.0 {
             media_duration = crate::media::analyzer::Analyzer::probe_async(input_path)
                 .await
@@ -679,8 +971,7 @@ impl Pipeline {
             0.0
         };
 
-        let _ = self
-            .db
+        self.db
             .save_encode_stats(crate::db::EncodeStatsInput {
                 job_id,
                 input_size,
@@ -691,7 +982,7 @@ impl Pipeline {
                 avg_bitrate: avg_bitrate_kbps,
                 vmaf_score,
             })
-            .await;
+            .await?;
 
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         tracing::info!("✅ Job #{} COMPLETED", job_id);
@@ -705,17 +996,30 @@ impl Pipeline {
         tracing::info!("  Duration:    {:.2}s", encode_duration);
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
+        if let Some(sidecar_output) = context.plan.subtitles.sidecar_output() {
+            self.promote_temp_artifact(&sidecar_output.temp_path, &sidecar_output.final_path)?;
+            if let Err(err) =
+                self.promote_temp_artifact(context.temp_output_path, context.output_path)
+            {
+                let _ = std::fs::remove_file(&sidecar_output.final_path);
+                return Err(err);
+            }
+        } else {
+            self.promote_temp_artifact(context.temp_output_path, context.output_path)?;
+        }
         self.update_job_state(job_id, crate::db::JobState::Completed)
             .await?;
         self.update_job_progress(job_id, 100.0).await;
 
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled,
-            output_codec: execution_result
+            output_codec: context
+                .execution_result
                 .actual_output_codec
-                .unwrap_or(config.transcode.output_codec),
-            encoder_override: execution_result.actual_encoder_name.as_deref(),
-            metadata,
+                .unwrap_or(context.execution_result.planned_output_codec),
+            encoder_override: context.execution_result.actual_encoder_name.as_deref(),
+            fallback: context.execution_result.fallback.as_ref(),
+            metadata: context.metadata,
             event_type: "job_finished",
             status: Some("success"),
             failure_reason: None,
@@ -749,6 +1053,11 @@ impl Pipeline {
             event_type: params.event_type.to_string(),
             status: params.status.map(str::to_string),
             failure_reason: params.failure_reason.map(str::to_string),
+            fallback_kind: params.fallback.map(|fallback| match fallback.kind {
+                FallbackKind::Codec => "codec".to_string(),
+                FallbackKind::Backend => "backend".to_string(),
+                FallbackKind::Cpu => "cpu".to_string(),
+            }),
             hardware_model: hardware_label(hw),
             encoder: Some(
                 params
@@ -772,6 +1081,7 @@ struct TelemetryEventParams<'a> {
     telemetry_enabled: bool,
     output_codec: crate::config::OutputCodec,
     encoder_override: Option<&'a str>,
+    fallback: Option<&'a PlannedFallback>,
     metadata: &'a MediaMetadata,
     event_type: &'a str,
     status: Option<&'a str>,
@@ -780,6 +1090,21 @@ struct TelemetryEventParams<'a> {
     output_size_bytes: Option<u64>,
     duration_ms: Option<u64>,
     speed_factor: Option<f64>,
+}
+
+async fn cleanup_temp_subtitle_output(job_id: i64, plan: &TranscodePlan) {
+    if let Some(sidecar_output) = plan.subtitles.sidecar_output() {
+        if sidecar_output.temp_path.exists() {
+            if let Err(err) = tokio::fs::remove_file(&sidecar_output.temp_path).await {
+                tracing::warn!(
+                    "Job {}: Failed to remove subtitle temp output {:?}: {}",
+                    job_id,
+                    sidecar_output.temp_path,
+                    err
+                );
+            }
+        }
+    }
 }
 
 fn map_failure(error: &crate::error::AlchemistError) -> JobFailure {
@@ -818,7 +1143,8 @@ mod tests {
             rand::random::<u64>()
         ));
         let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
-        db.update_file_settings(false, "mkv", "", "keep").await?;
+        db.update_file_settings(false, "mkv", "", "keep", None)
+            .await?;
 
         let input = Path::new("/library/movie.mkv");
         let output = Path::new("/library/movie-alchemist.mkv");
@@ -831,6 +1157,7 @@ mod tests {
             DiscoveredMedia {
                 path: output.to_path_buf(),
                 mtime: SystemTime::UNIX_EPOCH,
+                source_root: None,
             },
         )
         .await?;
@@ -838,6 +1165,49 @@ mod tests {
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_temp_subtitle_output_removes_sidecar_temp() -> anyhow::Result<()> {
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_sidecar_cleanup_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+        let temp_sidecar = temp_root.join("movie.subs.mks.alchemist-part");
+        std::fs::write(&temp_sidecar, b"sidecar")?;
+
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            output_path: None,
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("medium".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Copy,
+            subtitles: SubtitleStreamPlan::Extract {
+                stream_indices: vec![0],
+                sidecar_output: SidecarOutputPlan {
+                    final_path: temp_root.join("movie.subs.mks"),
+                    temp_path: temp_sidecar.clone(),
+                },
+            },
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+
+        cleanup_temp_subtitle_output(1, &plan).await;
+        assert!(!temp_sidecar.exists());
+
+        let _ = std::fs::remove_dir_all(temp_root);
         Ok(())
     }
 }

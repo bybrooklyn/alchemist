@@ -67,6 +67,7 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub agent: Arc<Agent>,
     pub transcoder: Arc<Transcoder>,
+    pub scheduler: crate::scheduler::SchedulerHandle,
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: Arc<AtomicBool>,
     pub start_time: Instant,
@@ -87,6 +88,7 @@ pub struct RunServerArgs {
     pub config: Arc<RwLock<Config>>,
     pub agent: Arc<Agent>,
     pub transcoder: Arc<Transcoder>,
+    pub scheduler: crate::scheduler::SchedulerHandle,
     pub tx: broadcast::Sender<AlchemistEvent>,
     pub setup_required: bool,
     pub config_path: PathBuf,
@@ -112,6 +114,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         config,
         agent,
         transcoder,
+        scheduler,
         tx,
         setup_required,
         config_path,
@@ -135,6 +138,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         config,
         agent,
         transcoder,
+        scheduler,
         tx,
         setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: std::time::Instant::now(),
@@ -194,6 +198,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
         .route("/api/jobs/:id/cancel", post(cancel_job_handler))
+        .route("/api/jobs/:id/priority", post(update_job_priority_handler))
         .route("/api/jobs/:id/restart", post(restart_job_handler))
         .route("/api/jobs/:id/delete", post(delete_job_handler))
         .route("/api/jobs/:id/details", get(get_job_detail_handler))
@@ -208,6 +213,14 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/settings/system",
             get(get_system_settings_handler).post(update_system_settings_handler),
+        )
+        .route(
+            "/api/settings/bundle",
+            get(get_settings_bundle_handler).put(update_settings_bundle_handler),
+        )
+        .route(
+            "/api/settings/config",
+            get(get_settings_config_handler).put(update_settings_config_handler),
         )
         .route(
             "/api/settings/watch-dirs",
@@ -252,6 +265,9 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
+        .route("/api/fs/browse", get(fs_browse_handler))
+        .route("/api/fs/recommendations", get(fs_recommendations_handler))
+        .route("/api/fs/preview", post(fs_preview_handler))
         .route("/api/telemetry/payload", get(telemetry_payload_handler))
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
@@ -277,50 +293,15 @@ fn app_router(state: Arc<AppState>) -> Router {
 }
 
 async fn refresh_file_watcher(state: &AppState) {
-    if state.setup_required.load(Ordering::Relaxed) {
-        if let Err(e) = state.file_watcher.watch(&[]) {
-            error!("Failed to stop file watcher: {}", e);
-        }
-        return;
-    }
-
-    let mut watch_dirs: HashMap<PathBuf, bool> = HashMap::new();
-
+    let config = state.config.read().await.clone();
+    if let Err(e) = crate::system::watcher::refresh_from_sources(
+        state.file_watcher.as_ref(),
+        state.db.as_ref(),
+        &config,
+        state.setup_required.load(Ordering::Relaxed),
+    )
+    .await
     {
-        let config = state.config.read().await;
-        if config.scanner.watch_enabled {
-            for dir in &config.scanner.directories {
-                watch_dirs.insert(PathBuf::from(dir), true);
-            }
-        }
-    }
-
-    match state.db.get_watch_dirs().await {
-        Ok(dirs) => {
-            for dir in dirs {
-                watch_dirs
-                    .entry(PathBuf::from(dir.path))
-                    .and_modify(|recursive| *recursive |= dir.is_recursive)
-                    .or_insert(dir.is_recursive);
-            }
-        }
-        Err(e) => error!("Failed to fetch watch dirs from DB: {}", e),
-    }
-
-    let mut all_dirs: Vec<crate::system::watcher::WatchPath> = watch_dirs
-        .into_iter()
-        .map(|(path, recursive)| crate::system::watcher::WatchPath { path, recursive })
-        .collect();
-    all_dirs.sort_by(|a, b| a.path.cmp(&b.path));
-
-    if all_dirs.is_empty() {
-        if let Err(e) = state.file_watcher.watch(&[]) {
-            error!("Failed to stop file watcher: {}", e);
-        }
-        return;
-    }
-
-    if let Err(e) = state.file_watcher.watch(&all_dirs) {
         error!("Failed to update file watcher: {}", e);
     }
 }
@@ -371,7 +352,7 @@ fn config_save_error_to_response(config_path: &FsPath, err: &anyhow::Error) -> R
         .into_response()
 }
 
-fn save_config_or_response(
+async fn save_config_or_response(
     state: &AppState,
     config: &Config,
 ) -> std::result::Result<(), Box<Response>> {
@@ -391,8 +372,18 @@ fn save_config_or_response(
         }
     }
 
-    if let Err(err) = config.save(state.config_path.as_path()) {
-        return Err(config_save_error_to_response(&state.config_path, &err).into());
+    if let Err(err) = crate::settings::save_config_and_project(
+        state.db.as_ref(),
+        state.config_path.as_path(),
+        config,
+    )
+    .await
+    {
+        return Err(config_save_error_to_response(
+            &state.config_path,
+            &anyhow::Error::msg(err.to_string()),
+        )
+        .into());
     }
 
     Ok(())
@@ -438,21 +429,142 @@ fn validate_transcode_payload(
     Ok(())
 }
 
-fn normalize_setup_directories(
-    directories: &[String],
-) -> std::result::Result<Vec<String>, &'static str> {
+fn canonicalize_directory_path(
+    value: &str,
+    field_name: &str,
+) -> std::result::Result<PathBuf, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_name} must not be empty"));
+    }
+    if trimmed.contains('\0') {
+        return Err(format!("{field_name} must not contain null bytes"));
+    }
+
+    let path = PathBuf::from(trimmed);
+    if !path.is_dir() {
+        return Err(format!("{field_name} must be an existing directory"));
+    }
+
+    fs::canonicalize(&path).map_err(|_| format!("{field_name} must be canonicalizable"))
+}
+
+fn normalize_setup_directories(directories: &[String]) -> std::result::Result<Vec<String>, String> {
     let mut normalized = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
     for value in directories {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.contains('\0') {
-            return Err("directory paths must not contain null bytes");
+
+        let canonical = canonicalize_directory_path(trimmed, "directories")?;
+        let canonical = canonical.to_string_lossy().to_string();
+        if seen.insert(canonical.clone()) {
+            normalized.push(canonical);
         }
-        normalized.push(trimmed.to_string());
     }
+
     Ok(normalized)
+}
+
+fn normalize_optional_directory(
+    value: Option<&str>,
+    field_name: &str,
+) -> std::result::Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    canonicalize_directory_path(trimmed, field_name)
+        .map(|path| Some(path.to_string_lossy().to_string()))
+}
+
+fn normalize_optional_path(
+    value: Option<&str>,
+    field_name: &str,
+) -> std::result::Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.contains('\0') {
+        return Err(format!("{field_name} must not contain null bytes"));
+    }
+
+    if cfg!(target_os = "linux") {
+        let path = PathBuf::from(trimmed);
+        if !path.exists() {
+            return Err(format!("{field_name} must exist"));
+        }
+        return fs::canonicalize(path)
+            .map(|path| Some(path.to_string_lossy().to_string()))
+            .map_err(|_| format!("{field_name} must be canonicalizable"));
+    }
+
+    Ok(Some(trimmed.to_string()))
+}
+
+fn is_row_not_found(err: &AlchemistError) -> bool {
+    matches!(err, AlchemistError::Database(sqlx::Error::RowNotFound))
+}
+
+#[derive(Serialize)]
+struct BlockedJob {
+    id: i64,
+    status: JobState,
+}
+
+#[derive(Serialize)]
+struct BlockedJobsResponse {
+    message: String,
+    blocked: Vec<BlockedJob>,
+}
+
+fn blocked_jobs_response(message: impl Into<String>, blocked: &[crate::db::Job]) -> Response {
+    let payload = BlockedJobsResponse {
+        message: message.into(),
+        blocked: blocked
+            .iter()
+            .map(|job| BlockedJob {
+                id: job.id,
+                status: job.status,
+            })
+            .collect(),
+    };
+    (StatusCode::CONFLICT, axum::Json(payload)).into_response()
+}
+
+async fn request_job_cancel(state: &AppState, job: &crate::db::Job) -> Result<bool> {
+    match job.status {
+        JobState::Queued => {
+            state
+                .db
+                .update_job_status(job.id, JobState::Cancelled)
+                .await?;
+            Ok(true)
+        }
+        JobState::Analyzing | JobState::Resuming => {
+            if !state.transcoder.cancel_job(job.id) {
+                return Ok(false);
+            }
+            state
+                .db
+                .update_job_status(job.id, JobState::Cancelled)
+                .await?;
+            Ok(true)
+        }
+        JobState::Encoding => Ok(state.transcoder.cancel_job(job.id)),
+        _ => Ok(false),
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -475,6 +587,8 @@ struct TranscodeSettingsPayload {
     tonemap_peak: f32,
     #[serde(default = "crate::config::default_tonemap_desat")]
     tonemap_desat: f32,
+    #[serde(default)]
+    subtitle_mode: crate::config::SubtitleMode,
 }
 
 async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -492,6 +606,7 @@ async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> i
         tonemap_algorithm: config.transcode.tonemap_algorithm,
         tonemap_peak: config.transcode.tonemap_peak,
         tonemap_desat: config.transcode.tonemap_desat,
+        subtitle_mode: config.transcode.subtitle_mode,
     })
 }
 
@@ -516,12 +631,13 @@ async fn update_transcode_settings_handler(
     next_config.transcode.tonemap_algorithm = payload.tonemap_algorithm;
     next_config.transcode.tonemap_peak = payload.tonemap_peak;
     next_config.transcode.tonemap_desat = payload.tonemap_desat;
+    next_config.transcode.subtitle_mode = payload.subtitle_mode;
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
-    if let Err(response) = save_config_or_response(&state, &next_config) {
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }
 
@@ -544,6 +660,8 @@ struct HardwareSettingsPayload {
     allow_cpu_encoding: bool,
     cpu_preset: String,
     preferred_vendor: Option<String>,
+    #[serde(default)]
+    device_path: Option<String>,
 }
 
 async fn get_hardware_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -553,6 +671,7 @@ async fn get_hardware_settings_handler(State(state): State<Arc<AppState>>) -> im
         allow_cpu_encoding: config.hardware.allow_cpu_encoding,
         cpu_preset: config.hardware.cpu_preset.to_string(),
         preferred_vendor: config.hardware.preferred_vendor.clone(),
+        device_path: config.hardware.device_path.clone(),
     })
 }
 
@@ -572,6 +691,11 @@ async fn update_hardware_settings_handler(
         _ => crate::config::CpuPreset::Medium,
     };
     next_config.hardware.preferred_vendor = payload.preferred_vendor;
+    next_config.hardware.device_path =
+        match normalize_optional_path(payload.device_path.as_deref(), "device_path") {
+            Ok(path) => path,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
@@ -583,7 +707,7 @@ async fn update_hardware_settings_handler(
             Err(err) => return hardware_error_response(&err),
         };
 
-    if let Err(response) = save_config_or_response(&state, &next_config) {
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }
 
@@ -600,6 +724,8 @@ async fn update_hardware_settings_handler(
 struct SystemSettingsPayload {
     monitoring_poll_interval: f64,
     enable_telemetry: bool,
+    #[serde(default)]
+    watch_enabled: bool,
 }
 
 async fn get_system_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -607,6 +733,7 @@ async fn get_system_settings_handler(State(state): State<Arc<AppState>>) -> impl
     axum::Json(SystemSettingsPayload {
         monitoring_poll_interval: config.system.monitoring_poll_interval,
         enable_telemetry: config.system.enable_telemetry,
+        watch_enabled: config.scanner.watch_enabled,
     })
 }
 
@@ -625,12 +752,13 @@ async fn update_system_settings_handler(
     let mut next_config = state.config.read().await.clone();
     next_config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
     next_config.system.enable_telemetry = payload.enable_telemetry;
+    next_config.scanner.watch_enabled = payload.watch_enabled;
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
-    if let Err(response) = save_config_or_response(&state, &next_config) {
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }
 
@@ -639,20 +767,137 @@ async fn update_system_settings_handler(
         *config = next_config;
     }
 
+    refresh_file_watcher(&state).await;
+
     (StatusCode::OK, "Settings updated").into_response()
+}
+
+async fn get_settings_bundle_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await.clone();
+    axum::Json(crate::settings::bundle_response(config)).into_response()
+}
+
+async fn update_settings_bundle_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<Config>,
+) -> impl IntoResponse {
+    if let Err(err) = payload.validate() {
+        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+    }
+
+    let hardware_info = match crate::system::hardware::detect_hardware_for_config(&payload).await {
+        Ok(info) => info,
+        Err(err) => return hardware_error_response(&err),
+    };
+
+    if let Err(response) = save_config_or_response(&state, &payload).await {
+        return *response;
+    }
+
+    {
+        let mut config = state.config.write().await;
+        *config = payload.clone();
+    }
+
+    state
+        .agent
+        .set_concurrent_jobs(payload.transcode.concurrent_jobs)
+        .await;
+    state.hardware_state.replace(Some(hardware_info)).await;
+    refresh_file_watcher(&state).await;
+    state.scheduler.trigger();
+
+    axum::Json(crate::settings::bundle_response(payload)).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct RawConfigPayload {
+    raw_toml: String,
+}
+
+async fn get_settings_config_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let raw_toml = match crate::settings::load_raw_config(state.config_path.as_path()) {
+        Ok(raw_toml) => raw_toml,
+        Err(err) => return config_read_error_response("load raw config", &err),
+    };
+    let normalized = state.config.read().await.clone();
+    axum::Json(crate::settings::config_response(raw_toml, normalized)).into_response()
+}
+
+async fn update_settings_config_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<RawConfigPayload>,
+) -> impl IntoResponse {
+    let config = match crate::settings::parse_raw_config(&payload.raw_toml) {
+        Ok(config) => config,
+        Err(err) => return hardware_error_response(&err),
+    };
+
+    let hardware_info = match crate::system::hardware::detect_hardware_for_config(&config).await {
+        Ok(info) => info,
+        Err(err) => return hardware_error_response(&err),
+    };
+
+    if !state.config_mutable {
+        return config_write_blocked_response(state.config_path.as_path());
+    }
+
+    if let Some(parent) = state.config_path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                return config_save_error_to_response(&state.config_path, &anyhow::Error::new(err));
+            }
+        }
+    }
+
+    if let Err(err) = crate::settings::save_config_and_project(
+        state.db.as_ref(),
+        state.config_path.as_path(),
+        &config,
+    )
+    .await
+    {
+        return config_save_error_to_response(
+            &state.config_path,
+            &anyhow::Error::msg(err.to_string()),
+        );
+    }
+
+    {
+        let mut config_lock = state.config.write().await;
+        *config_lock = config.clone();
+    }
+
+    state
+        .agent
+        .set_concurrent_jobs(config.transcode.concurrent_jobs)
+        .await;
+    state.hardware_state.replace(Some(hardware_info)).await;
+    refresh_file_watcher(&state).await;
+    state.scheduler.trigger();
+
+    axum::Json(crate::settings::config_response(payload.raw_toml, config)).into_response()
 }
 
 #[derive(serde::Deserialize)]
 struct SetupConfig {
     username: String,
     password: String,
+    #[serde(default)]
+    settings: Option<crate::config::Config>,
+    #[serde(default)]
     size_reduction_threshold: f64,
     #[serde(default = "default_setup_min_bpp")]
     min_bpp_threshold: f64,
+    #[serde(default)]
     min_file_size_mb: u64,
+    #[serde(default)]
     concurrent_jobs: usize,
+    #[serde(default)]
     directories: Vec<String>,
+    #[serde(default = "default_setup_true")]
     allow_cpu_encoding: bool,
+    #[serde(default = "default_setup_true")]
     enable_telemetry: bool,
     #[serde(default)]
     output_codec: crate::config::OutputCodec,
@@ -662,6 +907,10 @@ struct SetupConfig {
 
 fn default_setup_min_bpp() -> f64 {
     0.1
+}
+
+fn default_setup_true() -> bool {
+    true
 }
 
 async fn setup_complete_handler(
@@ -687,39 +936,51 @@ async fn setup_complete_handler(
         )
             .into_response();
     }
-    if payload.concurrent_jobs == 0 {
+    if payload.settings.is_none() && payload.concurrent_jobs == 0 {
         return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
     }
-    if !(0.0..=1.0).contains(&payload.size_reduction_threshold) {
+    if payload.settings.is_none() && !(0.0..=1.0).contains(&payload.size_reduction_threshold) {
         return (
             StatusCode::BAD_REQUEST,
             "size_reduction_threshold must be 0.0-1.0",
         )
             .into_response();
     }
-    if payload.min_bpp_threshold < 0.0 {
+    if payload.settings.is_none() && payload.min_bpp_threshold < 0.0 {
         return (StatusCode::BAD_REQUEST, "min_bpp_threshold must be >= 0.0").into_response();
     }
-
-    let setup_directories = match normalize_setup_directories(&payload.directories) {
-        Ok(paths) => paths,
-        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
-    };
 
     if !state.config_mutable {
         return config_write_blocked_response(state.config_path.as_path());
     }
 
-    let mut next_config = state.config.read().await.clone();
-    next_config.transcode.concurrent_jobs = payload.concurrent_jobs;
-    next_config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
-    next_config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
-    next_config.transcode.min_file_size_mb = payload.min_file_size_mb;
-    next_config.transcode.output_codec = payload.output_codec;
-    next_config.transcode.quality_profile = payload.quality_profile;
-    next_config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
-    next_config.scanner.directories = setup_directories.clone();
-    next_config.system.enable_telemetry = payload.enable_telemetry;
+    let mut next_config = match payload.settings {
+        Some(mut settings) => {
+            settings.scanner.directories = match normalize_setup_directories(&settings.scanner.directories) {
+                Ok(paths) => paths,
+                Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+            };
+            settings
+        }
+        None => {
+            let setup_directories = match normalize_setup_directories(&payload.directories) {
+                Ok(paths) => paths,
+                Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+            };
+            let mut config = state.config.read().await.clone();
+            config.transcode.concurrent_jobs = payload.concurrent_jobs;
+            config.transcode.size_reduction_threshold = payload.size_reduction_threshold;
+            config.transcode.min_bpp_threshold = payload.min_bpp_threshold;
+            config.transcode.min_file_size_mb = payload.min_file_size_mb;
+            config.transcode.output_codec = payload.output_codec;
+            config.transcode.quality_profile = payload.quality_profile;
+            config.hardware.allow_cpu_encoding = payload.allow_cpu_encoding;
+            config.scanner.directories = setup_directories;
+            config.system.enable_telemetry = payload.enable_telemetry;
+            config
+        }
+    };
+    next_config.scanner.watch_enabled = true;
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
@@ -731,7 +992,7 @@ async fn setup_complete_handler(
             Err(err) => return hardware_error_response(&err),
         };
 
-    if let Err(response) = save_config_or_response(&state, &next_config) {
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }
     {
@@ -779,19 +1040,6 @@ async fn setup_complete_handler(
             .into_response();
     }
 
-    // Ensure setup directories are reflected in watch_dirs for Settings UI.
-    if let Ok(existing) = state.db.get_watch_dirs().await {
-        let mut existing_paths = std::collections::HashSet::new();
-        for wd in existing {
-            existing_paths.insert(wd.path);
-        }
-        for dir in &setup_directories {
-            if !existing_paths.contains(dir) {
-                let _ = state.db.add_watch_dir(dir, true).await;
-            }
-        }
-    }
-
     // Update Setup State (Hot Reload)
     state.setup_required.store(false, Ordering::Relaxed);
     state
@@ -799,7 +1047,6 @@ async fn setup_complete_handler(
         .set_concurrent_jobs(payload.concurrent_jobs)
         .await;
     state.hardware_state.replace(Some(hardware_info)).await;
-    state.agent.resume();
     refresh_file_watcher(&state).await;
 
     // Start Scan (optional, but good for UX)
@@ -828,24 +1075,25 @@ struct UiPreferences {
 }
 
 async fn get_preferences_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.db.get_preference("active_theme_id").await {
-        Ok(active_theme_id) => axum::Json(UiPreferences { active_theme_id }).into_response(),
-        Err(err) => config_read_error_response("load UI preferences", &err),
-    }
+    let config = state.config.read().await;
+    axum::Json(UiPreferences {
+        active_theme_id: config.appearance.active_theme_id.clone(),
+    })
+    .into_response()
 }
 
 async fn update_preferences_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<UiPreferences>,
 ) -> impl IntoResponse {
-    if let Some(theme_id) = payload.active_theme_id {
-        if let Err(e) = state.db.set_preference("active_theme_id", &theme_id).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to save preference: {}", e),
-            )
-                .into_response();
-        }
+    let mut next_config = state.config.read().await.clone();
+    next_config.appearance.active_theme_id = payload.active_theme_id;
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
     }
     StatusCode::OK.into_response()
 }
@@ -1004,10 +1252,14 @@ async fn cancel_job_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if state.transcoder.cancel_job(id) {
-        StatusCode::OK
-    } else {
-        StatusCode::NOT_FOUND
+    match state.db.get_job_by_id(id).await {
+        Ok(Some(job)) => match request_job_cancel(&state, &job).await {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
@@ -1035,6 +1287,37 @@ async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoR
     axum::Json(serde_json::json!({
         "status": if state.agent.is_paused() { "paused" } else { "running" }
     }))
+}
+
+#[derive(Deserialize)]
+struct FsBrowseQuery {
+    path: Option<String>,
+}
+
+async fn fs_browse_handler(
+    Query(query): Query<FsBrowseQuery>,
+) -> impl IntoResponse {
+    match crate::system::fs_browser::browse(query.path.as_deref()).await {
+        Ok(response) => axum::Json(response).into_response(),
+        Err(err) => config_read_error_response("browse server filesystem", &err),
+    }
+}
+
+async fn fs_recommendations_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await.clone();
+    match crate::system::fs_browser::recommendations(&config, state.db.as_ref()).await {
+        Ok(response) => axum::Json(response).into_response(),
+        Err(err) => config_read_error_response("load folder recommendations", &err),
+    }
+}
+
+async fn fs_preview_handler(
+    axum::Json(payload): axum::Json<crate::system::fs_browser::FsPreviewRequest>,
+) -> impl IntoResponse {
+    match crate::system::fs_browser::preview(payload).await {
+        Ok(response) => axum::Json(response).into_response(),
+        Err(err) => config_read_error_response("preview selected server folders", &err),
+    }
 }
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1165,6 +1448,12 @@ async fn auth_middleware(State(state): State<Arc<AppState>>, req: Request, next:
         if state.setup_required.load(Ordering::Relaxed) && path == "/api/system/hardware" {
             return next.run(req).await;
         }
+        if state.setup_required.load(Ordering::Relaxed) && path.starts_with("/api/fs/") {
+            return next.run(req).await;
+        }
+        if state.setup_required.load(Ordering::Relaxed) && path == "/api/settings/bundle" {
+            return next.run(req).await;
+        }
 
         // Protected API endpoints -> Require Token
         let mut token = req
@@ -1281,15 +1570,13 @@ fn sse_message_stream(
     rx: broadcast::Receiver<AlchemistEvent>,
 ) -> impl Stream<Item = std::result::Result<SseMessage, Infallible>> {
     stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => return Some((Ok(sse_message_for_event(&event)), rx)),
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!("SSE subscriber lagged; skipped {skipped} events");
-                    return Some((Ok(sse_lagged_message(skipped)), rx));
-                }
-                Err(broadcast::error::RecvError::Closed) => return None,
+        match rx.recv().await {
+            Ok(event) => Some((Ok(sse_message_for_event(&event)), rx)),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!("SSE subscriber lagged; skipped {skipped} events");
+                Some((Ok(sse_lagged_message(skipped)), rx))
             }
+            Err(broadcast::error::RecvError::Closed) => None,
         }
     })
 }
@@ -1540,16 +1827,47 @@ async fn batch_jobs_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<BatchActionPayload>,
 ) -> impl IntoResponse {
-    let result = match payload.action.as_str() {
-        "cancel" => state.db.batch_cancel_jobs(&payload.ids).await,
-        "delete" => state.db.batch_delete_jobs(&payload.ids).await,
-        "restart" => state.db.batch_restart_jobs(&payload.ids).await,
-        _ => return (StatusCode::BAD_REQUEST, "Invalid action").into_response(),
+    let jobs = match state.db.get_jobs_by_ids(&payload.ids).await {
+        Ok(jobs) => jobs,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    match result {
-        Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match payload.action.as_str() {
+        "cancel" => {
+            let mut count = 0_u64;
+            for job in &jobs {
+                match request_job_cancel(&state, job).await {
+                    Ok(true) => count += 1,
+                    Ok(false) => {}
+                    Err(e) if is_row_not_found(&e) => {}
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    }
+                }
+            }
+            axum::Json(serde_json::json!({ "count": count })).into_response()
+        }
+        "delete" | "restart" => {
+            let blocked: Vec<_> = jobs.iter().filter(|job| job.is_active()).cloned().collect();
+            if !blocked.is_empty() {
+                return blocked_jobs_response(
+                    format!("{} is blocked while jobs are active", payload.action),
+                    &blocked,
+                );
+            }
+
+            let result = if payload.action == "delete" {
+                state.db.batch_delete_jobs(&payload.ids).await
+            } else {
+                state.db.batch_restart_jobs(&payload.ids).await
+            };
+
+            match result {
+                Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        _ => (StatusCode::BAD_REQUEST, "Invalid action").into_response(),
     }
 }
 
@@ -1583,20 +1901,40 @@ async fn add_notification_handler(
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
-    let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
-    match state
-        .db
-        .add_notification_target(
-            &payload.name,
-            &payload.target_type,
-            &payload.endpoint_url,
-            payload.auth_token.as_deref(),
-            &events_json,
-            payload.enabled,
-        )
-        .await
+    let mut next_config = state.config.read().await.clone();
+    next_config
+        .notifications
+        .targets
+        .push(crate::config::NotificationTargetConfig {
+            name: payload.name.clone(),
+            target_type: payload.target_type.clone(),
+            endpoint_url: payload.endpoint_url.clone(),
+            auth_token: payload.auth_token.clone(),
+            events: payload.events.clone(),
+            enabled: payload.enabled,
+        });
+
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
     {
-        Ok(t) => axum::Json(serde_json::json!(t)).into_response(),
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+
+    match state.db.get_notification_targets().await {
+        Ok(targets) => targets
+            .into_iter()
+            .find(|target| {
+                target.name == payload.name
+                    && target.target_type == payload.target_type
+                    && target.endpoint_url == payload.endpoint_url
+            })
+            .map(|target| axum::Json(serde_json::json!(target)).into_response())
+            .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1605,10 +1943,28 @@ async fn delete_notification_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    match state.db.delete_notification_target(id).await {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let target = match state.db.get_notification_targets().await {
+        Ok(targets) => targets.into_iter().find(|target| target.id == id),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let Some(target) = target else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mut next_config = state.config.read().await.clone();
+    next_config.notifications.targets.retain(|candidate| {
+        !(candidate.name == target.name
+            && candidate.target_type == target.target_type
+            && candidate.endpoint_url == target.endpoint_url)
+    });
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
     }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    StatusCode::OK.into_response()
 }
 
 async fn test_notification_handler(
@@ -1692,13 +2048,39 @@ async fn add_schedule_handler(
         None => return (StatusCode::BAD_REQUEST, "end_time must be HH:MM").into_response(),
     };
 
-    let days_json = serde_json::to_string(&payload.days_of_week).unwrap_or_default();
-    match state
-        .db
-        .add_schedule_window(&start_time, &end_time, &days_json, payload.enabled)
-        .await
+    let mut next_config = state.config.read().await.clone();
+    next_config
+        .schedule
+        .windows
+        .push(crate::config::ScheduleWindowConfig {
+            start_time: start_time.clone(),
+            end_time: end_time.clone(),
+            days_of_week: payload.days_of_week.clone(),
+            enabled: payload.enabled,
+        });
+
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
     {
-        Ok(w) => axum::Json(serde_json::json!(w)).into_response(),
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    state.scheduler.trigger();
+
+    match state.db.get_schedule_windows().await {
+        Ok(windows) => windows
+            .into_iter()
+            .find(|window| {
+                window.start_time == start_time
+                    && window.end_time == end_time
+                    && window.enabled == payload.enabled
+            })
+            .map(|window| axum::Json(serde_json::json!(window)).into_response())
+            .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1707,10 +2089,31 @@ async fn delete_schedule_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    match state.db.delete_schedule_window(id).await {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let window = match state.db.get_schedule_windows().await {
+        Ok(windows) => windows.into_iter().find(|window| window.id == id),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let Some(window) = window else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let days_of_week: Vec<i32> = serde_json::from_str(&window.days_of_week).unwrap_or_default();
+    let mut next_config = state.config.read().await.clone();
+    next_config.schedule.windows.retain(|candidate| {
+        !(candidate.start_time == window.start_time
+            && candidate.end_time == window.end_time
+            && candidate.enabled == window.enabled
+            && candidate.days_of_week == days_of_week)
+    });
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
     }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    state.scheduler.trigger();
+    StatusCode::OK.into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1730,15 +2133,43 @@ async fn add_watch_dir_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddWatchDirPayload>,
 ) -> impl IntoResponse {
-    match state
-        .db
-        .add_watch_dir(&payload.path, payload.is_recursive.unwrap_or(true))
-        .await
+    let normalized_path = match canonicalize_directory_path(&payload.path, "path") {
+        Ok(path) => path,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
+
+    let normalized_path = normalized_path.to_string_lossy().to_string();
+    let mut next_config = state.config.read().await.clone();
+    if next_config
+        .scanner
+        .extra_watch_dirs
+        .iter()
+        .any(|watch_dir| watch_dir.path == normalized_path)
     {
-        Ok(dir) => {
-            refresh_file_watcher(&state).await;
-            axum::Json(dir).into_response()
-        }
+        return (StatusCode::CONFLICT, "watch folder already exists").into_response();
+    }
+    next_config
+        .scanner
+        .extra_watch_dirs
+        .push(crate::config::WatchDirConfig {
+            path: normalized_path.clone(),
+            is_recursive: payload.is_recursive.unwrap_or(true),
+        });
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    refresh_file_watcher(&state).await;
+
+    match state.db.get_watch_dirs().await {
+        Ok(dirs) => dirs
+            .into_iter()
+            .find(|dir| dir.path == normalized_path)
+            .map(|dir| axum::Json(dir).into_response())
+            .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1747,13 +2178,28 @@ async fn remove_watch_dir_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    match state.db.remove_watch_dir(id).await {
-        Ok(_) => {
-            refresh_file_watcher(&state).await;
-            StatusCode::OK.into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let dir = match state.db.get_watch_dirs().await {
+        Ok(dirs) => dirs.into_iter().find(|dir| dir.id == id),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let Some(dir) = dir else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mut next_config = state.config.read().await.clone();
+    next_config
+        .scanner
+        .extra_watch_dirs
+        .retain(|watch_dir| watch_dir.path != dir.path);
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
     }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    refresh_file_watcher(&state).await;
+    StatusCode::OK.into_response()
 }
 
 async fn restart_job_handler(
@@ -1762,11 +2208,17 @@ async fn restart_job_handler(
 ) -> impl IntoResponse {
     match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => {
+            if job.is_active() {
+                return blocked_jobs_response("restart is blocked while the job is active", &[job]);
+            }
             if let Err(e) = state
                 .db
                 .update_job_status(job.id, crate::db::JobState::Queued)
                 .await
             {
+                if is_row_not_found(&e) {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
                 return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             StatusCode::OK.into_response()
@@ -1780,8 +2232,37 @@ async fn delete_job_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    let job = match state.db.get_job_by_id(id).await {
+        Ok(Some(job)) => job,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    if job.is_active() {
+        return blocked_jobs_response("delete is blocked while the job is active", &[job]);
+    }
+
     match state.db.delete_job(id).await {
         Ok(_) => StatusCode::OK.into_response(),
+        Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateJobPriorityPayload {
+    priority: i32,
+}
+
+async fn update_job_priority_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    axum::Json(payload): axum::Json<UpdateJobPriorityPayload>,
+) -> impl IntoResponse {
+    match state.db.set_job_priority(id, payload.priority).await {
+        Ok(_) => axum::Json(serde_json::json!({ "id": id, "priority": payload.priority }))
+            .into_response(),
+        Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1836,10 +2317,16 @@ async fn get_job_detail_handler(
 }
 
 async fn get_file_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.db.get_file_settings().await {
-        Ok(s) => axum::Json(serde_json::json!(s)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    let config = state.config.read().await;
+    axum::Json(serde_json::json!({
+        "id": 1,
+        "delete_source": config.files.delete_source,
+        "output_extension": config.files.output_extension,
+        "output_suffix": config.files.output_suffix,
+        "replace_strategy": config.files.replace_strategy,
+        "output_root": config.files.output_root,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1848,6 +2335,8 @@ struct UpdateFileSettingsPayload {
     output_extension: String,
     output_suffix: String,
     replace_strategy: String,
+    #[serde(default)]
+    output_root: Option<String>,
 }
 
 async fn update_file_settings_handler(
@@ -1862,19 +2351,38 @@ async fn update_file_settings_handler(
             .into_response();
     }
 
-    match state
-        .db
-        .update_file_settings(
-            payload.delete_source,
-            &payload.output_extension,
-            &payload.output_suffix,
-            &payload.replace_strategy,
-        )
-        .await
-    {
-        Ok(s) => axum::Json(serde_json::json!(s)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let output_root =
+        match normalize_optional_directory(payload.output_root.as_deref(), "output_root") {
+            Ok(value) => value,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
+
+    let mut next_config = state.config.read().await.clone();
+    next_config.files.delete_source = payload.delete_source;
+    next_config.files.output_extension = payload.output_extension.clone();
+    next_config.files.output_suffix = payload.output_suffix.clone();
+    next_config.files.replace_strategy = payload.replace_strategy.clone();
+    next_config.files.output_root = output_root.clone();
+
+    if let Err(e) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    axum::Json(serde_json::json!({
+        "id": 1,
+        "delete_source": payload.delete_source,
+        "output_extension": payload.output_extension,
+        "output_suffix": payload.output_suffix,
+        "replace_strategy": payload.replace_strategy,
+        "output_root": output_root,
+    }))
+    .into_response()
 }
 
 fn has_path_separator(value: &str) -> bool {
@@ -2222,6 +2730,7 @@ mod tests {
             vendor: crate::system::hardware::Vendor::Cpu,
             device_path: None,
             supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
         }));
         let (tx, _rx) = broadcast::channel(tx_capacity);
         let transcoder = Arc::new(Transcoder::new());
@@ -2236,6 +2745,7 @@ mod tests {
             )
             .await,
         );
+        let scheduler = crate::scheduler::Scheduler::new(db.clone(), agent.clone());
         let file_watcher = Arc::new(crate::system::watcher::FileWatcher::new(db.clone()));
 
         let mut sys = sysinfo::System::new();
@@ -2247,6 +2757,7 @@ mod tests {
             config: config.clone(),
             agent,
             transcoder,
+            scheduler: scheduler.handle(),
             tx,
             setup_required: Arc::new(AtomicBool::new(setup_required)),
             start_time: Instant::now(),
@@ -2304,6 +2815,28 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
+    async fn seed_job(
+        db: &Db,
+        status: JobState,
+    ) -> std::result::Result<(crate::db::Job, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+        let input = temp_path("alchemist_job_input", "mkv");
+        let output = temp_path("alchemist_job_output", "mkv");
+        std::fs::write(&input, b"test")?;
+
+        db.enqueue_job(&input, &output, std::time::SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .expect("job");
+        if job.status != status {
+            db.update_job_status(job.id, status).await?;
+        }
+
+        let job = db.get_job_by_id(job.id).await?.expect("job by id");
+        Ok((job, input, output))
+    }
+
     fn cleanup_paths(paths: &[PathBuf]) {
         for path in paths {
             let _ = std::fs::remove_file(path);
@@ -2325,6 +2858,7 @@ mod tests {
             tonemap_algorithm: crate::config::TonemapAlgorithm::Hable,
             tonemap_peak: 100.0,
             tonemap_desat: 0.2,
+            subtitle_mode: crate::config::SubtitleMode::Copy,
         }
     }
 
@@ -2349,18 +2883,34 @@ mod tests {
 
     #[test]
     fn normalize_setup_directories_trims_and_filters() {
+        let movies_dir = temp_path("alchemist_setup_movies", "dir");
+        let tv_dir = temp_path("alchemist_setup_tv", "dir");
+        std::fs::create_dir_all(&movies_dir).unwrap();
+        std::fs::create_dir_all(&tv_dir).unwrap();
+
         let input = vec![
-            " /media/movies ".to_string(),
+            format!(" {} ", movies_dir.to_string_lossy()),
             "".to_string(),
             "   ".to_string(),
-            "/media/tv".to_string(),
+            tv_dir.to_string_lossy().to_string(),
         ];
 
         let normalized = normalize_setup_directories(&input).expect("normalize");
         assert_eq!(
             normalized,
-            vec!["/media/movies".to_string(), "/media/tv".to_string()]
+            vec![
+                std::fs::canonicalize(&movies_dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                std::fs::canonicalize(&tv_dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ]
         );
+
+        cleanup_paths(&[movies_dir, tv_dir]);
     }
 
     #[test]
@@ -2429,7 +2979,8 @@ mod tests {
                     "allow_cpu_fallback": true,
                     "allow_cpu_encoding": true,
                     "cpu_preset": "medium",
-                    "preferred_vendor": "cpu"
+                    "preferred_vendor": "cpu",
+                    "device_path": null
                 }),
             ))
             .await?;
@@ -2453,13 +3004,14 @@ mod tests {
 
         let persisted = crate::config::Config::load(config_path.as_path())?;
         assert_eq!(persisted.hardware.preferred_vendor.as_deref(), Some("cpu"));
+        assert_eq!(persisted.hardware.device_path, None);
 
         cleanup_paths(&[config_path, db_path]);
         Ok(())
     }
 
     #[tokio::test]
-    async fn setup_complete_updates_runtime_hardware_and_watch_dirs(
+    async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let watch_dir = temp_path("alchemist_setup_watch", "dir");
         std::fs::create_dir_all(&watch_dir)?;
@@ -2514,9 +3066,16 @@ mod tests {
         );
 
         let watch_dirs = state.db.get_watch_dirs().await?;
-        assert!(watch_dirs
-            .iter()
-            .any(|dir| dir.path == watch_dir.to_string_lossy()));
+        assert!(watch_dirs.is_empty());
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert!(persisted.scanner.watch_enabled);
+        assert_eq!(
+            persisted.scanner.directories,
+            vec![std::fs::canonicalize(&watch_dir)?
+                .to_string_lossy()
+                .to_string()]
+        );
 
         let response = app
             .clone()
@@ -2534,6 +3093,335 @@ mod tests {
         assert!(body.contains("\"vendor\":\"cpu\""));
 
         cleanup_paths(&[watch_dir, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn setup_complete_accepts_nested_settings_payload(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let watch_dir = temp_path("alchemist_setup_nested_watch", "dir");
+        std::fs::create_dir_all(&watch_dir)?;
+
+        let (state, app, config_path, db_path) = build_test_app(true, 8, |config| {
+            config.hardware.preferred_vendor = Some("cpu".to_string());
+        })
+        .await?;
+
+        let mut settings = crate::config::Config::default();
+        settings.scanner.directories = vec![watch_dir.to_string_lossy().to_string()];
+        settings.appearance.active_theme_id = Some("midnight".to_string());
+        settings.notifications.targets = vec![crate::config::NotificationTargetConfig {
+            name: "Discord".to_string(),
+            target_type: "discord".to_string(),
+            endpoint_url: "https://discord.com/api/webhooks/test".to_string(),
+            auth_token: None,
+            events: vec!["completed".to_string()],
+            enabled: true,
+        }];
+        settings.schedule.windows = vec![crate::config::ScheduleWindowConfig {
+            start_time: "22:00".to_string(),
+            end_time: "06:00".to_string(),
+            days_of_week: vec![1, 2, 3],
+            enabled: true,
+        }];
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/setup/complete")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "admin",
+                            "password": "password123",
+                            "settings": settings,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!state.setup_required.load(Ordering::Relaxed));
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert_eq!(persisted.appearance.active_theme_id.as_deref(), Some("midnight"));
+        assert_eq!(persisted.notifications.targets.len(), 1);
+        assert_eq!(persisted.schedule.windows.len(), 1);
+
+        cleanup_paths(&[watch_dir, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fs_endpoints_are_available_during_setup(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let browse_root = temp_path("alchemist_fs_browse", "dir");
+        std::fs::create_dir_all(&browse_root)?;
+        let media_dir = browse_root.join("movies");
+        std::fs::create_dir_all(&media_dir)?;
+        std::fs::write(media_dir.join("movie.mkv"), b"video")?;
+
+        let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+        let browse_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/fs/browse?path={}", browse_root.to_string_lossy()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(browse_response.status(), StatusCode::OK);
+        let browse_body = body_text(browse_response).await;
+        assert!(browse_body.contains("movies"));
+
+        let preview_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/fs/preview")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "directories": [browse_root.to_string_lossy().to_string()]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(preview_response.status(), StatusCode::OK);
+        let preview_body = body_text(preview_response).await;
+        assert!(preview_body.contains("\"total_media_files\":1"));
+
+        cleanup_paths(&[browse_root, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn transcode_settings_round_trip_subtitle_mode(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/settings/transcode",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"subtitle_mode\":\"copy\""));
+
+        let mut payload = sample_transcode_payload();
+        payload.subtitle_mode = crate::config::SubtitleMode::None;
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/settings/transcode",
+                &token,
+                serde_json::to_value(&payload)?,
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert_eq!(
+            persisted.transcode.subtitle_mode,
+            crate::config::SubtitleMode::None
+        );
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn system_settings_round_trip_watch_enabled(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+            config.scanner.watch_enabled = true;
+        })
+        .await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/settings/system",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"watch_enabled\":true"));
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/settings/system",
+                &token,
+                json!({
+                    "monitoring_poll_interval": 2.0,
+                    "enable_telemetry": true,
+                    "watch_enabled": false
+                }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert!(!persisted.scanner.watch_enabled);
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settings_bundle_put_projects_extended_settings_to_db(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let mut payload = crate::config::Config::default();
+        payload.appearance.active_theme_id = Some("midnight".to_string());
+        payload.scanner.extra_watch_dirs = vec![crate::config::WatchDirConfig {
+            path: "/tmp/library".to_string(),
+            is_recursive: true,
+        }];
+        payload.files.output_suffix = "-custom".to_string();
+        payload.schedule.windows = vec![crate::config::ScheduleWindowConfig {
+            start_time: "22:00".to_string(),
+            end_time: "06:00".to_string(),
+            days_of_week: vec![1, 2, 3],
+            enabled: true,
+        }];
+        payload.notifications.enabled = true;
+        payload.notifications.targets = vec![crate::config::NotificationTargetConfig {
+            name: "Discord".to_string(),
+            target_type: "discord".to_string(),
+            endpoint_url: "https://discord.com/api/webhooks/test".to_string(),
+            auth_token: None,
+            events: vec!["completed".to_string()],
+            enabled: true,
+        }];
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::PUT,
+                "/api/settings/bundle",
+                &token,
+                serde_json::to_value(&payload)?,
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let watch_dirs = state.db.get_watch_dirs().await?;
+        assert_eq!(watch_dirs.len(), 1);
+        assert_eq!(watch_dirs[0].path, "/tmp/library");
+
+        let file_settings = state.db.get_file_settings().await?;
+        assert_eq!(file_settings.output_suffix, "-custom");
+
+        let schedule = state.db.get_schedule_windows().await?;
+        assert_eq!(schedule.len(), 1);
+
+        let notifications = state.db.get_notification_targets().await?;
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].target_type, "discord");
+
+        let theme = state.db.get_preference("active_theme_id").await?;
+        assert_eq!(theme.as_deref(), Some("midnight"));
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert_eq!(
+            persisted.appearance.active_theme_id.as_deref(),
+            Some("midnight")
+        );
+        assert_eq!(persisted.files.output_suffix, "-custom");
+        assert_eq!(persisted.scanner.extra_watch_dirs.len(), 1);
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn raw_config_put_overwrites_divergent_db_projection(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        state.db.add_watch_dir("/tmp/stale", true).await?;
+
+        let mut payload = crate::config::Config::default();
+        payload.appearance.active_theme_id = Some("ember".to_string());
+        payload.files.output_extension = "mp4".to_string();
+        let raw_toml = toml::to_string_pretty(&payload)?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::PUT,
+                "/api/settings/config",
+                &token,
+                json!({ "raw_toml": raw_toml }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let watch_dirs = state.db.get_watch_dirs().await?;
+        assert!(watch_dirs.is_empty());
+        let file_settings = state.db.get_file_settings().await?;
+        assert_eq!(file_settings.output_extension, "mp4");
+        let theme = state.db.get_preference("active_theme_id").await?;
+        assert_eq!(theme.as_deref(), Some("ember"));
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hardware_settings_get_exposes_configured_device_path(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let explicit_path = if cfg!(target_os = "linux") {
+            "/dev/dri/renderD128".to_string()
+        } else {
+            "custom-device".to_string()
+        };
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+            config.hardware.device_path = Some(explicit_path.clone());
+        })
+        .await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/settings/hardware",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"device_path\""));
+
+        cleanup_paths(&[config_path, db_path]);
         Ok(())
     }
 
@@ -2585,6 +3473,174 @@ mod tests {
         assert!(rendered.contains("\"second\""));
 
         cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_active_job_returns_conflict(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (job, input_path, output_path) =
+            seed_job(state.db.as_ref(), JobState::Encoding).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::POST,
+                &format!("/api/jobs/{}/delete", job.id),
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = body_text(response).await;
+        assert!(body.contains("\"blocked\""));
+        assert!(body.contains(&format!("\"id\":{}", job.id)));
+
+        cleanup_paths(&[input_path, output_path, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_delete_and_restart_block_active_jobs(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (active_job, active_input, active_output) =
+            seed_job(state.db.as_ref(), JobState::Encoding).await?;
+        let (queued_job, queued_input, queued_output) =
+            seed_job(state.db.as_ref(), JobState::Queued).await?;
+
+        for action in ["delete", "restart"] {
+            let response = app
+                .clone()
+                .oneshot(auth_json_request(
+                    Method::POST,
+                    "/api/jobs/batch",
+                    &token,
+                    json!({
+                        "action": action,
+                        "ids": [active_job.id, queued_job.id]
+                    }),
+                ))
+                .await?;
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            let body = body_text(response).await;
+            assert!(body.contains("\"blocked\""));
+            assert!(body.contains(&format!("\"id\":{}", active_job.id)));
+        }
+
+        cleanup_paths(&[
+            active_input,
+            active_output,
+            queued_input,
+            queued_output,
+            config_path,
+            db_path,
+        ]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_job_updates_status(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Queued).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::POST,
+                &format!("/api/jobs/{}/cancel", job.id),
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let updated = state.db.get_job_by_id(job.id).await?.expect("updated job");
+        assert_eq!(updated.status, JobState::Cancelled);
+
+        cleanup_paths(&[input_path, output_path, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn priority_endpoint_updates_job_priority(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Queued).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                &format!("/api/jobs/{}/priority", job.id),
+                &token,
+                json!({ "priority": 10 }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"priority\":10"));
+
+        let updated = state.db.get_job_by_id(job.id).await?.expect("updated job");
+        assert_eq!(updated.priority, 10);
+
+        cleanup_paths(&[input_path, output_path, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn watch_dir_paths_are_canonicalized_and_deduplicated(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let watch_root = temp_path("alchemist_watch_root", "dir");
+        let watch_dir = watch_root.join("library");
+        std::fs::create_dir_all(&watch_dir)?;
+
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let first_path = watch_dir.to_string_lossy().to_string();
+        let second_path = watch_root
+            .join("library/../library")
+            .to_string_lossy()
+            .to_string();
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/settings/watch-dirs",
+                &token,
+                json!({ "path": first_path, "is_recursive": true }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/settings/watch-dirs",
+                &token,
+                json!({ "path": second_path, "is_recursive": true }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let dirs = state.db.get_watch_dirs().await?;
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(
+            dirs[0].path,
+            std::fs::canonicalize(&watch_dir)?
+                .to_string_lossy()
+                .to_string()
+        );
+
+        cleanup_paths(&[watch_root, config_path, db_path]);
         Ok(())
     }
 }

@@ -1,8 +1,8 @@
 use crate::media::pipeline::{Encoder, RateControl};
 use crate::system::hardware::HardwareInfo;
 
-pub fn apply(
-    cmd: &mut tokio::process::Command,
+pub fn append_args(
+    args: &mut Vec<String>,
     encoder: Encoder,
     hw_info: Option<&HardwareInfo>,
     rate_control: Option<RateControl>,
@@ -10,9 +10,12 @@ pub fn apply(
 ) {
     if let Some(hw) = hw_info {
         if let Some(ref device_path) = hw.device_path {
-            cmd.arg("-init_hw_device")
-                .arg(format!("qsv=qsv:{}", device_path));
-            cmd.arg("-filter_hw_device").arg("qsv");
+            args.extend([
+                "-init_hw_device".to_string(),
+                format!("qsv=qsv:{device_path}"),
+                "-filter_hw_device".to_string(),
+                "qsv".to_string(),
+            ]);
         }
     }
 
@@ -23,19 +26,34 @@ pub fn apply(
 
     match encoder {
         Encoder::Av1Qsv => {
-            cmd.arg("-c:v").arg("av1_qsv");
-            cmd.arg("-global_quality").arg(quality.to_string());
-            cmd.arg("-look_ahead").arg("1");
+            args.extend([
+                "-c:v".to_string(),
+                "av1_qsv".to_string(),
+                "-global_quality".to_string(),
+                quality.to_string(),
+                "-look_ahead".to_string(),
+                "1".to_string(),
+            ]);
         }
         Encoder::HevcQsv => {
-            cmd.arg("-c:v").arg("hevc_qsv");
-            cmd.arg("-global_quality").arg(quality.to_string());
-            cmd.arg("-look_ahead").arg("1");
+            args.extend([
+                "-c:v".to_string(),
+                "hevc_qsv".to_string(),
+                "-global_quality".to_string(),
+                quality.to_string(),
+                "-look_ahead".to_string(),
+                "1".to_string(),
+            ]);
         }
         Encoder::H264Qsv => {
-            cmd.arg("-c:v").arg("h264_qsv");
-            cmd.arg("-global_quality").arg(quality.to_string());
-            cmd.arg("-look_ahead").arg("1");
+            args.extend([
+                "-c:v".to_string(),
+                "h264_qsv".to_string(),
+                "-global_quality".to_string(),
+                quality.to_string(),
+                "-look_ahead".to_string(),
+                "1".to_string(),
+            ]);
         }
         _ => {}
     }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal, Pause, Play, Trash2, RefreshCw } from "lucide-react";
+import { Terminal, Pause, Play, Trash2, RefreshCw, Search } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
@@ -24,6 +24,8 @@ export default function LogViewer() {
     const [loading, setLoading] = useState(true);
     const [streamError, setStreamError] = useState<string | null>(null);
     const [confirmClear, setConfirmClear] = useState(false);
+    const [query, setQuery] = useState("");
+    const [levelFilter, setLevelFilter] = useState<"all" | "info" | "warn" | "error">("all");
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const pausedRef = useRef(paused);
@@ -164,6 +166,18 @@ export default function LogViewer() {
         }
     };
 
+    const filteredLogs = logs.filter((log) => {
+        const level = log.level.toLowerCase();
+        if (levelFilter !== "all" && !level.includes(levelFilter)) {
+            return false;
+        }
+        if (!query.trim()) {
+            return true;
+        }
+        const haystack = `${log.message} ${log.job_id ?? ""}`.toLowerCase();
+        return haystack.includes(query.trim().toLowerCase());
+    });
+
     return (
         <div className="flex flex-col h-full rounded-2xl border border-helios-line/40 bg-[#0d1117] overflow-hidden shadow-2xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20 bg-helios-surface/50 backdrop-blur">
@@ -197,16 +211,39 @@ export default function LogViewer() {
                 </div>
             </div>
 
+            <div className="border-b border-helios-line/10 bg-helios-surface/30 px-4 py-3 flex flex-col md:flex-row gap-3">
+                <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
+                    <input
+                        type="text"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Filter logs by text or job id…"
+                        className="w-full rounded-lg border border-helios-line/20 bg-helios-surface px-9 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
+                    />
+                </div>
+                <select
+                    value={levelFilter}
+                    onChange={(e) => setLevelFilter(e.target.value as "all" | "info" | "warn" | "error")}
+                    className="rounded-lg border border-helios-line/20 bg-helios-surface px-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
+                >
+                    <option value="all">All Levels</option>
+                    <option value="info">Info</option>
+                    <option value="warn">Warnings</option>
+                    <option value="error">Errors</option>
+                </select>
+            </div>
+
             <div
                 ref={scrollRef}
                 className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-helios-line/20 scrollbar-track-transparent"
                 aria-live="polite"
             >
                 {streamError && <div className="text-amber-400 text-center py-4 text-[11px] font-semibold">{streamError}</div>}
-                {logs.length === 0 && !loading && !streamError && (
+                {filteredLogs.length === 0 && !loading && !streamError && (
                     <div className="text-helios-slate/30 text-center py-10 italic">No logs found.</div>
                 )}
-                {logs.map((log) => (
+                {filteredLogs.map((log) => (
                     <div key={log.id} className="flex gap-3 hover:bg-white/5 px-2 py-0.5 rounded -mx-2 group">
                         <span className="text-helios-slate/50 shrink-0 select-none w-20 text-right">{formatTime(log.created_at)}</span>
 

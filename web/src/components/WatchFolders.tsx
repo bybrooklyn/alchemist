@@ -3,6 +3,7 @@ import { FolderOpen, Trash2, Plus, Folder, Play } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
+import ServerDirectoryPicker from "./ui/ServerDirectoryPicker";
 
 interface WatchDir {
     id: number;
@@ -10,13 +11,37 @@ interface WatchDir {
     is_recursive: boolean;
 }
 
+interface SettingsBundleResponse {
+    settings: {
+        scanner: {
+            directories: string[];
+        };
+        [key: string]: unknown;
+    };
+}
+
 export default function WatchFolders() {
     const [dirs, setDirs] = useState<WatchDir[]>([]);
+    const [libraryDirs, setLibraryDirs] = useState<string[]>([]);
     const [path, setPath] = useState("");
+    const [libraryPath, setLibraryPath] = useState("");
+    const [isRecursive, setIsRecursive] = useState(true);
     const [loading, setLoading] = useState(true);
     const [scanning, setScanning] = useState(false);
+    const [syncingLibrary, setSyncingLibrary] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
+    const [pickerOpen, setPickerOpen] = useState<null | "library" | "watch">(null);
+
+    const fetchBundle = async () => {
+        try {
+            const data = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
+            setLibraryDirs(data.settings.scanner.directories);
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to fetch library directories";
+            setError(message);
+        }
+    };
 
     const fetchDirs = async () => {
         try {
@@ -33,6 +58,7 @@ export default function WatchFolders() {
 
     useEffect(() => {
         void fetchDirs();
+        void fetchBundle();
     }, []);
 
     const triggerScan = async () => {
@@ -58,10 +84,11 @@ export default function WatchFolders() {
             await apiAction("/api/settings/watch-dirs", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: path.trim(), is_recursive: true }),
+                body: JSON.stringify({ path: path.trim(), is_recursive: isRecursive }),
             });
 
             setPath("");
+            setIsRecursive(true);
             setError(null);
             await fetchDirs();
             showToast({ kind: "success", title: "Watch Folders", message: "Folder added." });
@@ -70,6 +97,44 @@ export default function WatchFolders() {
             setError(message);
             showToast({ kind: "error", title: "Watch Folders", message });
         }
+    };
+
+    const saveLibraryDirs = async (nextDirectories: string[]) => {
+        setSyncingLibrary(true);
+        try {
+            const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
+            await apiAction("/api/settings/bundle", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    ...bundle.settings,
+                    scanner: {
+                        ...bundle.settings.scanner,
+                        directories: nextDirectories,
+                    },
+                }),
+            });
+            setLibraryDirs(nextDirectories);
+            setError(null);
+            showToast({ kind: "success", title: "Library", message: "Library directories updated." });
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to update library directories";
+            setError(message);
+            showToast({ kind: "error", title: "Library", message });
+        } finally {
+            setSyncingLibrary(false);
+        }
+    };
+
+    const addLibraryDir = async () => {
+        const nextPath = libraryPath.trim();
+        if (!nextPath || libraryDirs.includes(nextPath)) return;
+        await saveLibraryDirs([...libraryDirs, nextPath]);
+        setLibraryPath("");
+    };
+
+    const removeLibraryDir = async (dir: string) => {
+        await saveLibraryDirs(libraryDirs.filter(candidate => candidate !== dir));
     };
 
     const removeDir = async (id: number) => {
@@ -115,24 +180,96 @@ export default function WatchFolders() {
                 </div>
             )}
 
-            <form onSubmit={addDir} className="flex gap-2">
-                <div className="relative flex-1">
-                    <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate/50" size={16} />
-                    <input
-                        type="text"
-                        value={path}
-                        onChange={(e) => setPath(e.target.value)}
-                        placeholder="Enter full directory path..."
-                        className="w-full bg-helios-surface border border-helios-line/20 rounded-xl pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
-                    />
+            <form onSubmit={addDir} className="space-y-3">
+                <div className="space-y-3 rounded-2xl border border-helios-line/20 bg-helios-surface-soft/50 p-4">
+                    <div>
+                        <h3 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Library Directories</h3>
+                        <p className="text-[10px] text-helios-slate mt-1">
+                            Canonical library roots from setup/TOML. These are stored in the main config file and synchronized into runtime watchers.
+                        </p>
+                    </div>
+                    <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate/50" size={16} />
+                            <input
+                                type="text"
+                                value={libraryPath}
+                                onChange={(e) => setLibraryPath(e.target.value)}
+                                placeholder="Add library directory..."
+                                className="w-full bg-helios-surface border border-helios-line/20 rounded-xl pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setPickerOpen("library")}
+                            className="rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
+                        >
+                            Browse
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void addLibraryDir()}
+                            disabled={!libraryPath.trim() || syncingLibrary}
+                            className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
+                        >
+                            <Plus size={16} /> Add
+                        </button>
+                    </div>
+                    <div className="space-y-2">
+                        {libraryDirs.map((dir) => (
+                            <div key={dir} className="flex items-center justify-between rounded-xl border border-helios-line/10 bg-helios-surface px-3 py-2">
+                                <span className="truncate font-mono text-sm text-helios-ink" title={dir}>{dir}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => void removeLibraryDir(dir)}
+                                    disabled={syncingLibrary}
+                                    className="rounded-lg p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
+                        ))}
+                        {libraryDirs.length === 0 && (
+                            <p className="text-xs text-helios-slate">No canonical library directories configured yet.</p>
+                        )}
+                    </div>
                 </div>
-                <button
-                    type="submit"
-                    disabled={!path.trim()}
-                    className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
-                >
-                    <Plus size={16} /> Add
-                </button>
+
+                <div className="flex gap-2">
+                    <div className="relative flex-1">
+                        <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate/50" size={16} />
+                        <input
+                            type="text"
+                            value={path}
+                            onChange={(e) => setPath(e.target.value)}
+                            placeholder="Enter full directory path..."
+                            className="w-full bg-helios-surface border border-helios-line/20 rounded-xl pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setPickerOpen("watch")}
+                        className="rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
+                    >
+                        Browse
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={!path.trim()}
+                        className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
+                    >
+                        <Plus size={16} /> Add
+                    </button>
+                </div>
+                <label className="inline-flex items-center gap-2 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-sm text-helios-ink">
+                    <input
+                        type="checkbox"
+                        checked={isRecursive}
+                        onChange={(e) => setIsRecursive(e.target.checked)}
+                        className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
+                    />
+                    Watch subdirectories recursively
+                </label>
             </form>
 
             <div className="space-y-2">
@@ -144,6 +281,9 @@ export default function WatchFolders() {
                             </div>
                             <span className="text-sm font-mono text-helios-ink truncate max-w-[400px]" title={dir.path}>
                                 {dir.path}
+                            </span>
+                            <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-helios-slate">
+                                {dir.is_recursive ? "Recursive" : "Top level"}
                             </span>
                         </div>
                         <button
@@ -181,6 +321,25 @@ export default function WatchFolders() {
                 onConfirm={async () => {
                     if (pendingRemoveId === null) return;
                     await removeDir(pendingRemoveId);
+                }}
+            />
+
+            <ServerDirectoryPicker
+                open={pickerOpen !== null}
+                title={pickerOpen === "library" ? "Select Library Root" : "Select Extra Watch Folder"}
+                description={
+                    pickerOpen === "library"
+                        ? "Choose a canonical server folder that represents a media library root."
+                        : "Choose an additional server folder to watch outside the canonical library roots."
+                }
+                onClose={() => setPickerOpen(null)}
+                onSelect={(selectedPath) => {
+                    if (pickerOpen === "library") {
+                        setLibraryPath(selectedPath);
+                    } else {
+                        setPath(selectedPath);
+                    }
+                    setPickerOpen(null);
                 }}
             />
         </div>

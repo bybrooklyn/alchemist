@@ -8,6 +8,7 @@ interface FileSettings {
     output_extension: string;
     output_suffix: string;
     replace_strategy: string;
+    output_root: string | null;
 }
 
 export default function FileSettings() {
@@ -16,6 +17,7 @@ export default function FileSettings() {
         output_extension: "mkv",
         output_suffix: "-alchemist",
         replace_strategy: "keep",
+        output_root: null,
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -105,6 +107,35 @@ export default function FileSettings() {
                                 <option value="mp4">mp4</option>
                             </select>
                         </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Output Root</label>
+                        <input
+                            type="text"
+                            value={settings.output_root ?? ""}
+                            onChange={e => setSettings({ ...settings, output_root: e.target.value || null })}
+                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
+                            placeholder="Optional mirrored output directory"
+                        />
+                        <p className="text-[10px] text-helios-slate mt-1">
+                            Leave blank to write alongside the source file. When set, Alchemist mirrors the source folder structure under this directory.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Existing Output Policy</label>
+                        <select
+                            value={settings.replace_strategy}
+                            onChange={e => setSettings({ ...settings, replace_strategy: e.target.value })}
+                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
+                        >
+                            <option value="keep">Keep existing output</option>
+                            <option value="replace">Replace after verified success</option>
+                        </select>
+                        <p className="text-[10px] text-helios-slate mt-1">
+                            Replace mode now encodes to a temp file first and only promotes it after all verification gates pass.
+                        </p>
                     </div>
 
                     <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-xl space-y-3">

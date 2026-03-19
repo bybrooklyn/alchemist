@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette } from "lucide-react";
+import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2 } from "lucide-react";
 import WatchFolders from "./WatchFolders";
 import NotificationSettings from "./NotificationSettings";
 import ScheduleSettings from "./ScheduleSettings";
@@ -9,16 +9,20 @@ import TranscodeSettings from "./TranscodeSettings";
 import SystemSettings from "./SystemSettings";
 import HardwareSettings from "./HardwareSettings";
 import AppearanceSettings from "./AppearanceSettings";
+import QualitySettings from "./QualitySettings";
+import ConfigEditorSettings from "./ConfigEditorSettings";
 
 const TABS = [
     { id: "appearance", label: "Appearance", icon: Palette, component: AppearanceSettings },
-    { id: "watch", label: "Watch Folders", icon: FolderOpen, component: WatchFolders },
+    { id: "watch", label: "Library & Intake", icon: FolderOpen, component: WatchFolders },
     { id: "transcode", label: "Transcoding", icon: Cog, component: TranscodeSettings },
-    { id: "files", label: "File Management", icon: FileCog, component: FileSettings },
-    { id: "schedule", label: "Schedule", icon: Calendar, component: ScheduleSettings },
+    { id: "quality", label: "Quality", icon: Activity, component: QualitySettings },
+    { id: "files", label: "Output & Files", icon: FileCog, component: FileSettings },
+    { id: "schedule", label: "Automation", icon: Calendar, component: ScheduleSettings },
     { id: "notifications", label: "Notifications", icon: Bell, component: NotificationSettings },
     { id: "hardware", label: "Hardware", icon: LayoutGrid, component: HardwareSettings },
-    { id: "system", label: "System", icon: Server, component: SystemSettings },
+    { id: "system", label: "Runtime", icon: Server, component: SystemSettings },
+    { id: "config", label: "Config", icon: FileCode2, component: ConfigEditorSettings },
 ];
 
 export default function SettingsPanel() {
@@ -133,6 +137,14 @@ export default function SettingsPanel() {
                            Container styling is applied here to wrap the component uniformly.
                         */}
                         <div className="bg-helios-surface border border-helios-line/20 rounded-3xl p-6 sm:p-8 shadow-sm">
+                            <div className="mb-5 rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    Setup & Runtime Controls
+                                </p>
+                                <p className="mt-1 text-sm text-helios-ink">
+                                    Tune library behavior, transcoding, hardware, automation, and advanced configuration from one place.
+                                </p>
+                            </div>
                             <div className="mb-6">
                                 <h2 className="text-xl font-bold text-helios-ink flex items-center gap-2">
                                     {(() => {

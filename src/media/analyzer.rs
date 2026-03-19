@@ -1,7 +1,7 @@
 use crate::error::{AlchemistError, Result};
 use crate::media::pipeline::{
     AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, DynamicRange, MediaAnalysis,
-    MediaMetadata, TranscodeDecision,
+    MediaMetadata, SubtitleStreamMetadata, TranscodeDecision,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ pub struct Stream {
     pub nb_frames: Option<String>,
     pub duration: Option<String>,
     pub disposition: Option<Disposition>,
+    pub tags: Option<Tags>,
     pub color_primaries: Option<String>,
     pub color_transfer: Option<String>,
     pub color_space: Option<String>,
@@ -41,6 +42,13 @@ pub struct Stream {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Disposition {
     pub default: Option<i32>,
+    pub forced: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Tags {
+    pub language: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +79,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                     "-print_format",
                     "json",
                     "-show_entries",
-                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range",
+                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
                 ])
                 .arg(&path)
                 .output()
@@ -91,6 +99,37 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 .ok_or_else(|| AlchemistError::Analyzer("No video stream found".to_string()))?;
 
             let audio_stream = metadata.streams.iter().find(|s| s.codec_type == "audio");
+            let audio_bitrate_bps = audio_stream
+                .and_then(|stream| stream.bit_rate.as_deref())
+                .and_then(parse_u64);
+            let audio_is_heavy = audio_stream
+                .map(Analyzer::should_transcode_audio)
+                .unwrap_or(false);
+            let subtitle_streams = metadata
+                .streams
+                .iter()
+                .filter(|s| s.codec_type == "subtitle")
+                .enumerate()
+                .map(|(stream_index, stream)| SubtitleStreamMetadata {
+                    stream_index,
+                    codec_name: stream.codec_name.clone(),
+                    language: stream.tags.as_ref().and_then(|tags| tags.language.clone()),
+                    title: stream.tags.as_ref().and_then(|tags| tags.title.clone()),
+                    default: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(|disposition| disposition.default)
+                        .unwrap_or(0)
+                        == 1,
+                    forced: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(|disposition| disposition.forced)
+                        .unwrap_or(0)
+                        == 1,
+                    burnable: subtitle_codec_is_burnable(&stream.codec_name),
+                })
+                .collect::<Vec<_>>();
 
             let color_transfer = video_stream.color_transfer.clone();
             let color_primaries = video_stream.color_primaries.clone();
@@ -189,7 +228,10 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 fps,
                 container: metadata.format.format_name.clone(),
                 audio_codec: audio_stream.map(|s| s.codec_name.clone()),
+                audio_bitrate_bps,
                 audio_channels: audio_stream.and_then(|s| s.channels),
+                audio_is_heavy,
+                subtitle_streams,
             };
 
             Ok(MediaAnalysis {
@@ -208,7 +250,8 @@ pub struct Analyzer;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputProbe {
     pub codec_name: String,
-    pub encoder_tag: Option<String>,
+    pub stream_encoder_tag: Option<String>,
+    pub format_encoder_tag: Option<String>,
 }
 
 impl Analyzer {
@@ -227,7 +270,7 @@ impl Analyzer {
                     "-print_format",
                     "json",
                     "-show_entries",
-                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range",
+                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
                 ])
                 .arg(&path)
                 .output()
@@ -289,6 +332,8 @@ impl Analyzer {
         #[derive(Debug, Deserialize)]
         struct ProbeStream {
             codec_name: Option<String>,
+            #[serde(default)]
+            tags: ProbeTags,
         }
 
         #[derive(Debug, Default, Deserialize)]
@@ -313,7 +358,7 @@ impl Analyzer {
                     "-print_format",
                     "json",
                     "-show_entries",
-                    "stream=codec_name:format_tags=encoder",
+                    "stream=codec_name:stream_tags=encoder:format_tags=encoder",
                 ])
                 .arg(&path)
                 .output()
@@ -334,7 +379,8 @@ impl Analyzer {
                 .unwrap_or_default();
             Ok(OutputProbe {
                 codec_name,
-                encoder_tag: parsed.format.tags.encoder,
+                stream_encoder_tag: parsed.streams.first().and_then(|s| s.tags.encoder.clone()),
+                format_encoder_tag: parsed.format.tags.encoder,
             })
         })
         .await
@@ -468,6 +514,13 @@ fn parse_u64(s: &str) -> Option<u64> {
     s.parse().ok()
 }
 
+fn subtitle_codec_is_burnable(codec_name: &str) -> bool {
+    matches!(
+        codec_name.to_ascii_lowercase().as_str(),
+        "subrip" | "srt" | "ass" | "ssa" | "webvtt" | "text" | "mov_text" | "tx3g"
+    )
+}
+
 fn infer_bit_depth(stream: &Stream) -> Option<u8> {
     if let Some(ref pix_fmt) = stream.pix_fmt {
         if let Some(depth) = bit_depth_from_pix_fmt(pix_fmt) {
@@ -580,6 +633,7 @@ mod tests {
             nb_frames: None,
             duration: None,
             disposition: None,
+            tags: None,
             color_primaries: None,
             color_transfer: None,
             color_space: None,
@@ -604,6 +658,7 @@ mod tests {
             nb_frames: None,
             duration: None,
             disposition: None,
+            tags: None,
             color_primaries: None,
             color_transfer: None,
             color_space: None,
@@ -628,6 +683,7 @@ mod tests {
             nb_frames: None,
             duration: None,
             disposition: None,
+            tags: None,
             color_primaries: None,
             color_transfer: None,
             color_space: None,

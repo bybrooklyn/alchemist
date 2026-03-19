@@ -77,6 +77,36 @@ test("single job delete failure is surfaced to the user", async ({ page }) => {
   await expectVisibleError(page, "forced single-job failure");
 });
 
+test("active jobs hide delete and disable batch restart/delete", async ({ page }) => {
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [
+      {
+        id: 2,
+        input_path: "/media/encoding.mkv",
+        output_path: "/output/encoding-av1.mkv",
+        status: "encoding",
+        priority: 10,
+        progress: 42,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+      },
+    ]);
+  });
+
+  await page.goto("/jobs");
+  await expect(page.getByTitle("/media/encoding.mkv")).toBeVisible();
+
+  await page.locator("tbody input[type='checkbox']").first().check();
+  await expect(page.getByTitle("Restart")).toBeDisabled();
+  await expect(page.getByTitle("Delete")).toBeDisabled();
+
+  await page.getByTitle("Actions").first().click();
+  const menu = page.locator("div.absolute.right-0.mt-2.w-44").first();
+  await expect(menu).toContainText("View details");
+  await expect(menu).not.toContainText("Delete");
+  await expect(menu.getByRole("button", { name: "Stop / Cancel" })).toBeVisible();
+});
+
 test("log clear failure is surfaced to the user", async ({ page }) => {
   await page.route("**/api/logs/history**", async (route) => {
     await fulfillJson(route, 200, [

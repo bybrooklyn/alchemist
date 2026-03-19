@@ -39,6 +39,7 @@ test("file settings save failure is visible", async ({ page }) => {
         output_extension: "mkv",
         output_suffix: "-alchemist",
         replace_strategy: "keep",
+        output_root: null,
       });
       return;
     }
@@ -50,6 +51,37 @@ test("file settings save failure is visible", async ({ page }) => {
 
   await expectVisibleError(page, "forced files failure");
   await expect(page.getByText("File settings saved.")).toHaveCount(0);
+});
+
+test("file settings output root round-trips through save payload", async ({ page }) => {
+  let savedBody: Record<string, unknown> | null = null;
+
+  await page.route("**/api/settings/files", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        delete_source: false,
+        output_extension: "mkv",
+        output_suffix: "-alchemist",
+        replace_strategy: "replace",
+        output_root: "/encoded",
+      });
+      return;
+    }
+
+    savedBody = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfillJson(route, 200, savedBody);
+  });
+
+  await page.goto("/settings?tab=files");
+  const outputRootInput = page.getByPlaceholder("Optional mirrored output directory");
+  await expect(outputRootInput).toHaveValue("/encoded");
+  await outputRootInput.fill("/encoded/mirror");
+  await page.getByRole("button", { name: "Save Settings" }).click();
+
+  expect(savedBody).toMatchObject({
+    output_root: "/encoded/mirror",
+    replace_strategy: "replace",
+  });
 });
 
 test("schedule add failure is visible", async ({ page }) => {
@@ -158,6 +190,34 @@ test("watch folder add failure is visible", async ({ page }) => {
   await expectVisibleError(page, "forced watch add failure");
 });
 
+test("watch folder recursive toggle is submitted", async ({ page }) => {
+  let savedBody: Record<string, unknown> | null = null;
+
+  await page.route("**/api/settings/watch-dirs", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, []);
+      return;
+    }
+
+    savedBody = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfillJson(route, 200, {
+      id: 1,
+      path: savedBody.path,
+      is_recursive: savedBody.is_recursive,
+    });
+  });
+
+  await page.goto("/settings?tab=watch");
+  await page.getByPlaceholder("Enter full directory path...").fill("/tmp/test-media");
+  await page.getByLabel("Watch subdirectories recursively").uncheck();
+  await page.getByRole("button", { name: /^Add$/ }).click();
+
+  expect(savedBody).toMatchObject({
+    path: "/tmp/test-media",
+    is_recursive: false,
+  });
+});
+
 test("watch folder remove failure is visible", async ({ page }) => {
   await page.route("**/api/settings/watch-dirs", async (route) => {
     if (route.request().method() === "GET") {
@@ -174,6 +234,7 @@ test("watch folder remove failure is visible", async ({ page }) => {
   });
 
   await page.goto("/settings?tab=watch");
+  await page.getByText("/tmp/test-media").hover();
   await page.getByTitle("Stop watching").click();
 
   const dialog = page.getByRole("dialog");
