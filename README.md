@@ -2,18 +2,23 @@
 
 > Intelligent video transcoding automation with hardware acceleration and CPU fallback
 
-Alchemist is a Rust-based video transcoding system that automatically converts your media library to efficient AV1 format using hardware acceleration (GPU) or software encoding (CPU fallback).
+Alchemist is a Rust-based video transcoding system that automatically converts your media library to efficient modern codecs using hardware acceleration (GPU) or software encoding (CPU fallback).
 
 ## Features
 
 - **Hardware Acceleration**: Supports NVIDIA (NVENC), Intel (QSV), AMD (VAAPI), Apple (VideoToolbox)
-- **CPU Fallback**: Automatic software encoding with libsvtav1 when GPU is unavailable
-- **Intelligent Analysis**: Only transcodes files that will benefit from AV1 encoding
-- **Web Dashboard**: Real-time monitoring and control via Axum/Askama/HTMX-based UI
+- **Codec Targets**: AV1, HEVC, and H.264 output profiles
+- **CPU Fallback**: Automatic software encoding when GPU acceleration is unavailable
+- **Intelligent Analysis**: Only transcodes files that will benefit from compression
+- **Web Dashboard**: Axum backend with an Astro + React frontend for real-time monitoring and control
 - **Single Binary**: All assets and templates are embedded into the binary for easy deployment
 - **Background Processing**: Queue-based system with concurrent job support
 - **Performance Metrics**: Detailed logging and statistics for each transcode job
 - **HDR Handling**: Preserve HDR metadata or tonemap to SDR for compatibility
+- **Priority Queueing**: Promote, lower, or reset per-job priority from the dashboard
+- **Watch Folders**: Mix recursive and top-level watch directories
+- **Safe Replace Flow**: Replacement encodes write to a temporary file and promote only after all gates pass
+- **Mirrored Output Roots**: Optionally write outputs to a separate root while preserving source-relative folders
 
 ## Quick Start
 
@@ -57,7 +62,7 @@ docker run -d \
   alchemist
 ```
 
-Access the web interface at `http://localhost:3000`
+Access the web interface at `http://localhost:3000`.
 
 ## Configuration
 
@@ -84,9 +89,18 @@ directories = [                  # Auto-scan directories
 
 Runtime environment variables:
 
-- `ALCHEMIST_CONFIG_PATH` config file path (default: `./config.toml`)
-- `ALCHEMIST_DB_PATH` SQLite database path (default: `./alchemist.db`)
+- `ALCHEMIST_CONFIG_PATH` config file path (default: `~/.openbitdo/config.toml` on Linux/macOS, `./config.toml` elsewhere)
+- `ALCHEMIST_DB_PATH` SQLite database path (default: `~/.openbitdo/alchemist.db` on Linux/macOS, `./alchemist.db` elsewhere)
 - `ALCHEMIST_CONFIG_MUTABLE` allow runtime config writes (`true`/`false`, default: `true`)
+
+Most operational settings are managed from the web UI after first boot:
+
+- `Transcode`: codec target, concurrency, thresholds, HDR handling
+- `Files`: output suffix/extension, optional `output_root`, replace strategy, source deletion
+- `Watch Folders`: add/remove canonicalized paths and choose recursive or top-level watching
+- `Jobs`: cancel active work, restart terminal jobs, delete terminal history, and adjust job priority
+
+When `output_root` is set, Alchemist mirrors the source-relative directory structure under that root. If it cannot determine a matching source root, it falls back to sibling output behavior.
 
 ## Supported Platforms
 

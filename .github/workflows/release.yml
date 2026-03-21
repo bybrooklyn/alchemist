@@ -26,6 +26,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release channel
+        id: release_channel
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
       
       # Use bundled Bun (installed via npm or setup-bun) to build frontend
       - name: Install Bun
@@ -59,11 +71,13 @@ jobs:
           cp target/${{ matrix.target }}/release/alchemist.exe alchemist-${{ matrix.target_name }}.exe
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
             alchemist-${{ matrix.target_name }}.exe
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}
+          make_latest: ${{ steps.release_channel.outputs.make_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,6 +99,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release channel
+        id: release_channel
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read app version
+        id: app_version
+        shell: bash
+        run: |
+          echo "value=$(grep -m1 '^version = ' Cargo.toml | cut -d'\"' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
@@ -128,9 +160,9 @@ jobs:
               <key>CFBundleName</key>
               <string>$APP_NAME</string>
               <key>CFBundleShortVersionString</key>
-              <string>${{ github.ref_name }}</string>
+              <string>${{ steps.app_version.outputs.value }}</string>
               <key>CFBundleVersion</key>
-              <string>${{ github.ref_name }}</string>
+              <string>${{ steps.app_version.outputs.value }}</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>LSApplicationCategoryType</key>
@@ -149,10 +181,12 @@ jobs:
           ditto -c -k --keepParent "$APP_DIR" "alchemist-macos-${{ matrix.target_name }}.zip"
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: alchemist-macos-${{ matrix.target_name }}.zip
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}
+          make_latest: ${{ steps.release_channel.outputs.make_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -165,6 +199,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release channel
+        id: release_channel
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
@@ -223,9 +269,11 @@ jobs:
           mv Alchemist*.AppImage alchemist-linux-x86_64.AppImage
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: alchemist-linux-x86_64.AppImage
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}
+          make_latest: ${{ steps.release_channel.outputs.make_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

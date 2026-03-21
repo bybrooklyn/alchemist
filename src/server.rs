@@ -956,10 +956,11 @@ async fn setup_complete_handler(
 
     let mut next_config = match payload.settings {
         Some(mut settings) => {
-            settings.scanner.directories = match normalize_setup_directories(&settings.scanner.directories) {
-                Ok(paths) => paths,
-                Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
-            };
+            settings.scanner.directories =
+                match normalize_setup_directories(&settings.scanner.directories) {
+                    Ok(paths) => paths,
+                    Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+                };
             settings
         }
         None => {
@@ -985,6 +986,8 @@ async fn setup_complete_handler(
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
+
+    let runtime_concurrent_jobs = next_config.transcode.concurrent_jobs;
 
     let hardware_info =
         match crate::system::hardware::detect_hardware_for_config(&next_config).await {
@@ -1044,7 +1047,7 @@ async fn setup_complete_handler(
     state.setup_required.store(false, Ordering::Relaxed);
     state
         .agent
-        .set_concurrent_jobs(payload.concurrent_jobs)
+        .set_concurrent_jobs(runtime_concurrent_jobs)
         .await;
     state.hardware_state.replace(Some(hardware_info)).await;
     refresh_file_watcher(&state).await;
@@ -1064,7 +1067,11 @@ async fn setup_complete_handler(
     let cookie = build_session_cookie(&token);
     (
         [(header::SET_COOKIE, cookie)],
-        axum::Json(serde_json::json!({ "status": "saved" })),
+        axum::Json(serde_json::json!({
+            "status": "saved",
+            "message": "Setup completed successfully.",
+            "concurrent_jobs": runtime_concurrent_jobs
+        })),
     )
         .into_response()
 }
@@ -1154,7 +1161,7 @@ struct StatsData {
     concurrent_limit: usize,
 }
 
-async fn get_stats_data(db: &Db, config: &Config) -> Result<StatsData> {
+async fn get_stats_data(db: &Db, concurrent_limit: usize) -> Result<StatsData> {
     let s = db.get_stats().await?;
     let total = s
         .as_object()
@@ -1177,13 +1184,12 @@ async fn get_stats_data(db: &Db, config: &Config) -> Result<StatsData> {
         completed,
         active,
         failed,
-        concurrent_limit: config.transcode.concurrent_jobs,
+        concurrent_limit,
     })
 }
 
 async fn stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let config = state.config.read().await;
-    match get_stats_data(&state.db, &config).await {
+    match get_stats_data(&state.db, state.agent.concurrent_jobs_limit()).await {
         Ok(stats) => axum::Json(serde_json::json!({
             "total": stats.total,
             "completed": stats.completed,
@@ -1264,13 +1270,38 @@ async fn cancel_job_handler(
 }
 
 async fn restart_failed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let _ = state.db.restart_failed_jobs().await;
-    StatusCode::OK
+    match state.db.restart_failed_jobs().await {
+        Ok(count) => {
+            let message = if count == 0 {
+                "No failed or cancelled jobs were waiting to be retried.".to_string()
+            } else if count == 1 {
+                "Queued 1 failed or cancelled job for retry.".to_string()
+            } else {
+                format!("Queued {count} failed or cancelled jobs for retry.")
+            };
+            axum::Json(serde_json::json!({ "count": count, "message": message })).into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }
 
 async fn clear_completed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let _ = state.db.clear_completed_jobs().await;
-    StatusCode::OK
+    match state.db.clear_completed_jobs().await {
+        Ok(count) => {
+            let message = if count == 0 {
+                "No completed jobs were waiting to be cleared.".to_string()
+            } else if count == 1 {
+                "Cleared 1 completed job from the queue. Historical stats were preserved."
+                    .to_string()
+            } else {
+                format!(
+                    "Cleared {count} completed jobs from the queue. Historical stats were preserved."
+                )
+            };
+            axum::Json(serde_json::json!({ "count": count, "message": message })).into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }
 
 async fn pause_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1294,9 +1325,7 @@ struct FsBrowseQuery {
     path: Option<String>,
 }
 
-async fn fs_browse_handler(
-    Query(query): Query<FsBrowseQuery>,
-) -> impl IntoResponse {
+async fn fs_browse_handler(Query(query): Query<FsBrowseQuery>) -> impl IntoResponse {
     match crate::system::fs_browser::browse(query.path.as_deref()).await {
         Ok(response) => axum::Json(response).into_response(),
         Err(err) => config_read_error_response("browse server filesystem", &err),
@@ -1661,7 +1690,6 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
         Ok(stats) => stats,
         Err(err) => return config_read_error_response("load system resource stats", &err),
     };
-    let config = state.config.read().await;
 
     // Query GPU utilization (using spawn_blocking to avoid blocking)
     let (gpu_utilization, gpu_memory_percent) = tokio::task::spawn_blocking(query_gpu_utilization)
@@ -1675,7 +1703,7 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
         memory_percent,
         uptime_seconds,
         active_jobs: stats.active,
-        concurrent_limit: config.transcode.concurrent_jobs,
+        concurrent_limit: state.agent.concurrent_jobs_limit(),
         cpu_count,
         gpu_utilization,
         gpu_memory_percent,
@@ -2211,14 +2239,7 @@ async fn restart_job_handler(
             if job.is_active() {
                 return blocked_jobs_response("restart is blocked while the job is active", &[job]);
             }
-            if let Err(e) = state
-                .db
-                .update_job_status(job.id, crate::db::JobState::Queued)
-                .await
-            {
-                if is_row_not_found(&e) {
-                    return StatusCode::NOT_FOUND.into_response();
-                }
+            if let Err(e) = state.db.batch_restart_jobs(&[job.id]).await {
                 return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             StatusCode::OK.into_response()
@@ -3108,6 +3129,7 @@ mod tests {
         .await?;
 
         let mut settings = crate::config::Config::default();
+        settings.transcode.concurrent_jobs = 3;
         settings.scanner.directories = vec![watch_dir.to_string_lossy().to_string()];
         settings.appearance.active_theme_id = Some("midnight".to_string());
         settings.notifications.targets = vec![crate::config::NotificationTargetConfig {
@@ -3147,9 +3169,14 @@ mod tests {
         assert!(!state.setup_required.load(Ordering::Relaxed));
 
         let persisted = crate::config::Config::load(config_path.as_path())?;
-        assert_eq!(persisted.appearance.active_theme_id.as_deref(), Some("midnight"));
+        assert_eq!(
+            persisted.appearance.active_theme_id.as_deref(),
+            Some("midnight")
+        );
         assert_eq!(persisted.notifications.targets.len(), 1);
         assert_eq!(persisted.schedule.windows.len(), 1);
+        assert_eq!(persisted.transcode.concurrent_jobs, 3);
+        assert_eq!(state.agent.concurrent_jobs_limit(), 3);
 
         cleanup_paths(&[watch_dir, config_path, db_path]);
         Ok(())
@@ -3171,7 +3198,10 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/api/fs/browse?path={}", browse_root.to_string_lossy()))
+                    .uri(format!(
+                        "/api/fs/browse?path={}",
+                        browse_root.to_string_lossy()
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3539,6 +3569,52 @@ mod tests {
             config_path,
             db_path,
         ]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clear_completed_archives_jobs_and_preserves_stats(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (job, input_path, output_path) =
+            seed_job(state.db.as_ref(), JobState::Completed).await?;
+
+        state
+            .db
+            .save_encode_stats(crate::db::EncodeStatsInput {
+                job_id: job.id,
+                input_size: 2_000,
+                output_size: 1_000,
+                compression_ratio: 0.5,
+                encode_time: 60.0,
+                encode_speed: 1.5,
+                avg_bitrate: 900.0,
+                vmaf_score: Some(95.0),
+            })
+            .await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::POST,
+                "/api/jobs/clear-completed",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"count\":1"));
+        assert!(body.contains("Historical stats were preserved"));
+
+        assert!(state.db.get_job_by_id(job.id).await?.is_none());
+        let aggregated = state.db.get_aggregated_stats().await?;
+        assert_eq!(aggregated.completed_jobs, 1);
+        assert_eq!(aggregated.total_input_size, 2_000);
+        assert_eq!(aggregated.total_output_size, 1_000);
+
+        cleanup_paths(&[input_path, output_path, config_path, db_path]);
         Ok(())
     }
 

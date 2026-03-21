@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-  echo "Usage: $0 <version>" >&2
+  echo "Usage: $0 <version>  # example: 0.2.10 or 0.2.10-rc.1" >&2
   exit 1
 fi
 
@@ -47,29 +47,35 @@ if count == 0:
         raise SystemExit("Failed to update web/package.json version field.")
 pkg.write_text(new_text)
 
-# CHANGELOG.md (top entry)
-changelog = root / "CHANGELOG.md"
-text = changelog.read_text()
-text = re.sub(r'(?m)^## \[v[^\]]+\]', f'## [v{version}]', text, count=1)
-changelog.write_text(text)
+# Cargo.lock (root package entry)
+lock = root / "Cargo.lock"
+text = lock.read_text()
+text = re.sub(
+    r'(?ms)(\[\[package\]\]\nname = "alchemist"\nversion = )"[^"]+"',
+    rf'\1"{version}"',
+    text,
+    count=1,
+)
+lock.write_text(text)
 
-# docs/Documentation.md footer + latest changelog entry
+# docs/Documentation.md footer
 docs = root / "docs" / "Documentation.md"
 text = docs.read_text()
 text = re.sub(r'(?m)^\*Documentation for Alchemist v[^*]+\*', f'*Documentation for Alchemist v{version}*', text, count=1)
-# Update the first changelog entry version after the Changelog header
-m = re.search(r'(## Changelog\n\n)(### v[^\n]+)', text)
-if m:
-    prefix = m.group(1)
-    text = text.replace(m.group(2), f'### v{version}', 1)
-
 docs.write_text(text)
 
 print(f"Updated version to {version}")
 PY
 
-read -r -p "Create git tag (e.g., v${VERSION}) or leave blank to skip: " TAG
-if [ -n "$TAG" ]; then
-  git -C "$ROOT_DIR" tag -a "$TAG" -m "$TAG"
-  echo "Created tag: $TAG"
-fi
+cat <<EOF
+Next steps:
+  1. Update CHANGELOG.md and docs/Documentation.md release notes for v${VERSION}
+  2. Run cargo test --quiet
+  3. Run bun run verify (in web/)
+  4. Run bun run test:reliability (in web-e2e/)
+  5. Merge the release-prep commit to main so Docker publishes ${VERSION}
+  6. Stable versions also publish latest; prereleases must not
+  7. Create annotated tag v${VERSION} on that exact merged commit for binary releases
+
+Note: this script no longer creates git tags. Tags must be created separately after merge.
+EOF

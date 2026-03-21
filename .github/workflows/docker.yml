@@ -38,6 +38,27 @@ jobs:
         id: image
         run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
+      - name: Compute release lane
+        id: release_lane
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:${VERSION}"
+              echo "${IMAGE}:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:${VERSION}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -57,9 +78,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
+          tags: ${{ steps.release_lane.outputs.tags }}
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

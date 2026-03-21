@@ -75,6 +75,11 @@ interface JobDetail {
     encode_stats?: EncodeStats;
 }
 
+interface CountMessageResponse {
+    count: number;
+    message: string;
+}
+
 type TabType = "all" | "active" | "queued" | "completed" | "failed";
 
 export default function JobManager() {
@@ -327,8 +332,10 @@ export default function JobManager() {
     const clearCompleted = async () => {
         setActionError(null);
         try {
-            await apiAction("/api/jobs/clear-completed", { method: "POST" });
-            showToast({ kind: "success", title: "Jobs", message: "Completed jobs cleared." });
+            const result = await apiJson<CountMessageResponse>("/api/jobs/clear-completed", {
+                method: "POST",
+            });
+            showToast({ kind: "success", title: "Jobs", message: result.message });
             await fetchJobs();
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to clear completed jobs";

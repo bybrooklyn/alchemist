@@ -426,6 +426,7 @@ impl Db {
              ON CONFLICT(input_path) DO UPDATE SET
              output_path = excluded.output_path,
              status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
+             archived = 0,
              mtime_hash = excluded.mtime_hash,
              updated_at = CURRENT_TIMESTAMP
              WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path",
@@ -465,7 +466,7 @@ impl Db {
                     COALESCE(attempt_count, 0) as attempt_count,
                     NULL as vmaf_score,
                     created_at, updated_at 
-             FROM jobs WHERE status = 'queued' 
+             FROM jobs WHERE status = 'queued' AND archived = 0
              ORDER BY priority DESC, created_at ASC LIMIT 1",
         )
         .fetch_optional(&self.pool)
@@ -479,7 +480,7 @@ impl Db {
             "UPDATE jobs
              SET status = 'analyzing', updated_at = CURRENT_TIMESTAMP
              WHERE id = (
-                 SELECT id FROM jobs WHERE status = 'queued'
+                 SELECT id FROM jobs WHERE status = 'queued' AND archived = 0
                  ORDER BY priority DESC, created_at ASC LIMIT 1
              )
              RETURNING id, input_path, output_path, status, NULL as decision_reason,
@@ -532,6 +533,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
+             WHERE j.archived = 0
              ORDER BY j.updated_at DESC",
         )
         .fetch_all(&self.pool)
@@ -652,7 +654,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.id = ?",
+             WHERE j.id = ? AND j.archived = 0",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -672,7 +674,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.status = ?
+             WHERE j.status = ? AND j.archived = 0
              ORDER BY j.priority DESC, j.created_at ASC",
         )
         .bind(status)
@@ -701,7 +703,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE 1=1 "
+             WHERE j.archived = 0 "
         );
 
         if let Some(statuses) = statuses {
@@ -799,7 +801,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.id = ?",
+             WHERE j.id = ? AND j.archived = 0",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -822,7 +824,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.id IN (",
+             WHERE j.archived = 0 AND j.id IN (",
         );
         let mut separated = qb.separated(", ");
         for id in ids {
@@ -910,7 +912,7 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.input_path = ?",
+             WHERE j.input_path = ? AND j.archived = 0",
         )
         .bind(path)
         .fetch_optional(&self.pool)
@@ -1309,16 +1311,24 @@ impl Db {
     }
 
     pub async fn restart_failed_jobs(&self) -> Result<u64> {
-        let result = sqlx::query("UPDATE jobs SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE status IN ('failed', 'cancelled')")
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE jobs
+             SET status = 'queued', progress = 0.0, updated_at = CURRENT_TIMESTAMP
+             WHERE status IN ('failed', 'cancelled') AND archived = 0",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected())
     }
 
     pub async fn clear_completed_jobs(&self) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM jobs WHERE status = 'completed'")
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE jobs
+             SET archived = 1, updated_at = CURRENT_TIMESTAMP
+             WHERE status = 'completed' AND archived = 0",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected())
     }
 
@@ -1687,6 +1697,55 @@ mod tests {
 
         let none = db.claim_next_job().await?;
         assert!(none.is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clear_completed_archives_jobs_but_preserves_encode_stats(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_archive_completed_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let input = Path::new("movie.mkv");
+        let output = Path::new("movie-alchemist.mkv");
+        let _ = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+
+        let job = db
+            .get_job_by_input_path("movie.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing job"))?;
+        db.update_job_status(job.id, JobState::Completed).await?;
+        db.save_encode_stats(EncodeStatsInput {
+            job_id: job.id,
+            input_size: 2_000,
+            output_size: 1_000,
+            compression_ratio: 0.5,
+            encode_time: 42.0,
+            encode_speed: 1.2,
+            avg_bitrate: 800.0,
+            vmaf_score: Some(96.5),
+        })
+        .await?;
+
+        let cleared = db.clear_completed_jobs().await?;
+        assert_eq!(cleared, 1);
+        assert!(db.get_job_by_id(job.id).await?.is_none());
+        assert!(db.get_job_by_input_path("movie.mkv").await?.is_none());
+
+        let visible_completed = db.get_jobs_by_status(JobState::Completed).await?;
+        assert!(visible_completed.is_empty());
+
+        let aggregated = db.get_aggregated_stats().await?;
+        assert_eq!(aggregated.completed_jobs, 1);
+        assert_eq!(aggregated.total_input_size, 2_000);
+        assert_eq!(aggregated.total_output_size, 1_000);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
