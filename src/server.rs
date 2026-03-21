@@ -1803,18 +1803,31 @@ struct JobTableParams {
     status: Option<String>,
     search: Option<String>,
     sort: Option<String>,
+    sort_by: Option<String>,
     sort_desc: Option<bool>,
+    archived: Option<String>,
 }
 
 async fn jobs_table_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<JobTableParams>,
 ) -> impl IntoResponse {
-    let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let page = params.page.unwrap_or(1).max(1);
+    let JobTableParams {
+        limit,
+        page,
+        status,
+        search,
+        sort,
+        sort_by,
+        sort_desc,
+        archived,
+    } = params;
+
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+    let page = page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
-    let statuses = if let Some(s) = params.status {
+    let statuses = if let Some(s) = status {
         let list: Vec<JobState> = s
             .split(',')
             .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
@@ -1828,15 +1841,22 @@ async fn jobs_table_handler(
         None
     };
 
+    let archived = match archived.as_deref() {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) | None => Some(false),
+    };
+
     match state
         .db
         .get_jobs_filtered(
             limit,
             offset,
             statuses,
-            params.search,
-            params.sort,
-            params.sort_desc.unwrap_or(false),
+            search,
+            sort_by.or(sort),
+            sort_desc.unwrap_or(false),
+            archived,
         )
         .await
     {

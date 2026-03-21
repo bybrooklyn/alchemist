@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
     Search, RefreshCw, Trash2, Ban,
-    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal
+    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
@@ -80,7 +80,15 @@ interface CountMessageResponse {
     message: string;
 }
 
-type TabType = "all" | "active" | "queued" | "completed" | "failed";
+type TabType = "all" | "active" | "queued" | "completed" | "failed" | "skipped" | "archived";
+type SortField = "updated_at" | "created_at" | "input_path" | "size";
+
+const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
+    { value: "updated_at", label: "Last Updated" },
+    { value: "created_at", label: "Date Added" },
+    { value: "input_path", label: "File Name" },
+    { value: "size", label: "File Size" },
+];
 
 export default function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
@@ -90,6 +98,8 @@ export default function JobManager() {
     const [searchInput, setSearchInput] = useState("");
     const debouncedSearch = useDebouncedValue(searchInput, 350);
     const [page, setPage] = useState(1);
+    const [sortBy, setSortBy] = useState<SortField>("updated_at");
+    const [sortDesc, setSortDesc] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [focusedJob, setFocusedJob] = useState<JobDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
@@ -130,11 +140,12 @@ export default function JobManager() {
     // Filter mapping
     const getStatusFilter = (tab: TabType) => {
         switch (tab) {
-            case "active": return "analyzing,encoding,resuming";
-            case "queued": return "queued";
-            case "completed": return "completed";
-            case "failed": return "failed,cancelled";
-            default: return "";
+            case "active": return ["analyzing", "encoding", "resuming"];
+            case "queued": return ["queued"];
+            case "completed": return ["completed"];
+            case "failed": return ["failed", "cancelled"];
+            case "skipped": return ["skipped"];
+            default: return [];
         }
     };
 
@@ -146,12 +157,15 @@ export default function JobManager() {
             const params = new URLSearchParams({
                 limit: "50",
                 page: page.toString(),
-                sort: "updated_at",
-                sort_desc: "true"
+                sort: sortBy,
+                sort_desc: String(sortDesc),
+                archived: String(activeTab === "archived"),
             });
+            params.set("sort_by", sortBy);
 
-            if (activeTab !== "all") {
-                params.set("status", getStatusFilter(activeTab));
+            const statusFilter = getStatusFilter(activeTab);
+            if (statusFilter.length > 0) {
+                params.set("status", statusFilter.join(","));
             }
             if (debouncedSearch) {
                 params.set("search", debouncedSearch);
@@ -172,7 +186,7 @@ export default function JobManager() {
                 setRefreshing(false);
             }
         }
-    }, [activeTab, debouncedSearch, page]);
+    }, [activeTab, debouncedSearch, page, sortBy, sortDesc]);
 
     const fetchJobsRef = useRef<() => Promise<void>>(async () => undefined);
 
@@ -336,6 +350,13 @@ export default function JobManager() {
                 method: "POST",
             });
             showToast({ kind: "success", title: "Jobs", message: result.message });
+            if (activeTab === "completed" && result.count > 0) {
+                showToast({
+                    kind: "info",
+                    title: "Jobs",
+                    message: "Completed jobs archived. View them in the Archived tab.",
+                });
+            }
             await fetchJobs();
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to clear completed jobs";
@@ -430,6 +451,7 @@ export default function JobManager() {
             failed: "bg-red-500/10 text-red-500 border-red-500/20",
             cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
             skipped: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+            archived: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
             resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
         };
         return (
@@ -469,7 +491,7 @@ export default function JobManager() {
             {/* Toolbar */}
             <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-helios-surface/50 p-1 rounded-xl border border-helios-line/10">
                 <div className="flex gap-1 p-1 bg-helios-surface border border-helios-line/10 rounded-lg">
-                    {(["all", "active", "queued", "completed", "failed"] as TabType[]).map((tab) => (
+                    {(["all", "active", "queued", "completed", "failed", "skipped", "archived"] as TabType[]).map((tab) => (
                         <button
                             key={tab}
                             onClick={() => { setActiveTab(tab); setPage(1); }}
@@ -485,7 +507,7 @@ export default function JobManager() {
                     ))}
                 </div>
 
-                <div className="flex items-center gap-3 w-full md:w-auto">
+                <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center md:w-auto">
                     <div className="relative flex-1 md:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
                         <input
@@ -495,6 +517,33 @@ export default function JobManager() {
                             onChange={(e) => setSearchInput(e.target.value)}
                             className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
                         />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <select
+                            value={sortBy}
+                            onChange={(e) => {
+                                setSortBy(e.target.value as SortField);
+                                setPage(1);
+                            }}
+                            className="h-10 rounded-lg border border-helios-line/20 bg-helios-surface px-3 text-sm text-helios-ink outline-none focus:border-helios-solar"
+                        >
+                            {SORT_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                        <button
+                            onClick={() => {
+                                setSortDesc((current) => !current);
+                                setPage(1);
+                            }}
+                            className="flex h-10 w-10 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"
+                            title={sortDesc ? "Sort descending" : "Sort ascending"}
+                            aria-label={sortDesc ? "Sort descending" : "Sort ascending"}
+                        >
+                            {sortDesc ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
+                        </button>
                     </div>
                     <button
                         onClick={() => void fetchJobs()}

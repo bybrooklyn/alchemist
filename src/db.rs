@@ -693,6 +693,7 @@ impl Db {
         search: Option<String>,
         sort_by: Option<String>,
         sort_desc: bool,
+        archived: Option<bool>,
     ) -> Result<Vec<Job>> {
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             "SELECT j.id, j.input_path, j.output_path, j.status, 
@@ -703,8 +704,18 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at
              FROM jobs j
-             WHERE j.archived = 0 "
+             WHERE 1 = 1 "
         );
+
+        match archived {
+            Some(true) => {
+                qb.push(" AND j.archived = 1 ");
+            }
+            Some(false) => {
+                qb.push(" AND j.archived = 0 ");
+            }
+            None => {}
+        }
 
         if let Some(statuses) = statuses {
             if !statuses.is_empty() {
