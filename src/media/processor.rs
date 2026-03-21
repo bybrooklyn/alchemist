@@ -91,6 +91,10 @@ impl Agent {
         self.scheduler_paused.load(Ordering::SeqCst)
     }
 
+    pub fn concurrent_jobs_limit(&self) -> usize {
+        self.semaphore_limit.load(Ordering::SeqCst)
+    }
+
     pub fn set_scheduler_paused(&self, paused: bool) {
         let current = self.scheduler_paused.load(Ordering::SeqCst);
         if current != paused {

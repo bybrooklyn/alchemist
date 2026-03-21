@@ -150,16 +150,14 @@ fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
     })
 }
 
-fn recommendations_blocking(config: &Config, extra_dirs: &[String]) -> Result<FsRecommendationsResponse> {
+fn recommendations_blocking(
+    config: &Config,
+    extra_dirs: &[String],
+) -> Result<FsRecommendationsResponse> {
     let mut seen = HashSet::new();
     let mut recommendations = Vec::new();
 
-    for dir in config
-        .scanner
-        .directories
-        .iter()
-        .chain(extra_dirs.iter())
-    {
+    for dir in config.scanner.directories.iter().chain(extra_dirs.iter()) {
         if let Ok(path) = canonical_or_original(Path::new(dir)) {
             let path_string = path.to_string_lossy().to_string();
             if seen.insert(path_string.clone()) {
@@ -237,7 +235,9 @@ fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
             let readable = exists && canonical.is_dir() && std::fs::read_dir(&canonical).is_ok();
 
             let media_files = if readable {
-                scanner.scan_with_recursion(vec![(canonical.clone(), true)]).len()
+                scanner
+                    .scan_with_recursion(vec![(canonical.clone(), true)])
+                    .len()
             } else {
                 0
             };
@@ -256,7 +256,8 @@ fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
 
             let mut dir_warnings = directory_warnings(&canonical, readable);
             if readable && media_files == 0 {
-                dir_warnings.push("No supported media files were found in this directory.".to_string());
+                dir_warnings
+                    .push("No supported media files were found in this directory.".to_string());
             }
             warnings.extend(dir_warnings.clone());
 
@@ -296,7 +297,9 @@ fn default_browse_root() -> Result<PathBuf> {
                 return Ok(drive_path);
             }
         }
-        Err(AlchemistError::Watch("No accessible drive roots found".to_string()))
+        Err(AlchemistError::Watch(
+            "No accessible drive roots found".to_string(),
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -369,13 +372,7 @@ fn candidate_roots() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         for root in [
-            "/media",
-            "/mnt",
-            "/srv",
-            "/data",
-            "/storage",
-            "/home",
-            "/var/lib",
+            "/media", "/mnt", "/srv", "/data", "/storage", "/home", "/var/lib",
         ] {
             roots.insert(PathBuf::from(root));
         }
@@ -409,8 +406,19 @@ fn classify_media_hint(path: &Path) -> MediaHint {
         .unwrap_or_default()
         .to_ascii_lowercase();
     let media_names = [
-        "movies", "movie", "tv", "shows", "series", "anime", "media", "videos", "plex", "emby",
-        "jellyfin", "library", "downloads",
+        "movies",
+        "movie",
+        "tv",
+        "shows",
+        "series",
+        "anime",
+        "media",
+        "videos",
+        "plex",
+        "emby",
+        "jellyfin",
+        "library",
+        "downloads",
     ];
     if media_names.iter().any(|candidate| name.contains(candidate)) {
         return MediaHint::High;
@@ -433,7 +441,12 @@ fn classify_media_hint(path: &Path) -> MediaHint {
             .path()
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| scanner.extensions.iter().any(|candidate| candidate == &ext.to_ascii_lowercase()))
+            .is_some_and(|ext| {
+                scanner
+                    .extensions
+                    .iter()
+                    .any(|candidate| candidate == &ext.to_ascii_lowercase())
+            })
         {
             media_files += 1;
             if media_files >= 3 {
@@ -479,7 +492,9 @@ fn entry_warning(path: &Path, readable: bool) -> Option<String> {
         return Some("Directory is not readable by the Alchemist process.".to_string());
     }
     if is_system_path(path) {
-        return Some("System directory. Only choose this if you know your media is stored here.".to_string());
+        return Some(
+            "System directory. Only choose this if you know your media is stored here.".to_string(),
+        );
     }
     None
 }
@@ -490,10 +505,15 @@ fn directory_warnings(path: &Path, readable: bool) -> Vec<String> {
         warnings.push("Directory is not readable by the Alchemist process.".to_string());
     }
     if is_system_path(path) {
-        warnings.push("This looks like a system path. Avoid scanning operating system folders.".to_string());
+        warnings.push(
+            "This looks like a system path. Avoid scanning operating system folders.".to_string(),
+        );
     }
     if path.components().count() <= 1 {
-        warnings.push("Top-level roots can be noisy. Prefer the specific media folder when possible.".to_string());
+        warnings.push(
+            "Top-level roots can be noisy. Prefer the specific media folder when possible."
+                .to_string(),
+        );
     }
     warnings
 }
@@ -513,7 +533,11 @@ fn is_system_path(path: &Path) -> bool {
         "c:\\windows",
         "c:\\program files",
     ];
-    system_roots.iter().any(|root| value == *root || value.starts_with(&format!("{root}/")) || value.starts_with(&format!("{root}\\")))
+    system_roots.iter().any(|root| {
+        value == *root
+            || value.starts_with(&format!("{root}/"))
+            || value.starts_with(&format!("{root}\\"))
+    })
 }
 
 #[cfg(test)]
@@ -530,7 +554,10 @@ mod tests {
 
     #[test]
     fn recommendation_prefers_media_like_names() {
-        assert_eq!(classify_media_hint(Path::new("/srv/movies")), MediaHint::High);
+        assert_eq!(
+            classify_media_hint(Path::new("/srv/movies")),
+            MediaHint::High
+        );
     }
 
     #[test]
@@ -541,7 +568,8 @@ mod tests {
 
     #[test]
     fn preview_detects_media_files_and_samples() {
-        let root = std::env::temp_dir().join(format!("alchemist_fs_preview_{}", rand::random::<u64>()));
+        let root =
+            std::env::temp_dir().join(format!("alchemist_fs_preview_{}", rand::random::<u64>()));
         std::fs::create_dir_all(&root).expect("root");
         let media_file = root.join("movie.mkv");
         std::fs::write(&media_file, b"video").expect("media");

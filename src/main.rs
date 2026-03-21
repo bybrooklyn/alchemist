@@ -85,6 +85,24 @@ async fn apply_reloaded_config(
     Ok(detected_hardware)
 }
 
+fn config_watch_target(config_path: &Path) -> &Path {
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn should_reload_config_for_event(event: &notify::Event, config_path: &Path) -> bool {
+    if !event.paths.iter().any(|path| path == config_path) {
+        return false;
+    }
+
+    matches!(
+        &event.kind,
+        notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Any
+    )
+}
+
 async fn run() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -418,10 +436,12 @@ async fn run() -> Result<()> {
 
         match watcher_res {
             Ok(mut watcher) => {
-                if let Err(e) =
-                    watcher.watch(config_watch_path.as_path(), RecursiveMode::NonRecursive)
-                {
-                    error!("Failed to watch config file {:?}: {}", config_watch_path, e);
+                let watch_target = config_watch_target(config_watch_path.as_path()).to_path_buf();
+                if let Err(e) = watcher.watch(watch_target.as_path(), RecursiveMode::NonRecursive) {
+                    error!(
+                        "Failed to watch config path {:?} via {:?}: {}",
+                        config_watch_path, watch_target, e
+                    );
                 } else {
                     // Prevent watcher from dropping by keeping it in the spawn if needed,
                     // or just spawning the processing loop.
@@ -433,8 +453,8 @@ async fn run() -> Result<()> {
                         let _watcher = watcher;
 
                         while let Some(event) = rx_notify.recv().await {
-                            if let notify::EventKind::Modify(_) = event.kind {
-                                info!("Config file changed. Reloading...");
+                            if should_reload_config_for_event(&event, config_watch_path.as_path()) {
+                                info!("Config file changed ({:?}). Reloading...", &event.kind);
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                                 match apply_reloaded_config(
@@ -541,6 +561,10 @@ async fn run() -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use notify::{
+        event::{CreateKind, ModifyKind, RenameMode},
+        Event, EventKind,
+    };
     fn temp_db_path(prefix: &str) -> PathBuf {
         let mut db_path = std::env::temp_dir();
         db_path.push(format!("{prefix}_{}.db", rand::random::<u64>()));
@@ -556,6 +580,40 @@ mod tests {
     #[test]
     fn args_reject_removed_output_dir_flag() {
         assert!(Args::try_parse_from(["alchemist", "--output-dir", "/tmp/out"]).is_err());
+    }
+
+    #[test]
+    fn config_reload_matches_create_modify_and_rename_events() {
+        let config_path = PathBuf::from("/tmp/alchemist-config.toml");
+
+        let create = Event {
+            kind: EventKind::Create(CreateKind::File),
+            paths: vec![config_path.clone()],
+            attrs: Default::default(),
+        };
+        assert!(should_reload_config_for_event(&create, &config_path));
+
+        let rename = Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            paths: vec![
+                PathBuf::from("/tmp/alchemist-config.toml.tmp"),
+                config_path.clone(),
+            ],
+            attrs: Default::default(),
+        };
+        assert!(should_reload_config_for_event(&rename, &config_path));
+
+        let unrelated = Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
+            paths: vec![PathBuf::from("/tmp/other.toml")],
+            attrs: Default::default(),
+        };
+        assert!(!should_reload_config_for_event(&unrelated, &config_path));
+
+        assert_eq!(
+            config_watch_target(config_path.as_path()),
+            Path::new("/tmp")
+        );
     }
 
     #[tokio::test]

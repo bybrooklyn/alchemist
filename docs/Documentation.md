@@ -203,8 +203,8 @@ On first launch, Alchemist runs an interactive setup wizard to:
 
 ## Configuration
 
-Configuration is stored at `config.toml` by default. Set `ALCHEMIST_CONFIG_PATH` to override the path.
-Database is stored at `alchemist.db` by default. Set `ALCHEMIST_DB_PATH` to override the path.
+Configuration is stored at `~/.openbitdo/config.toml` by default on Linux and macOS, and `./config.toml` elsewhere. Set `ALCHEMIST_CONFIG_PATH` to override the path.
+Database is stored at `~/.openbitdo/alchemist.db` by default on Linux and macOS, and `./alchemist.db` elsewhere. Set `ALCHEMIST_DB_PATH` to override the path.
 If `ALCHEMIST_CONFIG_MUTABLE=false`, settings/setup endpoints will return HTTP `409` for config write attempts.
 
 ### Full Configuration Reference
@@ -293,9 +293,9 @@ host = "0.0.0.0"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ALCHEMIST_CONFIG_PATH` | Primary config file path | `./config.toml` |
+| `ALCHEMIST_CONFIG_PATH` | Primary config file path | `~/.openbitdo/config.toml` on Linux/macOS, `./config.toml` elsewhere |
 | `ALCHEMIST_CONFIG` | Legacy alias for config path | unset |
-| `ALCHEMIST_DB_PATH` | SQLite database file path | `./alchemist.db` |
+| `ALCHEMIST_DB_PATH` | SQLite database file path | `~/.openbitdo/alchemist.db` on Linux/macOS, `./alchemist.db` elsewhere |
 | `ALCHEMIST_DATA_DIR` | Legacy data dir fallback for DB (`<dir>/alchemist.db`) | unset |
 | `ALCHEMIST_CONFIG_MUTABLE` | Enable/disable runtime config writes | `true` |
 
@@ -973,14 +973,32 @@ docker build --platform linux/amd64 -t alchemist .
 
 ### Versioning
 
-Version is tracked in two places that must stay in sync:
+Version metadata is tracked in three files that must stay in sync:
 - `VERSION` file (read by Docker workflow)
 - `Cargo.toml` `version` field
+- `web/package.json` `version` field
 
-To release:
-1. Update both files to new version
-2. Commit: `git commit -m "v0.2.5: Description"`
-3. Push to master (triggers Docker build)
+Supporting release metadata must also be updated for every cut:
+- `CHANGELOG.md` top release entry
+- `docs/Documentation.md` changelog section and footer
+- `Cargo.lock` root package version should be refreshed after the Cargo version bump
+
+Recommended workflow:
+1. Run `./scripts/bump_version.sh 0.2.10-rc.1`
+2. Update `CHANGELOG.md` and the docs changelog entry with release notes
+3. Run `cargo test --quiet`
+4. Run `bun run verify` in `web/`
+5. Run `bun run test:reliability` in `web-e2e/`
+6. Push the merged release commit to `main` so the Docker workflow publishes `:0.2.10-rc.1`
+7. Stable versions additionally publish `:latest`; prereleases must not
+8. Use `workflow_dispatch` on `.github/workflows/release.yml` as a dry run before tagging if you want to exercise the build matrix without publishing assets
+9. Create annotated tag `v0.2.10-rc.1` on that exact merged commit to publish Windows, macOS, and Linux prerelease assets
+
+Important:
+- Docker publishing is driven by `VERSION` on push to `main`
+- Binary/app releases are driven by the `v*` git tag
+- GitHub releases from `-rc.` tags must be marked prerelease and must not become latest
+- Do not create the release tag from a dirty or unmerged worktree
 
 ---
 
@@ -1228,6 +1246,13 @@ A:
 
 ## Changelog
 
+### v0.2.10-rc.1
+- ✅ Job lifecycle safety pass: queued vs active cancel handling, active-job delete/restart blocking, batch conflict responses, and stricter DB persistence checks
+- ✅ Output safety upgrade: `output_root`, mirrored destination paths, temp-file promotion, and non-destructive replace flow
+- ✅ Scheduler/watch/setup parity: immediate schedule refresh, Intel Arc H.264 detection fix, H.264 setup option, canonicalized watch folders, and recursive watch-folder controls
+- ✅ Jobs/settings UX improvements: per-job priority controls, output-root file settings, active-job-safe actions, and Astro router deprecation cleanup
+- ✅ RC prep hardening: version metadata synced across app/web/Docker inputs and release instructions updated for prerelease-vs-stable publishing
+
 ### v0.2.8
 - ✅ Default server mode; explicit CLI with `--cli --dir ...` and new `--reset-auth` flow
 - ✅ Login redirects to setup when no users exist
@@ -1296,4 +1321,4 @@ Alchemist is licensed under the **GPL-3.0 License**. See `LICENSE` for details.
 
 ---
 
-*Documentation for Alchemist v0.2.8*
+*Documentation for Alchemist v0.2.10-rc.1*

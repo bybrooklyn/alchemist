@@ -752,20 +752,36 @@ impl Pipeline {
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
-                self.finalize_job(
-                    job,
-                    &file_path,
-                    FinalizeJobContext {
-                        output_path: &output_path,
-                        temp_output_path: &temp_output_path,
-                        plan: &plan,
-                        start_time,
+                if let Err(err) = self
+                    .finalize_job(
+                        job.clone(),
+                        &file_path,
+                        FinalizeJobContext {
+                            output_path: &output_path,
+                            temp_output_path: &temp_output_path,
+                            plan: &plan,
+                            start_time,
+                            metadata,
+                            execution_result: &result,
+                        },
+                    )
+                    .await
+                {
+                    self.handle_finalize_failure(
+                        job.id,
+                        &plan,
                         metadata,
-                        execution_result: &result,
-                    },
-                )
-                .await
-                .map_err(|_| JobFailure::Transient)
+                        &result,
+                        &config_snapshot,
+                        start_time,
+                        &temp_output_path,
+                        &err,
+                    )
+                    .await;
+                    return Err(JobFailure::Transient);
+                }
+
+                Ok(())
             }
             Err(e) => {
                 if temp_output_path.exists() {
@@ -1041,6 +1057,57 @@ impl Pipeline {
         Ok(())
     }
 
+    async fn handle_finalize_failure(
+        &self,
+        job_id: i64,
+        plan: &TranscodePlan,
+        metadata: &MediaMetadata,
+        execution_result: &ExecutionResult,
+        config_snapshot: &crate::config::Config,
+        start_time: std::time::Instant,
+        temp_output_path: &Path,
+        err: &crate::error::AlchemistError,
+    ) {
+        tracing::error!("Job {}: Finalization failed: {}", job_id, err);
+
+        let message = format!("Finalization failed: {err}");
+        let _ = self.db.add_log("error", Some(job_id), &message).await;
+
+        if temp_output_path.exists() {
+            if let Err(cleanup_err) = tokio::fs::remove_file(temp_output_path).await {
+                tracing::warn!(
+                    "Job {}: Failed to remove temp output after finalize error {:?}: {}",
+                    job_id,
+                    temp_output_path,
+                    cleanup_err
+                );
+            }
+        }
+        cleanup_temp_subtitle_output(job_id, plan).await;
+
+        self.emit_telemetry_event(TelemetryEventParams {
+            telemetry_enabled: config_snapshot.system.enable_telemetry,
+            output_codec: execution_result
+                .actual_output_codec
+                .unwrap_or(execution_result.planned_output_codec),
+            encoder_override: execution_result.actual_encoder_name.as_deref(),
+            fallback: plan.fallback.as_ref(),
+            metadata,
+            event_type: "job_finished",
+            status: Some("failure"),
+            failure_reason: Some("finalize_failed"),
+            input_size_bytes: Some(metadata.size_bytes),
+            output_size_bytes: None,
+            duration_ms: Some(start_time.elapsed().as_millis() as u64),
+            speed_factor: None,
+        })
+        .await;
+
+        let _ = self
+            .update_job_state(job_id, crate::db::JobState::Failed)
+            .await;
+    }
+
     async fn emit_telemetry_event(&self, params: TelemetryEventParams<'_>) {
         if !params.telemetry_enabled {
             return;
@@ -1120,6 +1187,10 @@ fn map_failure(error: &crate::error::AlchemistError) -> JobFailure {
 mod tests {
     use super::*;
     use crate::db::Db;
+    use crate::system::hardware::{HardwareInfo, HardwareState, Vendor};
+    use crate::Transcoder;
+    use std::sync::Arc;
+    use tokio::sync::{broadcast, RwLock};
 
     #[test]
     fn generated_output_pattern_matches_default_suffix() {
@@ -1208,6 +1279,144 @@ mod tests {
         assert!(!temp_sidecar.exists());
 
         let _ = std::fs::remove_dir_all(temp_root);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_failure_marks_job_failed_and_cleans_temp_output() -> anyhow::Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_finalize_failure_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_finalize_failure_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("movie.mkv");
+        let output = temp_root.join("movie-alchemist.mkv");
+        std::fs::write(&input, b"source")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+        db.update_job_status(job.id, crate::db::JobState::Encoding)
+            .await?;
+
+        let temp_output = temp_output_path_for(&output);
+        std::fs::write(&temp_output, b"partial")?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+        }));
+        let (tx, _rx) = broadcast::channel(8);
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config.clone(),
+            hardware_state,
+            Arc::new(tx),
+            true,
+        );
+
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            output_path: Some(temp_output.clone()),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("medium".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Copy,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+        let metadata = MediaMetadata {
+            path: input.clone(),
+            duration_secs: 12.0,
+            codec_name: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 2_000,
+            video_bitrate_bps: Some(5_000_000),
+            container_bitrate_bps: Some(5_500_000),
+            fps: 24.0,
+            container: "mkv".to_string(),
+            audio_codec: Some("aac".to_string()),
+            audio_bitrate_bps: Some(192_000),
+            audio_channels: Some(2),
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+        };
+        let result = ExecutionResult {
+            requested_codec: crate::config::OutputCodec::H264,
+            planned_output_codec: crate::config::OutputCodec::H264,
+            requested_encoder: Encoder::H264X264,
+            used_encoder: Encoder::H264X264,
+            used_backend: EncoderBackend::Cpu,
+            fallback: None,
+            fallback_occurred: false,
+            actual_output_codec: Some(crate::config::OutputCodec::H264),
+            actual_encoder_name: Some("libx264".to_string()),
+            stats: ExecutionStats {
+                encode_time_secs: 0.0,
+                input_size: 0,
+                output_size: 0,
+                vmaf: None,
+            },
+        };
+        let config_snapshot = config.read().await.clone();
+
+        pipeline
+            .handle_finalize_failure(
+                job.id,
+                &plan,
+                &metadata,
+                &result,
+                &config_snapshot,
+                std::time::Instant::now(),
+                &temp_output,
+                &crate::error::AlchemistError::Unknown("disk full".to_string()),
+            )
+            .await;
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Failed);
+        assert!(!temp_output.exists());
+
+        let logs = db.get_logs(10, 0).await?;
+        assert!(logs
+            .iter()
+            .any(|entry| entry.message.contains("Finalization failed")));
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
         Ok(())
     }
 }

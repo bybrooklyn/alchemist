@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.10-rc.1] - 2026-03-07
+- Job lifecycle safety hardening: queued vs active cancel handling, active-job delete/restart blocking, batch-action conflict reporting, and stricter status/stat persistence.
+- Output handling now supports mirrored `output_root` destinations plus temp-file promotion so replace mode preserves the last good artifact until encode, size, and quality gates pass.
+- Scheduler, setup, and watch-folder parity updates shipped together: immediate schedule reevaluation, Intel Arc H.264 detection fix, H.264 setup option, canonicalized watch folders, and recursive watch configuration in the UI.
+- Jobs and settings UX now expose per-job priority controls, output-root file settings, active-job-safe actions, and the Astro router deprecation cleanup.
+- RC release hardening for `0.2.10-rc.1`: version metadata synced across app, Docker, and web artifacts; prerelease workflow behavior added; release instructions updated around main-driven RC Docker tags and tag-driven prerelease assets.
+
 ## [v0.2.9] - 2026-03-06
 - Runtime reliability pass: watcher/scanner hardening, resilient event consumers, config reload improvements, and live hardware refresh.
 - Admin UX refresh across dashboard, settings, setup, logs, jobs, charts, and system status with stronger error handling and feedback.
