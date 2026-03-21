@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Terminal, Server, Cpu, Activity, ShieldCheck, type LucideIcon } from "lucide-react";
-import { apiJson } from "../lib/api";
+import { apiJson, isApiError } from "../lib/api";
+import { showToast } from "../lib/toast";
 
 interface SystemInfo {
     version: string;
@@ -40,7 +41,10 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         if (isOpen && !info) {
             apiJson<SystemInfo>("/api/system/info")
                 .then(setInfo)
-                .catch(console.error);
+                .catch((e: unknown) => {
+                    const message = isApiError(e) ? e.message : "Failed to load version info";
+                    showToast({ kind: "error", title: "About", message });
+                });
         }
     }, [isOpen, info]);
 
