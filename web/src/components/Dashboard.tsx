@@ -75,7 +75,7 @@ export default function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [jobsLoading, setJobsLoading] = useState(true);
     const [bundle, setBundle] = useState<SettingsBundleResponse | null>(null);
-    const [engineStatus, setEngineStatus] = useState<"paused" | "running">("paused");
+    const [engineStatus, setEngineStatus] = useState<"paused" | "running" | "draining">("paused");
     const { stats: sharedStats, error: statsError } = useSharedStats();
     const stats = sharedStats ?? DEFAULT_STATS;
 
@@ -140,7 +140,7 @@ export default function Dashboard() {
                 // Ignore setup redirect lookup failures here; dashboard data fetches handle their own UX.
             }
         })();
-        void apiJson<{ status: "paused" | "running" }>("/api/engine/status")
+        void apiJson<{ status: "paused" | "running" | "draining" }>("/api/engine/status")
             .then((data) => setEngineStatus(data.status))
             .catch(() => undefined);
 
