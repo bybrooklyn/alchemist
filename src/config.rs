@@ -391,7 +391,7 @@ impl Default for QualityConfig {
 pub struct SystemConfig {
     #[serde(default = "default_poll_interval")]
     pub monitoring_poll_interval: f64,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_telemetry")]
     pub enable_telemetry: bool,
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: Option<u32>,
@@ -399,6 +399,10 @@ pub struct SystemConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_telemetry() -> bool {
+    false
 }
 
 fn default_poll_interval() -> f64 {
@@ -413,7 +417,7 @@ impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             monitoring_poll_interval: default_poll_interval(),
-            enable_telemetry: true,
+            enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
         }
     }
@@ -525,7 +529,7 @@ impl Default for Config {
             quality: QualityConfig::default(),
             system: SystemConfig {
                 monitoring_poll_interval: default_poll_interval(),
-                enable_telemetry: true,
+                enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
             },
         }

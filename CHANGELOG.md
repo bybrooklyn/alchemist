@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.10-rc.2] - 2026-03-21
+
+### Stability & Reliability
+- VMAF quality gating: encodes falling below a configurable minimum score are now rejected rather than silently promoted.
+- Exponential retry backoff for failed jobs: 5 / 15 / 60 / 360 minute delays based on attempt count prevent tight failure loops.
+- Orphaned temp file cleanup on startup: interrupted encodes no longer leave `.alchemist.tmp` files on disk indefinitely.
+- Log table pruning: configurable retention period (default 30 days) prevents unbounded log growth on busy servers.
+- Auth session cleanup: expired sessions are pruned on startup and every 24 hours.
+- Resource endpoint caching: `/api/system/resources` is cached for 500ms to prevent redundant OS probes from multiple open browser tabs.
+
+### New Features
+- Per-library profiles: each watch folder can have its own transcoding profile, with four built-in presets (Space Saver, Quality First, Balanced, Streaming) usable as starting points.
+- Storage savings dashboard: the Stats page now shows total space recovered, average reduction percentage, a savings-over-time chart, and per-codec breakdowns.
+- Library Doctor: scan your library for corrupt or broken files directly from System Settings.
+- `/api/jobs` added as a canonical alias for `/api/jobs/table`.
+
+### Beginner Experience
+- Plain-English skip reasons: skipped jobs now show a human-readable explanation with technical detail available in an expandable section.
+- Auto-redirect to the setup wizard for first-time users with no watch directories configured.
+- Setup wizard field descriptions: CRF, BPP, concurrent jobs, and CPU preset now include plain-English explanations inline.
+- Telemetry is now opt-in by default, with a detailed explanation of exactly what is collected.
+
+### Job Management
+- Skipped tab: dedicated tab in the Job Manager for skipped jobs.
+- Archived tab: cleared completed jobs are now visible in an Archived tab rather than disappearing permanently.
+- Sort controls: the job list can now be sorted by last updated, date added, file name, or file size.
+
+### UI & Design
+- Font updated from Space Grotesk to DM Sans.
+- Sidebar active state redesigned: a left accent bar replaces the filled background.
+- Border radius tightened throughout with a more consistent scale across cards, buttons, and badges.
+- Setup wizard refactored into composable step components.
+
+### Infrastructure
+- CI/CD workflows fully rewritten: Rust caching, TypeScript typechecking, and a frontend build shared across all platforms.
+- Multi-arch Docker images are now published for `linux/amd64` and `linux/arm64`.
+- Release binaries now ship as `.tar.gz` archives with SHA256 checksums; AppImage and `.app` bundles were removed.
+- Dockerfile now uses the stable Rust image with pinned FFmpeg checksums.
+- E2E test coverage added for all new features.
+
 ## [v0.2.10-rc.1] - 2026-03-07
 - Job lifecycle safety hardening: queued vs active cancel handling, active-job delete/restart blocking, batch-action conflict reporting, and stricter status/stat persistence.
 - Output handling now supports mirrored `output_root` destinations plus temp-file promotion so replace mode preserves the last good artifact until encode, size, and quality gates pass.

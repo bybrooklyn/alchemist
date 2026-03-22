@@ -117,7 +117,7 @@ export default function SetupWizard() {
     const setupSummary = useMemo(
         () => [
             { label: "Server folders", value: `${settings.scanner.directories.length}` },
-            { label: "Previewed media files", value: preview ? `${preview.total_media_files}` : "Pending" },
+            { label: "Previewed media files", value: preview ? `${preview.total_media_files}` : "--" },
             { label: "Notification targets", value: `${settings.notifications.targets.length}` },
             { label: "Schedule windows", value: `${settings.schedule.windows.length}` },
         ],
@@ -132,11 +132,9 @@ export default function SetupWizard() {
                         username={username}
                         password={password}
                         telemetryEnabled={settings.system.enable_telemetry}
-                        activeThemeId={settings.appearance.active_theme_id}
                         onUsernameChange={setUsername}
                         onPasswordChange={setPassword}
                         onTelemetryChange={(enable_telemetry) => setSettings((current) => ({ ...current, system: { ...current.system, enable_telemetry } }))}
-                        onThemeChange={(active_theme_id) => setSettings((current) => ({ ...current, appearance: { active_theme_id } }))}
                         registerValidator={registerValidator}
                     />
                 );
