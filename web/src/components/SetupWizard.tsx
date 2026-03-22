@@ -92,7 +92,21 @@ export default function SetupWizard() {
             setStep(6);
             setScanRunId((current) => current + 1);
         } catch (err) {
-            const message = isApiError(err) ? err.message : "Failed to save setup configuration.";
+            let message = "Failed to save setup configuration.";
+            if (isApiError(err)) {
+                if (err.status === 400) {
+                    message = err.message.length > 0
+                        ? err.message
+                        : "Setup configuration was rejected. Check that your username is at least 3 characters and password is at least 8 characters.";
+                } else if (err.status === 403) {
+                    message = "Setup has already been completed. Redirecting to dashboard...";
+                    setTimeout(() => { window.location.href = "/"; }, 1500);
+                } else if (err.status >= 500) {
+                    message = `Server error during setup (${err.status}). Check the Alchemist logs for details.`;
+                } else {
+                    message = err.message;
+                }
+            }
             setError(message);
         } finally {
             setSubmitting(false);
@@ -179,7 +193,7 @@ export default function SetupWizard() {
                     />
                 );
             case 5:
-                return <ReviewStep setupSummary={setupSummary} settings={settings} preview={preview} error={error} />;
+                return <ReviewStep setupSummary={setupSummary} settings={settings} preview={preview} error={null} />;
             case 6:
                 return <ScanStep runId={scanRunId} onBackToReview={() => setStep(5)} />;
             default:

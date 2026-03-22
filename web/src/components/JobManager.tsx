@@ -479,7 +479,7 @@ export default function JobManager() {
             resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
         };
         return (
-            <span className={cn("px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border", styles[status] || styles.queued)}>
+            <span className={cn("px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wider border", styles[status] || styles.queued)}>
                 {status}
             </span>
         );
@@ -503,15 +503,15 @@ export default function JobManager() {
         <div className="space-y-6 relative">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Active</div>
+                    <div className="text-xs font-medium text-helios-slate">Visible Active</div>
                     <div className="mt-2 text-2xl font-bold text-helios-ink">{activeCount}</div>
                 </div>
                 <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Failed</div>
+                    <div className="text-xs font-medium text-helios-slate">Visible Failed</div>
                     <div className="mt-2 text-2xl font-bold text-red-500">{failedCount}</div>
                 </div>
                 <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Completed</div>
+                    <div className="text-xs font-medium text-helios-slate">Visible Completed</div>
                     <div className="mt-2 text-2xl font-bold text-emerald-500">{completedCount}</div>
                 </div>
             </div>
@@ -710,10 +710,10 @@ export default function JobManager() {
                                                 {job.input_path.split(/[/\\]/).pop()}
                                             </span>
                                             <div className="flex items-center gap-2">
-                                                <span className="text-[10px] text-helios-slate truncate max-w-[240px]">
+                                                <span className="text-xs text-helios-slate truncate max-w-[240px]">
                                                     {job.input_path}
                                                 </span>
-                                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-[10px] font-bold text-helios-slate">
+                                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
                                                     P{job.priority}
                                                 </span>
                                             </div>
@@ -730,7 +730,7 @@ export default function JobManager() {
                                                 <div className="h-1.5 w-full bg-helios-line/10 rounded-full overflow-hidden">
                                                     <div className="h-full bg-helios-solar rounded-full transition-all duration-500" style={{ width: `${job.progress}%` }} />
                                                 </div>
-                                                <div className="text-[10px] text-right font-mono text-helios-slate">
+                                                <div className="text-xs text-right font-mono text-helios-slate">
                                                     {job.progress.toFixed(1)}%
                                                 </div>
                                             </div>
@@ -912,8 +912,8 @@ export default function JobManager() {
                                     <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-3 mb-1">
                                             {getStatusBadge(focusedJob.job.status)}
-                                            <span className="text-[10px] uppercase font-bold tracking-widest text-helios-slate">Job ID #{focusedJob.job.id}</span>
-                                            <span className="text-[10px] uppercase font-bold tracking-widest text-helios-slate">Priority {focusedJob.job.priority}</span>
+                                            <span className="text-xs font-medium text-helios-slate">Job ID #{focusedJob.job.id}</span>
+                                            <span className="text-xs font-medium text-helios-slate">Priority {focusedJob.job.priority}</span>
                                         </div>
                                         <h2 id="job-details-title" className="text-lg font-bold text-helios-ink truncate" title={focusedJob.job.input_path}>
                                             {focusedJob.job.input_path.split(/[/\\]/).pop()}
@@ -937,12 +937,12 @@ export default function JobManager() {
                                         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Activity size={12} />
-                                                <span className="text-[10px] font-bold uppercase tracking-wider">Video Codec</span>
+                                                <span className="text-xs font-medium text-helios-slate">Video Codec</span>
                                             </div>
                                             <p className="text-sm font-bold text-helios-ink capitalize">
                                                 {focusedJob.metadata?.codec_name || "Unknown"}
                                             </p>
-                                            <p className="text-[10px] text-helios-slate">
+                                            <p className="text-xs text-helios-slate">
                                                 {(focusedJob.metadata?.bit_depth ? `${focusedJob.metadata.bit_depth}-bit` : "Unknown bit depth")} • {focusedJob.metadata?.container.toUpperCase()}
                                             </p>
                                         </div>
@@ -950,12 +950,12 @@ export default function JobManager() {
                                         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Maximize2 size={12} />
-                                                <span className="text-[10px] font-bold uppercase tracking-wider">Resolution</span>
+                                                <span className="text-xs font-medium text-helios-slate">Resolution</span>
                                             </div>
                                             <p className="text-sm font-bold text-helios-ink">
                                                 {focusedJob.metadata ? `${focusedJob.metadata.width}x${focusedJob.metadata.height}` : "-"}
                                             </p>
-                                            <p className="text-[10px] text-helios-slate">
+                                            <p className="text-xs text-helios-slate">
                                                 {focusedJob.metadata?.fps.toFixed(2)} FPS
                                             </p>
                                         </div>
@@ -963,7 +963,7 @@ export default function JobManager() {
                                         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Clock size={12} />
-                                                <span className="text-[10px] font-bold uppercase tracking-wider">Duration</span>
+                                                <span className="text-xs font-medium text-helios-slate">Duration</span>
                                             </div>
                                             <p className="text-sm font-bold text-helios-ink">
                                                 {focusedJob.metadata ? formatDuration(focusedJob.metadata.duration_secs) : "-"}
@@ -974,7 +974,7 @@ export default function JobManager() {
                                     {/* Media Details */}
                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                         <div className="space-y-4">
-                                            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-helios-slate/60 flex items-center gap-2">
+                                            <h3 className="text-xs font-semibold uppercase tracking-wide text-helios-slate/60 flex items-center gap-2">
                                                 <Database size={12} /> Input Details
                                             </h3>
                                             <div className="space-y-3">
@@ -1000,7 +1000,7 @@ export default function JobManager() {
                                         </div>
 
                                         <div className="space-y-4">
-                                            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-helios-solar flex items-center gap-2">
+                                            <h3 className="text-xs font-semibold uppercase tracking-wide text-helios-solar flex items-center gap-2">
                                                 <Zap size={12} /> Output Details
                                             </h3>
                                             {focusedJob.encode_stats ? (
@@ -1028,7 +1028,7 @@ export default function JobManager() {
                                                     </div>
                                                 </div>
                                             ) : (
-                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-xl text-[10px] text-helios-slate italic">
+                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-xl text-xs text-helios-slate italic">
                                                     {focusedJob.job.status === 'encoding' ? "Encoding in progress..." : "No encode data available"}
                                                 </div>
                                             )}
@@ -1040,7 +1040,7 @@ export default function JobManager() {
                                         <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/10">
                                             <div className="flex items-center gap-2 text-amber-600 mb-1">
                                                 <Info size={12} />
-                                                <span className="text-[10px] font-bold uppercase tracking-wider">Decision Context</span>
+                                                <span className="text-xs font-medium text-helios-slate">Decision Context</span>
                                             </div>
                                             <p className="text-sm text-helios-ink leading-relaxed">
                                                 {focusedDecision?.human ?? focusedJob.job.decision_reason}

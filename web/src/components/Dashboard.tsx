@@ -309,7 +309,7 @@ export default function Dashboard() {
                             jobs.map((job) => {
                                 const status = (job.status || "").toLowerCase();
                                 return (
-                                    <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-helios-surface-soft hover:bg-white/5 transition-colors border border-transparent hover:border-helios-line/20">
+                                    <div key={job.id} className="flex items-center justify-between p-3 rounded-md bg-helios-surface-soft hover:bg-helios-surface-soft/60 transition-colors border border-transparent hover:border-helios-line/20">
                                         <div className="flex items-center gap-3 min-w-0">
                                             <div className={`w-2 h-2 rounded-full shrink-0 ${status === "completed"
                                                 ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
@@ -323,7 +323,7 @@ export default function Dashboard() {
                                                 <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
                                                     {job.input_path.split(/[/\\]/).pop()}
                                                 </span>
-                                                <span className="text-[10px] text-helios-slate uppercase tracking-wide font-bold">
+                                                <span className="text-xs text-helios-slate/70">
                                                     {job.status} · {formatRelativeTime(job.created_at)}
                                                 </span>
                                             </div>
@@ -362,7 +362,9 @@ export default function Dashboard() {
             <div className="p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm">
                 <div className="flex items-center gap-2 mb-6">
                     <Activity size={18} className="text-helios-solar" />
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-helios-slate">System Health</h3>
+                    <h3 className="text-sm font-semibold text-helios-slate">
+                        System Health
+                    </h3>
                 </div>
                 <ResourceMonitor />
             </div>

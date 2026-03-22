@@ -4,10 +4,8 @@ import SetupWizard from "../components/SetupWizard";
 ---
 
 <Layout title="Alchemist | Setup">
-    <div
-        class="min-h-screen bg-helios-main flex items-center justify-center p-4"
-    >
-        <div class="w-full max-w-3xl">
+    <div class="min-h-screen bg-helios-main overflow-y-auto">
+        <div class="w-full max-w-5xl mx-auto px-4 py-8">
             <SetupWizard client:only="react" />
         </div>
     </div>
@@ -15,13 +13,11 @@ import SetupWizard from "../components/SetupWizard";
 
 <script>
     import { apiJson } from "../lib/api";
-
-    // If setup is already done, redirect to dashboard
     apiJson<{ setup_required: boolean }>("/api/setup/status")
         .then((data) => {
             if (!data.setup_required) {
                 window.location.href = "/";
             }
         })
-        .catch((err) => console.error("Failed to check setup status", err));
+        .catch(() => undefined);
 </script>
