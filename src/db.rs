@@ -1336,7 +1336,7 @@ impl Db {
                 let score = watch_path.len();
                 if best
                     .as_ref()
-                    .map_or(true, |(best_score, _)| score > *best_score)
+                    .is_none_or(|(best_score, _)| score > *best_score)
                 {
                     best = Some((score, profile));
                 }
