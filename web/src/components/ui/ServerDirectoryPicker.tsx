@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Folder, FolderOpen, AlertTriangle, HardDrive, Sparkles } from "lucide-react";
+import { Folder, FolderOpen, AlertTriangle, Sparkles } from "lucide-react";
 import { apiJson, isApiError } from "../../lib/api";
 
 interface FsBreadcrumb {

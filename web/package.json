@@ -1,6 +1,6 @@
 {
   "name": "alchemist-web",
-  "version": "0.2.10-rc.2",
+  "version": "0.2.10-rc.3",
   "private": true,
   "packageManager": "bun@1",
   "type": "module",
