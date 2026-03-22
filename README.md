@@ -27,9 +27,11 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 - Get a ping when work finishes through Discord, Gotify, or a webhook.
 - Keep heavy jobs out of the way with a scheduler for off-peak hours.
 - Push urgent files to the front with the priority queue.
+- Switch the engine between background, balanced, and throughput modes without restarting the app.
 - Let hardware acceleration happen automatically on NVIDIA, Intel, AMD, or Apple, with CPU fallback when needed.
 - Preserve HDR metadata or tonemap to SDR depending on what you need.
 - Add folders once and let watch folders keep monitoring them automatically.
+- Shape audio output with stream rules for commentary stripping, language filtering, and default-track retention.
 
 ## Hardware Support
 

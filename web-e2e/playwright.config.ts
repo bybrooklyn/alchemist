@@ -1,5 +1,5 @@
 import { defineConfig } from "@playwright/test";
-import { CONFIG_PATH, DB_PATH } from "./testConfig";
+import { BASE_URL, CONFIG_PATH, DB_PATH, PORT } from "./testConfig";
 
 export default defineConfig({
   testDir: "./tests",
@@ -13,7 +13,7 @@ export default defineConfig({
   reporter: "list",
   globalSetup: "./global-setup.ts",
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: BASE_URL,
     headless: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -37,13 +37,14 @@ export default defineConfig({
   ],
   webServer: {
     command: "sh -c 'mkdir -p .runtime/media && cargo run --manifest-path ../Cargo.toml -- --reset-auth'",
-    url: "http://127.0.0.1:3000/api/health",
+    url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
       ALCHEMIST_CONFIG_PATH: CONFIG_PATH,
       ALCHEMIST_DB_PATH: DB_PATH,
       ALCHEMIST_CONFIG_MUTABLE: "true",
+      ALCHEMIST_SERVER_PORT: String(PORT),
       RUST_LOG: "warn",
     },
   },

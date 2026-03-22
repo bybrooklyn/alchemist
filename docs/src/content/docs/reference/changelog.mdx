@@ -5,6 +5,43 @@ description: History of changes and releases for Alchemist.
 
 All notable changes to Alchemist will be documented on this page.
 
+## v0.2.10-rc.5
+
+### Runtime & Queue Control
+- ✅ Added engine runtime modes (`background`, `balanced`, `throughput`) with manual overrides and drain/resume controls.
+- ✅ Expanded engine status reporting so the UI can distinguish manual pause, scheduler pause, drain state, and effective concurrency.
+
+### Media Processing & Diagnostics
+- ✅ Improved VAAPI-first Intel handling, remux planning, subtitle sidecars, and library health issue reporting.
+- ✅ Expanded hardware detection and probe logging for clearer CPU/GPU backend diagnostics.
+- ✅ Added stream rules for commentary stripping, language filtering, and default-audio retention.
+
+### Tooling & Docs
+- ✅ Normalized runtime config/database paths under the `alchemist` home and added a richer `justfile` workflow for development and releases.
+- ✅ Migrated docs onto a working Starlight content configuration and refreshed the local docs build path.
+- ✅ Hardened local release validation so Docker/tag pushes happen only after all checks pass, including docs and isolated web-e2e runs.
+
+## v0.2.10-rc.2
+
+### Stability & Reliability
+- ✅ VMAF quality gating, retry backoff, orphaned temp cleanup, log retention, and auth session cleanup landed together.
+- ✅ Resource endpoint caching reduced repeated OS probes from multiple open browser tabs.
+
+### New Features
+- ✅ Per-library profiles, the savings dashboard, Library Doctor, and `/api/jobs` as the canonical jobs endpoint.
+
+### Beginner Experience
+- ✅ Plain-English skip reasons, first-run redirect handling, setup wizard explanations, and telemetry opt-in.
+
+### Job Management
+- ✅ Dedicated skipped/archived tabs and richer sorting controls in the job list.
+
+### UI & Design
+- ✅ DM Sans typography, a simplified sidebar active state, tighter radius scale, and a more composable setup wizard.
+
+### Infrastructure
+- ✅ Cached Rust/TS/frontend CI, multi-arch Docker images, tarball release assets with checksums, and a pinned-FFmpeg Dockerfile.
+
 ## v0.2.10-rc.1
 
 ### Safety & Reliability
