@@ -1,0 +1,47 @@
+---
+title: Alchemist
+description: Self-hosted, open source video transcoding automation.
+template: splash
+hero:
+  tagline: Automate your video library's transformation to AV1, HEVC, and H.264 with intelligent analysis and hardware acceleration.
+  image:
+    file: ../../../public/favicon.svg
+  actions:
+    - text: Get Started
+      link: /getting-started/installation/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/alchemist-project/alchemist
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Alchemist is a tool that automatically shrinks your video library to save space without ruining the picture quality. It looks at your files, figures out the best way to make them smaller using your computer's graphics card, and handles all the hard work for you while you sleep.
+
+## Why Alchemist?
+
+<CardGrid stagger>
+	<Card title="Intelligent Analysis" icon="magnifier">
+		Alchemist calculates Bits Per Pixel (BPP) and performs size checks to ensure quality isn't "murdered" and space is actually saved.
+	</Card>
+	<Card title="Hardware Accelerated" icon="rocket">
+		Supports NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, and Apple VideoToolbox with automatic CPU fallback.
+	</Card>
+	<Card title="Built-in Library Doctor" icon="heart">
+		Scan your library for corrupt files and automatically queue them for repair or notification.
+	</Card>
+	<Card title="Flexible Scheduling" icon="calendar">
+		Run transcodes only when it's convenient—during off-peak hours or when the system is idle.
+	</Card>
+</CardGrid>
+
+## Features At a Glance
+
+- **Single Binary:** Everything you need, including FFmpeg, is bundled in our Docker image.
+- **Web UI:** Manage your entire transcoding pipeline from a clean, modern web interface.
+- **Storage Savings Dashboard:** Track exactly how much space you've reclaimed across your libraries.
+- **HDR Support:** Preserve HDR metadata or perform high-quality tonemapping to SDR.
+- **Quality Validation:** Optional VMAF scoring ensures your transcodes meet your quality standards.
+- **Notifications:** Stay informed via Discord, Gotify, or generic webhooks.

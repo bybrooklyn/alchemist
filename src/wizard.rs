@@ -71,6 +71,7 @@ impl ConfigWizard {
                 tonemap_peak: crate::config::default_tonemap_peak(),
                 tonemap_desat: crate::config::default_tonemap_desat(),
                 subtitle_mode: crate::config::SubtitleMode::Copy,
+                stream_rules: crate::config::StreamRules::default(),
                 vmaf_min_score: None,
             },
             hardware: crate::config::HardwareConfig {

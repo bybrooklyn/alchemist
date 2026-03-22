@@ -1,0 +1,60 @@
+---
+title: Docker
+description: Advanced Docker configuration for Alchemist.
+---
+
+This page is for users who want to fine-tune how Alchemist runs inside Docker. It covers advanced settings like using specific graphics cards and speeding up the process with temporary folders.
+
+Alchemist is most powerful when run in Docker. This guide covers some of the more advanced configuration options for your Docker setup.
+
+## Advanced Docker Compose
+
+Here is an example of a "power user" configuration:
+
+```yaml
+version: '3.8'
+
+services:
+  alchemist:
+    image: ghcr.io/alchemist-project/alchemist:latest
+    container_name: alchemist
+    ports:
+      - "3000:3000"
+    volumes:
+      - /path/to/your/config:/config # Where settings are saved
+      - /mnt/storage/media/movies:/media/movies:rw # Your movies
+      - /mnt/storage/media/tv:/media/tv:rw # Your TV shows
+      - /tmp/alchemist:/tmp # A fast place for temporary files
+    environment:
+      - PUID=1000 # Your user ID
+      - PGID=1000 # Your group ID
+      - TZ=Europe/London # Your local time
+      - NVIDIA_VISIBLE_DEVICES=all # Let Alchemist see NVIDIA cards
+    devices:
+      - /dev/dri:/dev/dri # Let Alchemist see Intel/AMD cards
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+```
+
+## Making it Faster with a "Temp" Folder
+
+Transcoding creates huge temporary files while it works. If you have a fast SSD, you can tell Alchemist to use it for these temporary files instead of your slower hard drives. This makes the whole process smoother.
+
+```yaml
+volumes:
+  - /mnt/fast-ssd/alchemist-tmp:/tmp
+```
+
+## Permissions (PUID/PGID)
+
+Alchemist needs permission to read your movies and write the new, smaller versions. Using `PUID` and `PGID` ensures that Alchemist has the same permissions as your user account on the computer.
+
+## Troubleshooting
+
+If Alchemist says it can't find your graphics card, make sure you've added the `devices:` or `deploy:` sections shown above. These are the "bridges" that let the software inside the container talk to the hardware in your computer.

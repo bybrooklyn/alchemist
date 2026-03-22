@@ -134,6 +134,17 @@ pub struct NewLibraryProfile {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct JobFilterQuery {
+    pub limit: i64,
+    pub offset: i64,
+    pub statuses: Option<Vec<JobState>>,
+    pub search: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_desc: bool,
+    pub archived: Option<bool>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct NotificationTarget {
     pub id: i64,
@@ -770,16 +781,7 @@ impl Db {
     }
 
     /// Get jobs with filtering, sorting and pagination
-    pub async fn get_jobs_filtered(
-        &self,
-        limit: i64,
-        offset: i64,
-        statuses: Option<Vec<JobState>>,
-        search: Option<String>,
-        sort_by: Option<String>,
-        sort_desc: bool,
-        archived: Option<bool>,
-    ) -> Result<Vec<Job>> {
+    pub async fn get_jobs_filtered(&self, query: JobFilterQuery) -> Result<Vec<Job>> {
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             "SELECT j.id, j.input_path, j.output_path, j.status, 
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
@@ -792,7 +794,7 @@ impl Db {
              WHERE 1 = 1 "
         );
 
-        match archived {
+        match query.archived {
             Some(true) => {
                 qb.push(" AND j.archived = 1 ");
             }
@@ -802,7 +804,7 @@ impl Db {
             None => {}
         }
 
-        if let Some(statuses) = statuses {
+        if let Some(statuses) = query.statuses {
             if !statuses.is_empty() {
                 qb.push(" AND j.status IN (");
                 let mut separated = qb.separated(", ");
@@ -813,13 +815,13 @@ impl Db {
             }
         }
 
-        if let Some(search) = search {
+        if let Some(search) = query.search {
             qb.push(" AND j.input_path LIKE ");
             qb.push_bind(format!("%{}%", search));
         }
 
         qb.push(" ORDER BY ");
-        let sort_col = match sort_by.as_deref() {
+        let sort_col = match query.sort_by.as_deref() {
             Some("created_at") => "j.created_at",
             Some("updated_at") => "j.updated_at",
             Some("input_path") => "j.input_path",
@@ -827,12 +829,12 @@ impl Db {
             _ => "j.updated_at",
         };
         qb.push(sort_col);
-        qb.push(if sort_desc { " DESC" } else { " ASC" });
+        qb.push(if query.sort_desc { " DESC" } else { " ASC" });
 
         qb.push(" LIMIT ");
-        qb.push_bind(limit);
+        qb.push_bind(query.limit);
         qb.push(" OFFSET ");
-        qb.push_bind(offset);
+        qb.push_bind(query.offset);
 
         let jobs = qb.build_query_as::<Job>().fetch_all(&self.pool).await?;
         Ok(jobs)

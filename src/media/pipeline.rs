@@ -36,6 +36,7 @@ pub struct MediaMetadata {
     pub audio_channels: Option<u32>,
     pub audio_is_heavy: bool,
     pub subtitle_streams: Vec<SubtitleStreamMetadata>,
+    pub audio_streams: Vec<AudioStreamMetadata>,
     pub dynamic_range: DynamicRange,
 }
 
@@ -48,6 +49,17 @@ pub struct SubtitleStreamMetadata {
     pub default: bool,
     pub forced: bool,
     pub burnable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioStreamMetadata {
+    pub stream_index: usize,
+    pub codec_name: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub channels: Option<u32>,
+    pub default: bool,
+    pub forced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +363,9 @@ pub struct TranscodePlan {
     pub encoder_preset: Option<String>,
     pub threads: usize,
     pub audio: AudioStreamPlan,
+    /// If Some, only these audio stream indices are mapped.
+    /// If None, all audio streams are mapped (default behavior).
+    pub audio_stream_indices: Option<Vec<usize>>,
     pub subtitles: SubtitleStreamPlan,
     pub filters: Vec<FilterStep>,
     pub allow_fallback: bool,
@@ -421,6 +436,15 @@ struct FinalizeJobContext<'a> {
     start_time: std::time::Instant,
     metadata: &'a MediaMetadata,
     execution_result: &'a ExecutionResult,
+}
+
+struct FinalizeFailureContext<'a> {
+    plan: &'a TranscodePlan,
+    metadata: &'a MediaMetadata,
+    execution_result: &'a ExecutionResult,
+    config_snapshot: &'a crate::config::Config,
+    start_time: std::time::Instant,
+    temp_output_path: &'a Path,
 }
 
 impl Pipeline {
@@ -788,12 +812,14 @@ impl Pipeline {
                 {
                     self.handle_finalize_failure(
                         job.id,
-                        &plan,
-                        metadata,
-                        &result,
-                        &config_snapshot,
-                        start_time,
-                        &temp_output_path,
+                        FinalizeFailureContext {
+                            plan: &plan,
+                            metadata,
+                            execution_result: &result,
+                            config_snapshot: &config_snapshot,
+                            start_time,
+                            temp_output_path: &temp_output_path,
+                        },
                         &err,
                     )
                     .await;
@@ -1106,12 +1132,7 @@ impl Pipeline {
     async fn handle_finalize_failure(
         &self,
         job_id: i64,
-        plan: &TranscodePlan,
-        metadata: &MediaMetadata,
-        execution_result: &ExecutionResult,
-        config_snapshot: &crate::config::Config,
-        start_time: std::time::Instant,
-        temp_output_path: &Path,
+        context: FinalizeFailureContext<'_>,
         err: &crate::error::AlchemistError,
     ) {
         tracing::error!("Job {}: Finalization failed: {}", job_id, err);
@@ -1122,32 +1143,33 @@ impl Pipeline {
             let _ = self.db.add_decision(job_id, "reject", reason).await;
         }
 
-        if temp_output_path.exists() {
-            if let Err(cleanup_err) = tokio::fs::remove_file(temp_output_path).await {
+        if context.temp_output_path.exists() {
+            if let Err(cleanup_err) = tokio::fs::remove_file(context.temp_output_path).await {
                 tracing::warn!(
                     "Job {}: Failed to remove temp output after finalize error {:?}: {}",
                     job_id,
-                    temp_output_path,
+                    context.temp_output_path,
                     cleanup_err
                 );
             }
         }
-        cleanup_temp_subtitle_output(job_id, plan).await;
+        cleanup_temp_subtitle_output(job_id, context.plan).await;
 
         self.emit_telemetry_event(TelemetryEventParams {
-            telemetry_enabled: config_snapshot.system.enable_telemetry,
-            output_codec: execution_result
+            telemetry_enabled: context.config_snapshot.system.enable_telemetry,
+            output_codec: context
+                .execution_result
                 .actual_output_codec
-                .unwrap_or(execution_result.planned_output_codec),
-            encoder_override: execution_result.actual_encoder_name.as_deref(),
-            fallback: plan.fallback.as_ref(),
-            metadata,
+                .unwrap_or(context.execution_result.planned_output_codec),
+            encoder_override: context.execution_result.actual_encoder_name.as_deref(),
+            fallback: context.plan.fallback.as_ref(),
+            metadata: context.metadata,
             event_type: "job_finished",
             status: Some("failure"),
             failure_reason: Some("finalize_failed"),
-            input_size_bytes: Some(metadata.size_bytes),
+            input_size_bytes: Some(context.metadata.size_bytes),
             output_size_bytes: None,
-            duration_ms: Some(start_time.elapsed().as_millis() as u64),
+            duration_ms: Some(context.start_time.elapsed().as_millis() as u64),
             speed_factor: None,
         })
         .await;
@@ -1312,6 +1334,7 @@ mod tests {
             encoder_preset: Some("medium".to_string()),
             threads: 0,
             audio: AudioStreamPlan::Copy,
+            audio_stream_indices: None,
             subtitles: SubtitleStreamPlan::Extract {
                 stream_indices: vec![0],
                 sidecar_output: SidecarOutputPlan {
@@ -1392,6 +1415,7 @@ mod tests {
             encoder_preset: Some("medium".to_string()),
             threads: 0,
             audio: AudioStreamPlan::Copy,
+            audio_stream_indices: None,
             subtitles: SubtitleStreamPlan::Drop,
             filters: Vec::new(),
             allow_fallback: true,
@@ -1418,6 +1442,7 @@ mod tests {
             audio_channels: Some(2),
             audio_is_heavy: false,
             subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
         };
         let result = ExecutionResult {
@@ -1442,12 +1467,14 @@ mod tests {
         pipeline
             .handle_finalize_failure(
                 job.id,
-                &plan,
-                &metadata,
-                &result,
-                &config_snapshot,
-                std::time::Instant::now(),
-                &temp_output,
+                FinalizeFailureContext {
+                    plan: &plan,
+                    metadata: &metadata,
+                    execution_result: &result,
+                    config_snapshot: &config_snapshot,
+                    start_time: std::time::Instant::now(),
+                    temp_output_path: &temp_output,
+                },
                 &crate::error::AlchemistError::Unknown("disk full".to_string()),
             )
             .await;
