@@ -1,4 +1,4 @@
-name: Release Binaries
+name: Release
 
 on:
   push:
@@ -10,270 +10,288 @@ permissions:
   contents: write
 
 jobs:
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
-  # WINDOWS BUILD (EXE)
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
-  build-windows:
-    name: Windows ${{ matrix.target_name }}
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            target_name: x86_64
-            msi_arch: x64
-
+  release-meta:
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+      make_latest: ${{ steps.channel.outputs.make_latest }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read version
+        id: version
+        run: echo "version=$(tr -d '\n\r' < VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Determine release channel
-        id: release_channel
+        id: channel
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* || "${GITHUB_REF_NAME}" == *-beta.* || "${GITHUB_REF_NAME}" == *-alpha.* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "make_latest=true" >> "$GITHUB_OUTPUT"
           fi
-      
-      # Use bundled Bun (installed via npm or setup-bun) to build frontend
+
+  build-frontend:
+    needs: [release-meta]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Install Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install Rust Toolchain
+      - name: Restore Bun modules cache
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: bun-release-${{ hashFiles('web/bun.lock') }}
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  build-linux:
+    needs: [release-meta, build-frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: alchemist-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: alchemist-linux-aarch64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # Frontend Build
-      - name: Build Frontend
-        shell: bash
-        run: |
-          cd web
-          bun install --frozen-lockfile
-          bun run build
-
-      # Backend Build (EXE)
-      - name: Build EXE
-        shell: cmd
-        run: |
-          cargo build --release --target ${{ matrix.target }}
-
-      # Move EXE to a predictable name for upload
-      - name: Prepare EXE
-        shell: bash
-        run: |
-          cp target/${{ matrix.target }}/release/alchemist.exe alchemist-${{ matrix.target_name }}.exe
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          files: |
-            alchemist-${{ matrix.target_name }}.exe
-          prerelease: ${{ steps.release_channel.outputs.prerelease }}
-          make_latest: ${{ steps.release_channel.outputs.make_latest }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          key: release-linux-${{ matrix.target }}
 
+      - name: Install aarch64 cross-compilation dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
-  # MACOS BUILD (.app bundle)
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY="target/${{ matrix.target }}/release/alchemist"
+          ARCHIVE="${{ matrix.artifact_name }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname "$BINARY")" "$(basename "$BINARY")"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}.tar.gz
+            ${{ matrix.artifact_name }}.tar.gz.sha256
+
+  build-windows:
+    needs: [release-meta, build-frontend]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-x86_64
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "target/x86_64-pc-windows-msvc/release/alchemist.exe" "alchemist-windows-x86_64.exe"
+          sha256sum "alchemist-windows-x86_64.exe" > "alchemist-windows-x86_64.exe.sha256"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alchemist-windows-x86_64
+          path: |
+            alchemist-windows-x86_64.exe
+            alchemist-windows-x86_64.exe.sha256
+
   build-macos:
-    name: macOS ${{ matrix.target_name }}
+    needs: [release-meta, build-frontend]
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-apple-darwin
-            target_name: x86_64
+            artifact_name: alchemist-macos-x86_64
           - target: aarch64-apple-darwin
-            target_name: arm64
-
+            artifact_name: alchemist-macos-arm64
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine release channel
-        id: release_channel
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "make_latest=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Read app version
-        id: app_version
-        shell: bash
-        run: |
-          echo "value=$(grep -m1 '^version = ' Cargo.toml | cut -d'\"' -f2)" >> "$GITHUB_OUTPUT"
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          bun-version: latest
+          fetch-depth: 1
 
-      - name: Install Rust Toolchain
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build Frontend
-        run: |
-          cd web
-          bun install --frozen-lockfile
-          bun run build
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-macos-${{ matrix.target }}
 
-      - name: Build Binary
+      - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create App Bundle
-        run: |
-          APP_NAME="Alchemist"
-          APP_DIR="$APP_NAME.app"
-          mkdir -p "$APP_DIR/Contents/MacOS"
-          mkdir -p "$APP_DIR/Contents/Resources"
-          
-          # Copy Binary
-          cp "target/${{ matrix.target }}/release/alchemist" "$APP_DIR/Contents/MacOS/$APP_NAME"
-          
-          # Create Info.plist (Basic)
-          cat <<EOF > "$APP_DIR/Contents/Info.plist"
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>$APP_NAME</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.alchemist.app</string>
-              <key>CFBundleName</key>
-              <string>$APP_NAME</string>
-              <key>CFBundleShortVersionString</key>
-              <string>${{ steps.app_version.outputs.value }}</string>
-              <key>CFBundleVersion</key>
-              <string>${{ steps.app_version.outputs.value }}</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>LSApplicationCategoryType</key>
-              <string>public.app-category.video</string>
-              <key>LSMinimumSystemVersion</key>
-              <string>10.13</string>
-          </dict>
-          </plist>
-          EOF
-
-          # Ad-hoc codesign to reduce "damaged" warnings on launch
-          codesign --force --deep --sign - "$APP_DIR"
-          xattr -cr "$APP_DIR" || true
-          
-          # Zip for release (No signing/notarization)
-          ditto -c -k --keepParent "$APP_DIR" "alchemist-macos-${{ matrix.target_name }}.zip"
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: alchemist-macos-${{ matrix.target_name }}.zip
-          prerelease: ${{ steps.release_channel.outputs.prerelease }}
-          make_latest: ${{ steps.release_channel.outputs.make_latest }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
-  # LINUX BUILD (AppImage)
-  # ------------------------------------------------------------------------------------------------------------------------------------------------
-  build-linux:
-    name: Linux x86_64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine release channel
-        id: release_channel
+      - name: Package release artifact
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "make_latest=true" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          BINARY="target/${{ matrix.target }}/release/alchemist"
+          ARCHIVE="${{ matrix.artifact_name }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname "$BINARY")" "$(basename "$BINARY")"
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
         with:
-          bun-version: latest
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}.tar.gz
+            ${{ matrix.artifact_name }}.tar.gz.sha256
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+  publish-release:
+    needs: [release-meta, build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
         with:
-          targets: x86_64-unknown-linux-gnu
+          pattern: alchemist-*
+          merge-multiple: true
+          path: release-assets
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: List release assets
+        run: ls -lh release-assets/
 
-      - name: Build Frontend
-        run: |
-          cd web
-          bun install --frozen-lockfile
-          bun run build
-
-      - name: Build Binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      - name: Create AppDir
-        run: |
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          mkdir -p AppDir/usr/share/applications
-
-          cp target/x86_64-unknown-linux-gnu/release/alchemist AppDir/usr/bin/alchemist
-          
-          # Create Desktop Entry
-          cat <<EOF > AppDir/usr/share/applications/alchemist.desktop
-          [Desktop Entry]
-          Name=Alchemist
-          Exec=alchemist
-          Icon=alchemist
-          Type=Application
-          Categories=Utility;
-          EOF
-          
-          # Placeholder Icon (Generate one if missing)
-          convert -size 256x256 xc:purple AppDir/usr/share/icons/hicolor/256x256/apps/alchemist.png || touch AppDir/usr/share/icons/hicolor/256x256/apps/alchemist.png
-
-      - name: Create AppImage
-        env:
-          ARCH: x86_64
-        run: |
-          wget -O linuxdeploy "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
-          chmod +x linuxdeploy
-          
-          ./linuxdeploy --appdir AppDir --output appimage
-
-          mv Alchemist*.AppImage alchemist-linux-x86_64.AppImage
-
-      - name: Upload Release Assets
+      - name: Publish release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: alchemist-linux-x86_64.AppImage
-          prerelease: ${{ steps.release_channel.outputs.prerelease }}
-          make_latest: ${{ steps.release_channel.outputs.make_latest }}
+          files: release-assets/*
+          prerelease: ${{ needs.release-meta.outputs.prerelease }}
+          make_latest: ${{ needs.release-meta.outputs.make_latest }}
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          name: Alchemist ${{ needs.release-meta.outputs.version }}
+          body: |
+            ## Alchemist ${{ needs.release-meta.outputs.version }}
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `alchemist-linux-x86_64.tar.gz` |
+            | Linux ARM64 (Pi, NAS) | `alchemist-linux-aarch64.tar.gz` |
+            | Windows x86_64 | `alchemist-windows-x86_64.exe` |
+            | macOS Apple Silicon | `alchemist-macos-arm64.tar.gz` |
+            | macOS Intel | `alchemist-macos-x86_64.tar.gz` |
+
+            SHA256 checksums are provided as `.sha256` files alongside each download.
+            Verify with: `sha256sum -c alchemist-linux-x86_64.tar.gz.sha256`
+
+            ### Docker
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.release-meta.outputs.version }}
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Release Published"
+            echo "**Version:** ${{ needs.release-meta.outputs.version }}"
+            echo "**Prerelease:** ${{ needs.release-meta.outputs.prerelease }}"
+            echo
+            echo "### Artifacts"
+            for file in release-assets/*; do
+              echo "- $(basename "$file")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

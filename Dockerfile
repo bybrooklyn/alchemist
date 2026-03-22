@@ -7,7 +7,7 @@ COPY web/ .
 RUN bun run build
 
 # Stage 2: Rust Chef Planner
-FROM rustlang/rust:nightly AS chef
+FROM rust:1-slim-bookworm AS chef
 WORKDIR /app
 RUN cargo install cargo-chef
 
@@ -51,16 +51,26 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Download stable FFmpeg static build (v7.1)
-RUN ARCH=$(dpkg --print-architecture) && \
+RUN set -e; \
+    ARCH=$(dpkg --print-architecture); \
     if [ "$ARCH" = "amd64" ]; then \
-    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz; \
+      ARCHIVE="ffmpeg-release-amd64-static.tar.xz"; \
+      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
+      SHA256="abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67"; \
     elif [ "$ARCH" = "arm64" ]; then \
-    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz; \
-    fi && \
-    tar xf ffmpeg-release-*-static.tar.xz && \
-    mv ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
-    mv ffmpeg-*-static/ffprobe /usr/local/bin/ && \
-    rm -rf ffmpeg-release-*-static.tar.xz ffmpeg-*-static
+      ARCHIVE="ffmpeg-release-arm64-static.tar.xz"; \
+      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
+      SHA256="f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1"; \
+    else \
+      echo "Unsupported architecture: $ARCH" >&2; \
+      exit 1; \
+    fi; \
+    wget -O "$ARCHIVE" "$URL"; \
+    echo "${SHA256}  ${ARCHIVE}" | sha256sum -c -; \
+    tar xf "$ARCHIVE"; \
+    mv ffmpeg-*-static/ffmpeg /usr/local/bin/; \
+    mv ffmpeg-*-static/ffprobe /usr/local/bin/; \
+    rm -rf "$ARCHIVE" ffmpeg-*-static
 
 COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 
@@ -72,4 +82,3 @@ ENV ALCHEMIST_DB_PATH=/app/data/alchemist.db
 EXPOSE 3000
 
 ENTRYPOINT ["alchemist"]
-CMD ["--server"]
