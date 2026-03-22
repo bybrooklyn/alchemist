@@ -36,6 +36,16 @@ fn ffmpeg_ready() -> bool {
             .unwrap_or(false)
 }
 
+fn ffmpeg_filter_available(filter_name: &str) -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-filters"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(filter_name))
+        .unwrap_or(false)
+}
+
 fn temp_root(prefix: &str) -> Result<PathBuf> {
     let mut path = std::env::temp_dir();
     path.push(format!("{prefix}_{}", rand::random::<u64>()));
@@ -333,7 +343,7 @@ async fn enqueue_and_process(
 
 #[tokio::test]
 async fn burn_subtitles_changes_video_frame_for_mkv_and_mp4() -> Result<()> {
-    if !ffmpeg_ready() {
+    if !ffmpeg_ready() || !ffmpeg_filter_available(" subtitles ") {
         return Ok(());
     }
 
@@ -393,7 +403,6 @@ async fn extract_subtitles_writes_sidecar_and_strips_main_output() -> Result<()>
     let root = temp_root("alchemist_extract_subtitles")?;
     let input = root.join("input.mkv");
     let output = root.join("output.mkv");
-    let sidecar = root.join("output.subs.mks");
     generate_subtitled_input(
         &input,
         &[
@@ -419,9 +428,23 @@ async fn extract_subtitles_writes_sidecar_and_strips_main_output() -> Result<()>
     let state = enqueue_and_process(db.as_ref(), &pipeline, &input, &output).await?;
     assert_eq!(state, JobState::Completed);
     assert_eq!(subtitle_stream_count(&output)?, 0);
-    assert!(sidecar.exists());
-    assert_eq!(subtitle_stream_count(&sidecar)?, 2);
-    assert!(!root.join("output.subs.mks.alchemist-part").exists());
+    let sidecars = std::fs::read_dir(&root)?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("output.")
+                        && name.ends_with(".srt")
+                        && !name.ends_with(".alchemist-part")
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sidecars.len(), 2);
+    for sidecar in &sidecars {
+        assert_eq!(subtitle_stream_count(sidecar)?, 1);
+        assert!(!sidecar.with_extension("srt.alchemist-part").exists());
+    }
 
     let _ = std::fs::remove_file(db_path);
     cleanup_root(&root);

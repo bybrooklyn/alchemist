@@ -38,6 +38,8 @@ export function humanizeSkipReason(reason: string): { human: string; technical: 
         switch (key) {
             case "already_target_codec":
                 return "This file is already in the target format — no conversion needed.";
+            case "already_target_codec_wrong_container":
+                return "This file is already in the right format but in an MP4 container. Alchemist will remux it to MKV — fast and lossless.";
             case "bpp_below_threshold":
                 return "This file is already efficiently compressed — transcoding it wouldn't save meaningful space.";
             case "below_min_file_size":
@@ -46,6 +48,8 @@ export function humanizeSkipReason(reason: string): { human: string; technical: 
                 return "This file is already in high-quality 10-bit format — re-encoding it could reduce quality.";
             case "size_reduction_insufficient":
                 return "Converting this file wouldn't make it meaningfully smaller, so Alchemist skipped it.";
+            case "remux: mp4_to_mkv_stream_copy":
+                return "Alchemist remuxed this file from MP4 to MKV with stream copy, so no re-encode or quality loss was needed.";
             default:
                 return reason;
         }
@@ -182,7 +186,7 @@ export default function JobManager() {
         onConfirm: () => Promise<void> | void;
     } | null>(null);
 
-    const isJobActive = (job: Job) => ["analyzing", "encoding", "resuming"].includes(job.status);
+    const isJobActive = (job: Job) => ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
 
     const formatJobActionError = (error: unknown, fallback: string) => {
         if (!isApiError(error)) {
@@ -205,7 +209,7 @@ export default function JobManager() {
     // Filter mapping
     const getStatusFilter = (tab: TabType) => {
         switch (tab) {
-            case "active": return ["analyzing", "encoding", "resuming"];
+            case "active": return ["analyzing", "encoding", "remuxing", "resuming"];
             case "queued": return ["queued"];
             case "completed": return ["completed"];
             case "failed": return ["failed", "cancelled"];
@@ -512,6 +516,7 @@ export default function JobManager() {
             queued: "bg-helios-slate/10 text-helios-slate border-helios-slate/20",
             analyzing: "bg-blue-500/10 text-blue-500 border-blue-500/20",
             encoding: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
+            remuxing: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
             completed: "bg-green-500/10 text-green-500 border-green-500/20",
             failed: "bg-red-500/10 text-red-500 border-red-500/20",
             cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
@@ -773,7 +778,7 @@ export default function JobManager() {
                                         </motion.div>
                                     </td>
                                     <td className="px-6 py-4">
-                                        {job.status === 'encoding' || job.status === 'analyzing' ? (
+                                        {["encoding", "analyzing", "remuxing"].includes(job.status) ? (
                                             <div className="w-24 space-y-1">
                                                 <div className="h-1.5 w-full bg-helios-line/10 rounded-full overflow-hidden">
                                                     <div className="h-full bg-helios-solar rounded-full transition-all duration-500" style={{ width: `${job.progress}%` }} />
@@ -864,7 +869,7 @@ export default function JobManager() {
                                                                 Retry
                                                             </button>
                                                         )}
-                                                        {(job.status === "encoding" || job.status === "analyzing") && (
+                                                        {["encoding", "analyzing", "remuxing"].includes(job.status) && (
                                                             <button
                                                                 onClick={() => {
                                                                     setMenuJobId(null);
@@ -1077,7 +1082,11 @@ export default function JobManager() {
                                                 </div>
                                             ) : (
                                                 <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-xl text-xs text-helios-slate italic">
-                                                    {focusedJob.job.status === 'encoding' ? "Encoding in progress..." : "No encode data available"}
+                                                    {focusedJob.job.status === "encoding"
+                                                        ? "Encoding in progress..."
+                                                        : focusedJob.job.status === "remuxing"
+                                                            ? "Remuxing in progress..."
+                                                            : "No encode data available"}
                                                 </div>
                                             )}
                                         </div>
@@ -1205,7 +1214,7 @@ export default function JobManager() {
                                                     <RefreshCw size={14} /> Retry Job
                                                 </button>
                                             )}
-                                            {(focusedJob.job.status === 'encoding' || focusedJob.job.status === 'analyzing') && (
+                                            {["encoding", "analyzing", "remuxing"].includes(focusedJob.job.status) && (
                                                 <button
                                                     onClick={() =>
                                                         openConfirm({

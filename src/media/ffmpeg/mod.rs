@@ -162,6 +162,21 @@ impl<'a> FFmpegCommandBuilder<'a> {
     }
 
     pub fn build_args(&self) -> Result<Vec<String>> {
+        if self.plan.is_remux {
+            return Ok(vec![
+                "-v".to_string(),
+                "error".to_string(),
+                "-i".to_string(),
+                self.input.display().to_string(),
+                "-c".to_string(),
+                "copy".to_string(),
+                "-map".to_string(),
+                "0".to_string(),
+                "-y".to_string(),
+                self.output.display().to_string(),
+            ]);
+        }
+
         let encoder = self
             .plan
             .encoder
@@ -268,13 +283,12 @@ impl<'a> FFmpegCommandBuilder<'a> {
     }
 
     pub fn build_subtitle_extract_args(&self) -> Result<Option<Vec<String>>> {
-        let SubtitleStreamPlan::Extract {
-            stream_indices,
-            sidecar_output,
-        } = &self.plan.subtitles
-        else {
+        let SubtitleStreamPlan::Extract { outputs } = &self.plan.subtitles else {
             return Ok(None);
         };
+        if outputs.is_empty() {
+            return Ok(None);
+        }
 
         let mut args = vec![
             "-hide_banner".to_string(),
@@ -282,25 +296,17 @@ impl<'a> FFmpegCommandBuilder<'a> {
             "-nostats".to_string(),
             "-i".to_string(),
             self.input.display().to_string(),
-            "-map_metadata".to_string(),
-            "0".to_string(),
-            "-vn".to_string(),
-            "-an".to_string(),
-            "-dn".to_string(),
         ];
 
-        for stream_index in stream_indices {
+        for sidecar_output in outputs {
             args.push("-map".to_string());
-            args.push(format!("0:s:{stream_index}"));
+            args.push(format!("0:s:{}", sidecar_output.stream_index));
+            args.push("-c:s".to_string());
+            args.push(sidecar_output.codec.clone());
+            args.push("-f".to_string());
+            args.push(sidecar_output.codec.clone());
+            args.push(sidecar_output.temp_path.display().to_string());
         }
-
-        args.extend([
-            "-c:s".to_string(),
-            "copy".to_string(),
-            "-f".to_string(),
-            "matroska".to_string(),
-            sidecar_output.temp_path.display().to_string(),
-        ]);
 
         Ok(Some(args))
     }
@@ -412,7 +418,7 @@ fn render_filtergraph(input: &Path, filters: &[FilterStep]) -> Option<String> {
             ),
             FilterStep::Format { pixel_format } => format!("format={pixel_format}"),
             FilterStep::SubtitleBurn { stream_index } => format!(
-                "subtitles='{}':si={stream_index}",
+                "subtitles=filename='{}':si={stream_index}",
                 escape_filter_path(input)
             ),
             FilterStep::HwUpload => "hwupload".to_string(),
@@ -801,6 +807,7 @@ mod tests {
             decision: TranscodeDecision::Transcode {
                 reason: "test".to_string(),
             },
+            is_remux: false,
             output_path: None,
             container: "mkv".to_string(),
             requested_codec: encoder.output_codec(),
@@ -1054,11 +1061,20 @@ mod tests {
         ];
         let mut plan = plan_for(Encoder::H264X264);
         plan.subtitles = SubtitleStreamPlan::Extract {
-            stream_indices: vec![0, 1],
-            sidecar_output: SidecarOutputPlan {
-                final_path: Path::new("/tmp/out.subs.mks").to_path_buf(),
-                temp_path: Path::new("/tmp/out.subs.mks.alchemist-part").to_path_buf(),
-            },
+            outputs: vec![
+                SidecarOutputPlan {
+                    stream_index: 0,
+                    codec: "srt".to_string(),
+                    final_path: Path::new("/tmp/out.eng.srt").to_path_buf(),
+                    temp_path: Path::new("/tmp/out.eng.srt.alchemist-part").to_path_buf(),
+                },
+                SidecarOutputPlan {
+                    stream_index: 1,
+                    codec: "ass".to_string(),
+                    final_path: Path::new("/tmp/out.jpn.ass").to_path_buf(),
+                    temp_path: Path::new("/tmp/out.jpn.ass.alchemist-part").to_path_buf(),
+                },
+            ],
         };
         let builder = FFmpegCommandBuilder::new(
             Path::new("/tmp/in.mkv"),
@@ -1072,7 +1088,43 @@ mod tests {
             .expect("subtitle extract args");
         assert!(args.contains(&"0:s:0".to_string()));
         assert!(args.contains(&"0:s:1".to_string()));
-        assert!(args.contains(&"/tmp/out.subs.mks.alchemist-part".to_string()));
+        assert!(args.contains(&"srt".to_string()));
+        assert!(args.contains(&"ass".to_string()));
+        assert!(args.contains(&"/tmp/out.eng.srt.alchemist-part".to_string()));
+        assert!(args.contains(&"/tmp/out.jpn.ass.alchemist-part".to_string()));
+    }
+
+    #[test]
+    fn remux_command_uses_stream_copy_without_encoder_args() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::H264X264);
+        plan.is_remux = true;
+        plan.encoder = None;
+        plan.backend = None;
+        plan.rate_control = None;
+        plan.encoder_preset = None;
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mp4"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert_eq!(
+            args,
+            vec![
+                "-v".to_string(),
+                "error".to_string(),
+                "-i".to_string(),
+                "/tmp/in.mp4".to_string(),
+                "-c".to_string(),
+                "copy".to_string(),
+                "-map".to_string(),
+                "0".to_string(),
+                "-y".to_string(),
+                "/tmp/out.mkv".to_string(),
+            ]
+        );
     }
 
     #[test]
