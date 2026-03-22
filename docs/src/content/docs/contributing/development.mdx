@@ -1,0 +1,71 @@
+---
+title: Development Setup
+description: Guide for setting up a local development environment for Alchemist.
+---
+
+This guide is for developers who want to modify Alchemist's code. We explain how to set up your computer to run the back-end (Rust) and the front-end (React) separately for faster development.
+
+## Tech Stack
+
+Alchemist is built using:
+- **Back-end**: [Rust](https://www.rust-lang.org/) with [Axum](https://github.com/tokio-rs/axum).
+- **Front-end**: [React](https://react.dev/) with [Astro](https://astro.build/) (located in the `web/` folder).
+- **Database**: [SQLite](https://www.sqlite.org/index.html).
+- **Transcoding**: [FFmpeg](https://ffmpeg.org/).
+
+## Prerequisites
+
+To work on Alchemist, you'll need:
+1.  **Rust**: Install via [rustup](https://rustup.rs/).
+2.  **Node.js**: Version 18 or newer (we recommend using `nvm`).
+3.  **Bun**: Used for front-end package management (`npm install -g bun`).
+4.  **FFmpeg**: Installed on your system (for local testing).
+
+## Local Development
+
+### 1. Back-end (Rust)
+The back-end handles the database, scanning files, and running FFmpeg.
+
+```bash
+# Clone the repository
+git clone https://github.com/alchemist-project/alchemist.git
+cd alchemist
+
+# Build the back-end
+cargo build
+
+# Run the back-end (starts the API on port 3000)
+cargo run
+```
+
+### 2. Front-end (Web UI)
+The web interface is located in the `web/` directory.
+
+```bash
+cd web
+
+# Install dependencies
+bun install
+
+# Start the development server (runs on port 4321)
+bun run dev
+```
+
+The front-end will automatically "talk" to the back-end running on port 3000.
+
+## Running Tests
+
+We value high-quality, tested code. Please ensure your changes don't break existing functionality.
+
+```bash
+# Run all Rust tests
+cargo test
+
+# Run front-end linting
+cd web
+bun run lint
+```
+
+## UI Development
+
+The `web/` folder uses **Tailwind CSS** for styling and **Lucide React** for icons. If you add new components, please follow the existing patterns in `web/src/components/ui/`.

@@ -1,0 +1,83 @@
+---
+title: Hardware Support
+description: Vendor-specific guide for hardware-accelerated transcoding.
+---
+
+This guide helps you set up and verify that Alchemist is using your computer's graphics card (GPU) or processor (CPU) correctly. Using a graphics card makes transcoding much faster and uses less electricity.
+
+Alchemist supports hardware-accelerated transcoding across all major GPU vendors. This guide provides detailed information on each vendor and how to enable their specific features.
+
+## Hardware Probing
+
+Alchemist automatically probes for available hardware at startup. You can see the detected hardware in **Settings** > **Hardware**.
+
+| Vendor | Probing Method |
+| :--- | :--- |
+| **NVIDIA** | `nvidia-smi` and checking for `_nvenc` encoders in FFmpeg. |
+| **Intel** | Checking `/dev/dri/renderD128` (or `renderD129`) and `_qsv` encoders. |
+| **AMD** | `/dev/dri/renderD128` and `_vaapi` (Linux) or `_amf` (Windows) encoders. |
+| **Apple** | Checking for `VideoToolbox` encoders. |
+| **CPU** | Always available via `libsvtav1`, `libx265`, and `libx264`. |
+
+## NVIDIA (NVENC)
+
+NVIDIA GPUs are highly recommended for high-quality, high-speed transcoding.
+
+### Enabling NVENC
+1.  Install the **NVIDIA Container Toolkit** on your host.
+2.  Pass the GPU to the Docker container (see [Docker Guide](/guides/docker/)).
+3.  Set **Preferred Vendor** to `nvidia` in **Settings** > **Hardware**.
+
+### Verification
+- **Log Check**: Look for "Using NVENC" in the Alchemist logs when a transcode starts.
+- **System Check**: Run `nvidia-smi` on your host machine while a transcode is running. You should see an `ffmpeg` process in the list.
+
+## Intel (QuickSync / QSV)
+
+Intel Integrated Graphics (iGPU) provide excellent transcoding performance with very low power consumption.
+
+### Enabling QSV
+1.  Ensure `/dev/dri` is passed to the container.
+2.  Set **Preferred Vendor** to `intel` in **Settings** > **Hardware**.
+
+### Verification
+- **Log Check**: Look for "Using QSV" in the Alchemist logs.
+- **Device Check**: Ensure `/dev/dri/renderD128` (or similar) exists inside the container. You can check this by running `ls /dev/dri` inside the container terminal.
+
+## AMD (VAAPI / AMF)
+
+AMD GPUs are supported on both Linux (via VAAPI) and Windows (via AMF).
+
+### Enabling VAAPI (Linux)
+1.  Ensure `/dev/dri` is passed to the container.
+2.  Set **Preferred Vendor** to `amd` in **Settings** > **Hardware**.
+
+### Verification
+- **Log Check**: Look for "Using VAAPI" (Linux) or "Using AMF" (Windows) in the logs.
+- **Device Check**: Similar to Intel, ensure `/dev/dri` devices are visible inside the container.
+
+## Apple (VideoToolbox)
+
+If you're running Alchemist on macOS (Apple Silicon or Intel), you can use Apple's VideoToolbox.
+
+### Enabling VideoToolbox
+1.  Set **Preferred Vendor** to `apple` in **Settings** > **Hardware**.
+
+### Verification
+- **Log Check**: Look for "Using VideoToolbox" in the Alchemist logs.
+- **Activity Monitor**: Open Activity Monitor on your Mac; you should see `ffmpeg` using "GPU" or "Media Engine" resources.
+
+## CPU Fallback (Software Encoding)
+
+If no GPU is available or supported, Alchemist will fall back to software encoding using your processor.
+
+### Key Features
+- **Highest Quality**: Software encoding often produces the best quality at the lowest file size, but it takes much longer.
+- **Very Slow**: Can be 10-50x slower than a graphics card.
+- **High Heat**: Your CPU will run at 100% and generate significant heat.
+
+### Verification
+- **Log Check**: Look for "Using CPU (Software)" in the logs.
+- **System Check**: Your CPU usage will spike to near 100%.
+
+To enable CPU fallback, check **Allow CPU fallback** in **Settings** > **Hardware**.

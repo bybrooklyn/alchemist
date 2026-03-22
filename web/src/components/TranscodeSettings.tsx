@@ -31,6 +31,26 @@ interface TranscodeSettingsPayload {
     tonemap_peak: number;
     tonemap_desat: number;
     subtitle_mode: "copy" | "burn" | "extract" | "none";
+    stream_rules: {
+        strip_audio_by_title: string[];
+        keep_audio_languages: string[];
+        keep_only_default_audio: boolean;
+    };
+}
+
+const defaultStreamRules: TranscodeSettingsPayload["stream_rules"] = {
+    strip_audio_by_title: [],
+    keep_audio_languages: [],
+    keep_only_default_audio: false,
+};
+
+const commentaryShortcutKeywords = ["commentary", "director"];
+
+function parseCommaSeparatedList(value: string): string[] {
+    return value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
 }
 
 export default function TranscodeSettings() {
@@ -47,7 +67,10 @@ export default function TranscodeSettings() {
     const fetchSettings = async () => {
         try {
             const data = await apiJson<TranscodeSettingsPayload>("/api/settings/transcode");
-            setSettings(data);
+            setSettings({
+                ...data,
+                stream_rules: data.stream_rules ?? defaultStreamRules,
+            });
             setError("");
         } catch (err) {
             setError(isApiError(err) ? err.message : "Unable to load current settings.");
@@ -86,6 +109,24 @@ export default function TranscodeSettings() {
     if (!settings) {
         return <div className="p-8 text-red-500">Failed to load settings.</div>;
     }
+
+    const commentaryShortcutEnabled = commentaryShortcutKeywords.every((keyword) =>
+        settings.stream_rules.strip_audio_by_title.some(
+            (entry) => entry.trim().toLowerCase() === keyword
+        )
+    );
+
+    const updateStreamRules = (
+        updates: Partial<TranscodeSettingsPayload["stream_rules"]>
+    ) => {
+        setSettings({
+            ...settings,
+            stream_rules: {
+                ...settings.stream_rules,
+                ...updates,
+            },
+        });
+    };
 
     return (
         <div className="flex flex-col gap-6">
@@ -214,6 +255,116 @@ export default function TranscodeSettings() {
                     <p className="text-[10px] text-helios-slate ml-1">
                         `burn` and `extract` are exposed here for planning parity; current jobs will skip until those subtitle paths are implemented end to end.
                     </p>
+                </div>
+
+                <div className="md:col-span-2 space-y-4 pt-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                        <Film size={14} /> Stream Rules
+                    </label>
+
+                    <div className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Strip commentary tracks</p>
+                            <p className="text-[10px] text-helios-slate mt-1">Adds built-in title keywords for common commentary tracks.</p>
+                        </div>
+                        <div className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                id="commentary-toggle"
+                                type="checkbox"
+                                checked={commentaryShortcutEnabled}
+                                onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    if (checked) {
+                                        const nextKeywords = [...settings.stream_rules.strip_audio_by_title];
+                                        for (const keyword of commentaryShortcutKeywords) {
+                                            if (
+                                                !nextKeywords.some(
+                                                    (entry) => entry.trim().toLowerCase() === keyword
+                                                )
+                                            ) {
+                                                nextKeywords.push(keyword);
+                                            }
+                                        }
+                                        updateStreamRules({ strip_audio_by_title: nextKeywords });
+                                        return;
+                                    }
+
+                                    updateStreamRules({
+                                        strip_audio_by_title:
+                                            settings.stream_rules.strip_audio_by_title.filter(
+                                                (entry) =>
+                                                    !commentaryShortcutKeywords.includes(
+                                                        entry.trim().toLowerCase()
+                                                    )
+                                            ),
+                                    });
+                                }}
+                                className="sr-only peer"
+                            />
+                            <div className="w-10 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <label className="text-xs font-bold uppercase tracking-wider text-helios-slate">
+                            Strip Audio Tracks By Title Keyword
+                        </label>
+                        <input
+                            type="text"
+                            value={settings.stream_rules.strip_audio_by_title.join(", ")}
+                            onChange={(e) =>
+                                updateStreamRules({
+                                    strip_audio_by_title: parseCommaSeparatedList(e.target.value),
+                                })
+                            }
+                            placeholder="commentary, director's commentary"
+                            className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        />
+                        <p className="text-[10px] text-helios-slate ml-1">
+                            Audio tracks whose title contains any of these words will be removed. Separate multiple keywords with commas.
+                        </p>
+                    </div>
+
+                    <div className="space-y-3">
+                        <label className="text-xs font-bold uppercase tracking-wider text-helios-slate">
+                            Keep Only These Audio Languages
+                        </label>
+                        <input
+                            type="text"
+                            value={settings.stream_rules.keep_audio_languages.join(", ")}
+                            onChange={(e) =>
+                                updateStreamRules({
+                                    keep_audio_languages: parseCommaSeparatedList(e.target.value),
+                                })
+                            }
+                            placeholder="eng, jpn"
+                            className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        />
+                        <p className="text-[10px] text-helios-slate ml-1">
+                            Only keep audio tracks matching these language codes. Tracks with no language tag are always kept. Leave blank to keep all languages.
+                        </p>
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Keep only default audio track</p>
+                            <p className="text-[10px] text-helios-slate mt-1">Strip all audio tracks except the one marked as default by the source file.</p>
+                        </div>
+                        <div className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                id="default-audio-toggle"
+                                type="checkbox"
+                                checked={settings.stream_rules.keep_only_default_audio}
+                                onChange={(e) =>
+                                    updateStreamRules({
+                                        keep_only_default_audio: e.target.checked,
+                                    })
+                                }
+                                className="sr-only peer"
+                            />
+                            <div className="w-10 h-5 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-helios-solar"></div>
+                        </div>
+                    </div>
                 </div>
 
                 {/* HDR + Tonemapping */}

@@ -1,0 +1,97 @@
+---
+title: System Architecture
+description: Overview of the internal design and modules of Alchemist.
+---
+
+Alchemist is designed as a modular, high-performance system for media transcoding. This page details the internal architecture and how the various components interact.
+
+## How It Works
+
+The core workflow of Alchemist follows a pipeline of scanning, analyzing, making a decision, and then executing the encode and verification.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   SCAN      │-───>│   ANALYZE   │────>│   DECIDE    │────>│   ENCODE    │
+│             │     │             │     │             │     │             │
+│ Find video  │     │ FFprobe     │     │ Worth it?   │     │ FFmpeg      │
+│ files       │     │ metadata    │     │ BPP check   │     │ GPU/CPU     │
+│             │     │             │     │             │     │             │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+                                               │                   │
+                                               ▼                   ▼
+                                        ┌─────────────┐     ┌─────────────┐
+                                        │   SKIP      │     │   VERIFY    │
+                                        │             │     │             │
+                                        │ Already     │     │ VMAF score  │
+                                        │ optimized   │     │ Size check  │
+                                        │             │     │             │
+                                        └─────────────┘     └─────────────┘
+```
+
+## Internal Architecture
+
+The system is composed of several independent modules that communicate through shared state and a centralized scheduler.
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                         Alchemist                             │
+├───────────────────────────────────────────────────────────────┤
+│      ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│      │   Scanner   │  │  Analyzer   │  │  Processor  │        │
+│      │             │  │             │  │             │        │
+│      │ • Directory │  │ • FFprobe   │  │ • FFmpeg    │        │
+│      │   walking   │  │ • BPP calc  │  │ • GPU/CPU   │        │
+│      │ • Filtering │  │ • Decision  │  │ • VMAF      │        │
+│      └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
+│             │                │                │               │
+│             └────────────────┼────────────────┘               │
+│                              ▼                                │  
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                    Scheduler                            │  │
+│  │  • Job queue management                                 │  │
+│  │  • Concurrency control                                  │  │
+│  │  • Priority ordering                                    │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                              │                                │
+│                              ▼                                │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                    SQLite Database                      │  │
+│  │  • Jobs, Decisions, Encode Stats                        │  │
+│  │  • Users, Sessions                                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                              │                                │
+│                              ▼                                │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                    Axum Web Server                      │  │
+│  │  • REST API endpoints                                   │  │
+│  │  • Server-Sent Events (SSE)                             │  │
+│  │  • Static file serving                                  │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
+```
+
+## Module Overview
+
+| Module | File | Purpose |
+|--------|------|---------|
+| **Main** | `src/main.rs` | Entry point, CLI parsing, server startup |
+| **Config** | `src/config.rs` | Configuration loading and validation |
+| **Database** | `src/db.rs` | SQLite operations, job management |
+| **Server** | `src/server.rs` | Axum routes, API handlers |
+| **Scheduler** | `src/scheduler.rs` | Job queue, concurrency control |
+| **Processor** | `src/processor.rs` | Orchestrates analysis → encoding flow |
+| **Analyzer** | `src/media/analyzer.rs` | FFprobe wrapper, transcode decisions |
+| **FFmpeg** | `src/media/ffmpeg.rs` | FFmpeg wrapper, encoding commands |
+| **Watcher** | `src/system/watcher.rs` | File system monitoring |
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Runtime** | Rust + Tokio | Async, safe, fast |
+| **Web Framework** | Axum | High-performance HTTP |
+| **Database** | SQLite + SQLx | Embedded, zero-config |
+| **Frontend** | Astro + React | Modern, reactive UI |
+| **Styling** | Tailwind CSS | Utility-first CSS |
+| **Media** | FFmpeg + FFprobe | Industry standard |
+| **Packaging** | rust-embed | Single binary deployment |

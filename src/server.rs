@@ -614,6 +614,8 @@ struct TranscodeSettingsPayload {
     tonemap_desat: f32,
     #[serde(default)]
     subtitle_mode: crate::config::SubtitleMode,
+    #[serde(default)]
+    stream_rules: crate::config::StreamRules,
 }
 
 async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -632,6 +634,7 @@ async fn get_transcode_settings_handler(State(state): State<Arc<AppState>>) -> i
         tonemap_peak: config.transcode.tonemap_peak,
         tonemap_desat: config.transcode.tonemap_desat,
         subtitle_mode: config.transcode.subtitle_mode,
+        stream_rules: config.transcode.stream_rules.clone(),
     })
 }
 
@@ -657,6 +660,7 @@ async fn update_transcode_settings_handler(
     next_config.transcode.tonemap_peak = payload.tonemap_peak;
     next_config.transcode.tonemap_desat = payload.tonemap_desat;
     next_config.transcode.subtitle_mode = payload.subtitle_mode;
+    next_config.transcode.stream_rules = payload.stream_rules.clone();
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
@@ -1029,27 +1033,24 @@ async fn setup_complete_handler(
         Some(raw_settings) => {
             // Deserialize the frontend SetupSettings into Config,
             // tolerating unknown fields and missing optional fields.
-            let mut settings: crate::config::Config =
-                match serde_json::from_value(raw_settings) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            format!(
-                                "Invalid settings format: {}. \
+            let mut settings: crate::config::Config = match serde_json::from_value(raw_settings) {
+                Ok(c) => c,
+                Err(err) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Invalid settings format: {}. \
                                  Check that all required fields are present.",
-                                err
-                            ),
-                        )
-                            .into_response();
-                    }
-                };
+                            err
+                        ),
+                    )
+                        .into_response();
+                }
+            };
             settings.scanner.directories =
                 match normalize_setup_directories(&settings.scanner.directories) {
                     Ok(paths) => paths,
-                    Err(msg) => {
-                        return (StatusCode::BAD_REQUEST, msg).into_response()
-                    }
+                    Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
                 };
             settings
         }
@@ -2099,15 +2100,15 @@ async fn jobs_table_handler(
 
     match state
         .db
-        .get_jobs_filtered(
+        .get_jobs_filtered(crate::db::JobFilterQuery {
             limit,
             offset,
             statuses,
             search,
-            sort_by.or(sort),
-            sort_desc.unwrap_or(false),
+            sort_by: sort_by.or(sort),
+            sort_desc: sort_desc.unwrap_or(false),
             archived,
-        )
+        })
         .await
     {
         Ok(jobs) => axum::Json(jobs).into_response(),
@@ -3389,6 +3390,7 @@ mod tests {
             tonemap_peak: 100.0,
             tonemap_desat: 0.2,
             subtitle_mode: crate::config::SubtitleMode::Copy,
+            stream_rules: crate::config::StreamRules::default(),
         }
     }
 
@@ -3761,9 +3763,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_text(response).await;
         assert!(body.contains("\"subtitle_mode\":\"copy\""));
+        assert!(body.contains("\"stream_rules\""));
 
         let mut payload = sample_transcode_payload();
         payload.subtitle_mode = crate::config::SubtitleMode::None;
+        payload.stream_rules = crate::config::StreamRules {
+            strip_audio_by_title: vec!["commentary".to_string()],
+            keep_audio_languages: vec!["eng".to_string()],
+            keep_only_default_audio: false,
+        };
         let response = app
             .clone()
             .oneshot(auth_json_request(
@@ -3779,6 +3787,14 @@ mod tests {
         assert_eq!(
             persisted.transcode.subtitle_mode,
             crate::config::SubtitleMode::None
+        );
+        assert_eq!(
+            persisted.transcode.stream_rules.strip_audio_by_title,
+            vec!["commentary".to_string()]
+        );
+        assert_eq!(
+            persisted.transcode.stream_rules.keep_audio_languages,
+            vec!["eng".to_string()]
         );
 
         cleanup_paths(&[config_path, db_path]);

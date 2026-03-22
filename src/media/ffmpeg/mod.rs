@@ -182,8 +182,18 @@ impl<'a> FFmpegCommandBuilder<'a> {
         ];
 
         if !matches!(self.plan.audio, AudioStreamPlan::Drop) {
-            args.push("-map".to_string());
-            args.push("0:a?".to_string());
+            match &self.plan.audio_stream_indices {
+                None => {
+                    args.push("-map".to_string());
+                    args.push("0:a?".to_string());
+                }
+                Some(indices) => {
+                    for &index in indices {
+                        args.push("-map".to_string());
+                        args.push(format!("0:a:{index}"));
+                    }
+                }
+            }
         }
         if matches!(self.plan.subtitles, SubtitleStreamPlan::CopyAllCompatible) {
             args.push("-map".to_string());
@@ -769,6 +779,7 @@ mod tests {
             audio_channels: Some(2),
             audio_is_heavy: false,
             subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Hdr10,
         }
     }
@@ -814,6 +825,7 @@ mod tests {
             }),
             threads: 0,
             audio: AudioStreamPlan::Copy,
+            audio_stream_indices: None,
             subtitles: SubtitleStreamPlan::CopyAllCompatible,
             filters,
             allow_fallback: true,
@@ -1060,6 +1072,23 @@ mod tests {
         assert!(args.contains(&"0:s:0".to_string()));
         assert!(args.contains(&"0:s:1".to_string()));
         assert!(args.contains(&"/tmp/out.subs.mks.alchemist-part".to_string()));
+    }
+
+    #[test]
+    fn selected_audio_streams_map_only_requested_indices() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::H264X264);
+        plan.audio_stream_indices = Some(vec![0, 2]);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder.build_args().expect("args");
+        assert!(args.contains(&"0:a:0".to_string()));
+        assert!(args.contains(&"0:a:2".to_string()));
+        assert!(!args.contains(&"0:a?".to_string()));
     }
 
     #[test]

@@ -1,0 +1,56 @@
+---
+title: Video Codecs
+description: Understanding the different video formats supported by Alchemist.
+---
+
+This page explains the different video formats (codecs) Alchemist uses to shrink your files. Choosing the right one depends on whether you care more about saving space or making sure your videos play on older devices.
+
+## What is a Codec?
+
+A "codec" is the technology used to compress video so it doesn't take up massive amounts of storage. Alchemist supports three main codecs, each with its own pros and cons.
+
+## AV1 (The Modern King)
+
+AV1 is the newest and most efficient video format. It can make files much smaller than older formats while keeping the picture looking great.
+
+- **Pros**: Smallest file sizes, best quality per megabyte, free to use.
+- **Cons**: Requires very new hardware to play smoothly (like 40-series NVIDIA cards or Apple M3 chips). Older devices will struggle and use a lot of battery.
+- **Best for**: Future-proofing your library and saving the most space.
+
+## HEVC / H.265 (The Current Standard)
+
+HEVC is the format used by almost all 4K Blu-rays and streaming services today. It's much more efficient than the older H.264.
+
+- **Pros**: Excellent balance of small size and high quality. Works on most modern TVs, phones, and tablets.
+- **Cons**: Some older computers or cheap streaming sticks might not play it.
+- **Best for**: A great balance of space savings and compatibility.
+
+## H.264 / AVC (The Old Reliable)
+
+H.264 is the most compatible video format in the world. Almost anything with a screen can play it.
+
+- **Pros**: Plays everywhere. Even a 15-year-old computer can handle it.
+- **Cons**: Files are much larger than AV1 or HEVC for the same quality.
+- **Best for**: If you need your videos to play on *every* device you own, no matter how old.
+
+---
+
+## Comparison Table
+
+| Feature | H.264 | HEVC | AV1 |
+| :--- | :--- | :--- | :--- |
+| **File Size** | Large | Medium | Smallest |
+| **Quality** | Good | Great | Best |
+| **Compatibility** | Universal | Very Good | Growing |
+| **Encoding Speed** | Fastest | Fast | Slower |
+
+---
+
+## What is BPP (Bits Per Pixel)?
+
+You'll see "BPP" mentioned in Alchemist. It's a simple way to measure how "squished" a video is.
+- **High BPP (0.15+)**: Very high quality, but larger file size.
+- **Medium BPP (0.10)**: Great balance, looks like a high-quality stream.
+- **Low BPP (0.05-)**: Might start looking "blocky" or blurry.
+
+Alchemist uses BPP to make sure it doesn't try to shrink a video that is already as small as it can be without losing quality.

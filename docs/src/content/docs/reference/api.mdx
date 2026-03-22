@@ -1,0 +1,132 @@
+---
+title: API Reference
+description: Detailed reference for the Alchemist REST API.
+---
+
+All API endpoints require authentication via Bearer token, except for:
+- `/api/setup/*` - Setup wizard endpoints
+- `/api/auth/login` - Login endpoint
+- `/api/health` - Health check (returns status, version, uptime)
+- `/api/ready` - Readiness check (returns database status)
+
+## Authentication
+
+To use the API, you first need to log in to get a token.
+
+```bash
+# Login
+POST /api/auth/login
+Content-Type: application/json
+{
+  "username": "admin", 
+  "password": "secret"
+}
+
+# Response: {"token": "abc123..."}
+
+# Use token in subsequent requests
+Authorization: Bearer abc123...
+```
+
+## Jobs
+
+Endpoints for managing transcoding jobs.
+
+```bash
+# Get all jobs
+GET /api/jobs/table
+
+# Get job stats
+GET /api/stats
+
+# Cancel job
+POST /api/jobs/:id/cancel
+
+# Restart job
+POST /api/jobs/:id/restart
+
+# Restart all failed
+POST /api/jobs/restart-failed
+
+# Clear completed
+POST /api/jobs/clear-completed
+```
+
+## Statistics
+
+Endpoints for retrieving performance and space savings data.
+
+```bash
+# Aggregated stats (totals)
+GET /api/stats/aggregated
+# Response: {total_input_bytes, total_output_bytes, total_savings_bytes, 
+#            total_time_seconds, total_jobs, avg_vmaf}
+
+# Daily stats (last 30 days)
+GET /api/stats/daily
+# Response: [{date, jobs_completed, bytes_saved, total_input_bytes, 
+#             total_output_bytes}, ...]
+
+# Detailed per-job stats
+GET /api/stats/detailed
+# Response: [{job_id, input_path, input_size_bytes, output_size_bytes,
+#             compression_ratio, encode_time_seconds, encode_speed,
+#             avg_bitrate_kbps, vmaf_score, created_at}, ...]
+```
+
+## Engine Control
+
+Endpoints for controlling the background processing engine.
+
+```bash
+# Pause processing
+POST /api/engine/pause
+
+# Resume processing
+POST /api/engine/resume
+
+# Get engine status
+GET /api/engine/status
+```
+
+## Settings
+
+Endpoints for managing application configuration.
+
+```bash
+# Get transcode settings
+GET /api/settings/transcode
+
+# Update transcode settings
+POST /api/settings/transcode
+Content-Type: application/json
+{
+  "concurrent_jobs": 2,
+  "size_reduction_threshold": 0.3,
+  "min_bpp_threshold": 0.1,
+  "min_file_size_mb": 50,
+  "output_codec": "av1",
+  "allow_fallback": true,
+  "quality_profile": "balanced",
+  "threads": 0,
+  "hdr_mode": "preserve",
+  "tonemap_algorithm": "hable",
+  "tonemap_peak": 100,
+  "tonemap_desat": 0.2
+}
+```
+
+## Server-Sent Events
+
+Real-time updates are provided via a Server-Sent Events (SSE) stream.
+
+```bash
+# Real-time event stream
+GET /api/events?token=<auth_token>
+
+# Event types:
+# - JobStateChanged: {job_id, status}
+# - Progress: {job_id, percentage, time}
+# - Decision: {job_id, action, reason}
+# - Log: {job_id, message}
+```

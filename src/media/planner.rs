@@ -146,6 +146,10 @@ impl Planner for BasicPlanner {
             &container,
             audio_mode,
         );
+        let audio_stream_indices = filter_audio_streams(
+            &analysis.metadata.audio_streams,
+            &self.config.transcode.stream_rules,
+        );
         let filters = plan_filters(analysis, encoder, &self.config, &subtitles, hdr_mode);
         let (rate_control, encoder_preset) =
             encoder_runtime_settings(encoder, &self.config, quality_profile, crf_override);
@@ -162,6 +166,7 @@ impl Planner for BasicPlanner {
             encoder_preset,
             threads: self.config.transcode.threads,
             audio,
+            audio_stream_indices,
             subtitles,
             filters,
             allow_fallback: self.config.transcode.allow_fallback,
@@ -189,6 +194,7 @@ fn skip_plan(
         encoder_preset: None,
         threads,
         audio: AudioStreamPlan::Copy,
+        audio_stream_indices: None,
         subtitles: SubtitleStreamPlan::CopyAllCompatible,
         filters: Vec::new(),
         allow_fallback,
@@ -680,6 +686,81 @@ fn plan_audio(
     AudioStreamPlan::Copy
 }
 
+/// Apply stream rules to determine which audio stream indices to keep.
+/// Returns None if all streams should be kept (no filtering needed), or
+/// Some(Vec<usize>) with the stream indices to keep.
+fn filter_audio_streams(
+    streams: &[crate::media::pipeline::AudioStreamMetadata],
+    rules: &crate::config::StreamRules,
+) -> Option<Vec<usize>> {
+    if streams.is_empty() {
+        return None;
+    }
+
+    if rules.strip_audio_by_title.is_empty()
+        && rules.keep_audio_languages.is_empty()
+        && !rules.keep_only_default_audio
+    {
+        return None;
+    }
+
+    let mut kept: Vec<usize> = streams
+        .iter()
+        .filter(|stream| {
+            if !rules.strip_audio_by_title.is_empty() {
+                if let Some(title) = &stream.title {
+                    let title_lower = title.to_lowercase();
+                    if rules
+                        .strip_audio_by_title
+                        .iter()
+                        .any(|keyword| title_lower.contains(&keyword.to_lowercase()))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if !rules.keep_audio_languages.is_empty() {
+                if let Some(language) = &stream.language {
+                    if !rules
+                        .keep_audio_languages
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(language))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if rules.keep_only_default_audio
+                && rules.keep_audio_languages.is_empty()
+                && !stream.default
+            {
+                return false;
+            }
+
+            true
+        })
+        .map(|stream| stream.stream_index)
+        .collect();
+
+    if kept.is_empty() {
+        let fallback = streams
+            .iter()
+            .find(|stream| stream.default)
+            .or_else(|| streams.first());
+        if let Some(fallback) = fallback {
+            kept.push(fallback.stream_index);
+        }
+    }
+
+    if kept.len() == streams.len() {
+        return None;
+    }
+
+    Some(kept)
+}
+
 fn audio_copy_supported(container: &str, codec: &str) -> bool {
     let codec = codec.to_ascii_lowercase();
     match container {
@@ -886,7 +967,8 @@ mod tests {
     use super::*;
     use crate::config::{HdrMode, QualityProfile, TonemapAlgorithm, TranscodeConfig};
     use crate::media::pipeline::{
-        AnalysisConfidence, DynamicRange, MediaMetadata, SubtitleStreamMetadata,
+        AnalysisConfidence, AudioStreamMetadata, DynamicRange, MediaMetadata,
+        SubtitleStreamMetadata,
     };
 
     fn config() -> Config {
@@ -931,6 +1013,7 @@ mod tests {
                     forced: false,
                     burnable: false,
                 }],
+                audio_streams: vec![],
                 dynamic_range: DynamicRange::Sdr,
             },
             warnings: Vec::new(),
@@ -1120,5 +1203,119 @@ mod tests {
             select_encoder(OutputCodec::Av1, &inventory, false).expect("selected encoder");
         assert_eq!(encoder, Encoder::Av1Svt);
         assert!(fallback.is_none());
+    }
+
+    #[test]
+    fn audio_stream_rules_strip_commentary_and_keep_main_audio() {
+        let rules = crate::config::StreamRules {
+            strip_audio_by_title: vec!["commentary".to_string()],
+            keep_audio_languages: Vec::new(),
+            keep_only_default_audio: false,
+        };
+
+        let kept = filter_audio_streams(
+            &[
+                AudioStreamMetadata {
+                    stream_index: 0,
+                    codec_name: "aac".to_string(),
+                    language: Some("eng".to_string()),
+                    title: Some("Director Commentary".to_string()),
+                    channels: Some(2),
+                    default: false,
+                    forced: false,
+                },
+                AudioStreamMetadata {
+                    stream_index: 1,
+                    codec_name: "aac".to_string(),
+                    language: Some("eng".to_string()),
+                    title: Some("Main Audio".to_string()),
+                    channels: Some(6),
+                    default: true,
+                    forced: false,
+                },
+            ],
+            &rules,
+        );
+
+        assert_eq!(kept, Some(vec![1]));
+    }
+
+    #[test]
+    fn audio_stream_rules_fall_back_to_default_when_all_filtered() {
+        let rules = crate::config::StreamRules {
+            strip_audio_by_title: vec!["commentary".to_string()],
+            keep_audio_languages: vec!["jpn".to_string()],
+            keep_only_default_audio: false,
+        };
+
+        let kept = filter_audio_streams(
+            &[
+                AudioStreamMetadata {
+                    stream_index: 0,
+                    codec_name: "aac".to_string(),
+                    language: Some("eng".to_string()),
+                    title: Some("Commentary".to_string()),
+                    channels: Some(2),
+                    default: false,
+                    forced: false,
+                },
+                AudioStreamMetadata {
+                    stream_index: 1,
+                    codec_name: "aac".to_string(),
+                    language: Some("eng".to_string()),
+                    title: Some("Main Audio".to_string()),
+                    channels: Some(6),
+                    default: true,
+                    forced: false,
+                },
+            ],
+            &rules,
+        );
+
+        assert_eq!(kept, Some(vec![1]));
+    }
+
+    #[test]
+    fn keep_audio_languages_overrides_default_only_rule() {
+        let rules = crate::config::StreamRules {
+            strip_audio_by_title: Vec::new(),
+            keep_audio_languages: vec!["jpn".to_string()],
+            keep_only_default_audio: true,
+        };
+
+        let kept = filter_audio_streams(
+            &[
+                AudioStreamMetadata {
+                    stream_index: 0,
+                    codec_name: "aac".to_string(),
+                    language: Some("eng".to_string()),
+                    title: Some("English".to_string()),
+                    channels: Some(2),
+                    default: true,
+                    forced: false,
+                },
+                AudioStreamMetadata {
+                    stream_index: 1,
+                    codec_name: "aac".to_string(),
+                    language: Some("jpn".to_string()),
+                    title: Some("Japanese".to_string()),
+                    channels: Some(2),
+                    default: false,
+                    forced: false,
+                },
+                AudioStreamMetadata {
+                    stream_index: 2,
+                    codec_name: "aac".to_string(),
+                    language: None,
+                    title: Some("Unknown".to_string()),
+                    channels: Some(2),
+                    default: false,
+                    forced: false,
+                },
+            ],
+            &rules,
+        );
+
+        assert_eq!(kept, Some(vec![1, 2]));
     }
 }

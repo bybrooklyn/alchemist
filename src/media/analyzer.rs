@@ -1,7 +1,7 @@
 use crate::error::{AlchemistError, Result};
 use crate::media::pipeline::{
-    AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, DynamicRange, MediaAnalysis,
-    MediaMetadata, SubtitleStreamMetadata, TranscodeDecision,
+    AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, AudioStreamMetadata,
+    DynamicRange, MediaAnalysis, MediaMetadata, SubtitleStreamMetadata, TranscodeDecision,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -130,6 +130,31 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                     burnable: subtitle_codec_is_burnable(&stream.codec_name),
                 })
                 .collect::<Vec<_>>();
+            let audio_streams = metadata
+                .streams
+                .iter()
+                .filter(|s| s.codec_type == "audio")
+                .enumerate()
+                .map(|(stream_index, stream)| AudioStreamMetadata {
+                    stream_index,
+                    codec_name: stream.codec_name.clone(),
+                    language: stream.tags.as_ref().and_then(|tags| tags.language.clone()),
+                    title: stream.tags.as_ref().and_then(|tags| tags.title.clone()),
+                    channels: stream.channels,
+                    default: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(|disposition| disposition.default)
+                        .unwrap_or(0)
+                        == 1,
+                    forced: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(|disposition| disposition.forced)
+                        .unwrap_or(0)
+                        == 1,
+                })
+                .collect::<Vec<_>>();
 
             let color_transfer = video_stream.color_transfer.clone();
             let color_primaries = video_stream.color_primaries.clone();
@@ -232,6 +257,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 audio_channels: audio_stream.and_then(|s| s.channels),
                 audio_is_heavy,
                 subtitle_streams,
+                audio_streams,
             };
 
             Ok(MediaAnalysis {

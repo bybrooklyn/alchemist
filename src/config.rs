@@ -270,7 +270,31 @@ pub struct TranscodeConfig {
     #[serde(default)]
     pub subtitle_mode: SubtitleMode,
     #[serde(default)]
+    pub stream_rules: StreamRules,
+    #[serde(default)]
     pub vmaf_min_score: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct StreamRules {
+    /// Strip audio tracks whose title contains any of these
+    /// strings (case-insensitive). Common use: ["commentary",
+    /// "director"].
+    #[serde(default)]
+    pub strip_audio_by_title: Vec<String>,
+
+    /// If non-empty, keep ONLY audio tracks whose language tag
+    /// matches one of these ISO 639-2 codes (e.g. ["eng", "jpn"]).
+    /// Tracks with no language tag are always kept.
+    /// If empty, all languages are kept (default).
+    #[serde(default)]
+    pub keep_audio_languages: Vec<String>,
+
+    /// If true, strip all audio tracks except the one marked
+    /// default by the source file. Overridden by
+    /// keep_audio_languages if both are set.
+    #[serde(default)]
+    pub keep_only_default_audio: bool,
 }
 
 // Removed default_quality_profile helper as Default trait on enum handles it now.
@@ -509,6 +533,7 @@ impl Default for Config {
                 tonemap_peak: default_tonemap_peak(),
                 tonemap_desat: default_tonemap_desat(),
                 subtitle_mode: SubtitleMode::Copy,
+                stream_rules: StreamRules::default(),
                 vmaf_min_score: None,
             },
             hardware: HardwareConfig {

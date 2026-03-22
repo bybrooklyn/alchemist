@@ -1,6 +1,9 @@
-# GPU Passthrough Guide
+---
+title: GPU Passthrough Guide
+description: How to enable hardware acceleration for video encoding in Docker containers.
+---
 
-This guide explains how to enable hardware acceleration for video encoding in Docker containers.
+This guide explains how to enable hardware acceleration for video encoding in Docker containers. Using your GPU (Graphics Processing Unit) instead of your CPU (Central Processing Unit) can significantly speed up transcoding and reduce system load.
 
 ## NVIDIA GPU (NVENC)
 
@@ -26,6 +29,8 @@ sudo systemctl restart docker
 
 ### Docker Compose Configuration
 
+To use your NVIDIA GPU in Docker Compose, add the `deploy` section to your service:
+
 ```yaml
 services:
   alchemist:
@@ -42,6 +47,8 @@ services:
 ```
 
 ### Docker CLI
+
+If you're running Alchemist via the command line:
 
 ```bash
 docker run --gpus all \
@@ -69,6 +76,8 @@ vainfo
 ```
 
 ### Docker Compose Configuration
+
+Pass the `/dev/dri` device into the container:
 
 ```yaml
 services:
@@ -111,7 +120,7 @@ sudo apt install mesa-va-drivers vainfo
 
 ### Docker Configuration
 
-Same as Intel QSV, but set driver:
+Same as Intel QSV, but set the driver name to `radeonsi`:
 
 ```yaml
 environment:
@@ -122,14 +131,14 @@ environment:
 
 ## Verification
 
-After starting the container, check hardware detection in the logs:
+After starting the container, check the hardware detection in the logs (available at `/logs` in the web UI):
 
 ```
 Selected Hardware: Intel QSV
   Device Path: /dev/dri/renderD128
 ```
 
-If you see `CPU (Software)`, hardware acceleration is not working.
+If you see `CPU (Software)`, hardware acceleration is not working, and Alchemist is falling back to your processor.
 
 ## Troubleshooting
 
