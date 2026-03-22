@@ -121,26 +121,26 @@ test-e2e-ui:
 
 # Wipe the dev database (essential for re-testing the setup wizard)
 db-reset:
-    @DB="${ALCHEMIST_DB_PATH:-$HOME/.alchemist/alchemist.db}"; \
+    @DB="${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}"; \
         echo "Deleting $DB"; \
         rm -f "$DB"; \
         echo "Done — next run will re-apply migrations."
 
 # Wipe dev database AND config (full clean slate, triggers setup wizard)
 db-reset-all:
-    @DB="${ALCHEMIST_DB_PATH:-$HOME/.alchemist/alchemist.db}"; \
-        CFG="${ALCHEMIST_CONFIG_PATH:-$HOME/.alchemist/config.toml}"; \
+    @DB="${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}"; \
+        CFG="${ALCHEMIST_CONFIG_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/config.toml}"; \
         echo "Deleting $DB and $CFG"; \
         rm -f "$DB" "$CFG"; \
         echo "Done — setup wizard will run on next launch."
 
 # Open the dev database in sqlite3
 db-shell:
-    @sqlite3 "${ALCHEMIST_DB_PATH:-$HOME/.alchemist/alchemist.db}"
+    @sqlite3 "${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}"
 
 # Show applied migrations
 db-migrations:
-    @sqlite3 "${ALCHEMIST_DB_PATH:-$HOME/.alchemist/alchemist.db}" \
+    @sqlite3 "${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}" \
         "SELECT version, description, installed_on FROM _sqlx_migrations ORDER BY installed_on;"
 
 # ─────────────────────────────────────────
@@ -249,9 +249,14 @@ loc:
 
 # Show all environment variables Alchemist respects
 env-help:
-    @echo "ALCHEMIST_CONFIG_PATH    Config file path (default: ~/.alchemist/config.toml)"
+    @echo "ALCHEMIST_CONFIG_PATH    Config file path"
+    @echo "                         Linux/macOS default: ~/.config/alchemist/config.toml"
+    @echo "                         Windows default:     %APPDATA%\\Alchemist\\config.toml"
     @echo "ALCHEMIST_CONFIG         Alias for ALCHEMIST_CONFIG_PATH"
-    @echo "ALCHEMIST_DB_PATH        SQLite database path (default: ~/.alchemist/alchemist.db)"
-    @echo "ALCHEMIST_DATA_DIR       Alternative data directory"
+    @echo "ALCHEMIST_DB_PATH        SQLite database path"
+    @echo "                         Linux/macOS default: ~/.config/alchemist/alchemist.db"
+    @echo "                         Windows default:     %APPDATA%\\Alchemist\\alchemist.db"
+    @echo "ALCHEMIST_DATA_DIR       Override data directory for the DB file"
     @echo "ALCHEMIST_CONFIG_MUTABLE Allow runtime config writes (default: true)"
+    @echo "XDG_CONFIG_HOME          Respected on Linux/macOS if set"
     @echo "RUST_LOG                 Log level (e.g. info, debug, alchemist=trace)"
