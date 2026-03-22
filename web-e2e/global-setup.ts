@@ -2,6 +2,7 @@ import { request, type FullConfig } from "@playwright/test";
 import fs from "node:fs/promises";
 import {
   AUTH_STATE_PATH,
+  BASE_URL,
   MEDIA_DIR,
   TEST_PASSWORD,
   TEST_USERNAME,
@@ -15,7 +16,7 @@ async function waitForSetupStatus(maxMs = 30_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < maxMs) {
     try {
-      const api = await request.newContext({ baseURL: "http://127.0.0.1:3000" });
+      const api = await request.newContext({ baseURL: BASE_URL });
       const response = await api.get("/api/setup/status");
       await api.dispose();
       if (response.ok()) {
@@ -33,7 +34,7 @@ async function globalSetup(_config: FullConfig): Promise<void> {
   await fs.mkdir(MEDIA_DIR, { recursive: true });
   await waitForSetupStatus();
 
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:3000" });
+  const api = await request.newContext({ baseURL: BASE_URL });
 
   const statusResponse = await api.get("/api/setup/status");
   if (!statusResponse.ok()) {

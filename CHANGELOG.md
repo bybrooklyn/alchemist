@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.10-rc.5] - 2026-03-22
+
+### Runtime & Queue Control
+- Engine runtime modes now support `background`, `balanced`, and `throughput`, with manual concurrency overrides and drain/resume controls exposed through the API and dashboard header.
+- Engine status reporting now includes pause source, drain state, concurrent-limit metadata, and mode visibility for troubleshooting.
+- Queue management continued to harden with safer active-job controls, clearer failure surfacing, and better per-job operational feedback.
+
+### Media Processing & Library Health
+- VAAPI-first Intel handling, remux planning, subtitle sidecars, and library health issue reporting were expanded across the planner, FFmpeg integration, and dashboard.
+- Hardware detection and probe logging were improved to make CPU/GPU backend selection and diagnostics easier to understand.
+- Stream rules landed for commentary stripping, audio-language filtering, and keeping only the default audio track when needed.
+
+### Paths, Setup & Docs
+- Default config and database paths were normalized around the `alchemist` runtime home, and the repo now ships a `justfile` for common dev, release, Docker, and database workflows.
+- The docs site moved onto Starlight and now builds locally with a proper content config, localized collection wiring, and a corrected splash-page schema.
+- Release automation now bumps repo-wide version manifests, supports checkpoint commits before release validation, and isolates web-e2e onto a separate port so a local server on `3000` does not block release verification.
+
+### CI/CD & Release Tooling
+- Docker publishing is now gated behind successful validation, and local release verification covers Rust checks/tests, frontend verification, docs build, `actionlint`, and the reliability Playwright suite.
+- `just update` does not create the release commit, git tag, or push until the full validation gate passes.
+
 ## [v0.2.10-rc.2] - 2026-03-21
 
 ### Stability & Reliability

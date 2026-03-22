@@ -5,7 +5,7 @@ description: Detailed reference for Alchemist configuration settings.
 
 This page explains all the settings available in Alchemist. You can change these to control how Alchemist handles your video files and how it uses your computer's hardware.
 
-Alchemist uses a YAML configuration file (usually `config.yaml` in your `/config` volume). Below is a complete list of all supported fields.
+Alchemist uses a TOML configuration file, usually `config.toml`. On Linux and macOS the default path is `~/.config/alchemist/config.toml` unless you override it with `ALCHEMIST_CONFIG_PATH`.
 
 ## Transcoding Settings (`transcode`)
 
@@ -19,7 +19,7 @@ Settings that control the actual video conversion process.
 | `concurrent_jobs` | integer | `1` | How many transcodes to run at once. | `2` |
 | `threads` | integer | `0` | CPU threads per job. `0` means automatic. | `4` |
 | `quality_profile` | string | `Balanced` | Speed vs. Quality tradeoff. | `Quality`, `Balanced`, `Speed` |
-| `output_codec` | string | `hevc` | The target video format. | `av1`, `hevc`, `h264` |
+| `output_codec` | string | `av1` | The target video format. | `av1`, `hevc`, `h264` |
 | `allow_fallback` | boolean | `true` | If hardware encoding fails, fall back to software. | `false` |
 | `hdr_mode` | string | `preserve` | How to handle HDR video. | `preserve`, `tonemap` |
 | `tonemap_algorithm` | string | `hable` | Algorithm for HDR to SDR conversion. | `mobius`, `reinhard`, `clip` |
@@ -28,13 +28,23 @@ Settings that control the actual video conversion process.
 | `subtitle_mode` | string | `copy` | How to handle subtitles. | `copy`, `burn`, `none`, `extract` |
 | `vmaf_min_score` | float | (Optional) | Minimum VMAF score to accept a transcode. | `93.0` |
 
+### Stream Rules (`transcode.stream_rules`)
+
+Rules for pruning or keeping audio tracks before the output is written.
+
+| Field | Type | Default | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `strip_audio_by_title` | list | `[]` | Remove audio tracks whose title contains one of these strings. | `["commentary", "director"]` |
+| `keep_audio_languages` | list | `[]` | Keep only audio tracks whose language tag matches these ISO 639-2 codes. | `["eng", "jpn"]` |
+| `keep_only_default_audio` | boolean | `false` | Keep only the default audio track unless language rules override it. | `true` |
+
 ## Hardware Settings (`hardware`)
 
 Settings for graphics cards and CPU encoding.
 
 | Field | Type | Default | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `preferred_vendor` | string | `cpu` | The GPU brand you want to use. | `nvidia`, `intel`, `amd`, `apple` |
+| `preferred_vendor` | string | (Auto) | Preferred hardware backend if you want to pin one. | `nvidia`, `intel`, `amd`, `apple`, `cpu` |
 | `device_path` | string | (Optional) | Path to the GPU device file. | `/dev/dri/renderD128` |
 | `allow_cpu_fallback` | boolean | `true` | Fall back to CPU if no GPU is found. | `false` |
 | `cpu_preset` | string | `medium` | Software encoding speed/quality preset. | `slow`, `fast`, `faster` |
@@ -47,7 +57,7 @@ Settings for finding and watching your video files.
 | Field | Type | Default | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `directories` | list | `[]` | List of folders to scan for videos. | `["/media/movies", "/media/tv"]` |
-| `watch_enabled` | boolean | `true` | Watch for new files in real-time. | `false` |
+| `watch_enabled` | boolean | `false` | Watch configured library directories in real-time. | `true` |
 | `extra_watch_dirs` | list | `[]` | Additional folders to watch with options. | `[{ "path": "/media/downloads", "is_recursive": true }]` |
 
 ## Notification Settings (`notifications`)
@@ -98,3 +108,4 @@ General application settings.
 | `monitoring_poll_interval` | float | `2.0` | How often to refresh system stats (sec). | `5.0` |
 | `enable_telemetry` | boolean | `false` | Send anonymous usage data to help us. | `true` |
 | `log_retention_days` | integer | `30` | How long to keep log files on disk. | `7` |
+| `engine_mode` | string | `balanced` | Runtime engine mode used by the dashboard/API controls. | `background`, `balanced`, `throughput` |

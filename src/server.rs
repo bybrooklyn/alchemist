@@ -162,7 +162,17 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
 
     let app = app_router(state);
 
-    let addr = "0.0.0.0:3000";
+    let port = std::env::var("ALCHEMIST_SERVER_PORT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value.trim().parse::<u16>().map_err(|_| {
+                AlchemistError::Config("ALCHEMIST_SERVER_PORT must be a valid u16".to_string())
+            })
+        })
+        .transpose()?
+        .unwrap_or(3000);
+    let addr = format!("0.0.0.0:{port}");
     info!("listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

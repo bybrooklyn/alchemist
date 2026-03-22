@@ -271,7 +271,7 @@ update NEW_VERSION:
     echo "── Docs build ──"; \
     (cd docs && bun install --frozen-lockfile && bun run build); \
     echo "── E2E reliability ──"; \
-    (cd web-e2e && bun install --frozen-lockfile && bun run test:reliability); \
+    (cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT=4173 bun run test:reliability); \
     mapfile -t PACKAGE_FILES < <(git ls-files -- 'package.json' '*/package.json'); \
     mapfile -t CHANGED_TRACKED < <(git diff --name-only --); \
     if [ "${#CHANGED_TRACKED[@]}" -eq 0 ]; then \
