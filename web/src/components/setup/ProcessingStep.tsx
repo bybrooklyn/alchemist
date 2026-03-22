@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { FileCog, Video } from "lucide-react";
+import { FileCog, Info, Video } from "lucide-react";
 import clsx from "clsx";
 import { LabeledInput, LabeledSelect, RangeControl, ToggleRow } from "./SetupControls";
 import type { SetupSettings } from "./types";
@@ -26,7 +26,7 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                     <div className="text-sm font-semibold text-helios-ink">Transcoding Target</div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {(["av1", "hevc", "h264"] as const).map((codec) => (
@@ -43,8 +43,10 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                     </div>
 
                     <div className="space-y-3">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Quality Profile</label>
-                        <select value={transcode.quality_profile} onChange={(e) => updateTranscode({ quality_profile: e.target.value as SetupSettings["transcode"]["quality_profile"] })} className="w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink">
+                        <label className="text-xs font-medium text-helios-slate">
+                            Quality Profile
+                        </label>
+                        <select value={transcode.quality_profile} onChange={(e) => updateTranscode({ quality_profile: e.target.value as SetupSettings["transcode"]["quality_profile"] })} className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink">
                             <option value="speed">Speed</option>
                             <option value="balanced">Balanced</option>
                             <option value="quality">Quality</option>
@@ -61,20 +63,38 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                         </p>
                     </div>
                     <div>
-                        <RangeControl label={`Minimum Savings (${Math.round(transcode.size_reduction_threshold * 100)}%)`} min={0} max={0.9} step={0.05} value={transcode.size_reduction_threshold} onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })} />
+                        <RangeControl label="Minimum Savings" min={0} max={0.9} step={0.05} value={transcode.size_reduction_threshold} onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })} />
                         <p className="text-xs text-helios-slate mt-1 leading-relaxed">
                             Alchemist will skip a file if the newly encoded version wouldn't be at least this much smaller than the original. This prevents pointless re-encoding of files that are already well-optimized.
                         </p>
                     </div>
-                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                        Bits Per Pixel — determines how compressed a file must already be before Alchemist skips it. If a file is already very compressed, re-encoding it could reduce quality without saving much space. Leave this at the default unless you know what you're doing.
-                    </p>
-                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                        Files smaller than this will be skipped entirely. Small files rarely benefit from transcoding and it's usually not worth the processing time.
-                    </p>
+                    <details className="group">
+                        <summary className="flex items-center gap-1.5 text-xs text-helios-solar cursor-pointer hover:underline select-none list-none">
+                            <Info size={13} />
+                            What is the BPP threshold?
+                        </summary>
+                        <p className="mt-2 text-xs text-helios-slate leading-relaxed pl-5">
+                            Bits Per Pixel — determines how compressed a file must
+                            already be before Alchemist skips it. If a file is already
+                            very compressed, re-encoding it could reduce quality without
+                            saving much space. Leave this at the default unless you know
+                            what you're doing.
+                        </p>
+                    </details>
+                    <details className="group">
+                        <summary className="flex items-center gap-1.5 text-xs text-helios-solar cursor-pointer hover:underline select-none list-none">
+                            <Info size={13} />
+                            Why are small files skipped?
+                        </summary>
+                        <p className="mt-2 text-xs text-helios-slate leading-relaxed pl-5">
+                            Files smaller than this will be skipped entirely. Small
+                            files rarely benefit from transcoding and it's usually not
+                            worth the processing time.
+                        </p>
+                    </details>
                 </div>
 
-                <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><FileCog size={16} className="text-helios-solar" />Output Rules</div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

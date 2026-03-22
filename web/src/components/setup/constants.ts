@@ -76,7 +76,7 @@ export const DEFAULT_SETTINGS: SetupSettings = {
         windows: [],
     },
     system: {
-        enable_telemetry: true,
+        enable_telemetry: false,
         monitoring_poll_interval: 2,
     },
 };

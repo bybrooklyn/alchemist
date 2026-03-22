@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { FolderOpen, Search, Sparkles } from "lucide-react";
+import { FolderOpen, FolderSearch, Plus, Search, Sparkles } from "lucide-react";
 import { apiJson, isApiError } from "../../lib/api";
 import ServerDirectoryPicker from "../ui/ServerDirectoryPicker";
 import type { FsPreviewResponse, FsRecommendation, StepValidator } from "./types";
@@ -96,33 +96,68 @@ export default function LibraryStep({
 
                 <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
                     <div className="space-y-5">
-                        <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft/40 p-5 space-y-4">
+                        <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 p-5 space-y-4">
                             <div className="flex items-start justify-between gap-4">
                                 <div>
                                     <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Sparkles size={16} className="text-helios-solar" />Suggested Server Folders</div>
                                     <p className="text-xs text-helios-slate mt-1">Auto-discovered media-like folders from the server filesystem. Review and add what you actually want watched.</p>
                                 </div>
-                                <button type="button" onClick={() => setPickerOpen(true)} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:border-helios-solar/30">Browse Server Folders</button>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {recommendations.map((recommendation) => (
-                                    <button key={recommendation.path} type="button" onClick={() => addDirectory(recommendation.path)} className="rounded-lg border border-helios-line/20 bg-helios-surface px-4 py-4 text-left hover:border-helios-solar/30 transition-all">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <span className="font-semibold text-helios-ink">{recommendation.label}</span>
-                                            <span className="rounded-full border border-helios-line/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-helios-slate">{recommendation.media_hint}</span>
-                                        </div>
-                                        <p className="mt-2 font-mono text-[11px] text-helios-slate break-all">{recommendation.path}</p>
-                                        <p className="mt-2 text-xs text-helios-slate">{recommendation.reason}</p>
-                                    </button>
-                                ))}
+                                {recommendations.map((recommendation) => {
+                                    const hint = recommendation.media_hint;
+                                    const badgeLabel =
+                                        hint === "medium" ? "Possible media" :
+                                        hint === "low"    ? "Few media files" :
+                                        null;
+                                    return (
+                                        <button
+                                            key={recommendation.path}
+                                            type="button"
+                                            onClick={() => addDirectory(recommendation.path)}
+                                            className="rounded-md border border-helios-line/20 bg-helios-surface px-4 py-3 text-left hover:border-helios-solar/40 transition-all min-h-[80px] group"
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <span className="text-base font-semibold text-helios-ink leading-tight">
+                                                    {recommendation.label}
+                                                </span>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    {badgeLabel && (
+                                                        <span className="rounded border border-helios-line/30 px-2 py-0.5 text-[10px] font-medium text-helios-slate/70">
+                                                            {badgeLabel}
+                                                        </span>
+                                                    )}
+                                                    <Plus
+                                                        size={14}
+                                                        className="text-helios-solar/60 group-hover:text-helios-solar transition-colors"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="mt-1.5 font-mono text-xs text-helios-slate/70 truncate" title={recommendation.path}>
+                                                {recommendation.path}
+                                            </p>
+                                            <p className="mt-1 text-xs text-helios-slate truncate" title={recommendation.reason}>
+                                                {recommendation.reason}
+                                            </p>
+                                        </button>
+                                    );
+                                })}
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => setPickerOpen(true)}
+                                className="w-full flex items-center justify-center gap-2 rounded-md border border-helios-line/30 py-2.5 text-sm font-medium text-helios-slate hover:border-helios-solar/40 hover:text-helios-ink transition-colors"
+                            >
+                                <FolderSearch size={15} />
+                                Browse Server Folders
+                            </button>
                         </div>
 
-                        <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                        <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><FolderOpen size={16} className="text-helios-solar" />Selected Library Roots</div>
                             <div className="flex gap-2">
-                                <input type="text" value={dirInput} onChange={(e) => onDirInputChange(e.target.value)} placeholder="Paste a server path or use Browse" className="flex-1 rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 font-mono text-sm text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none" />
-                                <button type="button" onClick={() => addDirectory(dirInput)} className="rounded-xl bg-helios-solar px-5 py-3 text-sm font-semibold text-helios-main">Add</button>
+                                <input type="text" value={dirInput} onChange={(e) => onDirInputChange(e.target.value)} placeholder="Paste a server path or use Browse" className="flex-1 rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 font-mono text-sm text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none" />
+                                <button type="button" onClick={() => addDirectory(dirInput)} className="rounded-md bg-helios-solar px-5 py-3 text-sm font-semibold text-helios-main">Add</button>
                             </div>
                             <div className="space-y-2">
                                 {directories.map((dir) => (
@@ -131,7 +166,7 @@ export default function LibraryStep({
                                             <p className="font-mono text-sm text-helios-ink truncate" title={dir}>{dir}</p>
                                             <p className="text-[11px] text-helios-slate mt-1">Watched recursively and used as a library root.</p>
                                         </div>
-                                        <button type="button" onClick={() => onDirectoriesChange(directories.filter((value) => value !== dir))} className="rounded-xl border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
+                                        <button type="button" onClick={() => onDirectoriesChange(directories.filter((value) => value !== dir))} className="rounded-md border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
                                     </div>
                                 ))}
                                 {directories.length === 0 && <p className="text-sm text-helios-slate">No server folders selected yet.</p>}
@@ -139,13 +174,13 @@ export default function LibraryStep({
                         </div>
                     </div>
 
-                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Search size={16} className="text-helios-solar" />Library Preview</div>
                                 <p className="text-xs text-helios-slate mt-1">See what Alchemist will likely ingest before you finish setup.</p>
                             </div>
-                            <button type="button" onClick={() => void fetchPreview()} disabled={previewLoading || directories.length === 0} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:border-helios-solar/30 disabled:opacity-50">{previewLoading ? "Previewing..." : "Refresh Preview"}</button>
+                            <button type="button" onClick={() => void fetchPreview()} disabled={previewLoading || directories.length === 0} className="rounded-md border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:border-helios-solar/30 disabled:opacity-50">{previewLoading ? "Previewing..." : "Refresh Preview"}</button>
                         </div>
 
                         {previewError && <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{previewError}</div>}

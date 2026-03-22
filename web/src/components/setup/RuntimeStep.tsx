@@ -33,6 +33,16 @@ export default function RuntimeStep({
     onNotificationDraftChange,
 }: RuntimeStepProps) {
     const updateHardware = (patch: Partial<SetupSettings["hardware"]>) => onHardwareChange({ ...hardware, ...patch });
+    const vendorLabel = (vendor: string): string => {
+        const map: Record<string, string> = {
+            nvidia: "NVIDIA",
+            amd: "AMD",
+            intel: "Intel",
+            apple: "Apple",
+            cpu: "CPU",
+        };
+        return map[vendor.toLowerCase()] ?? vendor;
+    };
     const addScheduleWindow = () => {
         if (!scheduleDraft.start_time || !scheduleDraft.end_time || scheduleDraft.days_of_week.length === 0) return;
         onScheduleChange({ windows: [...schedule.windows, { ...scheduleDraft }] });
@@ -52,9 +62,9 @@ export default function RuntimeStep({
 
             <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6">
                 <div className="space-y-6">
-                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Cpu size={16} className="text-helios-solar" />Hardware Policy</div>
-                        {hardwareInfo && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-helios-ink">Detected <span className="font-bold">{hardwareInfo.vendor}</span> with {hardwareInfo.supported_codecs.join(", ").toUpperCase()} support.</div>}
+                        {hardwareInfo && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-helios-ink">Detected{" "}<span className="font-bold">{vendorLabel(hardwareInfo.vendor)}</span>{" "}with{" "}{hardwareInfo.supported_codecs.map((c) => (c === "h264" ? "H.264" : c.toUpperCase())).join(", ")}{" "}support.</div>}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <LabeledSelect label="Preferred Vendor" value={hardware.preferred_vendor ?? ""} onChange={(preferred_vendor) => updateHardware({ preferred_vendor: preferred_vendor || null })} options={[{ value: "", label: "Auto detect" }, { value: "nvidia", label: "NVIDIA" }, { value: "amd", label: "AMD" }, { value: "intel", label: "Intel" }, { value: "apple", label: "Apple" }, { value: "cpu", label: "CPU" }]} />
                             <div>
@@ -69,7 +79,7 @@ export default function RuntimeStep({
                         <ToggleRow title="Allow CPU Encoding" body="Permit CPU encoders even when GPU options exist." checked={hardware.allow_cpu_encoding} onChange={(allow_cpu_encoding) => updateHardware({ allow_cpu_encoding })} />
                     </div>
 
-                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Calendar size={16} className="text-helios-solar" />Schedule Windows</div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <LabeledInput label="Start" type="time" value={scheduleDraft.start_time} onChange={(start_time) => onScheduleDraftChange({ ...scheduleDraft, start_time })} />
@@ -85,7 +95,7 @@ export default function RuntimeStep({
                                 );
                             })}
                         </div>
-                        <button type="button" onClick={addScheduleWindow} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Schedule Window</button>
+                        <button type="button" onClick={addScheduleWindow} className="rounded-md border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Schedule Window</button>
                         <div className="space-y-2">
                             {schedule.windows.map((window, index) => (
                                 <div key={`${window.start_time}-${window.end_time}-${index}`} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
@@ -93,7 +103,7 @@ export default function RuntimeStep({
                                         <div className="text-sm font-semibold text-helios-ink">{window.start_time} - {window.end_time}</div>
                                         <div className="text-xs text-helios-slate mt-1">{window.days_of_week.map((day) => WEEKDAY_OPTIONS[day]).join(", ")}</div>
                                     </div>
-                                    <button type="button" onClick={() => onScheduleChange({ windows: schedule.windows.filter((_, current) => current !== index) })} className="rounded-xl border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
+                                    <button type="button" onClick={() => onScheduleChange({ windows: schedule.windows.filter((_, current) => current !== index) })} className="rounded-md border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
                                 </div>
                             ))}
                             {schedule.windows.length === 0 && <p className="text-sm text-helios-slate">No restricted schedule windows configured. Processing will run whenever work is available.</p>}
@@ -102,7 +112,7 @@ export default function RuntimeStep({
                 </div>
 
                 <div className="space-y-6">
-                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Bell size={16} className="text-helios-solar" />Notifications</div>
                         <ToggleRow title="Enable Notifications" body="Send alerts when jobs succeed or fail." checked={notifications.enabled} onChange={(enabled) => onNotificationsChange({ ...notifications, enabled })} />
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -120,7 +130,7 @@ export default function RuntimeStep({
                                 );
                             })}
                         </div>
-                        <button type="button" onClick={addNotificationTarget} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Notification Target</button>
+                        <button type="button" onClick={addNotificationTarget} className="rounded-md border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Notification Target</button>
                         <div className="space-y-2">
                             {notifications.targets.map((target, index) => (
                                 <div key={`${target.name}-${target.endpoint_url}-${index}`} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
@@ -128,7 +138,7 @@ export default function RuntimeStep({
                                         <div className="text-sm font-semibold text-helios-ink">{target.name}</div>
                                         <div className="text-xs text-helios-slate mt-1 truncate" title={target.endpoint_url}>{target.endpoint_url}</div>
                                     </div>
-                                    <button type="button" onClick={() => onNotificationsChange({ ...notifications, targets: notifications.targets.filter((_, current) => current !== index) })} className="rounded-xl border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
+                                    <button type="button" onClick={() => onNotificationsChange({ ...notifications, targets: notifications.targets.filter((_, current) => current !== index) })} className="rounded-md border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10">Remove</button>
                                 </div>
                             ))}
                             {notifications.targets.length === 0 && <p className="text-sm text-helios-slate">No notification targets configured yet.</p>}

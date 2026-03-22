@@ -184,6 +184,8 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/stats/daily", get(daily_stats_handler))
         .route("/api/stats/detailed", get(detailed_stats_handler))
         .route("/api/stats/savings", get(savings_summary_handler))
+        // Canonical job list endpoint.
+        .route("/api/jobs", get(jobs_table_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
         .route("/api/jobs/batch", post(batch_jobs_handler))
         .route("/api/logs/history", get(logs_history_handler))
@@ -962,7 +964,7 @@ struct SetupConfig {
     directories: Vec<String>,
     #[serde(default = "default_setup_true")]
     allow_cpu_encoding: bool,
-    #[serde(default = "default_setup_true")]
+    #[serde(default = "default_setup_telemetry")]
     enable_telemetry: bool,
     #[serde(default)]
     output_codec: crate::config::OutputCodec,
@@ -976,6 +978,10 @@ fn default_setup_min_bpp() -> f64 {
 
 fn default_setup_true() -> bool {
     true
+}
+
+fn default_setup_telemetry() -> bool {
+    false
 }
 
 async fn setup_complete_handler(
@@ -1213,8 +1219,19 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             .into_response();
     }
 
-    // Default fallback to 404 for missing files, except for the SPA root fallback if intended.
-    // Given we are using Astro as SSG for these pages, if it's not found, it's a 404.
+    if !path.contains('.') {
+        if let Some(content) = load_static_asset("404.html") {
+            let mime = mime_guess::from_path("404.html").first_or_octet_stream();
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content,
+            )
+                .into_response();
+        }
+    }
+
+    // Default fallback to 404 for missing files.
     StatusCode::NOT_FOUND.into_response()
 }
 
@@ -1716,6 +1733,10 @@ async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Response {
+    if !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
+    }
+
     let ip = request_ip(&req).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     if !allow_global_request(&state, ip).await {
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
@@ -3775,7 +3796,7 @@ mod tests {
                 &token,
                 json!({
                     "monitoring_poll_interval": 2.0,
-                    "enable_telemetry": true,
+                    "enable_telemetry": false,
                     "watch_enabled": false
                 }),
             ))

@@ -1,13 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-    Area,
-    AreaChart,
-    CartesianGrid,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis,
-} from "recharts";
 import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -132,6 +123,7 @@ export default function SavingsOverview() {
         ...summary.savings_by_codec.map((entry) => entry.bytes_saved),
         1
     );
+    const maxChartSavings = Math.max(...chartData.map((entry) => entry.gb_saved), 1);
 
     return (
         <div className="space-y-6">
@@ -161,44 +153,28 @@ export default function SavingsOverview() {
                 {chartData.length === 0 ? (
                     <div className="py-10 text-center text-sm text-helios-slate">No data yet</div>
                 ) : (
-                    <div className="mt-4 h-[200px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData}>
-                                <CartesianGrid
-                                    stroke="rgb(var(--border-subtle) / 0.25)"
-                                    vertical={false}
-                                />
-                                <XAxis
-                                    dataKey="label"
-                                    tick={{ fill: "rgb(var(--text-muted))", fontSize: 12 }}
-                                    tickLine={false}
-                                    axisLine={false}
-                                />
-                                <YAxis
-                                    tick={{ fill: "rgb(var(--text-muted))", fontSize: 12 }}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    tickFormatter={(value: number) => `${value.toFixed(1)} GB`}
-                                />
-                                <Tooltip
-                                    contentStyle={{
-                                        backgroundColor: "rgb(var(--bg-panel))",
-                                        border: "1px solid rgb(var(--border-subtle) / 0.4)",
-                                        borderRadius: "12px",
-                                        color: "rgb(var(--text-primary))",
-                                    }}
-                                    formatter={(value: number) => [`${value.toFixed(1)} GB`, "Saved"]}
-                                    labelFormatter={(label: string) => label}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="gb_saved"
-                                    stroke="rgb(var(--accent-primary))"
-                                    fill="rgba(var(--accent-primary), 0.2)"
-                                    strokeWidth={2}
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
+                    <div className="mt-4">
+                        <div className="flex h-[200px] items-end gap-2 rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 px-3 py-4">
+                            {chartData.map((entry) => (
+                                <div key={entry.date} className="flex h-full flex-1 flex-col justify-end">
+                                    <div className="group relative flex-1 rounded-md bg-helios-surface-soft/50">
+                                        <div
+                                            className="absolute bottom-0 w-full rounded-md bg-helios-solar/70 transition-all"
+                                            style={{
+                                                height: `${Math.max(
+                                                    (entry.gb_saved / maxChartSavings) * 100,
+                                                    4
+                                                )}%`,
+                                            }}
+                                            title={`${entry.label}: ${entry.gb_saved.toFixed(1)} GB saved`}
+                                        />
+                                    </div>
+                                    <div className="mt-2 truncate text-center text-[10px] text-helios-slate">
+                                        {entry.label}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 )}
             </div>
