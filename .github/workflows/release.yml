@@ -6,12 +6,17 @@ on:
       - 'v*'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   release-meta:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       prerelease: ${{ steps.channel.outputs.prerelease }}
       make_latest: ${{ steps.channel.outputs.make_latest }}
@@ -25,6 +30,17 @@ jobs:
       - name: Read version
         id: version
         run: echo "version=$(tr -d '\n\r' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_tag="v${{ steps.version.outputs.version }}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${expected_tag}" >&2
+            exit 1
+          fi
 
       - name: Determine release channel
         id: channel
@@ -42,6 +58,7 @@ jobs:
   build-frontend:
     needs: [release-meta]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web
@@ -61,9 +78,17 @@ jobs:
         with:
           path: web/node_modules
           key: bun-release-${{ hashFiles('web/bun.lock') }}
+          restore-keys: |
+            bun-release-
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: bun run typecheck
+
+      - name: Astro diagnostics
+        run: bun run check
 
       - name: Build frontend
         run: bun run build
@@ -78,6 +103,7 @@ jobs:
   build-linux:
     needs: [release-meta, build-frontend]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -140,6 +166,7 @@ jobs:
   build-windows:
     needs: [release-meta, build-frontend]
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -183,6 +210,7 @@ jobs:
   build-macos:
     needs: [release-meta, build-frontend]
     runs-on: macos-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -236,6 +264,7 @@ jobs:
   publish-release:
     needs: [release-meta, build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download release artifacts
