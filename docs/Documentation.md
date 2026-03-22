@@ -704,6 +704,8 @@ See [GPU_PASSTHROUGH.md](GPU_PASSTHROUGH.md) for detailed instructions on:
 
 ## Docker Deployment
 
+Published container images are multi-arch for Linux `amd64` and `arm64`. Stable tags publish `:latest`, branch builds publish `:edge`, and every build also gets an exact version tag plus a `sha-<short>` tag.
+
 ### Basic Run
 
 ```bash
@@ -758,8 +760,9 @@ volumes:
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `0.2.5` | Specific version |
-| `0.2` | Latest patch of minor version |
+| `edge` | Latest `main` / `master` branch build |
+| `0.2.10-rc.1` | Exact version or prerelease |
+| `sha-<short>` | Immutable commit-based image |
 
 ---
 
@@ -827,7 +830,9 @@ alchemist/
 │
 ├── .github/
 │   └── workflows/
-│       └── docker.yml        # CI/CD pipeline
+│       ├── ci.yml            # Rust + frontend validation
+│       ├── docker.yml        # Multi-arch container publishing
+│       └── release.yml       # Standalone binary release pipeline
 │
 ├── Cargo.toml                # Rust dependencies
 ├── Cargo.lock
@@ -884,19 +889,22 @@ RUST_LOG=debug cargo run --
 cd web
 
 # Install dependencies with Bun
-bun install
+bun install --frozen-lockfile
 
 # Development server with hot reload (port 4321)
 bun run dev
+
+# Type check
+bun run typecheck
+
+# Astro diagnostics
+bun run check
 
 # Production build (outputs to dist/)
 bun run build
 
 # Preview production build
 bun run preview
-
-# Type check
-bun run astro check
 ```
 
 #### Docker Build
@@ -908,8 +916,11 @@ docker build -t alchemist .
 # Build with no cache (clean build)
 docker build --no-cache -t alchemist .
 
-# Build for specific platform
+# Build a specific platform image locally
 docker build --platform linux/amd64 -t alchemist .
+
+# Build multi-arch images with Buildx
+docker buildx build --platform linux/amd64,linux/arm64 -t alchemist .
 ```
 
 ### Code Style
@@ -986,18 +997,21 @@ Supporting release metadata must also be updated for every cut:
 Recommended workflow:
 1. Run `./scripts/bump_version.sh 0.2.10-rc.1`
 2. Update `CHANGELOG.md` and the docs changelog entry with release notes
-3. Run `cargo test --quiet`
-4. Run `bun run verify` in `web/`
-5. Run `bun run test:reliability` in `web-e2e/`
-6. Push the merged release commit to `main` so the Docker workflow publishes `:0.2.10-rc.1`
-7. Stable versions additionally publish `:latest`; prereleases must not
-8. Use `workflow_dispatch` on `.github/workflows/release.yml` as a dry run before tagging if you want to exercise the build matrix without publishing assets
-9. Create annotated tag `v0.2.10-rc.1` on that exact merged commit to publish Windows, macOS, and Linux prerelease assets
+3. Run `cargo fmt --all -- --check`
+4. Run `cargo clippy --all-targets --all-features -- -D warnings`
+5. Run `cargo test --all-targets`
+6. Run `bun install --frozen-lockfile && bun run typecheck && bun run build` in `web/`
+7. Let `.github/workflows/ci.yml` validate the branch or pull request before merge
+8. Push the merged release commit to `main` or `master` so `.github/workflows/docker.yml` publishes the exact version tag and, for stable builds, `:latest`
+9. Use `workflow_dispatch` on `.github/workflows/release.yml` as a dry run if you want to exercise the release matrix without publishing assets
+10. Create annotated tag `v0.2.10-rc.1` on that exact merged commit to publish Linux (`.tar.gz`), Windows (`.exe`), and macOS (`.tar.gz`) release assets with SHA256 files
 
 Important:
-- Docker publishing is driven by `VERSION` on push to `main`
-- Binary/app releases are driven by the `v*` git tag
+- CI runs on pushes to `main` / `master`, pull requests, and manual dispatches, while docs-only changes are ignored
+- Docker publishing is driven by `VERSION` plus source changes on push to `main` / `master`
+- Standalone release artifacts are driven by the `v*` git tag
 - GitHub releases from `-rc.` tags must be marked prerelease and must not become latest
+- Linux and macOS releases are plain `.tar.gz` archives containing the server binary, not desktop bundles
 - Do not create the release tag from a dirty or unmerged worktree
 
 ---
@@ -1251,7 +1265,8 @@ A:
 - ✅ Output safety upgrade: `output_root`, mirrored destination paths, temp-file promotion, and non-destructive replace flow
 - ✅ Scheduler/watch/setup parity: immediate schedule refresh, Intel Arc H.264 detection fix, H.264 setup option, canonicalized watch folders, and recursive watch-folder controls
 - ✅ Jobs/settings UX improvements: per-job priority controls, output-root file settings, active-job-safe actions, and Astro router deprecation cleanup
-- ✅ RC prep hardening: version metadata synced across app/web/Docker inputs and release instructions updated for prerelease-vs-stable publishing
+- ✅ CI/CD rewrite: cached Rust checks, frontend typecheck/build validation, multi-arch Docker publishing, and unified release metadata flow
+- ✅ Release packaging simplified: Linux and macOS now ship plain `.tar.gz` binaries, Windows ships `.exe`, and every asset includes SHA256 checksums
 
 ### v0.2.8
 - ✅ Default server mode; explicit CLI with `--cli --dir ...` and new `--reset-auth` flow
