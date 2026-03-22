@@ -30,6 +30,8 @@ Alchemist is a Rust-based video transcoding system that automatically converts y
 
 ### Installation
 
+#### From Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/BrooklynLovesZelda/alchemist.git
@@ -42,13 +44,22 @@ cargo build --release
 ./target/release/alchemist
 ```
 
+#### Prebuilt Releases
+
+GitHub Releases publish standalone server artifacts for:
+
+- Linux x86_64: `alchemist-linux-x86_64.tar.gz`
+- Linux arm64: `alchemist-linux-aarch64.tar.gz`
+- Windows x86_64: `alchemist-windows-x86_64.exe`
+- macOS Intel: `alchemist-macos-x86_64.tar.gz`
+- macOS Apple Silicon: `alchemist-macos-arm64.tar.gz`
+
+Each release also ships a matching `.sha256` file for checksum verification.
+
 ### Docker Deployment
 
 ```bash
-# Build the Docker image
-docker build -t alchemist .
-
-# Run the container
+# Run the published multi-arch image
 docker run -d \
   -p 3000:3000 \
   -v /path/to/config.toml:/app/config/config.toml:ro \
@@ -59,10 +70,17 @@ docker run -d \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
   -e ALCHEMIST_CONFIG_MUTABLE=false \
   --name alchemist \
-  alchemist
+  ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 Access the web interface at `http://localhost:3000`.
+
+Container tags:
+
+- `latest`: latest stable release only
+- `edge`: latest build from `main` or `master`
+- `0.2.10-rc.1`: exact release or prerelease version
+- `sha-<short>`: immutable commit-based build tag
 
 ## Configuration
 
@@ -104,9 +122,9 @@ When `output_root` is set, Alchemist mirrors the source-relative directory struc
 
 ## Supported Platforms
 
-- **Linux**: x86_64 (Docker & Binary)
+- **Linux**: x86_64 and arm64 (Docker & Binary)
 - **Windows**: x86_64
-- **macOS**: x86_64 (Experimental)
+- **macOS**: x86_64 and arm64
 
 ## Usage
 
