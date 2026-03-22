@@ -951,7 +951,7 @@ struct SetupConfig {
     username: String,
     password: String,
     #[serde(default)]
-    settings: Option<crate::config::Config>,
+    settings: Option<serde_json::Value>,
     #[serde(default)]
     size_reduction_threshold: f64,
     #[serde(default = "default_setup_min_bpp")]
@@ -1026,11 +1026,30 @@ async fn setup_complete_handler(
     }
 
     let mut next_config = match payload.settings {
-        Some(mut settings) => {
+        Some(raw_settings) => {
+            // Deserialize the frontend SetupSettings into Config,
+            // tolerating unknown fields and missing optional fields.
+            let mut settings: crate::config::Config =
+                match serde_json::from_value(raw_settings) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!(
+                                "Invalid settings format: {}. \
+                                 Check that all required fields are present.",
+                                err
+                            ),
+                        )
+                            .into_response();
+                    }
+                };
             settings.scanner.directories =
                 match normalize_setup_directories(&settings.scanner.directories) {
                     Ok(paths) => paths,
-                    Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+                    Err(msg) => {
+                        return (StatusCode::BAD_REQUEST, msg).into_response()
+                    }
                 };
             settings
         }
