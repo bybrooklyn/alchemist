@@ -460,7 +460,9 @@ mod tests {
             file.flush()?;
         }
 
-        tokio::time::sleep(Duration::from_millis(2200)).await;
+        // Access close/write events can enable quick-settle on Linux, so
+        // keep this assertion comfortably before the earliest ready poll.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(db.get_job_stats().await?.queued, 0);
 
         {
@@ -469,7 +471,7 @@ mod tests {
             file.flush()?;
         }
 
-        tokio::time::sleep(Duration::from_millis(2200)).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(db.get_job_stats().await?.queued, 0);
 
         wait_for_queued_jobs(db.as_ref(), 1).await?;

@@ -25,27 +25,34 @@ text = cargo.read_text()
 text = re.sub(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{version}"', text, count=1)
 cargo.write_text(text)
 
-# web/package.json
-pkg = root / "web" / "package.json"
-text = pkg.read_text()
-# Strip unexpected control characters that can break JSON parsing.
-text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ch == "\r" or ord(ch) >= 32)
-new_text, count = re.subn(
-    r'(?m)^(\s*"version"\s*:\s*)"[^"]+"',
-    rf'\1"{version}"',
-    text,
-    count=1,
-)
-if count == 0:
+def update_package_json(pkg: Path) -> None:
+    text = pkg.read_text()
+    # Strip unexpected control characters that can break JSON parsing.
+    text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ch == "\r" or ord(ch) >= 32)
     new_text, count = re.subn(
-        r'(?m)^(\s*"name"\s*:\s*"[^"]+",\s*)$',
-        r'\1  "version": "' + version + r'",\n',
+        r'(?m)^(\s*"version"\s*:\s*)"[^"]+"',
+        rf'\1"{version}"',
         text,
         count=1,
     )
     if count == 0:
-        raise SystemExit("Failed to update web/package.json version field.")
-pkg.write_text(new_text)
+        new_text, count = re.subn(
+            r'(?m)^(\s*"name"\s*:\s*"[^"]+",\s*)$',
+            r'\1  "version": "' + version + r'",\n',
+            text,
+            count=1,
+        )
+        if count == 0:
+            raise SystemExit(f"Failed to update {pkg.relative_to(root)} version field.")
+    pkg.write_text(new_text)
+
+
+# package.json files across the repo
+for pkg in sorted(root.rglob("package.json")):
+    relative = pkg.relative_to(root)
+    if any(part in {"node_modules", "dist", ".astro"} for part in relative.parts):
+        continue
+    update_package_json(pkg)
 
 # Cargo.lock (root package entry)
 lock = root / "Cargo.lock"
@@ -58,18 +65,24 @@ text = re.sub(
 )
 lock.write_text(text)
 
-# docs/Documentation.md footer
-docs = root / "docs" / "Documentation.md"
-text = docs.read_text()
-text = re.sub(r'(?m)^\*Documentation for Alchemist v[^*]+\*', f'*Documentation for Alchemist v{version}*', text, count=1)
-docs.write_text(text)
+# Legacy docs footer (optional; current docs site no longer uses this file)
+legacy_docs = root / "docs" / "Documentation.md"
+if legacy_docs.exists():
+    text = legacy_docs.read_text()
+    text = re.sub(
+        r'(?m)^\*Documentation for Alchemist v[^*]+\*',
+        f'*Documentation for Alchemist v{version}*',
+        text,
+        count=1,
+    )
+    legacy_docs.write_text(text)
 
 print(f"Updated version to {version}")
 PY
 
 cat <<EOF
 Next steps:
-  1. Update CHANGELOG.md and docs/Documentation.md release notes for v${VERSION}
+  1. Update CHANGELOG.md and docs/src/content/docs/reference/changelog.mdx for v${VERSION}
   2. Run cargo test --quiet
   3. Run bun run verify (in web/)
   4. Run bun run test:reliability (in web-e2e/)

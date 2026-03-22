@@ -251,6 +251,7 @@ impl EngineMode {
     /// Compute the appropriate concurrent job count for this
     /// mode given the number of logical CPU cores available.
     /// Returns 0 to signal "use the stored manual override".
+    #[allow(clippy::manual_clamp)]
     pub fn concurrent_jobs_for_cpu_count(&self, cpu_count: usize) -> usize {
         match self {
             // Background: always 1 job, minimal impact

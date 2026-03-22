@@ -181,10 +181,131 @@ docker-logs:
 # VERSIONING & RELEASE
 # ─────────────────────────────────────────
 
-# Bump version across all files (e.g. just bump 0.3.0 or just bump 0.3.0-rc.1)
+# Bump version across repo version files only (e.g. just bump 0.3.0 or just bump 0.3.0-rc.1)
 bump NEW_VERSION:
     @echo "Bumping to {{NEW_VERSION}}..."
     bash scripts/bump_version.sh {{NEW_VERSION}}
+
+# Checkpoint dirty local work with confirmation, then bump, validate, commit, tag, and push
+# (blocks behind/diverged remote state; e.g. just update 0.3.0-rc.1 or just update v0.3.0-rc.1)
+update NEW_VERSION:
+    @RAW_VERSION="{{NEW_VERSION}}"; \
+    NEW_VERSION="${RAW_VERSION#v}"; \
+    CURRENT_VERSION="{{VERSION}}"; \
+    TAG="v${NEW_VERSION}"; \
+    BRANCH="$(git branch --show-current)"; \
+    if [ -z "${NEW_VERSION}" ]; then \
+        echo "error: version must not be empty" >&2; \
+        exit 1; \
+    fi; \
+    if [ "${NEW_VERSION}" = "${CURRENT_VERSION}" ]; then \
+        echo "error: version ${NEW_VERSION} is already current" >&2; \
+        exit 1; \
+    fi; \
+    if [ -z "${BRANCH}" ]; then \
+        echo "error: detached HEAD is not supported for just update" >&2; \
+        exit 1; \
+    fi; \
+    if ! git remote get-url origin >/dev/null 2>&1; then \
+        echo "error: origin remote does not exist" >&2; \
+        exit 1; \
+    fi; \
+    if [ -n "$(git status --porcelain)" ]; then \
+        echo "── Local changes detected ──"; \
+        git status --short; \
+        if [ ! -r /dev/tty ]; then \
+            echo "error: interactive confirmation requires a TTY" >&2; \
+            exit 1; \
+        fi; \
+        printf "Checkpoint current local changes before release? [y/N] " > /dev/tty; \
+        read -r RESPONSE < /dev/tty; \
+        case "${RESPONSE}" in \
+            [Yy]|[Yy][Ee][Ss]) \
+                git add -A; \
+                git commit -m "chore: checkpoint before release ${TAG}"; \
+                ;; \
+            *) \
+                echo "error: aborted because local changes were not checkpointed" >&2; \
+                exit 1; \
+                ;; \
+        esac; \
+    fi; \
+    git fetch --quiet --prune --tags origin; \
+    if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then \
+        LOCAL_HEAD="$(git rev-parse HEAD)"; \
+        REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${BRANCH}")"; \
+        BASE_HEAD="$(git merge-base HEAD "refs/remotes/origin/${BRANCH}")"; \
+        if [ "${LOCAL_HEAD}" != "${REMOTE_HEAD}" ]; then \
+            if [ "${BASE_HEAD}" = "${LOCAL_HEAD}" ]; then \
+                echo "error: branch ${BRANCH} is behind origin/${BRANCH}; pull before running just update" >&2; \
+                exit 1; \
+            fi; \
+            if [ "${BASE_HEAD}" != "${REMOTE_HEAD}" ]; then \
+                echo "error: branch ${BRANCH} has diverged from origin/${BRANCH}; reconcile it before running just update" >&2; \
+                exit 1; \
+            fi; \
+        fi; \
+    fi; \
+    if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then \
+        echo "error: local tag ${TAG} already exists" >&2; \
+        exit 1; \
+    fi; \
+    if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then \
+        echo "error: remote tag ${TAG} already exists on origin" >&2; \
+        exit 1; \
+    fi; \
+    echo "── Bump version to ${NEW_VERSION} ──"; \
+    bash scripts/bump_version.sh "${NEW_VERSION}"; \
+    echo "── Rust format ──"; \
+    cargo fmt --all -- --check; \
+    echo "── Rust clippy ──"; \
+    cargo clippy --locked --all-targets --all-features -- -D warnings; \
+    echo "── Rust check ──"; \
+    cargo check --locked --all-targets --all-features; \
+    echo "── Rust tests ──"; \
+    cargo test --locked --all-targets -- --test-threads=4; \
+    echo "── Actionlint ──"; \
+    actionlint .github/workflows/*.yml; \
+    echo "── Web verify ──"; \
+    (cd web && bun install --frozen-lockfile && bun run verify); \
+    echo "── Docs build ──"; \
+    (cd docs && bun install && bun run build); \
+    echo "── E2E reliability ──"; \
+    (cd web-e2e && bun install --frozen-lockfile && bun run test:reliability); \
+    mapfile -t PACKAGE_FILES < <(git ls-files -- 'package.json' '*/package.json'); \
+    mapfile -t CHANGED_TRACKED < <(git diff --name-only --); \
+    if [ "${#CHANGED_TRACKED[@]}" -eq 0 ]; then \
+        echo "error: bump completed but no tracked files changed" >&2; \
+        exit 1; \
+    fi; \
+    for file in "${CHANGED_TRACKED[@]}"; do \
+        case "${file}" in \
+            VERSION|Cargo.toml|Cargo.lock|package.json|*/package.json|docs/Documentation.md) ;; \
+            *) \
+                echo "error: unexpected tracked change after validation: ${file}" >&2; \
+                exit 1; \
+                ;; \
+        esac; \
+    done; \
+    git add -- VERSION Cargo.toml Cargo.lock; \
+    if [ "${#PACKAGE_FILES[@]}" -gt 0 ]; then \
+        git add -- "${PACKAGE_FILES[@]}"; \
+    fi; \
+    if git ls-files --error-unmatch docs/Documentation.md >/dev/null 2>&1; then \
+        git add -- docs/Documentation.md; \
+    fi; \
+    if git diff --cached --quiet; then \
+        echo "error: no version files were staged for commit" >&2; \
+        exit 1; \
+    fi; \
+    echo "── Commit release ──"; \
+    git commit -m "chore: release ${TAG}"; \
+    echo "── Tag release ──"; \
+    git tag -a "${TAG}" -m "${TAG}"; \
+    echo "── Push branch ──"; \
+    git push origin "${BRANCH}"; \
+    echo "── Push tag ──"; \
+    git push origin "refs/tags/${TAG}"
 
 # Show current version
 version:
