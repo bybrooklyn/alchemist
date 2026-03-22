@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-const APP_HOME_DIR: &str = ".openbitdo";
+const APP_HOME_DIR: &str = ".alchemist";
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_DB_PATH: &str = "alchemist.db";
 
@@ -76,26 +76,26 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn default_home_root_uses_openbitdo_directory() {
+    fn default_home_root_uses_alchemist_directory() {
         let home = Path::new("/Users/tester");
         assert_eq!(
             default_home_root_for(Some(home)),
-            Some(home.join(".openbitdo"))
+            Some(home.join(".alchemist"))
         );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn default_paths_live_under_openbitdo() {
+    fn default_paths_live_under_alchemist() {
         let root = default_home_root_for(Some(Path::new("/Users/tester")))
             .expect("expected home root on unix-like target");
         assert_eq!(
             root.join(DEFAULT_CONFIG_PATH),
-            PathBuf::from("/Users/tester/.openbitdo/config.toml")
+            PathBuf::from("/Users/tester/.alchemist/config.toml")
         );
         assert_eq!(
             root.join(DEFAULT_DB_PATH),
-            PathBuf::from("/Users/tester/.openbitdo/alchemist.db")
+            PathBuf::from("/Users/tester/.alchemist/alchemist.db")
         );
     }
 }
