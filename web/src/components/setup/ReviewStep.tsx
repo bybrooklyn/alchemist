@@ -19,7 +19,7 @@ export default function ReviewStep({ setupSummary, settings, preview, error }: R
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {setupSummary.map((item) => <div key={item.label} className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4"><div className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">{item.label}</div><div className="mt-2 text-2xl font-bold text-helios-ink">{item.value}</div></div>)}
+                {setupSummary.map((item) => <div key={item.label} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4"><div className="text-[10px] font-bold uppercase tracking-wider text-helios-slate">{item.label}</div><div className="mt-2 text-2xl font-bold text-helios-ink">{item.value}</div></div>)}
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -29,7 +29,7 @@ export default function ReviewStep({ setupSummary, settings, preview, error }: R
                 <ReviewCard title="Runtime" lines={[`Theme: ${settings.appearance.active_theme_id ?? "default"}`, `${settings.notifications.targets.length} notification targets`, `${settings.schedule.windows.length} schedule windows`, `Telemetry: ${settings.system.enable_telemetry ? "enabled" : "disabled"}`]} />
             </div>
 
-            {error && <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{error}</div>}
+            {error && <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{error}</div>}
         </motion.div>
     );
 }

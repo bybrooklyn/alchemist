@@ -378,7 +378,7 @@ export default function AppearanceSettings() {
                                         onClick={() => handleSelect(theme.id)}
                                         disabled={isActive || Boolean(savingThemeId)}
                                         className={cn(
-                                            "group relative flex flex-col items-start gap-4 rounded-2xl border p-4 text-left transition-all duration-300 outline-none",
+                                            "group relative flex flex-col items-start gap-4 rounded-lg border p-4 text-left transition-all duration-300 outline-none",
                                             isActive
                                                 ? "border-helios-solar bg-helios-solar/10 shadow-[0_0_20px_rgba(var(--accent-primary),0.12)] ring-1 ring-helios-solar/30"
                                                 : "border-helios-line/40 bg-helios-surface/80 hover:border-helios-solar/40 hover:bg-helios-surface hover:shadow-xl hover:shadow-black/10"
@@ -386,7 +386,7 @@ export default function AppearanceSettings() {
                                     >
                                         <div className="flex w-full items-center justify-between gap-3">
                                             <div
-                                                className="h-12 w-12 rounded-2xl border border-white/10 shadow-inner flex-shrink-0 flex items-center justify-center relative overflow-hidden"
+                                                className="h-12 w-12 rounded-lg border border-white/10 shadow-inner flex-shrink-0 flex items-center justify-center relative overflow-hidden"
                                                 data-color-profile={theme.id}
                                                 style={{
                                                     background: `linear-gradient(140deg, rgb(var(--bg-main)), rgb(var(--bg-panel)))`,

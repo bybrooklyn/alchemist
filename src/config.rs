@@ -148,6 +148,25 @@ impl OutputCodec {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioMode {
+    #[default]
+    Copy,
+    Aac,
+    AacStereo,
+}
+
+impl AudioMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Aac => "aac",
+            Self::AacStereo => "aac_stereo",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
@@ -250,6 +269,8 @@ pub struct TranscodeConfig {
     pub tonemap_desat: f32,
     #[serde(default)]
     pub subtitle_mode: SubtitleMode,
+    #[serde(default)]
+    pub vmaf_min_score: Option<f64>,
 }
 
 // Removed default_quality_profile helper as Default trait on enum handles it now.
@@ -372,6 +393,8 @@ pub struct SystemConfig {
     pub monitoring_poll_interval: f64,
     #[serde(default = "default_true")]
     pub enable_telemetry: bool,
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -382,14 +405,87 @@ fn default_poll_interval() -> f64 {
     2.0
 }
 
+fn default_log_retention_days() -> Option<u32> {
+    Some(30)
+}
+
 impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             monitoring_poll_interval: default_poll_interval(),
             enable_telemetry: true,
+            log_retention_days: default_log_retention_days(),
         }
     }
 }
+
+#[derive(Debug, Serialize, Clone, Copy)]
+pub struct BuiltInLibraryProfile {
+    pub id: i64,
+    pub name: &'static str,
+    pub preset: &'static str,
+    pub codec: OutputCodec,
+    pub quality_profile: QualityProfile,
+    pub hdr_mode: HdrMode,
+    pub audio_mode: AudioMode,
+    pub crf_override: Option<i32>,
+    pub notes: Option<&'static str>,
+}
+
+pub const PRESET_SPACE_SAVER: BuiltInLibraryProfile = BuiltInLibraryProfile {
+    id: 1,
+    name: "Space Saver",
+    preset: "space_saver",
+    codec: OutputCodec::Av1,
+    quality_profile: QualityProfile::Speed,
+    hdr_mode: HdrMode::Tonemap,
+    audio_mode: AudioMode::Aac,
+    crf_override: None,
+    notes: Some("Optimized for aggressive size reduction."),
+};
+
+pub const PRESET_QUALITY_FIRST: BuiltInLibraryProfile = BuiltInLibraryProfile {
+    id: 2,
+    name: "Quality First",
+    preset: "quality_first",
+    codec: OutputCodec::Hevc,
+    quality_profile: QualityProfile::Quality,
+    hdr_mode: HdrMode::Preserve,
+    audio_mode: AudioMode::Copy,
+    crf_override: None,
+    notes: Some("Prioritizes fidelity over maximum compression."),
+};
+
+pub const PRESET_BALANCED: BuiltInLibraryProfile = BuiltInLibraryProfile {
+    id: 3,
+    name: "Balanced",
+    preset: "balanced",
+    codec: OutputCodec::Av1,
+    quality_profile: QualityProfile::Balanced,
+    hdr_mode: HdrMode::Preserve,
+    audio_mode: AudioMode::Copy,
+    crf_override: None,
+    notes: Some("Balanced compression and playback quality."),
+};
+
+pub const PRESET_STREAMING: BuiltInLibraryProfile = BuiltInLibraryProfile {
+    id: 4,
+    name: "Streaming",
+    preset: "streaming",
+    codec: OutputCodec::H264,
+    quality_profile: QualityProfile::Balanced,
+    hdr_mode: HdrMode::Tonemap,
+    audio_mode: AudioMode::AacStereo,
+    crf_override: None,
+    notes: Some("Maximizes compatibility for streaming clients."),
+};
+
+pub const BUILT_IN_LIBRARY_PROFILES: [BuiltInLibraryProfile; 4] = [
+    PRESET_SPACE_SAVER,
+    PRESET_QUALITY_FIRST,
+    PRESET_BALANCED,
+    PRESET_STREAMING,
+];
 
 impl Default for Config {
     fn default() -> Self {
@@ -409,6 +505,7 @@ impl Default for Config {
                 tonemap_peak: default_tonemap_peak(),
                 tonemap_desat: default_tonemap_desat(),
                 subtitle_mode: SubtitleMode::Copy,
+                vmaf_min_score: None,
             },
             hardware: HardwareConfig {
                 preferred_vendor: None,
@@ -429,6 +526,7 @@ impl Default for Config {
             system: SystemConfig {
                 monitoring_poll_interval: default_poll_interval(),
                 enable_telemetry: true,
+                log_retention_days: default_log_retention_days(),
             },
         }
     }
@@ -529,6 +627,15 @@ impl Config {
                 "min_vmaf_score must be between 0.0 and 100.0, got {}",
                 self.quality.min_vmaf_score
             );
+        }
+
+        if let Some(vmaf_min_score) = self.transcode.vmaf_min_score {
+            if !(0.0..=100.0).contains(&vmaf_min_score) {
+                anyhow::bail!(
+                    "vmaf_min_score must be between 0.0 and 100.0, got {}",
+                    vmaf_min_score
+                );
+            }
         }
 
         Ok(())

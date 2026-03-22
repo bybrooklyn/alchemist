@@ -29,6 +29,11 @@ interface SettingsBundleResponse {
     };
 }
 
+interface PreferenceResponse {
+    key: string;
+    value: string;
+}
+
 interface StatCardProps {
     label: string;
     value: number;
@@ -54,12 +59,12 @@ const DEFAULT_STATS = {
 
 function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     return (
-        <div className="p-5 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm relative overflow-hidden group hover:bg-helios-surface-soft transition-colors">
-            <div className={`absolute -top-2 -right-2 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${colorClass}`}>
-                <Icon size={64} />
-            </div>
-            <div className="relative z-10 flex flex-col gap-1">
-                <span className="text-xs font-bold uppercase tracking-wider text-helios-slate">{label}</span>
+        <div className="p-5 rounded-lg bg-helios-surface border border-helios-line/40 shadow-sm hover:bg-helios-surface-soft transition-colors">
+            <div className="flex flex-col gap-1">
+                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-helios-slate">
+                    <Icon size={16} className={`${colorClass} opacity-60`} />
+                    {label}
+                </span>
                 <span className={`text-3xl font-bold font-mono tracking-tight ${colorClass}`}>{value}</span>
             </div>
         </div>
@@ -105,9 +110,36 @@ export default function Dashboard() {
         };
 
         void fetchJobs();
-        void apiJson<SettingsBundleResponse>("/api/settings/bundle")
-            .then(setBundle)
-            .catch(() => undefined);
+        void (async () => {
+            try {
+                const bundleResponse = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
+                setBundle(bundleResponse);
+
+                if (
+                    bundleResponse.settings.scanner.directories.length === 0
+                    && typeof window !== "undefined"
+                    && window.location.pathname !== "/setup"
+                ) {
+                    let setupComplete: string | null = null;
+                    try {
+                        const preference = await apiJson<PreferenceResponse>(
+                            "/api/settings/preferences/setup_complete"
+                        );
+                        setupComplete = preference.value;
+                    } catch (error) {
+                        if (!(isApiError(error) && error.status === 404)) {
+                            throw error;
+                        }
+                    }
+
+                    if (setupComplete !== "true") {
+                        window.location.href = "/setup";
+                    }
+                }
+            } catch {
+                // Ignore setup redirect lookup failures here; dashboard data fetches handle their own UX.
+            }
+        })();
         void apiJson<{ status: "paused" | "running" }>("/api/engine/status")
             .then((data) => setEngineStatus(data.status))
             .catch(() => undefined);
@@ -219,8 +251,8 @@ export default function Dashboard() {
     return (
         <div className="flex flex-col gap-6 flex-1 min-h-0 overflow-hidden">
             {engineStatus === "paused" && (
-                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-5 py-4">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Engine Paused</div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-500">Engine Paused</div>
                     <div className="mt-2 text-sm text-helios-ink">
                         The queue can still fill up, but Alchemist will not start encoding until you click <span className="font-bold">Start</span> in the header.
                     </div>
@@ -236,23 +268,23 @@ export default function Dashboard() {
 
             {bundle && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Library Roots</div>
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Library Roots</div>
                         <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.scanner.directories.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Notification Targets</div>
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Notification Targets</div>
                         <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.notifications.targets.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Schedule Windows</div>
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Schedule Windows</div>
                         <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.schedule.windows.length}</div>
                     </div>
                 </div>
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-                <div className="lg:col-span-2 p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">
+                <div className="lg:col-span-2 p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">
                     <div className="flex items-center justify-between mb-6">
                         <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
                             <Activity size={20} className="text-helios-solar" />
@@ -263,7 +295,14 @@ export default function Dashboard() {
 
                     <div className="flex flex-col gap-3">
                         {jobsLoading && jobs.length === 0 ? (
-                            <div className="text-center py-8 text-helios-slate animate-pulse">Loading activity...</div>
+                            <div className="py-2">
+                                {Array.from({ length: 5 }).map((_, index) => (
+                                    <div
+                                        key={index}
+                                        className={`h-10 w-full rounded-md bg-helios-surface-soft/60 animate-pulse ${index < 4 ? "mb-2" : ""}`}
+                                    />
+                                ))}
+                            </div>
                         ) : jobs.length === 0 ? (
                             <div className="text-center py-8 text-helios-slate/60 italic">No recent activity found.</div>
                         ) : (
@@ -299,7 +338,7 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                <div className="p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm h-full">
+                <div className="p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm h-full">
                     <h3 className="text-lg font-bold text-helios-ink mb-6 flex items-center gap-2">
                         <Zap size={20} className="text-helios-solar" />
                         Quick Start
@@ -320,7 +359,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            <div className="p-6 rounded-3xl bg-helios-surface border border-helios-line/40 shadow-sm">
+            <div className="p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm">
                 <div className="flex items-center gap-2 mb-6">
                     <Activity size={18} className="text-helios-solar" />
                     <h3 className="text-sm font-bold uppercase tracking-wider text-helios-slate">System Health</h3>

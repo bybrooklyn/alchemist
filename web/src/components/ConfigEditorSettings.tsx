@@ -106,7 +106,7 @@ export default function ConfigEditorSettings() {
             <textarea
                 value={rawToml}
                 onChange={(e) => setRawToml(e.target.value)}
-                className="min-h-[520px] w-full rounded-2xl border border-helios-line/20 bg-helios-surface-soft px-4 py-4 font-mono text-sm leading-6 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                className="min-h-[520px] w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-4 font-mono text-sm leading-6 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                 spellCheck={false}
             />
 

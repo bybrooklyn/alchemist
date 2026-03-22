@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Activity, Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
+import LibraryDoctor from "./LibraryDoctor";
 
 interface SystemSettingsPayload {
     monitoring_poll_interval: number;
@@ -153,6 +154,10 @@ export default function SystemSettings() {
                     <Save size={18} />
                     {saving ? "Saving..." : "Save Settings"}
                 </button>
+            </div>
+
+            <div className="border-t border-helios-line/10 pt-6">
+                <LibraryDoctor />
             </div>
         </div>
     );

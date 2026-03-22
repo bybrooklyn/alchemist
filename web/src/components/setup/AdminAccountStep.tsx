@@ -57,7 +57,7 @@ export default function AdminAccountStep({
                         <label className="block text-sm font-medium text-helios-slate mb-2">Admin Password</label>
                         <input type="password" value={password} onChange={(e) => onPasswordChange(e.target.value)} className="w-full bg-helios-surface-soft border border-helios-line/40 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar outline-none" placeholder="Choose a strong password" />
                     </div>
-                    <label className="flex items-center justify-between rounded-2xl border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-4">
+                    <label className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-4">
                         <div>
                             <p className="text-sm font-semibold text-helios-ink">Anonymous Telemetry</p>
                             <p className="text-xs text-helios-slate mt-1">Help improve reliability and defaults with anonymous runtime signals.</p>
@@ -78,7 +78,7 @@ export default function AdminAccountStep({
                                 type="button"
                                 onClick={() => onThemeChange(theme.id)}
                                 className={clsx(
-                                    "rounded-2xl border px-4 py-4 text-left transition-all",
+                                    "rounded-lg border px-4 py-4 text-left transition-all",
                                     activeThemeId === theme.id
                                         ? "border-helios-solar bg-helios-solar/10 text-helios-ink"
                                         : "border-helios-line/20 bg-helios-surface-soft/50 text-helios-slate hover:border-helios-solar/20"

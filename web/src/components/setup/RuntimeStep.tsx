@@ -52,19 +52,24 @@ export default function RuntimeStep({
 
             <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6">
                 <div className="space-y-6">
-                    <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Cpu size={16} className="text-helios-solar" />Hardware Policy</div>
-                        {hardwareInfo && <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-helios-ink">Detected <span className="font-bold">{hardwareInfo.vendor}</span> with {hardwareInfo.supported_codecs.join(", ").toUpperCase()} support.</div>}
+                        {hardwareInfo && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-helios-ink">Detected <span className="font-bold">{hardwareInfo.vendor}</span> with {hardwareInfo.supported_codecs.join(", ").toUpperCase()} support.</div>}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <LabeledSelect label="Preferred Vendor" value={hardware.preferred_vendor ?? ""} onChange={(preferred_vendor) => updateHardware({ preferred_vendor: preferred_vendor || null })} options={[{ value: "", label: "Auto detect" }, { value: "nvidia", label: "NVIDIA" }, { value: "amd", label: "AMD" }, { value: "intel", label: "Intel" }, { value: "apple", label: "Apple" }, { value: "cpu", label: "CPU" }]} />
-                            <LabeledSelect label="CPU Preset" value={hardware.cpu_preset} onChange={(cpu_preset) => updateHardware({ cpu_preset: cpu_preset as SetupSettings["hardware"]["cpu_preset"] })} options={[{ value: "slow", label: "Slow" }, { value: "medium", label: "Medium" }, { value: "fast", label: "Fast" }, { value: "faster", label: "Faster" }]} />
+                            <div>
+                                <LabeledSelect label="CPU Preset" value={hardware.cpu_preset} onChange={(cpu_preset) => updateHardware({ cpu_preset: cpu_preset as SetupSettings["hardware"]["cpu_preset"] })} options={[{ value: "slow", label: "Slow" }, { value: "medium", label: "Medium" }, { value: "fast", label: "Fast" }, { value: "faster", label: "Faster" }]} />
+                                <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                                    How much effort your CPU puts into each encode. Slower presets produce smaller, better-quality files but take longer. 'Medium' is a sensible default for most setups.
+                                </p>
+                            </div>
                         </div>
                         <LabeledInput label="Explicit Device Path" value={hardware.device_path ?? ""} onChange={(device_path) => updateHardware({ device_path: device_path || null })} placeholder="/dev/dri/renderD128" />
                         <ToggleRow title="Allow CPU Fallback" body="Use software encoding if the preferred GPU path is unavailable." checked={hardware.allow_cpu_fallback} onChange={(allow_cpu_fallback) => updateHardware({ allow_cpu_fallback })} />
                         <ToggleRow title="Allow CPU Encoding" body="Permit CPU encoders even when GPU options exist." checked={hardware.allow_cpu_encoding} onChange={(allow_cpu_encoding) => updateHardware({ allow_cpu_encoding })} />
                     </div>
 
-                    <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Calendar size={16} className="text-helios-solar" />Schedule Windows</div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <LabeledInput label="Start" type="time" value={scheduleDraft.start_time} onChange={(start_time) => onScheduleDraftChange({ ...scheduleDraft, start_time })} />
@@ -83,7 +88,7 @@ export default function RuntimeStep({
                         <button type="button" onClick={addScheduleWindow} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Schedule Window</button>
                         <div className="space-y-2">
                             {schedule.windows.map((window, index) => (
-                                <div key={`${window.start_time}-${window.end_time}-${index}`} className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
+                                <div key={`${window.start_time}-${window.end_time}-${index}`} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
                                     <div>
                                         <div className="text-sm font-semibold text-helios-ink">{window.start_time} - {window.end_time}</div>
                                         <div className="text-xs text-helios-slate mt-1">{window.days_of_week.map((day) => WEEKDAY_OPTIONS[day]).join(", ")}</div>
@@ -97,7 +102,7 @@ export default function RuntimeStep({
                 </div>
 
                 <div className="space-y-6">
-                    <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Bell size={16} className="text-helios-solar" />Notifications</div>
                         <ToggleRow title="Enable Notifications" body="Send alerts when jobs succeed or fail." checked={notifications.enabled} onChange={(enabled) => onNotificationsChange({ ...notifications, enabled })} />
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -118,7 +123,7 @@ export default function RuntimeStep({
                         <button type="button" onClick={addNotificationTarget} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">Add Notification Target</button>
                         <div className="space-y-2">
                             {notifications.targets.map((target, index) => (
-                                <div key={`${target.name}-${target.endpoint_url}-${index}`} className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
+                                <div key={`${target.name}-${target.endpoint_url}-${index}`} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 flex items-center justify-between gap-4">
                                     <div className="min-w-0">
                                         <div className="text-sm font-semibold text-helios-ink">{target.name}</div>
                                         <div className="text-xs text-helios-slate mt-1 truncate" title={target.endpoint_url}>{target.endpoint_url}</div>

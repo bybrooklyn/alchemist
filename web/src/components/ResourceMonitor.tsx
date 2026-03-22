@@ -123,13 +123,32 @@ export default function ResourceMonitor() {
     };
 
     if (!stats) {
+        if (!error) {
+            return (
+                <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3" aria-live="polite">
+                    {Array.from({ length: 5 }).map((_, index) => (
+                        <div
+                            key={index}
+                            className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40"
+                        >
+                            <div className="h-4 w-24 rounded-md bg-helios-surface-soft/60 animate-pulse" />
+                            <div className="mt-4 h-7 w-20 rounded-md bg-helios-surface-soft/60 animate-pulse" />
+                            <div className="mt-4 h-2 w-full rounded-full bg-helios-surface-soft/60 animate-pulse" />
+                            <div className="mt-3 flex justify-between">
+                                <div className="h-3 w-16 rounded-md bg-helios-surface-soft/60 animate-pulse" />
+                                <div className="h-3 w-14 rounded-md bg-helios-surface-soft/60 animate-pulse" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
         return (
-            <div className={`p-6 rounded-2xl bg-white/5 border border-white/10 h-48 flex items-center justify-center ${error ? "" : "animate-pulse"}`}>
+            <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40 h-48 flex items-center justify-center">
                 <div className="text-center" aria-live="polite">
-                    <div className={`text-sm ${error ? "text-red-400" : "text-white/40"}`}>
-                        {error ? "Unable to load system stats." : "Loading system stats..."}
-                    </div>
-                    {error && <div className="text-[10px] text-white/40 mt-2">{error} Retrying automatically...</div>}
+                    <div className="text-sm text-red-400">Unable to load system stats.</div>
+                    <div className="text-[10px] text-helios-slate/60 mt-2">{error} Retrying automatically...</div>
                 </div>
             </div>
         );
@@ -140,10 +159,10 @@ export default function ResourceMonitor() {
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40"
             >
                 <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <Cpu size={16} /> CPU Usage
                     </div>
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${getUsageColor(stats.cpu_percent)}`}>
@@ -151,13 +170,13 @@ export default function ResourceMonitor() {
                     </span>
                 </div>
                 <div className="space-y-1">
-                    <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-2 w-full bg-helios-surface-soft/50 rounded-full overflow-hidden">
                         <div
                             className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.cpu_percent)}`}
                             style={{ width: `${Math.min(stats.cpu_percent, 100)}%` }}
                         />
                     </div>
-                    <div className="flex justify-between text-xs text-white/40">
+                    <div className="flex justify-between text-xs text-helios-slate/60">
                         <span>CPU Cores</span>
                         <span>{stats.cpu_count} Logical</span>
                     </div>
@@ -168,10 +187,10 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 }}
-                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40"
             >
                 <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <HardDrive size={16} /> Memory
                     </div>
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${getUsageColor(stats.memory_percent)}`}>
@@ -179,13 +198,13 @@ export default function ResourceMonitor() {
                     </span>
                 </div>
                 <div className="space-y-1">
-                    <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-2 w-full bg-helios-surface-soft/50 rounded-full overflow-hidden">
                         <div
                             className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.memory_percent)}`}
                             style={{ width: `${Math.min(stats.memory_percent, 100)}%` }}
                         />
                     </div>
-                    <div className="flex justify-between text-xs text-white/40">
+                    <div className="flex justify-between text-xs text-helios-slate/60">
                         <span>{(stats.memory_used_mb / 1024).toFixed(1)} GB used</span>
                         <span>{(stats.memory_total_mb / 1024).toFixed(0)} GB total</span>
                     </div>
@@ -196,13 +215,13 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
-                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40"
             >
                 <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <Layers size={16} /> Active Jobs
                     </div>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-helios-solar/10 text-helios-solar">
                         {stats.active_jobs} / {stats.concurrent_limit}
                     </span>
                 </div>
@@ -211,7 +230,7 @@ export default function ResourceMonitor() {
                         <div
                             key={i}
                             className={`flex-1 rounded-sm transition-all duration-300 ${
-                                i < stats.active_jobs ? "bg-blue-500 h-6" : "bg-white/10 h-2"
+                                i < stats.active_jobs ? "bg-helios-solar h-6" : "bg-helios-surface-soft/50 h-2"
                             }`}
                         />
                     ))}
@@ -222,10 +241,10 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
-                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md"
+                className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40"
             >
                 <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <Cpu size={16} /> GPU
                     </div>
                     {stats.gpu_utilization != null ? (
@@ -233,11 +252,11 @@ export default function ResourceMonitor() {
                             {stats.gpu_utilization.toFixed(1)}%
                         </span>
                     ) : (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/10 text-white/40">N/A</span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-helios-surface-soft/50 text-helios-slate/60">N/A</span>
                     )}
                 </div>
                 <div className="space-y-1">
-                    <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-2 w-full bg-helios-surface-soft/50 rounded-full overflow-hidden">
                         {stats.gpu_utilization != null && (
                             <div
                                 className={`h-full rounded-full transition-all duration-500 ${getBarColor(stats.gpu_utilization)}`}
@@ -245,7 +264,7 @@ export default function ResourceMonitor() {
                             />
                         )}
                     </div>
-                    <div className="flex justify-between text-xs text-white/40">
+                    <div className="flex justify-between text-xs text-helios-slate/60">
                         <span>VRAM</span>
                         <span>{stats.gpu_memory_percent?.toFixed(0) || "-"}% used</span>
                     </div>
@@ -256,15 +275,15 @@ export default function ResourceMonitor() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
-                className="min-w-0 p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex flex-col justify-between"
+                className="min-w-0 p-3 rounded-lg bg-helios-surface border border-helios-line/40 flex flex-col justify-between"
             >
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-white/60 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <Clock size={16} /> Uptime
                     </div>
                     <Activity size={14} className="text-green-500 animate-pulse" />
                 </div>
-                <div className="text-2xl font-bold text-white/90">{formatUptime(stats.uptime_seconds)}</div>
+                <div className="text-2xl font-bold text-helios-ink">{formatUptime(stats.uptime_seconds)}</div>
             </motion.div>
         </div>
     );

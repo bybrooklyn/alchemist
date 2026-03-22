@@ -103,6 +103,10 @@ fn should_reload_config_for_event(event: &notify::Event, config_path: &Path) -> 
     )
 }
 
+fn orphaned_temp_output_path(output_path: &str) -> PathBuf {
+    PathBuf::from(format!("{output_path}.alchemist.tmp"))
+}
+
 async fn run() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -221,6 +225,53 @@ async fn run() -> Result<()> {
         db_path,
         db_start.elapsed().as_millis()
     );
+
+    let interrupted_jobs = {
+        let mut jobs = Vec::new();
+        match db.get_jobs_by_status(db::JobState::Encoding).await {
+            Ok(mut encoding_jobs) => jobs.append(&mut encoding_jobs),
+            Err(err) => error!("Failed to load interrupted encoding jobs: {}", err),
+        }
+        match db.get_jobs_by_status(db::JobState::Analyzing).await {
+            Ok(mut analyzing_jobs) => jobs.append(&mut analyzing_jobs),
+            Err(err) => error!("Failed to load interrupted analyzing jobs: {}", err),
+        }
+        jobs
+    };
+
+    match db.reset_interrupted_jobs().await {
+        Ok(count) if count > 0 => {
+            warn!("{} interrupted jobs reset to queued", count);
+            for job in interrupted_jobs {
+                let temp_path = orphaned_temp_output_path(&job.output_path);
+                if std::fs::metadata(&temp_path).is_ok() {
+                    match std::fs::remove_file(&temp_path) {
+                        Ok(_) => warn!("Removed orphaned temp file: {}", temp_path.display()),
+                        Err(err) => error!(
+                            "Failed to remove orphaned temp file {}: {}",
+                            temp_path.display(),
+                            err
+                        ),
+                    }
+                }
+            }
+        }
+        Ok(_) => {}
+        Err(err) => error!("Failed to reset interrupted jobs: {}", err),
+    }
+
+    let log_retention_days = config.system.log_retention_days.unwrap_or(30);
+    match db.prune_old_logs(log_retention_days).await {
+        Ok(count) if count > 0 => info!("Pruned {} old log rows", count),
+        Ok(_) => {}
+        Err(err) => error!("Failed to prune old logs: {}", err),
+    }
+
+    match db.cleanup_expired_sessions().await {
+        Ok(count) => debug!("Removed {} expired sessions at startup", count),
+        Err(err) => error!("Failed to cleanup expired sessions: {}", err),
+    }
+
     if args.reset_auth {
         db.reset_auth().await?;
         warn!("Auth reset requested. All users and sessions cleared.");
@@ -326,6 +377,34 @@ async fn run() -> Result<()> {
     let transcoder = Arc::new(Transcoder::new());
     let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
     let config = Arc::new(RwLock::new(config));
+
+    let maintenance_db = db.clone();
+    let maintenance_config = config.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60 * 60 * 24));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+
+            let retention_days = maintenance_config
+                .read()
+                .await
+                .system
+                .log_retention_days
+                .unwrap_or(30);
+            match maintenance_db.prune_old_logs(retention_days).await {
+                Ok(count) if count > 0 => info!("Pruned {} old log rows", count),
+                Ok(_) => {}
+                Err(err) => error!("Failed to prune old logs: {}", err),
+            }
+
+            match maintenance_db.cleanup_expired_sessions().await {
+                Ok(count) => debug!("Removed {} expired sessions", count),
+                Err(err) => error!("Failed to cleanup expired sessions: {}", err),
+            }
+        }
+    });
+
     let agent = Arc::new(
         Agent::new(
             db.clone(),

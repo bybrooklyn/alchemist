@@ -6,6 +6,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
     Row, SqlitePool,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::info;
@@ -102,7 +103,35 @@ pub struct WatchDir {
     pub id: i64,
     pub path: String,
     pub is_recursive: bool,
+    pub profile_id: Option<i64>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct LibraryProfile {
+    pub id: i64,
+    pub name: String,
+    pub preset: String,
+    pub codec: String,
+    pub quality_profile: String,
+    pub hdr_mode: String,
+    pub audio_mode: String,
+    pub crf_override: Option<i32>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NewLibraryProfile {
+    pub name: String,
+    pub preset: String,
+    pub codec: String,
+    pub quality_profile: String,
+    pub hdr_mode: String,
+    pub audio_mode: String,
+    pub crf_override: Option<i32>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -332,6 +361,37 @@ pub struct EncodeStatsInput {
     pub encode_speed: f64,
     pub avg_bitrate: f64,
     pub vmaf_score: Option<f64>,
+    pub output_codec: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodecSavings {
+    pub codec: String,
+    pub bytes_saved: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailySavings {
+    pub date: String,
+    pub bytes_saved: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SavingsSummary {
+    pub total_input_bytes: i64,
+    pub total_output_bytes: i64,
+    pub total_bytes_saved: i64,
+    pub savings_percent: f64,
+    pub job_count: i64,
+    pub savings_by_codec: Vec<CodecSavings>,
+    pub savings_over_time: Vec<DailySavings>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct HealthSummary {
+    pub total_checked: i64,
+    pub issues_found: i64,
+    pub last_run: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -377,23 +437,23 @@ impl Db {
             migrate_start.elapsed().as_millis()
         );
 
-        let db = Self { pool };
-        db.reset_interrupted_jobs().await?;
-
-        Ok(db)
+        Ok(Self { pool })
     }
 
     // init method removed as it is replaced by migrations
 
-    pub async fn reset_interrupted_jobs(&self) -> Result<()> {
-        sqlx::query(
-            "UPDATE jobs SET status = 'queued', updated_at = CURRENT_TIMESTAMP
-             WHERE status IN ('analyzing', 'encoding', 'resuming')",
+    pub async fn reset_interrupted_jobs(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE jobs
+             SET status = 'queued',
+                 progress = 0.0,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE status IN ('encoding', 'analyzing') AND archived = 0",
         )
         .execute(&self.pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     pub async fn enqueue_job(
@@ -466,7 +526,18 @@ impl Db {
                     COALESCE(attempt_count, 0) as attempt_count,
                     NULL as vmaf_score,
                     created_at, updated_at 
-             FROM jobs WHERE status = 'queued' AND archived = 0
+             FROM jobs
+             WHERE status = 'queued'
+               AND archived = 0
+               AND (
+                    COALESCE(attempt_count, 0) = 0
+                    OR CASE
+                        WHEN COALESCE(attempt_count, 0) = 1 THEN datetime(updated_at, '+5 minutes')
+                        WHEN COALESCE(attempt_count, 0) = 2 THEN datetime(updated_at, '+15 minutes')
+                        WHEN COALESCE(attempt_count, 0) = 3 THEN datetime(updated_at, '+60 minutes')
+                        ELSE datetime(updated_at, '+360 minutes')
+                    END <= datetime('now')
+               )
              ORDER BY priority DESC, created_at ASC LIMIT 1",
         )
         .fetch_optional(&self.pool)
@@ -480,7 +551,19 @@ impl Db {
             "UPDATE jobs
              SET status = 'analyzing', updated_at = CURRENT_TIMESTAMP
              WHERE id = (
-                 SELECT id FROM jobs WHERE status = 'queued' AND archived = 0
+                 SELECT id
+                 FROM jobs
+                 WHERE status = 'queued'
+                   AND archived = 0
+                   AND (
+                        COALESCE(attempt_count, 0) = 0
+                        OR CASE
+                            WHEN COALESCE(attempt_count, 0) = 1 THEN datetime(updated_at, '+5 minutes')
+                            WHEN COALESCE(attempt_count, 0) = 2 THEN datetime(updated_at, '+15 minutes')
+                            WHEN COALESCE(attempt_count, 0) = 3 THEN datetime(updated_at, '+60 minutes')
+                            ELSE datetime(updated_at, '+360 minutes')
+                        END <= datetime('now')
+                   )
                  ORDER BY priority DESC, created_at ASC LIMIT 1
              )
              RETURNING id, input_path, output_path, status, NULL as decision_reason,
@@ -612,8 +695,8 @@ impl Db {
         let result = sqlx::query(
             "INSERT INTO encode_stats 
              (job_id, input_size_bytes, output_size_bytes, compression_ratio, 
-              encode_time_seconds, encode_speed, avg_bitrate_kbps, vmaf_score)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              encode_time_seconds, encode_speed, avg_bitrate_kbps, vmaf_score, output_codec)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(job_id) DO UPDATE SET
              input_size_bytes = excluded.input_size_bytes,
              output_size_bytes = excluded.output_size_bytes,
@@ -621,7 +704,8 @@ impl Db {
              encode_time_seconds = excluded.encode_time_seconds,
              encode_speed = excluded.encode_speed,
              avg_bitrate_kbps = excluded.avg_bitrate_kbps,
-             vmaf_score = excluded.vmaf_score",
+             vmaf_score = excluded.vmaf_score,
+             output_codec = excluded.output_codec",
         )
         .bind(stats.job_id)
         .bind(stats.input_size as i64)
@@ -631,6 +715,7 @@ impl Db {
         .bind(stats.encode_speed)
         .bind(stats.avg_bitrate)
         .bind(stats.vmaf_score)
+        .bind(stats.output_codec)
         .execute(&self.pool)
         .await?;
 
@@ -774,7 +859,9 @@ impl Db {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM jobs WHERE id IN (");
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "UPDATE jobs SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id IN (",
+        );
         let mut separated = qb.separated(", ");
         for id in ids {
             separated.push_bind(id);
@@ -849,10 +936,14 @@ impl Db {
     }
 
     pub async fn delete_job(&self, id: i64) -> Result<()> {
-        let result = sqlx::query("DELETE FROM jobs WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE jobs
+             SET archived = 1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(crate::error::AlchemistError::Database(
                 sqlx::Error::RowNotFound,
@@ -888,6 +979,7 @@ impl Db {
         let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
         let has_recursive = self.has_column("watch_dirs", "recursive").await?;
         let has_enabled = self.has_column("watch_dirs", "enabled").await?;
+        let has_profile_id = self.has_column("watch_dirs", "profile_id").await?;
 
         let recursive_expr = if has_is_recursive {
             "is_recursive"
@@ -902,9 +994,11 @@ impl Db {
         } else {
             ""
         };
+        let profile_expr = if has_profile_id { "profile_id" } else { "NULL" };
         let query = format!(
-            "SELECT id, path, {} as is_recursive, created_at FROM watch_dirs {}ORDER BY path ASC",
-            recursive_expr, enabled_filter
+            "SELECT id, path, {} as is_recursive, {} as profile_id, created_at
+             FROM watch_dirs {}ORDER BY path ASC",
+            recursive_expr, profile_expr, enabled_filter
         );
 
         let dirs = sqlx::query_as::<_, WatchDir>(&query)
@@ -944,10 +1038,30 @@ impl Db {
     pub async fn add_watch_dir(&self, path: &str, is_recursive: bool) -> Result<WatchDir> {
         let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
         let has_recursive = self.has_column("watch_dirs", "recursive").await?;
+        let has_profile_id = self.has_column("watch_dirs", "profile_id").await?;
 
-        let row = if has_is_recursive {
+        let row = if has_is_recursive && has_profile_id {
             sqlx::query_as::<_, WatchDir>(
-                "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?) RETURNING id, path, is_recursive, created_at",
+                "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?)
+                 RETURNING id, path, is_recursive, profile_id, created_at",
+            )
+            .bind(path)
+            .bind(is_recursive)
+            .fetch_one(&self.pool)
+            .await?
+        } else if has_is_recursive {
+            sqlx::query_as::<_, WatchDir>(
+                "INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?)
+                 RETURNING id, path, is_recursive, NULL as profile_id, created_at",
+            )
+            .bind(path)
+            .bind(is_recursive)
+            .fetch_one(&self.pool)
+            .await?
+        } else if has_recursive && has_profile_id {
+            sqlx::query_as::<_, WatchDir>(
+                "INSERT INTO watch_dirs (path, recursive) VALUES (?, ?)
+                 RETURNING id, path, recursive as is_recursive, profile_id, created_at",
             )
             .bind(path)
             .bind(is_recursive)
@@ -955,7 +1069,8 @@ impl Db {
             .await?
         } else if has_recursive {
             sqlx::query_as::<_, WatchDir>(
-                "INSERT INTO watch_dirs (path, recursive) VALUES (?, ?) RETURNING id, path, recursive as is_recursive, created_at",
+                "INSERT INTO watch_dirs (path, recursive) VALUES (?, ?)
+                 RETURNING id, path, recursive as is_recursive, NULL as profile_id, created_at",
             )
             .bind(path)
             .bind(is_recursive)
@@ -963,7 +1078,8 @@ impl Db {
             .await?
         } else {
             sqlx::query_as::<_, WatchDir>(
-                "INSERT INTO watch_dirs (path) VALUES (?) RETURNING id, path, 1 as is_recursive, created_at",
+                "INSERT INTO watch_dirs (path) VALUES (?)
+                 RETURNING id, path, 1 as is_recursive, NULL as profile_id, created_at",
             )
             .bind(path)
             .fetch_one(&self.pool)
@@ -978,17 +1094,45 @@ impl Db {
     ) -> Result<()> {
         let has_is_recursive = self.has_column("watch_dirs", "is_recursive").await?;
         let has_recursive = self.has_column("watch_dirs", "recursive").await?;
+        let has_profile_id = self.has_column("watch_dirs", "profile_id").await?;
+        let preserved_profiles = if has_profile_id {
+            let rows = sqlx::query("SELECT path, profile_id FROM watch_dirs")
+                .fetch_all(&self.pool)
+                .await?;
+            rows.into_iter()
+                .map(|row| {
+                    let path: String = row.get("path");
+                    let profile_id: Option<i64> = row.get("profile_id");
+                    (path, profile_id)
+                })
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM watch_dirs")
             .execute(&mut *tx)
             .await?;
         for watch_dir in watch_dirs {
-            if has_is_recursive {
-                sqlx::query("INSERT INTO watch_dirs (path, is_recursive) VALUES (?, ?)")
-                    .bind(&watch_dir.path)
-                    .bind(watch_dir.is_recursive)
-                    .execute(&mut *tx)
-                    .await?;
+            let preserved_profile_id = preserved_profiles.get(&watch_dir.path).copied().flatten();
+            if has_is_recursive && has_profile_id {
+                sqlx::query(
+                    "INSERT INTO watch_dirs (path, is_recursive, profile_id) VALUES (?, ?, ?)",
+                )
+                .bind(&watch_dir.path)
+                .bind(watch_dir.is_recursive)
+                .bind(preserved_profile_id)
+                .execute(&mut *tx)
+                .await?;
+            } else if has_recursive && has_profile_id {
+                sqlx::query(
+                    "INSERT INTO watch_dirs (path, recursive, profile_id) VALUES (?, ?, ?)",
+                )
+                .bind(&watch_dir.path)
+                .bind(watch_dir.is_recursive)
+                .bind(preserved_profile_id)
+                .execute(&mut *tx)
+                .await?;
             } else if has_recursive {
                 sqlx::query("INSERT INTO watch_dirs (path, recursive) VALUES (?, ?)")
                     .bind(&watch_dir.path)
@@ -1017,6 +1161,197 @@ impl Db {
             ));
         }
         Ok(())
+    }
+
+    pub async fn get_all_profiles(&self) -> Result<Vec<LibraryProfile>> {
+        let profiles = sqlx::query_as::<_, LibraryProfile>(
+            "SELECT id, name, preset, codec, quality_profile, hdr_mode, audio_mode,
+                    crf_override, notes, created_at, updated_at
+             FROM library_profiles
+             ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(profiles)
+    }
+
+    pub async fn get_profile(&self, id: i64) -> Result<Option<LibraryProfile>> {
+        let profile = sqlx::query_as::<_, LibraryProfile>(
+            "SELECT id, name, preset, codec, quality_profile, hdr_mode, audio_mode,
+                    crf_override, notes, created_at, updated_at
+             FROM library_profiles
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(profile)
+    }
+
+    pub async fn create_profile(&self, profile: NewLibraryProfile) -> Result<i64> {
+        let id = sqlx::query(
+            "INSERT INTO library_profiles
+                (name, preset, codec, quality_profile, hdr_mode, audio_mode, crf_override, notes, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        )
+        .bind(profile.name)
+        .bind(profile.preset)
+        .bind(profile.codec)
+        .bind(profile.quality_profile)
+        .bind(profile.hdr_mode)
+        .bind(profile.audio_mode)
+        .bind(profile.crf_override)
+        .bind(profile.notes)
+        .execute(&self.pool)
+        .await?
+        .last_insert_rowid();
+        Ok(id)
+    }
+
+    pub async fn update_profile(&self, id: i64, profile: NewLibraryProfile) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE library_profiles
+             SET name = ?,
+                 preset = ?,
+                 codec = ?,
+                 quality_profile = ?,
+                 hdr_mode = ?,
+                 audio_mode = ?,
+                 crf_override = ?,
+                 notes = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+        )
+        .bind(profile.name)
+        .bind(profile.preset)
+        .bind(profile.codec)
+        .bind(profile.quality_profile)
+        .bind(profile.hdr_mode)
+        .bind(profile.audio_mode)
+        .bind(profile.crf_override)
+        .bind(profile.notes)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_profile(&self, id: i64) -> Result<()> {
+        let result = sqlx::query("DELETE FROM library_profiles WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn assign_profile_to_watch_dir(
+        &self,
+        dir_id: i64,
+        profile_id: Option<i64>,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE watch_dirs
+             SET profile_id = ?
+             WHERE id = ?",
+        )
+        .bind(profile_id)
+        .bind(dir_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_profile_for_path(&self, path: &str) -> Result<Option<LibraryProfile>> {
+        let normalized = Path::new(path);
+        let candidate = sqlx::query_as::<_, LibraryProfile>(
+            "SELECT lp.id, lp.name, lp.preset, lp.codec, lp.quality_profile, lp.hdr_mode,
+                    lp.audio_mode, lp.crf_override, lp.notes, lp.created_at, lp.updated_at
+             FROM watch_dirs wd
+             JOIN library_profiles lp ON lp.id = wd.profile_id
+             WHERE wd.profile_id IS NOT NULL
+               AND (? = wd.path OR ? LIKE wd.path || '/%' OR ? LIKE wd.path || '\\%')
+             ORDER BY LENGTH(wd.path) DESC
+             LIMIT 1",
+        )
+        .bind(path)
+        .bind(path)
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if candidate.is_some() {
+            return Ok(candidate);
+        }
+
+        // SQLite prefix matching is a fast first pass; fall back to strict path ancestry
+        // if separators or normalization differ.
+        let rows = sqlx::query(
+            "SELECT wd.path,
+                    lp.id, lp.name, lp.preset, lp.codec, lp.quality_profile, lp.hdr_mode,
+                    lp.audio_mode, lp.crf_override, lp.notes, lp.created_at, lp.updated_at
+             FROM watch_dirs wd
+             JOIN library_profiles lp ON lp.id = wd.profile_id
+             WHERE wd.profile_id IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut best: Option<(usize, LibraryProfile)> = None;
+        for row in rows {
+            let watch_path: String = row.get("path");
+            let profile = LibraryProfile {
+                id: row.get("id"),
+                name: row.get("name"),
+                preset: row.get("preset"),
+                codec: row.get("codec"),
+                quality_profile: row.get("quality_profile"),
+                hdr_mode: row.get("hdr_mode"),
+                audio_mode: row.get("audio_mode"),
+                crf_override: row.get("crf_override"),
+                notes: row.get("notes"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            };
+            let watch_path_buf = PathBuf::from(&watch_path);
+            if normalized == watch_path_buf || normalized.starts_with(&watch_path_buf) {
+                let score = watch_path.len();
+                if best
+                    .as_ref()
+                    .map_or(true, |(best_score, _)| score > *best_score)
+                {
+                    best = Some((score, profile));
+                }
+            }
+        }
+
+        Ok(best.map(|(_, profile)| profile))
+    }
+
+    pub async fn count_watch_dirs_using_profile(&self, profile_id: i64) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM watch_dirs WHERE profile_id = ?")
+            .bind(profile_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
     }
 
     pub async fn get_notification_targets(&self) -> Result<Vec<NotificationTarget>> {
@@ -1295,6 +1630,77 @@ impl Db {
         Ok(stats)
     }
 
+    pub async fn get_savings_summary(&self) -> Result<SavingsSummary> {
+        let totals = sqlx::query(
+            "SELECT
+                COALESCE(SUM(input_size_bytes), 0) as total_input_bytes,
+                COALESCE(SUM(output_size_bytes), 0) as total_output_bytes,
+                COUNT(*) as job_count
+             FROM encode_stats
+             WHERE output_size_bytes IS NOT NULL",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_input_bytes: i64 = totals.get("total_input_bytes");
+        let total_output_bytes: i64 = totals.get("total_output_bytes");
+        let job_count: i64 = totals.get("job_count");
+        let total_bytes_saved = (total_input_bytes - total_output_bytes).max(0);
+        let savings_percent = if total_input_bytes > 0 {
+            (total_bytes_saved as f64 / total_input_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let savings_by_codec = sqlx::query(
+            "SELECT
+                COALESCE(NULLIF(TRIM(e.output_codec), ''), 'unknown') as codec,
+                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
+             FROM encode_stats e
+             JOIN jobs j ON j.id = e.job_id
+             WHERE e.output_size_bytes IS NOT NULL
+             GROUP BY codec
+             ORDER BY bytes_saved DESC, codec ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| CodecSavings {
+            codec: row.get("codec"),
+            bytes_saved: row.get("bytes_saved"),
+        })
+        .collect::<Vec<_>>();
+
+        let savings_over_time = sqlx::query(
+            "SELECT
+                DATE(e.created_at) as date,
+                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
+             FROM encode_stats e
+             WHERE e.output_size_bytes IS NOT NULL
+               AND e.created_at >= datetime('now', '-30 days')
+             GROUP BY DATE(e.created_at)
+             ORDER BY date ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| DailySavings {
+            date: row.get("date"),
+            bytes_saved: row.get("bytes_saved"),
+        })
+        .collect::<Vec<_>>();
+
+        Ok(SavingsSummary {
+            total_input_bytes,
+            total_output_bytes,
+            total_bytes_saved,
+            savings_percent,
+            job_count,
+            savings_by_codec,
+            savings_over_time,
+        })
+    }
+
     /// Batch update job statuses (for batch operations)
     pub async fn batch_update_status(
         &self,
@@ -1423,6 +1829,17 @@ impl Db {
         Ok(())
     }
 
+    pub async fn prune_old_logs(&self, max_age_days: u32) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM logs
+             WHERE created_at < datetime('now', '-' || ? || ' days')",
+        )
+        .bind(max_age_days as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn create_user(&self, username: &str, password_hash: &str) -> Result<i64> {
         let id = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
             .bind(username)
@@ -1510,6 +1927,117 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn cleanup_expired_sessions(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn record_health_check(&self, job_id: i64, issues: Option<String>) -> Result<()> {
+        sqlx::query(
+            "UPDATE jobs
+             SET health_issues = ?,
+                 last_health_check = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(issues)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_health_summary(&self) -> Result<HealthSummary> {
+        let row = sqlx::query(
+            "SELECT
+                (SELECT COUNT(*) FROM jobs WHERE last_health_check IS NOT NULL) as total_checked,
+                (SELECT COUNT(*)
+                 FROM jobs
+                 WHERE health_issues IS NOT NULL AND TRIM(health_issues) != '') as issues_found,
+                (SELECT MAX(started_at) FROM health_scan_runs) as last_run",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(HealthSummary {
+            total_checked: row.get("total_checked"),
+            issues_found: row.get("issues_found"),
+            last_run: row.get("last_run"),
+        })
+    }
+
+    pub async fn create_health_scan_run(&self) -> Result<i64> {
+        let id = sqlx::query("INSERT INTO health_scan_runs DEFAULT VALUES")
+            .execute(&self.pool)
+            .await?
+            .last_insert_rowid();
+        Ok(id)
+    }
+
+    pub async fn complete_health_scan_run(
+        &self,
+        id: i64,
+        files_checked: i64,
+        issues_found: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE health_scan_runs
+             SET completed_at = datetime('now'),
+                 files_checked = ?,
+                 issues_found = ?
+             WHERE id = ?",
+        )
+        .bind(files_checked)
+        .bind(issues_found)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_jobs_needing_health_check(&self) -> Result<Vec<Job>> {
+        let jobs = sqlx::query_as::<_, Job>(
+            "SELECT j.id, j.input_path, j.output_path, j.status,
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE j.status = 'completed'
+               AND (
+                    j.last_health_check IS NULL
+                    OR j.last_health_check < datetime('now', '-7 days')
+               )
+             ORDER BY COALESCE(j.last_health_check, '1970-01-01') ASC, j.updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(jobs)
+    }
+
+    pub async fn get_jobs_with_health_issues(&self) -> Result<Vec<Job>> {
+        let jobs = sqlx::query_as::<_, Job>(
+            "SELECT j.id, j.input_path, j.output_path, j.status,
+                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                    COALESCE(j.priority, 0) as priority,
+                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                    COALESCE(j.attempt_count, 0) as attempt_count,
+                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                    j.created_at, j.updated_at
+             FROM jobs j
+             WHERE j.archived = 0
+               AND j.health_issues IS NOT NULL
+               AND TRIM(j.health_issues) != ''
+             ORDER BY j.updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(jobs)
     }
 
     pub async fn reset_auth(&self) -> Result<()> {
@@ -1715,6 +2243,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_next_job_respects_attempt_backoff(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_backoff_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let input = Path::new("backoff-input.mkv");
+        let output = Path::new("backoff-output.mkv");
+        let _ = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+
+        let job = db
+            .get_job_by_input_path("backoff-input.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing backoff job"))?;
+
+        sqlx::query(
+            "UPDATE jobs
+             SET attempt_count = 1,
+                 updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(job.id)
+        .execute(&db.pool)
+        .await?;
+
+        assert!(db.claim_next_job().await?.is_none());
+
+        sqlx::query(
+            "UPDATE jobs
+             SET updated_at = datetime('now', '-6 minutes')
+             WHERE id = ?",
+        )
+        .bind(job.id)
+        .execute(&db.pool)
+        .await?;
+
+        let claimed = db.claim_next_job().await?;
+        assert!(claimed.is_some());
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn clear_completed_archives_jobs_but_preserves_encode_stats(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
@@ -1742,6 +2318,7 @@ mod tests {
             encode_speed: 1.2,
             avg_bitrate: 800.0,
             vmaf_score: Some(96.5),
+            output_codec: Some("av1".to_string()),
         })
         .await?;
 

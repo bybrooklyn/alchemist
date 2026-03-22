@@ -26,7 +26,7 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                     <div className="text-sm font-semibold text-helios-ink">Transcoding Target</div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {(["av1", "hevc", "h264"] as const).map((codec) => (
@@ -34,7 +34,7 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                                 key={codec}
                                 type="button"
                                 onClick={() => updateTranscode({ output_codec: codec })}
-                                className={clsx("rounded-2xl border px-4 py-4 text-left transition-all", transcode.output_codec === codec ? "border-helios-solar bg-helios-solar/10 text-helios-ink" : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate")}
+                                className={clsx("rounded-lg border px-4 py-4 text-left transition-all", transcode.output_codec === codec ? "border-helios-solar bg-helios-solar/10 text-helios-ink" : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate")}
                             >
                                 <div className="font-semibold uppercase">{codec}</div>
                                 <div className="text-[10px] mt-2 opacity-80">{codec === "av1" ? "Best compression" : codec === "hevc" ? "Broad modern compatibility" : "Maximum playback compatibility"}</div>
@@ -49,13 +49,32 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                             <option value="balanced">Balanced</option>
                             <option value="quality">Quality</option>
                         </select>
+                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                            Controls the balance between file size and visual quality. Lower numbers = better quality but larger files. Higher numbers = smaller files with slightly lower quality. The default works well for most people.
+                        </p>
                     </div>
 
-                    <RangeControl label="Concurrent Jobs" min={1} max={8} step={1} value={transcode.concurrent_jobs} onChange={(concurrent_jobs) => updateTranscode({ concurrent_jobs })} />
-                    <RangeControl label={`Minimum Savings (${Math.round(transcode.size_reduction_threshold * 100)}%)`} min={0} max={0.9} step={0.05} value={transcode.size_reduction_threshold} onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })} />
+                    <div>
+                        <RangeControl label="Concurrent Jobs" min={1} max={8} step={1} value={transcode.concurrent_jobs} onChange={(concurrent_jobs) => updateTranscode({ concurrent_jobs })} />
+                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                            How many videos to convert at the same time. More means faster overall progress but uses more CPU and GPU resources. Start with 1 or 2 if you're not sure — you can always increase it later.
+                        </p>
+                    </div>
+                    <div>
+                        <RangeControl label={`Minimum Savings (${Math.round(transcode.size_reduction_threshold * 100)}%)`} min={0} max={0.9} step={0.05} value={transcode.size_reduction_threshold} onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })} />
+                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                            Alchemist will skip a file if the newly encoded version wouldn't be at least this much smaller than the original. This prevents pointless re-encoding of files that are already well-optimized.
+                        </p>
+                    </div>
+                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                        Bits Per Pixel — determines how compressed a file must already be before Alchemist skips it. If a file is already very compressed, re-encoding it could reduce quality without saving much space. Leave this at the default unless you know what you're doing.
+                    </p>
+                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">
+                        Files smaller than this will be skipped entirely. Small files rarely benefit from transcoding and it's usually not worth the processing time.
+                    </p>
                 </div>
 
-                <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><FileCog size={16} className="text-helios-solar" />Output Rules</div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

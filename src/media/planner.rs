@@ -1,4 +1,4 @@
-use crate::config::{Config, OutputCodec, SubtitleMode};
+use crate::config::{AudioMode, Config, HdrMode, OutputCodec, QualityProfile, SubtitleMode};
 use crate::error::Result;
 use crate::media::pipeline::{
     AudioCodec, AudioStreamPlan, Encoder, FallbackKind, FilterStep, MediaAnalysis, PlannedFallback,
@@ -49,8 +49,24 @@ impl EncoderInventory {
 
 #[async_trait]
 impl Planner for BasicPlanner {
-    async fn plan(&self, analysis: &MediaAnalysis, output_path: &Path) -> Result<TranscodePlan> {
+    async fn plan(
+        &self,
+        analysis: &MediaAnalysis,
+        output_path: &Path,
+        profile: Option<&crate::db::LibraryProfile>,
+    ) -> Result<TranscodePlan> {
         let container = normalize_container(output_path, &analysis.metadata.container);
+        let requested_codec = profile
+            .map(|profile| output_codec_from_profile(&profile.codec))
+            .unwrap_or(self.config.transcode.output_codec);
+        let quality_profile = profile
+            .map(|profile| quality_profile_from_profile(&profile.quality_profile))
+            .unwrap_or(self.config.transcode.quality_profile);
+        let hdr_mode = profile
+            .map(|profile| hdr_mode_from_profile(&profile.hdr_mode))
+            .unwrap_or(self.config.transcode.hdr_mode);
+        let audio_mode = profile.map(|profile| audio_mode_from_profile(&profile.audio_mode));
+        let crf_override = profile.and_then(|profile| profile.crf_override);
         let available_encoders =
             build_available_encoders(&self.config, self.hw_info.as_ref(), &self.encoder_caps);
 
@@ -58,49 +74,48 @@ impl Planner for BasicPlanner {
             return Ok(skip_plan(
                 "No available encoders for current hardware policy".to_string(),
                 container,
-                self.config.transcode.output_codec,
+                requested_codec,
                 self.config.transcode.allow_fallback,
                 self.config.transcode.threads,
             ));
         }
 
         if !self.config.transcode.allow_fallback
-            && !available_encoders
-                .has_requested_codec_without_fallback(self.config.transcode.output_codec)
+            && !available_encoders.has_requested_codec_without_fallback(requested_codec)
         {
             return Ok(skip_plan(
                 format!(
                     "Preferred codec {} unavailable and fallback disabled",
-                    self.config.transcode.output_codec.as_str()
+                    requested_codec.as_str()
                 ),
                 container,
-                self.config.transcode.output_codec,
+                requested_codec,
                 self.config.transcode.allow_fallback,
                 self.config.transcode.threads,
             ));
         }
 
-        let decision = should_transcode(analysis, &self.config);
+        let decision = should_transcode(analysis, &self.config, requested_codec);
 
         if let TranscodeDecision::Skip { reason } = &decision {
             return Ok(skip_plan(
                 reason.clone(),
                 container,
-                self.config.transcode.output_codec,
+                requested_codec,
                 self.config.transcode.allow_fallback,
                 self.config.transcode.threads,
             ));
         }
 
         let Some((encoder, fallback)) = select_encoder(
-            self.config.transcode.output_codec,
+            requested_codec,
             &available_encoders,
             self.config.transcode.allow_fallback,
         ) else {
             return Ok(skip_plan(
                 "No suitable encoder available".to_string(),
                 container,
-                self.config.transcode.output_codec,
+                requested_codec,
                 self.config.transcode.allow_fallback,
                 self.config.transcode.threads,
             ));
@@ -117,7 +132,7 @@ impl Planner for BasicPlanner {
                 return Ok(skip_plan(
                     reason,
                     container,
-                    self.config.transcode.output_codec,
+                    requested_codec,
                     self.config.transcode.allow_fallback,
                     self.config.transcode.threads,
                 ))
@@ -129,15 +144,17 @@ impl Planner for BasicPlanner {
             analysis.metadata.audio_channels,
             analysis.metadata.audio_is_heavy,
             &container,
+            audio_mode,
         );
-        let filters = plan_filters(analysis, encoder, &self.config, &subtitles);
-        let (rate_control, encoder_preset) = encoder_runtime_settings(encoder, &self.config);
+        let filters = plan_filters(analysis, encoder, &self.config, &subtitles, hdr_mode);
+        let (rate_control, encoder_preset) =
+            encoder_runtime_settings(encoder, &self.config, quality_profile, crf_override);
 
         Ok(TranscodePlan {
             decision,
             output_path: None,
             container,
-            requested_codec: self.config.transcode.output_codec,
+            requested_codec,
             output_codec: Some(encoder.output_codec()),
             encoder: Some(encoder),
             backend: Some(encoder.backend()),
@@ -195,15 +212,18 @@ fn normalize_container(output_path: &Path, input_container: &str) -> String {
         .unwrap_or_else(|| "mkv".to_string())
 }
 
-fn should_transcode(analysis: &MediaAnalysis, config: &Config) -> TranscodeDecision {
+fn should_transcode(
+    analysis: &MediaAnalysis,
+    config: &Config,
+    target_codec: OutputCodec,
+) -> TranscodeDecision {
     let metadata = &analysis.metadata;
-    let target_codec = config.transcode.output_codec;
     let target_codec_str = target_codec.as_str();
 
     if metadata.codec_name.eq_ignore_ascii_case(target_codec_str) && metadata.bit_depth == Some(10)
     {
         return TranscodeDecision::Skip {
-            reason: format!("Already {} 10-bit", target_codec_str),
+            reason: format!("already_target_codec|codec={target_codec_str},bit_depth=10"),
         };
     }
 
@@ -212,7 +232,10 @@ fn should_transcode(analysis: &MediaAnalysis, config: &Config) -> TranscodeDecis
         && metadata.bit_depth.is_some_and(|depth| depth <= 8)
     {
         return TranscodeDecision::Skip {
-            reason: "Already H.264".to_string(),
+            reason: format!(
+                "already_target_codec|codec=h264,bit_depth={}",
+                metadata.bit_depth.unwrap_or(8)
+            ),
         };
     }
 
@@ -240,7 +263,7 @@ fn should_transcode(analysis: &MediaAnalysis, config: &Config) -> TranscodeDecis
 
     if width == 0.0 || height == 0.0 {
         return TranscodeDecision::Skip {
-            reason: "Incomplete metadata (resolution missing)".to_string(),
+            reason: "incomplete_metadata|missing=resolution".to_string(),
         };
     }
 
@@ -275,7 +298,7 @@ fn should_transcode(analysis: &MediaAnalysis, config: &Config) -> TranscodeDecis
     if video_bitrate_available && normalized_bpp.is_some_and(|value| value < threshold) {
         return TranscodeDecision::Skip {
             reason: format!(
-                "BPP too low ({:.4} normalized < {:.2}), avoiding quality murder",
+                "bpp_below_threshold|bpp={:.3},threshold={:.3}",
                 normalized_bpp.unwrap_or_default(),
                 threshold
             ),
@@ -286,7 +309,7 @@ fn should_transcode(analysis: &MediaAnalysis, config: &Config) -> TranscodeDecis
     if metadata.size_bytes < min_size_bytes {
         return TranscodeDecision::Skip {
             reason: format!(
-                "File too small ({}MB < {}MB) to justify transcode overhead",
+                "below_min_file_size|size_mb={},threshold_mb={}",
                 metadata.size_bytes / 1024 / 1024,
                 config.transcode.min_file_size_mb
             ),
@@ -533,24 +556,26 @@ fn cpu_fallback(requested_codec: OutputCodec, encoder: Encoder) -> PlannedFallba
     }
 }
 
-fn encoder_runtime_settings(encoder: Encoder, config: &Config) -> (RateControl, Option<String>) {
-    match encoder {
+fn encoder_runtime_settings(
+    encoder: Encoder,
+    config: &Config,
+    quality_profile: QualityProfile,
+    crf_override: Option<i32>,
+) -> (RateControl, Option<String>) {
+    let (rate_control, encoder_preset) = match encoder {
         Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => (
             RateControl::QsvQuality {
-                value: parse_quality_u8(config.transcode.quality_profile.qsv_quality(), 23),
+                value: parse_quality_u8(quality_profile.qsv_quality(), 23),
             },
             None,
         ),
         Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => (
             RateControl::Cq { value: 25 },
-            Some(config.transcode.quality_profile.nvenc_preset().to_string()),
+            Some(quality_profile.nvenc_preset().to_string()),
         ),
         Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => (
             RateControl::Cq {
-                value: parse_quality_u8(
-                    config.transcode.quality_profile.videotoolbox_quality(),
-                    65,
-                ),
+                value: parse_quality_u8(quality_profile.videotoolbox_quality(), 65),
             },
             None,
         ),
@@ -590,7 +615,12 @@ fn encoder_runtime_settings(encoder: Encoder, config: &Config) -> (RateControl, 
         Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => {
             (RateControl::Cq { value: 24 }, None)
         }
-    }
+    };
+
+    (
+        apply_crf_override(rate_control, crf_override),
+        encoder_preset,
+    )
 }
 
 fn plan_audio(
@@ -598,7 +628,37 @@ fn plan_audio(
     audio_channels: Option<u32>,
     audio_is_heavy: bool,
     container: &str,
+    audio_mode: Option<AudioMode>,
 ) -> AudioStreamPlan {
+    if let Some(audio_mode) = audio_mode {
+        return match audio_mode {
+            AudioMode::Copy => {
+                let Some(audio_codec) = audio_codec else {
+                    return AudioStreamPlan::Copy;
+                };
+                if audio_copy_supported(container, audio_codec) {
+                    AudioStreamPlan::Copy
+                } else {
+                    AudioStreamPlan::Transcode {
+                        codec: AudioCodec::Aac,
+                        bitrate_kbps: audio_bitrate_kbps(AudioCodec::Aac, audio_channels),
+                        channels: None,
+                    }
+                }
+            }
+            AudioMode::Aac => AudioStreamPlan::Transcode {
+                codec: AudioCodec::Aac,
+                bitrate_kbps: audio_bitrate_kbps(AudioCodec::Aac, audio_channels),
+                channels: None,
+            },
+            AudioMode::AacStereo => AudioStreamPlan::Transcode {
+                codec: AudioCodec::Aac,
+                bitrate_kbps: audio_bitrate_kbps(AudioCodec::Aac, Some(2)),
+                channels: Some(2),
+            },
+        };
+    }
+
     let Some(audio_codec) = audio_codec else {
         return AudioStreamPlan::Copy;
     };
@@ -613,6 +673,7 @@ fn plan_audio(
         return AudioStreamPlan::Transcode {
             codec,
             bitrate_kbps: audio_bitrate_kbps(codec, audio_channels),
+            channels: None,
         };
     }
 
@@ -745,12 +806,11 @@ fn plan_filters(
     encoder: Encoder,
     config: &Config,
     subtitles: &SubtitleStreamPlan,
+    hdr_mode: HdrMode,
 ) -> Vec<FilterStep> {
     let mut filters = Vec::new();
 
-    if analysis.metadata.dynamic_range.is_hdr()
-        && config.transcode.hdr_mode == crate::config::HdrMode::Tonemap
-    {
+    if analysis.metadata.dynamic_range.is_hdr() && hdr_mode == crate::config::HdrMode::Tonemap {
         filters.push(FilterStep::Tonemap {
             algorithm: config.transcode.tonemap_algorithm,
             peak: config.transcode.tonemap_peak,
@@ -776,6 +836,49 @@ fn plan_filters(
 
 fn parse_quality_u8(value: &str, default_value: u8) -> u8 {
     value.parse().unwrap_or(default_value)
+}
+
+fn apply_crf_override(rate_control: RateControl, crf_override: Option<i32>) -> RateControl {
+    let Some(crf_override) = crf_override else {
+        return rate_control;
+    };
+    let value = crf_override.clamp(0, u8::MAX as i32) as u8;
+    match rate_control {
+        RateControl::Crf { .. } => RateControl::Crf { value },
+        RateControl::Cq { .. } => RateControl::Cq { value },
+        RateControl::QsvQuality { .. } => RateControl::QsvQuality { value },
+    }
+}
+
+fn output_codec_from_profile(value: &str) -> OutputCodec {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "hevc" | "h265" => OutputCodec::Hevc,
+        "h264" | "avc" => OutputCodec::H264,
+        _ => OutputCodec::Av1,
+    }
+}
+
+fn quality_profile_from_profile(value: &str) -> QualityProfile {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "quality" => QualityProfile::Quality,
+        "speed" => QualityProfile::Speed,
+        _ => QualityProfile::Balanced,
+    }
+}
+
+fn hdr_mode_from_profile(value: &str) -> HdrMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "tonemap" => HdrMode::Tonemap,
+        _ => HdrMode::Preserve,
+    }
+}
+
+fn audio_mode_from_profile(value: &str) -> AudioMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "aac" => AudioMode::Aac,
+        "aac_stereo" => AudioMode::AacStereo,
+        _ => AudioMode::Copy,
+    }
 }
 
 #[cfg(test)]
@@ -857,7 +960,7 @@ mod tests {
 
     #[test]
     fn heavy_audio_prefers_transcode() {
-        let plan = plan_audio(Some("flac"), Some(6), true, "mkv");
+        let plan = plan_audio(Some("flac"), Some(6), true, "mkv", None);
         assert!(matches!(
             plan,
             AudioStreamPlan::Transcode {
@@ -876,6 +979,7 @@ mod tests {
             Encoder::HevcVaapi,
             &cfg,
             &SubtitleStreamPlan::Drop,
+            HdrMode::Preserve,
         );
         assert!(matches!(
             filters.as_slice(),

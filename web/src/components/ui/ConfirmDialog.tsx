@@ -134,7 +134,7 @@ export default function ConfirmDialog({
                     aria-labelledby="confirm-dialog-title"
                     aria-describedby="confirm-dialog-description"
                     tabIndex={-1}
-                    className="w-full max-w-sm rounded-2xl border border-helios-line/30 bg-helios-surface p-6 shadow-2xl outline-none"
+                    className="w-full max-w-sm rounded-lg border border-helios-line/30 bg-helios-surface p-6 shadow-2xl outline-none"
                 >
                     <h3 id="confirm-dialog-title" className="text-lg font-bold text-helios-ink">
                         {title}

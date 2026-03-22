@@ -117,7 +117,7 @@ export default function ServerDirectoryPicker({
             />
 
             <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
-                <div className="w-full max-w-5xl rounded-3xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden">
+                <div className="w-full max-w-5xl rounded-xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden">
                     <div className="border-b border-helios-line/20 px-6 py-5 flex items-start justify-between gap-4">
                         <div>
                             <div className="flex items-center gap-3">
@@ -177,7 +177,7 @@ export default function ServerDirectoryPicker({
                                             key={recommendation.path}
                                             type="button"
                                             onClick={() => void loadBrowse(recommendation.path)}
-                                            className="w-full rounded-2xl border border-helios-line/20 bg-helios-surface px-3 py-3 text-left hover:border-helios-solar/30 hover:bg-helios-surface-soft transition-all"
+                                            className="w-full rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-3 text-left hover:border-helios-solar/30 hover:bg-helios-surface-soft transition-all"
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div>
@@ -197,7 +197,7 @@ export default function ServerDirectoryPicker({
 
                         <section className="px-6 py-5 flex flex-col">
                             {error && (
-                                <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+                                <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
                                     {error}
                                 </div>
                             )}
@@ -217,7 +217,7 @@ export default function ServerDirectoryPicker({
                                         ))}
                                     </div>
 
-                                    <div className="mb-4 rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
+                                    <div className="mb-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
                                         <div className="flex items-start justify-between gap-4">
                                             <div>
                                                 <p className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
@@ -257,7 +257,7 @@ export default function ServerDirectoryPicker({
                                         {loading && <div className="text-xs text-helios-slate animate-pulse">Loading…</div>}
                                     </div>
 
-                                    <div className="flex-1 overflow-y-auto rounded-2xl border border-helios-line/20 bg-helios-surface-soft/30">
+                                    <div className="flex-1 overflow-y-auto rounded-lg border border-helios-line/20 bg-helios-surface-soft/30">
                                         {browse.entries.length === 0 ? (
                                             <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-sm text-helios-slate">
                                                 No child directories were found here.

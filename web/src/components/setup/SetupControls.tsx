@@ -80,7 +80,7 @@ export function LabeledSelect({ label, value, onChange, options }: LabeledSelect
 
 export function ToggleRow({ title, body, checked, onChange }: ToggleRowProps) {
     return (
-        <label className="flex items-center justify-between gap-4 rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
+        <label className="flex items-center justify-between gap-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
             <div>
                 <p className="text-sm font-semibold text-helios-ink">{title}</p>
                 <p className="text-xs text-helios-slate mt-1">{body}</p>
@@ -92,7 +92,7 @@ export function ToggleRow({ title, body, checked, onChange }: ToggleRowProps) {
 
 export function ReviewCard({ title, lines }: ReviewCardProps) {
     return (
-        <div className="rounded-3xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-5">
+        <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-5">
             <div className="text-sm font-semibold text-helios-ink">{title}</div>
             <div className="mt-3 space-y-2">
                 {lines.map((line) => (

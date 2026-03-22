@@ -139,7 +139,7 @@ export default function StatsCharts() {
     }
 
     const StatCard = ({ icon: Icon, label, value, subtext, colorClass }: StatCardProps) => (
-        <div className="p-6 rounded-2xl bg-helios-surface border border-helios-line/40 shadow-sm">
+        <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40 shadow-sm">
             <div className="flex items-start justify-between">
                 <div>
                     <p className="text-sm font-medium text-helios-slate uppercase tracking-wide mb-1">{label}</p>
@@ -214,7 +214,7 @@ export default function StatsCharts() {
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Daily Activity Chart */}
-                <div className="p-6 rounded-2xl bg-helios-surface border border-helios-line/40">
+                <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40">
                     <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
                         <BarChart3 size={20} className="text-blue-500" />
                         Daily Activity (Last 30 Days)
@@ -255,7 +255,7 @@ export default function StatsCharts() {
                 </div>
 
                 {/* Space Efficiency */}
-                <div className="p-6 rounded-2xl bg-helios-surface border border-helios-line/40">
+                <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40">
                     <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
                         <Zap size={20} className="text-helios-solar" />
                         Space Efficiency
@@ -286,7 +286,7 @@ export default function StatsCharts() {
 
             {/* Recent Jobs Table */}
             {detailedStats.length > 0 && (
-                <div className="p-6 rounded-2xl bg-helios-surface border border-helios-line/40">
+                <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40">
                     <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
                         <FileVideo size={20} className="text-amber-500" />
                         Recent Completed Jobs

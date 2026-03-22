@@ -30,6 +30,30 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
     );
 }
 
+export function humanizeSkipReason(reason: string): { human: string; technical: string } {
+    const [rawKey, technical = ""] = reason.split("|", 2);
+    const key = rawKey.trim();
+
+    const human = (() => {
+        switch (key) {
+            case "already_target_codec":
+                return "This file is already in the target format — no conversion needed.";
+            case "bpp_below_threshold":
+                return "This file is already efficiently compressed — transcoding it wouldn't save meaningful space.";
+            case "below_min_file_size":
+                return "This file is too small to be worth transcoding.";
+            case "already_10bit":
+                return "This file is already in high-quality 10-bit format — re-encoding it could reduce quality.";
+            case "size_reduction_insufficient":
+                return "Converting this file wouldn't make it meaningfully smaller, so Alchemist skipped it.";
+            default:
+                return reason;
+        }
+    })();
+
+    return { human, technical };
+}
+
 interface Job {
     id: number;
     input_path: string;
@@ -471,18 +495,22 @@ export default function JobManager() {
         setConfirmState(config);
     };
 
+    const focusedDecision = focusedJob?.job.decision_reason
+        ? humanizeSkipReason(focusedJob.job.decision_reason)
+        : null;
+
     return (
         <div className="space-y-6 relative">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
                     <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Active</div>
                     <div className="mt-2 text-2xl font-bold text-helios-ink">{activeCount}</div>
                 </div>
-                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
                     <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Failed</div>
                     <div className="mt-2 text-2xl font-bold text-red-500">{failedCount}</div>
                 </div>
-                <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
+                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
                     <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Visible Completed</div>
                     <div className="mt-2 text-2xl font-bold text-emerald-500">{completedCount}</div>
                 </div>
@@ -625,7 +653,7 @@ export default function JobManager() {
             )}
 
             {/* Table */}
-            <div className="bg-helios-surface/50 border border-helios-line/20 rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-helios-surface/50 border border-helios-line/20 rounded-lg overflow-hidden shadow-sm">
                 <table className="w-full text-left border-collapse">
                     <thead className="bg-helios-surface border-b border-helios-line/20 text-xs font-bold text-helios-slate uppercase tracking-wider">
                         <tr>
@@ -644,10 +672,18 @@ export default function JobManager() {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-helios-line/10">
-                        {jobs.length === 0 ? (
+                        {loading && jobs.length === 0 ? (
+                            Array.from({ length: 5 }).map((_, index) => (
+                                <tr key={`loading-${index}`}>
+                                    <td colSpan={6} className="px-6 py-3">
+                                        <div className="h-10 w-full rounded-md bg-helios-surface-soft/60 animate-pulse" />
+                                    </td>
+                                </tr>
+                            ))
+                        ) : jobs.length === 0 ? (
                             <tr>
                                 <td colSpan={6} className="px-6 py-12 text-center text-helios-slate">
-                                    {loading ? "Loading jobs..." : "No jobs found"}
+                                    No jobs found
                                 </td>
                             </tr>
                         ) : (
@@ -869,7 +905,7 @@ export default function JobManager() {
                                 aria-labelledby="job-details-title"
                                 aria-describedby="job-details-path"
                                 tabIndex={-1}
-                                className="w-full max-w-2xl bg-helios-surface border border-helios-line/20 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden mx-4"
+                                className="w-full max-w-2xl bg-helios-surface border border-helios-line/20 rounded-lg shadow-2xl pointer-events-auto overflow-hidden mx-4"
                             >
                                 {/* Header */}
                                 <div className="p-6 border-b border-helios-line/10 flex justify-between items-start gap-4 bg-helios-surface-soft/50">
@@ -886,7 +922,7 @@ export default function JobManager() {
                                     </div>
                                     <button
                                         onClick={() => setFocusedJob(null)}
-                                        className="p-2 hover:bg-helios-line/10 rounded-xl transition-colors text-helios-slate"
+                                        className="p-2 hover:bg-helios-line/10 rounded-md transition-colors text-helios-slate"
                                     >
                                         <X size={20} />
                                     </button>
@@ -1006,9 +1042,19 @@ export default function JobManager() {
                                                 <Info size={12} />
                                                 <span className="text-[10px] font-bold uppercase tracking-wider">Decision Context</span>
                                             </div>
-                                            <p className="text-xs text-amber-700/80 leading-relaxed italic">
-                                                "{focusedJob.job.decision_reason}"
+                                            <p className="text-sm text-helios-ink leading-relaxed">
+                                                {focusedDecision?.human ?? focusedJob.job.decision_reason}
                                             </p>
+                                            {focusedDecision?.technical ? (
+                                                <details className="mt-2">
+                                                    <summary className="text-xs text-helios-slate cursor-pointer hover:text-helios-ink">
+                                                        Technical details
+                                                    </summary>
+                                                    <span className="mt-2 inline-block font-mono text-xs text-helios-slate/70">
+                                                        {focusedDecision.technical}
+                                                    </span>
+                                                </details>
+                                            ) : null}
                                         </div>
                                     )}
 
