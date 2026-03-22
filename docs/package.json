@@ -1,6 +1,6 @@
 {
   "name": "alchemist-docs",
-  "version": "0.2.10-rc.3",
+  "version": "0.2.10-rc.4",
   "private": true,
   "scripts": {
     "dev": "astro dev",
