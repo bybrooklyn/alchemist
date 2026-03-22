@@ -84,6 +84,11 @@ export default function SetupWizard() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username, password, settings }),
             });
+            void apiAction("/api/settings/preferences", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "setup_complete", value: "true" }),
+            }).catch(() => undefined);
             setStep(6);
             setScanRunId((current) => current + 1);
         } catch (err) {

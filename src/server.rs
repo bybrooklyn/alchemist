@@ -22,7 +22,7 @@ use axum::{
 use chrono::Utc;
 use futures::{
     stream::{self, Stream},
-    StreamExt,
+    FutureExt, StreamExt,
 };
 use rand::rngs::OsRng;
 use rand::Rng;
@@ -79,6 +79,7 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub config_mutable: bool,
     pub hardware_state: HardwareState,
+    pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
     login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
 }
@@ -150,18 +151,9 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         config_path,
         config_mutable,
         hardware_state,
+        resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
-    });
-
-    let cleanup_db = state.db.clone();
-    tokio::spawn(async move {
-        loop {
-            if let Err(e) = cleanup_db.cleanup_sessions().await {
-                error!("Failed to cleanup sessions: {}", e);
-            }
-            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
-        }
     });
 
     let app = app_router(state);
@@ -191,6 +183,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/stats/aggregated", get(aggregated_stats_handler))
         .route("/api/stats/daily", get(daily_stats_handler))
         .route("/api/stats/detailed", get(detailed_stats_handler))
+        .route("/api/stats/savings", get(savings_summary_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
         .route("/api/jobs/batch", post(batch_jobs_handler))
         .route("/api/logs/history", get(logs_history_handler))
@@ -219,6 +212,14 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(get_settings_bundle_handler).put(update_settings_bundle_handler),
         )
         .route(
+            "/api/settings/preferences",
+            post(set_setting_preference_handler),
+        )
+        .route(
+            "/api/settings/preferences/:key",
+            get(get_setting_preference_handler),
+        )
+        .route(
             "/api/settings/config",
             get(get_settings_config_handler).put(update_settings_config_handler),
         )
@@ -229,6 +230,19 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/settings/watch-dirs/:id",
             delete(remove_watch_dir_handler),
+        )
+        .route(
+            "/api/watch-dirs/:id/profile",
+            axum::routing::patch(assign_watch_dir_profile_handler),
+        )
+        .route("/api/profiles/presets", get(get_profile_presets_handler))
+        .route(
+            "/api/profiles",
+            get(list_profiles_handler).post(create_profile_handler),
+        )
+        .route(
+            "/api/profiles/:id",
+            axum::routing::put(update_profile_handler).delete(delete_profile_handler),
         )
         .route(
             "/api/settings/notifications",
@@ -265,6 +279,15 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
+        .route("/api/library/health", get(library_health_handler))
+        .route(
+            "/api/library/health/scan",
+            post(start_library_health_scan_handler),
+        )
+        .route(
+            "/api/library/health/issues",
+            get(get_library_health_issues_handler),
+        )
         .route("/api/fs/browse", get(fs_browse_handler))
         .route("/api/fs/recommendations", get(fs_recommendations_handler))
         .route("/api/fs/preview", post(fs_preview_handler))
@@ -777,6 +800,48 @@ async fn get_settings_bundle_handler(State(state): State<Arc<AppState>>) -> impl
     axum::Json(crate::settings::bundle_response(config)).into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct SettingPreferencePayload {
+    key: String,
+    value: String,
+}
+
+#[derive(serde::Serialize)]
+struct SettingPreferenceResponse {
+    key: String,
+    value: String,
+}
+
+async fn set_setting_preference_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<SettingPreferencePayload>,
+) -> impl IntoResponse {
+    let key = payload.key.trim();
+    if key.is_empty() {
+        return (StatusCode::BAD_REQUEST, "key must not be empty").into_response();
+    }
+
+    match state.db.set_preference(key, payload.value.as_str()).await {
+        Ok(_) => axum::Json(SettingPreferenceResponse {
+            key: key.to_string(),
+            value: payload.value,
+        })
+        .into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn get_setting_preference_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_preference(key.as_str()).await {
+        Ok(Some(value)) => axum::Json(SettingPreferenceResponse { key, value }).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
 async fn update_settings_bundle_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<Config>,
@@ -1234,6 +1299,13 @@ async fn detailed_stats_handler(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 
+async fn savings_summary_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_savings_summary().await {
+        Ok(summary) => axum::Json(summary).into_response(),
+        Err(err) => config_read_error_response("load storage savings summary", &err),
+    }
+}
+
 async fn scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.read().await;
     let mut dirs: Vec<std::path::PathBuf> = config
@@ -1378,6 +1450,135 @@ async fn ready_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             axum::Json(serde_json::json!({ "ready": false, "reason": "database unavailable" })),
         )
     }
+}
+
+async fn library_health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_health_summary().await {
+        Ok(summary) => axum::Json(summary).into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn get_library_health_issues_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.db.get_jobs_with_health_issues().await {
+        Ok(jobs) => axum::Json(jobs).into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn run_library_health_scan(db: Arc<Db>) {
+    let result = std::panic::AssertUnwindSafe({
+        let db = db.clone();
+        async move {
+            let created_run_id = match db.create_health_scan_run().await {
+                Ok(id) => id,
+                Err(err) => {
+                    error!("Failed to create library health scan run: {}", err);
+                    return;
+                }
+            };
+
+            let jobs = match db.get_jobs_needing_health_check().await {
+                Ok(jobs) => jobs,
+                Err(err) => {
+                    error!("Failed to load jobs for library health scan: {}", err);
+                    let _ = db.complete_health_scan_run(created_run_id, 0, 0).await;
+                    return;
+                }
+            };
+
+            let counters = Arc::new(Mutex::new((0_i64, 0_i64)));
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
+
+            stream::iter(jobs)
+                .for_each_concurrent(None, {
+                    let db = db.clone();
+                    let counters = counters.clone();
+                    let semaphore = semaphore.clone();
+
+                    move |job| {
+                        let db = db.clone();
+                        let counters = counters.clone();
+                        let semaphore = semaphore.clone();
+                        async move {
+                            let Ok(permit) = semaphore.acquire_owned().await else {
+                                error!("Library health scan semaphore closed unexpectedly");
+                                return;
+                            };
+                            let _permit = permit;
+
+                            match crate::media::health::HealthChecker::check_file(FsPath::new(
+                                &job.output_path,
+                            ))
+                            .await
+                            {
+                                Ok(issues) => {
+                                    if let Err(err) =
+                                        db.record_health_check(job.id, issues.clone()).await
+                                    {
+                                        error!(
+                                            "Failed to record library health result for job {}: {}",
+                                            job.id, err
+                                        );
+                                        return;
+                                    }
+
+                                    let mut guard = counters.lock().await;
+                                    guard.0 += 1;
+                                    if issues
+                                        .as_deref()
+                                        .is_some_and(|issues| !issues.trim().is_empty())
+                                    {
+                                        guard.1 += 1;
+                                    }
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "Library health check was inconclusive for job {} ({}): {}",
+                                        job.id, job.output_path, err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                })
+                .await;
+
+            let (files_checked, issues_found) = *counters.lock().await;
+            if let Err(err) = db
+                .complete_health_scan_run(created_run_id, files_checked, issues_found)
+                .await
+            {
+                error!(
+                    "Failed to complete library health scan run {}: {}",
+                    created_run_id, err
+                );
+            }
+        }
+    })
+    .catch_unwind()
+    .await;
+
+    if result.is_err() {
+        error!("Library health scan panicked");
+    }
+}
+
+async fn start_library_health_scan_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        run_library_health_scan(db).await;
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({ "status": "accepted" })),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1643,7 +1844,13 @@ struct SystemResources {
 }
 
 async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Response {
-    // Use a block to limit the scope of the lock
+    let mut cache = state.resources_cache.lock().await;
+    if let Some((value, cached_at)) = cache.as_ref() {
+        if cached_at.elapsed() < Duration::from_millis(500) {
+            return axum::Json(value.clone()).into_response();
+        }
+    }
+
     let (cpu_percent, memory_used_mb, memory_total_mb, memory_percent, cpu_count) = {
         let mut sys = match state.sys.lock() {
             Ok(sys) => sys,
@@ -1656,16 +1863,11 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
                     .into_response();
             }
         };
-        // Full refresh for better accuracy when polled less frequently
         sys.refresh_all();
 
-        // Get CPU usage (average across all cores)
         let cpu_percent =
             sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len().max(1) as f32;
-
         let cpu_count = sys.cpus().len();
-
-        // Memory info
         let memory_used_mb = (sys.used_memory() / 1024 / 1024) as u64;
         let memory_total_mb = (sys.total_memory() / 1024 / 1024) as u64;
         let memory_percent = if memory_total_mb > 0 {
@@ -1673,6 +1875,7 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
         } else {
             0.0
         };
+
         (
             cpu_percent,
             memory_used_mb,
@@ -1682,21 +1885,16 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
         )
     };
 
-    // Uptime
     let uptime_seconds = state.start_time.elapsed().as_secs();
-
-    // Active jobs from database
     let stats = match state.db.get_job_stats().await {
         Ok(stats) => stats,
         Err(err) => return config_read_error_response("load system resource stats", &err),
     };
-
-    // Query GPU utilization (using spawn_blocking to avoid blocking)
     let (gpu_utilization, gpu_memory_percent) = tokio::task::spawn_blocking(query_gpu_utilization)
         .await
         .unwrap_or((None, None));
 
-    axum::Json(SystemResources {
+    let value = match serde_json::to_value(SystemResources {
         cpu_percent,
         memory_used_mb,
         memory_total_mb,
@@ -1707,8 +1905,20 @@ async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Respons
         cpu_count,
         gpu_utilization,
         gpu_memory_percent,
-    })
-    .into_response()
+    }) {
+        Ok(value) => value,
+        Err(err) => {
+            error!("Failed to serialize system resource payload: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize system resource payload",
+            )
+                .into_response();
+        }
+    };
+
+    *cache = Some((value.clone(), Instant::now()));
+    axum::Json(value).into_response()
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools
@@ -2170,6 +2380,102 @@ struct AddWatchDirPayload {
     is_recursive: Option<bool>,
 }
 
+#[derive(serde::Serialize)]
+struct LibraryProfileResponse {
+    id: i64,
+    name: String,
+    preset: String,
+    codec: String,
+    quality_profile: String,
+    hdr_mode: String,
+    audio_mode: String,
+    crf_override: Option<i32>,
+    notes: Option<String>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+    builtin: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct LibraryProfilePayload {
+    name: String,
+    preset: String,
+    codec: String,
+    quality_profile: String,
+    hdr_mode: String,
+    audio_mode: String,
+    crf_override: Option<i32>,
+    notes: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct AssignWatchDirProfilePayload {
+    profile_id: Option<i64>,
+}
+
+fn is_builtin_profile_id(id: i64) -> bool {
+    crate::config::BUILT_IN_LIBRARY_PROFILES
+        .iter()
+        .any(|profile| profile.id == id)
+}
+
+fn library_profile_response(profile: crate::db::LibraryProfile) -> LibraryProfileResponse {
+    LibraryProfileResponse {
+        id: profile.id,
+        name: profile.name,
+        preset: profile.preset,
+        codec: profile.codec,
+        quality_profile: profile.quality_profile,
+        hdr_mode: profile.hdr_mode,
+        audio_mode: profile.audio_mode,
+        crf_override: profile.crf_override,
+        notes: profile.notes,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+        builtin: is_builtin_profile_id(profile.id),
+    }
+}
+
+fn validate_library_profile_payload(
+    payload: &LibraryProfilePayload,
+) -> std::result::Result<(), &'static str> {
+    if payload.name.trim().is_empty() {
+        return Err("name must not be empty");
+    }
+    if payload.preset.trim().is_empty() {
+        return Err("preset must not be empty");
+    }
+    if payload.codec.trim().is_empty() {
+        return Err("codec must not be empty");
+    }
+    if payload.quality_profile.trim().is_empty() {
+        return Err("quality_profile must not be empty");
+    }
+    if payload.hdr_mode.trim().is_empty() {
+        return Err("hdr_mode must not be empty");
+    }
+    if payload.audio_mode.trim().is_empty() {
+        return Err("audio_mode must not be empty");
+    }
+    Ok(())
+}
+
+fn to_new_library_profile(payload: LibraryProfilePayload) -> crate::db::NewLibraryProfile {
+    crate::db::NewLibraryProfile {
+        name: payload.name.trim().to_string(),
+        preset: payload.preset.trim().to_string(),
+        codec: payload.codec.trim().to_ascii_lowercase(),
+        quality_profile: payload.quality_profile.trim().to_ascii_lowercase(),
+        hdr_mode: payload.hdr_mode.trim().to_ascii_lowercase(),
+        audio_mode: payload.audio_mode.trim().to_ascii_lowercase(),
+        crf_override: payload.crf_override,
+        notes: payload
+            .notes
+            .map(|notes| notes.trim().to_string())
+            .filter(|notes| !notes.is_empty()),
+    }
+}
+
 async fn get_watch_dirs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_watch_dirs().await {
         Ok(dirs) => axum::Json(dirs).into_response(),
@@ -2248,6 +2554,148 @@ async fn remove_watch_dir_handler(
     }
     refresh_file_watcher(&state).await;
     StatusCode::OK.into_response()
+}
+
+async fn list_profiles_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_all_profiles().await {
+        Ok(profiles) => axum::Json(
+            profiles
+                .into_iter()
+                .map(library_profile_response)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn get_profile_presets_handler() -> impl IntoResponse {
+    let presets = crate::config::BUILT_IN_LIBRARY_PROFILES
+        .iter()
+        .map(|preset| {
+            serde_json::json!({
+                "id": preset.id,
+                "name": preset.name,
+                "preset": preset.preset,
+                "codec": preset.codec.as_str(),
+                "quality_profile": preset.quality_profile.as_str(),
+                "hdr_mode": preset.hdr_mode.as_str(),
+                "audio_mode": preset.audio_mode.as_str(),
+                "crf_override": preset.crf_override,
+                "notes": preset.notes,
+                "builtin": true
+            })
+        })
+        .collect::<Vec<_>>();
+    axum::Json(presets).into_response()
+}
+
+async fn create_profile_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<LibraryProfilePayload>,
+) -> impl IntoResponse {
+    if let Err(message) = validate_library_profile_payload(&payload) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+
+    let new_profile = to_new_library_profile(payload);
+    let id = match state.db.create_profile(new_profile).await {
+        Ok(id) => id,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    match state.db.get_profile(id).await {
+        Ok(Some(profile)) => (
+            StatusCode::CREATED,
+            axum::Json(library_profile_response(profile)),
+        )
+            .into_response(),
+        Ok(None) => StatusCode::CREATED.into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn update_profile_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    axum::Json(payload): axum::Json<LibraryProfilePayload>,
+) -> impl IntoResponse {
+    if is_builtin_profile_id(id) {
+        return (StatusCode::CONFLICT, "Built-in presets are read-only").into_response();
+    }
+    if let Err(message) = validate_library_profile_payload(&payload) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+
+    match state
+        .db
+        .update_profile(id, to_new_library_profile(payload))
+        .await
+    {
+        Ok(_) => match state.db.get_profile(id).await {
+            Ok(Some(profile)) => axum::Json(library_profile_response(profile)).into_response(),
+            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        },
+        Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn delete_profile_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    if is_builtin_profile_id(id) {
+        return (StatusCode::CONFLICT, "Built-in presets cannot be deleted").into_response();
+    }
+
+    match state.db.count_watch_dirs_using_profile(id).await {
+        Ok(count) if count > 0 => (
+            StatusCode::CONFLICT,
+            "Profile is still assigned to one or more watch folders",
+        )
+            .into_response(),
+        Ok(_) => match state.db.delete_profile(id).await {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        },
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+async fn assign_watch_dir_profile_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    axum::Json(payload): axum::Json<AssignWatchDirProfilePayload>,
+) -> impl IntoResponse {
+    if let Some(profile_id) = payload.profile_id {
+        match state.db.get_profile(profile_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(err) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+            }
+        }
+    }
+
+    match state
+        .db
+        .assign_profile_to_watch_dir(id, payload.profile_id)
+        .await
+    {
+        Ok(_) => match state.db.get_watch_dirs().await {
+            Ok(dirs) => dirs
+                .into_iter()
+                .find(|dir| dir.id == id)
+                .map(|dir| axum::Json(dir).into_response())
+                .unwrap_or_else(|| StatusCode::OK.into_response()),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        },
+        Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }
 
 async fn restart_job_handler(
@@ -2812,6 +3260,7 @@ mod tests {
             config_path: config_path.clone(),
             config_mutable: true,
             hardware_state,
+            resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
             login_rate_limiter: Mutex::new(HashMap::new()),
             global_rate_limiter: Mutex::new(HashMap::new()),
         });
@@ -3611,6 +4060,7 @@ mod tests {
                 encode_speed: 1.5,
                 avg_bitrate: 900.0,
                 vmaf_score: Some(95.0),
+                output_codec: Some("av1".to_string()),
             })
             .await?;
 

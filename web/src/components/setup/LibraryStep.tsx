@@ -96,7 +96,7 @@ export default function LibraryStep({
 
                 <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
                     <div className="space-y-5">
-                        <div className="rounded-3xl border border-helios-line/20 bg-helios-surface-soft/40 p-5 space-y-4">
+                        <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft/40 p-5 space-y-4">
                             <div className="flex items-start justify-between gap-4">
                                 <div>
                                     <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Sparkles size={16} className="text-helios-solar" />Suggested Server Folders</div>
@@ -106,7 +106,7 @@ export default function LibraryStep({
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {recommendations.map((recommendation) => (
-                                    <button key={recommendation.path} type="button" onClick={() => addDirectory(recommendation.path)} className="rounded-2xl border border-helios-line/20 bg-helios-surface px-4 py-4 text-left hover:border-helios-solar/30 transition-all">
+                                    <button key={recommendation.path} type="button" onClick={() => addDirectory(recommendation.path)} className="rounded-lg border border-helios-line/20 bg-helios-surface px-4 py-4 text-left hover:border-helios-solar/30 transition-all">
                                         <div className="flex items-center justify-between gap-3">
                                             <span className="font-semibold text-helios-ink">{recommendation.label}</span>
                                             <span className="rounded-full border border-helios-line/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-helios-slate">{recommendation.media_hint}</span>
@@ -118,7 +118,7 @@ export default function LibraryStep({
                             </div>
                         </div>
 
-                        <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                        <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><FolderOpen size={16} className="text-helios-solar" />Selected Library Roots</div>
                             <div className="flex gap-2">
                                 <input type="text" value={dirInput} onChange={(e) => onDirInputChange(e.target.value)} placeholder="Paste a server path or use Browse" className="flex-1 rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 font-mono text-sm text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none" />
@@ -126,7 +126,7 @@ export default function LibraryStep({
                             </div>
                             <div className="space-y-2">
                                 {directories.map((dir) => (
-                                    <div key={dir} className="flex items-center justify-between rounded-2xl border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-3">
+                                    <div key={dir} className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-3">
                                         <div className="min-w-0">
                                             <p className="font-mono text-sm text-helios-ink truncate" title={dir}>{dir}</p>
                                             <p className="text-[11px] text-helios-slate mt-1">Watched recursively and used as a library root.</p>
@@ -139,7 +139,7 @@ export default function LibraryStep({
                         </div>
                     </div>
 
-                    <div className="rounded-3xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><Search size={16} className="text-helios-solar" />Library Preview</div>
@@ -148,18 +148,18 @@ export default function LibraryStep({
                             <button type="button" onClick={() => void fetchPreview()} disabled={previewLoading || directories.length === 0} className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:border-helios-solar/30 disabled:opacity-50">{previewLoading ? "Previewing..." : "Refresh Preview"}</button>
                         </div>
 
-                        {previewError && <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{previewError}</div>}
+                        {previewError && <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{previewError}</div>}
 
                         {preview ? (
                             <div className="space-y-4">
-                                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
+                                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
                                     <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">Estimated Supported Media</p>
                                     <p className="mt-2 text-2xl font-bold text-helios-ink">{preview.total_media_files}</p>
                                 </div>
-                                {preview.warnings.length > 0 && <div className="space-y-2">{preview.warnings.map((warning) => <div key={warning} className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-500">{warning}</div>)}</div>}
+                                {preview.warnings.length > 0 && <div className="space-y-2">{preview.warnings.map((warning) => <div key={warning} className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-500">{warning}</div>)}</div>}
                                 <div className="space-y-3">
                                     {preview.directories.map((directory) => (
-                                        <div key={directory.path} className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
+                                        <div key={directory.path} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
                                             <div className="flex items-center justify-between gap-3">
                                                 <div className="min-w-0">
                                                     <p className="font-mono text-sm text-helios-ink break-all">{directory.path}</p>
@@ -173,7 +173,7 @@ export default function LibraryStep({
                                 </div>
                             </div>
                         ) : (
-                            <div className="rounded-2xl border border-dashed border-helios-line/20 px-4 py-8 text-sm text-helios-slate text-center">Add one or more server folders to preview what Alchemist will scan.</div>
+                            <div className="rounded-lg border border-dashed border-helios-line/20 px-4 py-8 text-sm text-helios-slate text-center">Add one or more server folders to preview what Alchemist will scan.</div>
                         )}
                     </div>
                 </div>

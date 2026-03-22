@@ -287,6 +287,7 @@ pub enum AudioStreamPlan {
     Transcode {
         codec: AudioCodec,
         bitrate_kbps: u16,
+        channels: Option<u32>,
     },
     Drop,
 }
@@ -386,7 +387,12 @@ pub trait Analyzer: Send + Sync {
 
 #[async_trait]
 pub trait Planner: Send + Sync {
-    async fn plan(&self, analysis: &MediaAnalysis, output_path: &Path) -> Result<TranscodePlan>;
+    async fn plan(
+        &self,
+        analysis: &MediaAnalysis,
+        output_path: &Path,
+        profile: Option<&crate::db::LibraryProfile>,
+    ) -> Result<TranscodePlan>;
 }
 
 #[async_trait]
@@ -530,7 +536,7 @@ fn temp_output_path_for(path: &Path) -> PathBuf {
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("output");
-    parent.join(format!("{filename}.alchemist-part"))
+    parent.join(format!("{filename}.alchemist.tmp"))
 }
 
 impl Pipeline {
@@ -650,7 +656,20 @@ impl Pipeline {
         let config_snapshot = self.config.read().await.clone();
         let hw_info = self.hardware_state.snapshot().await;
         let planner = BasicPlanner::new(Arc::new(config_snapshot.clone()), hw_info.clone());
-        let mut plan = match planner.plan(&analysis, &output_path).await {
+        let profile = match self.db.get_profile_for_path(&job.input_path).await {
+            Ok(profile) => profile,
+            Err(err) => {
+                tracing::error!("Job {}: Failed to resolve library profile: {}", job.id, err);
+                let _ = self
+                    .update_job_state(job.id, crate::db::JobState::Failed)
+                    .await;
+                return Err(JobFailure::Transient);
+            }
+        };
+        let mut plan = match planner
+            .plan(&analysis, &output_path, profile.as_ref())
+            .await
+        {
             Ok(plan) => plan,
             Err(e) => {
                 tracing::error!("Job {}: Planner failed: {}", job.id, e);
@@ -912,11 +931,17 @@ impl Pipeline {
             let _ = std::fs::remove_file(context.temp_output_path);
             cleanup_temp_subtitle_output(job_id, context.plan).await;
             let reason = if output_size == 0 {
-                "Empty output"
+                format!(
+                    "size_reduction_insufficient|reduction=0.000,threshold={:.3},output_size=0",
+                    config.transcode.size_reduction_threshold
+                )
             } else {
-                "Inefficient reduction"
+                format!(
+                    "size_reduction_insufficient|reduction={:.3},threshold={:.3},output_size={}",
+                    reduction, config.transcode.size_reduction_threshold, output_size
+                )
             };
-            let _ = self.db.add_decision(job_id, "skip", reason).await;
+            let _ = self.db.add_decision(job_id, "skip", &reason).await;
             self.update_job_state(job_id, crate::db::JobState::Skipped)
                 .await?;
             return Ok(());
@@ -937,6 +962,19 @@ impl Pipeline {
                     vmaf_score = score.vmaf;
                     if let Some(s) = vmaf_score {
                         tracing::info!("[Job {}] VMAF Score: {:.2}", job_id, s);
+                        if let Some(threshold) = config.transcode.vmaf_min_score {
+                            if s < threshold {
+                                let _ = std::fs::remove_file(context.temp_output_path);
+                                cleanup_temp_subtitle_output(job_id, context.plan).await;
+                                return Err(crate::error::AlchemistError::QualityCheckFailed(
+                                    format!(
+                                        "VMAF score {:.1} fell below the minimum threshold of {:.1}. The original file has been preserved.",
+                                        s,
+                                        threshold
+                                    ),
+                                ));
+                            }
+                        }
                         if s < config.quality.min_vmaf_score && config.quality.revert_on_low_quality
                         {
                             tracing::warn!(
@@ -997,6 +1035,14 @@ impl Pipeline {
                 encode_speed,
                 avg_bitrate: avg_bitrate_kbps,
                 vmaf_score,
+                output_codec: Some(
+                    context
+                        .execution_result
+                        .actual_output_codec
+                        .unwrap_or(context.execution_result.planned_output_codec)
+                        .as_str()
+                        .to_string(),
+                ),
             })
             .await?;
 
@@ -1072,6 +1118,9 @@ impl Pipeline {
 
         let message = format!("Finalization failed: {err}");
         let _ = self.db.add_log("error", Some(job_id), &message).await;
+        if let crate::error::AlchemistError::QualityCheckFailed(reason) = err {
+            let _ = self.db.add_decision(job_id, "reject", reason).await;
+        }
 
         if temp_output_path.exists() {
             if let Err(cleanup_err) = tokio::fs::remove_file(temp_output_path).await {

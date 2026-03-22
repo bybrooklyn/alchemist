@@ -73,7 +73,7 @@ export default function ScanStep({ runId, onBackToReview }: ScanStepProps) {
             </div>
 
             {scanError && (
-                <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm text-red-500 space-y-3">
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm text-red-500 space-y-3">
                     <p className="font-semibold">The initial scan hit an error.</p>
                     <p>{scanError}</p>
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -92,8 +92,8 @@ export default function ScanStep({ runId, onBackToReview }: ScanStepProps) {
                     <div className="h-3 rounded-full border border-helios-line/20 bg-helios-surface-soft overflow-hidden">
                         <motion.div className="h-full bg-helios-solar" animate={{ width: `${scanStatus.files_found > 0 ? (scanStatus.files_added / scanStatus.files_found) * 100 : 0}%` }} />
                     </div>
-                    {scanStatus.current_folder && <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 font-mono text-xs text-helios-slate">{scanStatus.current_folder}</div>}
-                    {!scanStatus.is_running && <button type="button" onClick={() => { window.location.href = "/"; }} className="w-full rounded-2xl bg-helios-solar px-6 py-4 font-bold text-helios-main shadow-lg shadow-helios-solar/20 hover:opacity-90">Enter Dashboard</button>}
+                    {scanStatus.current_folder && <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 font-mono text-xs text-helios-slate">{scanStatus.current_folder}</div>}
+                    {!scanStatus.is_running && <button type="button" onClick={() => { window.location.href = "/"; }} className="w-full rounded-lg bg-helios-solar px-6 py-4 font-bold text-helios-main shadow-lg shadow-helios-solar/20 hover:opacity-90">Enter Dashboard</button>}
                 </div>
             )}
         </motion.div>

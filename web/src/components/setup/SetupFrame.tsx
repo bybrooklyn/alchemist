@@ -16,7 +16,7 @@ interface SetupFrameProps {
 
 export default function SetupFrame({ step, configMutable, error, submitting, onBack, onNext, children }: SetupFrameProps) {
     return (
-        <div className="bg-helios-surface border border-helios-line/60 rounded-3xl overflow-hidden shadow-2xl max-w-5xl w-full mx-auto">
+        <div className="bg-helios-surface border border-helios-line/60 rounded-xl overflow-hidden shadow-2xl max-w-5xl w-full mx-auto">
             <div className="h-1 bg-helios-surface-soft w-full flex">
                 <motion.div className="bg-helios-solar h-full" initial={{ width: 0 }} animate={{ width: `${(step / SETUP_STEP_COUNT) * 100}%` }} />
             </div>
@@ -31,17 +31,17 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
                         </div>
                     </div>
 
-                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-3 text-xs text-helios-slate max-w-sm">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-3 text-xs text-helios-slate max-w-sm">
                         <p className="font-bold uppercase tracking-wider text-helios-ink">Server-side selection</p>
                         <p className="mt-1">All folders here refer to the filesystem available to the Alchemist server process, not your browser’s local machine.</p>
                     </div>
                 </header>
 
-                {!configMutable && <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">The config file is read-only right now. Setup cannot finish until the TOML file is writable.</div>}
+                {!configMutable && <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">The config file is read-only right now. Setup cannot finish until the TOML file is writable.</div>}
 
                 <AnimatePresence mode="wait">{children}</AnimatePresence>
 
-                {error && step < 6 && <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{error}</div>}
+                {error && step < 6 && <div className="mt-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{error}</div>}
 
                 {step < 6 && (
                     <div className="mt-8 flex items-center justify-between gap-4 border-t border-helios-line/20 pt-6">

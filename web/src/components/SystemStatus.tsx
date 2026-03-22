@@ -148,7 +148,7 @@ export default function SystemStatus() {
                                 aria-modal="true"
                                 aria-labelledby="system-status-title"
                                 layoutId={layoutId}
-                                className="w-full max-w-lg bg-helios-surface border border-helios-line/30 rounded-3xl shadow-2xl overflow-hidden relative outline-none"
+                                className="w-full max-w-lg bg-helios-surface border border-helios-line/30 rounded-xl shadow-2xl overflow-hidden relative outline-none"
                                 onClick={(e) => e.stopPropagation()}
                                 tabIndex={-1}
                             >
@@ -181,7 +181,7 @@ export default function SystemStatus() {
                                     </div>
 
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                                        <div className="bg-helios-surface-soft/50 rounded-2xl p-5 border border-helios-line/10 flex flex-col items-center text-center gap-2">
+                                        <div className="bg-helios-surface-soft/50 rounded-lg p-5 border border-helios-line/10 flex flex-col items-center text-center gap-2">
                                             <Zap size={20} className="text-helios-solar opacity-80" />
                                             <div className="flex flex-col">
                                                 <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Concurrency</span>
@@ -198,7 +198,7 @@ export default function SystemStatus() {
                                             </div>
                                         </div>
 
-                                        <div className="bg-helios-surface-soft/50 rounded-2xl p-5 border border-helios-line/10 flex flex-col items-center text-center gap-2">
+                                        <div className="bg-helios-surface-soft/50 rounded-lg p-5 border border-helios-line/10 flex flex-col items-center text-center gap-2">
                                             <Database size={20} className="text-blue-400 opacity-80" />
                                             <div className="flex flex-col">
                                                 <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Total Jobs</span>

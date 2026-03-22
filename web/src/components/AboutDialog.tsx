@@ -135,13 +135,13 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                             aria-modal="true"
                             aria-labelledby="about-dialog-title"
                             tabIndex={-1}
-                            className="w-full max-w-md bg-helios-surface border border-helios-line/30 rounded-3xl shadow-2xl overflow-hidden relative"
+                            className="w-full max-w-md bg-helios-surface border border-helios-line/30 rounded-xl shadow-2xl overflow-hidden relative"
                         >
                             <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-helios-solar/10 to-transparent pointer-events-none" />
 
                             <div className="p-8 relative">
                                 <div className="flex items-center justify-between mb-6">
-                                    <div className="p-3 bg-helios-surface-soft border border-helios-line/20 rounded-2xl shadow-sm">
+                                    <div className="p-3 bg-helios-surface-soft border border-helios-line/20 rounded-lg shadow-sm">
                                         <div className="w-8 h-8 rounded-lg bg-helios-solar text-helios-main flex items-center justify-center font-bold text-xl">
                                             Al
                                         </div>

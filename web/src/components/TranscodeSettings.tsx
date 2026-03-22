@@ -121,7 +121,7 @@ export default function TranscodeSettings() {
                         <button
                             onClick={() => setSettings({ ...settings, output_codec: "av1" })}
                             className={cn(
-                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
                                 settings.output_codec === "av1"
                                     ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
                                     : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -133,7 +133,7 @@ export default function TranscodeSettings() {
                         <button
                             onClick={() => setSettings({ ...settings, output_codec: "hevc" })}
                             className={cn(
-                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
                                 settings.output_codec === "hevc"
                                     ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
                                     : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -145,7 +145,7 @@ export default function TranscodeSettings() {
                         <button
                             onClick={() => setSettings({ ...settings, output_codec: "h264" })}
                             className={cn(
-                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
                                 settings.output_codec === "h264"
                                     ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
                                     : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -168,7 +168,7 @@ export default function TranscodeSettings() {
                                 key={profile}
                                 onClick={() => setSettings({ ...settings, quality_profile: profile })}
                                 className={cn(
-                                    "flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-20",
+                                    "flex flex-col items-center justify-center p-3 rounded-md border transition-all h-20",
                                     settings.quality_profile === profile
                                         ? "bg-helios-solar/10 border-helios-solar text-helios-ink font-bold shadow-sm"
                                         : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -180,7 +180,7 @@ export default function TranscodeSettings() {
                     </div>
                 </div>
 
-                <div className="md:col-span-2 flex items-center justify-between rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4">
+                <div className="md:col-span-2 flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
                     <div>
                         <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow Fallback</p>
                         <p className="text-[10px] text-helios-slate mt-1">If preferred codec is unavailable, use the best available fallback.</p>
@@ -225,7 +225,7 @@ export default function TranscodeSettings() {
                         <button
                             onClick={() => setSettings({ ...settings, hdr_mode: "preserve" })}
                             className={cn(
-                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
                                 settings.hdr_mode === "preserve"
                                     ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
                                     : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -237,7 +237,7 @@ export default function TranscodeSettings() {
                         <button
                             onClick={() => setSettings({ ...settings, hdr_mode: "tonemap" })}
                             className={cn(
-                                "flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all",
+                                "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
                                 settings.hdr_mode === "tonemap"
                                     ? "bg-helios-solar/10 border-helios-solar text-helios-ink shadow-sm ring-1 ring-helios-solar/20"
                                     : "bg-helios-surface border-helios-line/30 text-helios-slate hover:bg-helios-surface-soft"
@@ -365,7 +365,7 @@ export default function TranscodeSettings() {
                 <button
                     onClick={handleSave}
                     disabled={saving}
-                    className="flex items-center gap-2 bg-helios-solar text-helios-main font-bold px-6 py-3 rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50"
+                    className="flex items-center gap-2 bg-helios-solar text-helios-main font-bold px-6 py-3 rounded-md hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                     <Save size={18} />
                     {saving ? "Saving..." : "Save Settings"}

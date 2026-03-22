@@ -85,7 +85,7 @@ export default function QualitySettings() {
                 </div>
             )}
 
-            <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
+            <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                 <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Enable VMAF</p>
                     <p className="text-[10px] text-helios-slate mt-1">Compute a quality score after encoding.</p>
@@ -132,7 +132,7 @@ export default function QualitySettings() {
                 />
             </div>
 
-            <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
+            <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                 <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Revert on Low Quality</p>
                     <p className="text-[10px] text-helios-slate mt-1">Keep the source if the VMAF score drops below the threshold.</p>
@@ -161,7 +161,7 @@ export default function QualitySettings() {
                 <button
                     onClick={() => void handleSave()}
                     disabled={saving}
-                    className="flex items-center gap-2 rounded-xl bg-helios-solar px-6 py-3 font-bold text-helios-main hover:opacity-90 transition-opacity disabled:opacity-50"
+                    className="flex items-center gap-2 rounded-md bg-helios-solar px-6 py-3 font-bold text-helios-main hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                     <Save size={18} />
                     {saving ? "Saving..." : "Save Quality Settings"}

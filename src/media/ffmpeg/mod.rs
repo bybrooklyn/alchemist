@@ -313,6 +313,7 @@ fn apply_audio_plan(args: &mut Vec<String>, plan: &AudioStreamPlan) {
         AudioStreamPlan::Transcode {
             codec,
             bitrate_kbps,
+            channels,
         } => {
             args.extend([
                 "-c:a".to_string(),
@@ -320,6 +321,9 @@ fn apply_audio_plan(args: &mut Vec<String>, plan: &AudioStreamPlan) {
                 "-b:a".to_string(),
                 format!("{bitrate_kbps}k"),
             ]);
+            if let Some(channels) = channels {
+                args.extend(["-ac".to_string(), channels.to_string()]);
+            }
             if matches!(codec, AudioCodec::Aac) {
                 args.extend(["-profile:a".to_string(), "aac_low".to_string()]);
             }
@@ -996,6 +1000,7 @@ mod tests {
         plan.audio = AudioStreamPlan::Transcode {
             codec: AudioCodec::Aac,
             bitrate_kbps: 192,
+            channels: None,
         };
         plan.requested_codec = OutputCodec::H264;
         let metadata = metadata();

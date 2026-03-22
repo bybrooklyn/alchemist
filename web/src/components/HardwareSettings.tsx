@@ -87,15 +87,15 @@ export default function HardwareSettings() {
     if (loading) {
         return (
             <div className="flex flex-col gap-4 animate-pulse">
-                <div className="h-12 bg-helios-surface-soft rounded-2xl w-full" />
-                <div className="h-40 bg-helios-surface-soft rounded-2xl w-full" />
+                <div className="h-12 bg-helios-surface-soft rounded-lg w-full" />
+                <div className="h-40 bg-helios-surface-soft rounded-lg w-full" />
             </div>
         );
     }
 
     if (error || !info) {
         return (
-            <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center gap-3" aria-live="polite">
+            <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg flex items-center gap-3" aria-live="polite">
                 <AlertCircle size={20} />
                 <span className="font-semibold">{error || "Hardware detection failed."}</span>
             </div>
@@ -127,7 +127,7 @@ export default function HardwareSettings() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm">
+                <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm">
                     <div className="flex items-center gap-3 mb-4">
                         <div className={`p-2.5 rounded-xl ${details.bg} ${details.color}`}>
                             <HardDrive size={18} />
@@ -140,7 +140,7 @@ export default function HardwareSettings() {
 
                     <div className="space-y-4">
                         <div>
-                            <span className="text-[10px] font-bold text-helios-slate uppercase tracking-widest block mb-1.5 ml-0.5">Device Path</span>
+                            <span className="text-xs font-medium text-helios-slate uppercase tracking-wide block mb-1.5 ml-0.5">Device Path</span>
                             <div className="bg-helios-surface-soft border border-helios-line/30 rounded-lg px-3 py-2 font-mono text-xs text-helios-ink shadow-inner">
                                 {info.device_path || (info.vendor === "Nvidia" ? "NVIDIA Driver (Direct)" : "Auto-detected Interface")}
                             </div>
@@ -148,7 +148,7 @@ export default function HardwareSettings() {
                     </div>
                 </div>
 
-                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm">
+                <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm">
                     <div className="flex items-center gap-3 mb-4">
                         <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
                             <CheckCircle2 size={18} />
@@ -175,7 +175,7 @@ export default function HardwareSettings() {
             </div>
 
             {info.vendor === "Cpu" && (
-                <div className="p-4 bg-helios-solar/5 border border-helios-solar/10 rounded-2xl">
+                <div className="p-4 bg-helios-solar/5 border border-helios-solar/10 rounded-lg">
                     <div className="flex gap-3">
                         <AlertCircle className="text-helios-solar shrink-0" size={18} />
                         <div className="space-y-1">
@@ -189,7 +189,7 @@ export default function HardwareSettings() {
             )}
 
             {settings && (
-                <div className="bg-helios-surface border border-helios-line/30 rounded-2xl p-5 shadow-sm space-y-5">
+                <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm space-y-5">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
@@ -213,7 +213,7 @@ export default function HardwareSettings() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-helios-line/10 pt-5">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">Preferred Vendor</label>
+                            <label className="text-xs font-medium uppercase tracking-wide text-helios-slate">Preferred Vendor</label>
                             <select
                                 value={settings.preferred_vendor ?? ""}
                                 onChange={(e) => setSettings({
@@ -232,7 +232,7 @@ export default function HardwareSettings() {
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">CPU Preset</label>
+                            <label className="text-xs font-medium uppercase tracking-wide text-helios-slate">CPU Preset</label>
                             <select
                                 value={settings.cpu_preset}
                                 onChange={(e) => setSettings({ ...settings, cpu_preset: e.target.value })}
@@ -246,7 +246,7 @@ export default function HardwareSettings() {
                         </div>
                     </div>
 
-                    <div className="rounded-2xl border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                         <div>
                             <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow CPU Fallback</p>
                             <p className="text-[10px] text-helios-slate mt-1">Permit software encoding when the preferred GPU path is unavailable.</p>
@@ -280,7 +280,7 @@ export default function HardwareSettings() {
                             <button
                                 onClick={() => void saveAllSettings()}
                                 disabled={saving}
-                                className="flex items-center justify-center gap-2 bg-helios-solar text-helios-main font-bold px-5 py-3 rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50"
+                                className="flex items-center justify-center gap-2 bg-helios-solar text-helios-main font-bold px-5 py-3 rounded-md hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
                                 <Save size={16} />
                                 {saving ? "Saving..." : "Apply"}

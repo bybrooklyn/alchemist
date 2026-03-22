@@ -179,7 +179,7 @@ export default function LogViewer() {
     });
 
     return (
-        <div className="flex flex-col h-full rounded-2xl border border-helios-line/40 bg-[#0d1117] overflow-hidden shadow-2xl">
+        <div className="flex flex-col h-full rounded-lg border border-helios-line/40 bg-[#0d1117] overflow-hidden shadow-2xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20 bg-helios-surface/50 backdrop-blur">
                 <div className="flex items-center gap-2 text-helios-slate" aria-live="polite">
                     <Terminal size={16} />

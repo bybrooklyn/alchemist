@@ -94,7 +94,7 @@ export default function SettingsPanel() {
                                     navItemRefs.current[tab.id] = node;
                                 }}
                                 onClick={() => paginate(tab.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 relative overflow-hidden group ${isActive
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold transition-all duration-200 relative overflow-hidden group ${isActive
                                     ? "text-helios-ink bg-helios-surface-soft shadow-sm border border-helios-line/20"
                                     : "text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft/50"
                                     }`}
@@ -102,7 +102,7 @@ export default function SettingsPanel() {
                                 {isActive && (
                                     <motion.div
                                         layoutId="active-tab"
-                                        className="absolute inset-0 bg-helios-surface-soft border border-helios-line/20 rounded-xl"
+                                        className="absolute inset-0 bg-helios-surface-soft border border-helios-line/20 rounded-md"
                                         initial={false}
                                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                                     />
@@ -136,9 +136,9 @@ export default function SettingsPanel() {
                            We render the active component. 
                            Container styling is applied here to wrap the component uniformly.
                         */}
-                        <div className="bg-helios-surface border border-helios-line/20 rounded-3xl p-6 sm:p-8 shadow-sm">
-                            <div className="mb-5 rounded-2xl border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                        <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
+                            <div className="mb-5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-helios-slate/70">
                                     Setup & Runtime Controls
                                 </p>
                                 <p className="mt-1 text-sm text-helios-ink">
