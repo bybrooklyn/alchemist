@@ -1,7 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-const APP_HOME_DIR: &str = ".alchemist";
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_DB_PATH: &str = "alchemist.db";
 
@@ -13,54 +12,68 @@ fn parse_bool_env(value: &str) -> Option<bool> {
     }
 }
 
-fn default_home_root_for(home: Option<&Path>) -> Option<PathBuf> {
+/// Returns the platform-appropriate default data directory for
+/// Alchemist. All files (config and DB) live here by default.
+///
+/// Linux/macOS: ~/.config/alchemist/
+///   Respects $XDG_CONFIG_HOME on Linux.
+/// Windows:     %APPDATA%\Alchemist\
+///   Falls back to the working directory if APPDATA is unset.
+fn default_data_dir() -> PathBuf {
+    // Linux and macOS: follow XDG / ~/.config
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        home.filter(|path| !path.as_os_str().is_empty())
-            .map(|path| path.join(APP_HOME_DIR))
+        if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
+            if !xdg.is_empty() {
+                return PathBuf::from(xdg).join("alchemist");
+            }
+        }
+        if let Some(home) = env::var_os("HOME") {
+            if !home.is_empty() {
+                return PathBuf::from(home)
+                    .join(".config")
+                    .join("alchemist");
+            }
+        }
+        PathBuf::from(".")
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    // Windows: %APPDATA%\Alchemist\
+    #[cfg(target_os = "windows")]
     {
-        let _ = home;
-        None
+        if let Ok(appdata) = env::var("APPDATA") {
+            if !appdata.is_empty() {
+                return PathBuf::from(appdata).join("Alchemist");
+            }
+        }
+        PathBuf::from(".")
     }
-}
 
-fn default_home_root() -> Option<PathBuf> {
-    let home = env::var_os("HOME").map(PathBuf::from);
-    default_home_root_for(home.as_deref())
-}
-
-fn default_config_path() -> PathBuf {
-    default_home_root()
-        .map(|root| root.join(DEFAULT_CONFIG_PATH))
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
-}
-
-fn default_db_path() -> PathBuf {
-    default_home_root()
-        .map(|root| root.join(DEFAULT_DB_PATH))
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_DB_PATH))
+    // Any other platform: working directory
+    #[cfg(not(any(target_os = "linux", target_os = "macos",
+                  target_os = "windows")))]
+    {
+        PathBuf::from(".")
+    }
 }
 
 pub fn config_path() -> PathBuf {
-    env::var("ALCHEMIST_CONFIG_PATH")
+    if let Ok(path) = env::var("ALCHEMIST_CONFIG_PATH")
         .or_else(|_| env::var("ALCHEMIST_CONFIG"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| default_config_path())
+    {
+        return PathBuf::from(path);
+    }
+    default_data_dir().join(DEFAULT_CONFIG_PATH)
 }
 
 pub fn db_path() -> PathBuf {
     if let Ok(path) = env::var("ALCHEMIST_DB_PATH") {
         return PathBuf::from(path);
     }
-
     if let Ok(data_dir) = env::var("ALCHEMIST_DATA_DIR") {
         return Path::new(&data_dir).join(DEFAULT_DB_PATH);
     }
-
-    default_db_path()
+    default_data_dir().join(DEFAULT_DB_PATH)
 }
 
 pub fn config_mutable() -> bool {
@@ -74,28 +87,60 @@ pub fn config_mutable() -> bool {
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn default_home_root_uses_alchemist_directory() {
-        let home = Path::new("/Users/tester");
-        assert_eq!(
-            default_home_root_for(Some(home)),
-            Some(home.join(".alchemist"))
+    fn env_override_takes_priority_for_config() {
+        // env vars always win regardless of platform
+        std::env::set_var(
+            "ALCHEMIST_CONFIG_PATH",
+            "/tmp/test-config.toml",
         );
+        assert_eq!(
+            config_path(),
+            PathBuf::from("/tmp/test-config.toml")
+        );
+        std::env::remove_var("ALCHEMIST_CONFIG_PATH");
+    }
+
+    #[test]
+    fn env_override_takes_priority_for_db() {
+        std::env::set_var(
+            "ALCHEMIST_DB_PATH",
+            "/tmp/test.db",
+        );
+        assert_eq!(db_path(), PathBuf::from("/tmp/test.db"));
+        std::env::remove_var("ALCHEMIST_DB_PATH");
+    }
+
+    #[test]
+    fn data_dir_override_for_db() {
+        std::env::set_var("ALCHEMIST_DATA_DIR", "/tmp/data");
+        assert_eq!(
+            db_path(),
+            PathBuf::from("/tmp/data/alchemist.db")
+        );
+        std::env::remove_var("ALCHEMIST_DATA_DIR");
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn default_paths_live_under_alchemist() {
-        let root = default_home_root_for(Some(Path::new("/Users/tester")))
-            .expect("expected home root on unix-like target");
-        assert_eq!(
-            root.join(DEFAULT_CONFIG_PATH),
-            PathBuf::from("/Users/tester/.alchemist/config.toml")
-        );
-        assert_eq!(
-            root.join(DEFAULT_DB_PATH),
-            PathBuf::from("/Users/tester/.alchemist/alchemist.db")
-        );
+    fn default_dir_respects_xdg_config_home() {
+        std::env::remove_var("ALCHEMIST_CONFIG_PATH");
+        std::env::remove_var("ALCHEMIST_CONFIG");
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg");
+        let dir = default_data_dir();
+        assert_eq!(dir, PathBuf::from("/tmp/xdg/alchemist"));
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn default_dir_falls_back_to_home_config() {
+        std::env::remove_var("XDG_CONFIG_HOME");
+        // HOME is always set in a test environment
+        let home = std::env::var("HOME").unwrap();
+        let expected = PathBuf::from(&home)
+            .join(".config")
+            .join("alchemist");
+        assert_eq!(default_data_dir(), expected);
     }
 }
