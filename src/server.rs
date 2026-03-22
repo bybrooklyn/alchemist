@@ -204,6 +204,12 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/events", get(sse_handler))
         .route("/api/engine/pause", post(pause_engine_handler))
         .route("/api/engine/resume", post(resume_engine_handler))
+        .route("/api/engine/drain", post(drain_engine_handler))
+        .route("/api/engine/stop-drain", post(stop_drain_handler))
+        .route(
+            "/api/engine/mode",
+            get(get_engine_mode_handler).post(set_engine_mode_handler),
+        )
         .route("/api/engine/status", get(engine_status_handler))
         .route(
             "/api/settings/transcode",
@@ -696,6 +702,7 @@ async fn update_transcode_settings_handler(
         *config = next_config;
     }
 
+    state.agent.set_manual_override(true);
     state
         .agent
         .set_concurrent_jobs(payload.concurrent_jobs)
@@ -892,6 +899,8 @@ async fn update_settings_bundle_handler(
         *config = payload.clone();
     }
 
+    state.agent.set_manual_override(true);
+    *state.agent.engine_mode.write().await = payload.system.engine_mode;
     state
         .agent
         .set_concurrent_jobs(payload.transcode.concurrent_jobs)
@@ -962,6 +971,8 @@ async fn update_settings_config_handler(
         *config_lock = config.clone();
     }
 
+    state.agent.set_manual_override(true);
+    *state.agent.engine_mode.write().await = config.system.engine_mode;
     state
         .agent
         .set_concurrent_jobs(config.transcode.concurrent_jobs)
@@ -1118,6 +1129,7 @@ async fn setup_complete_handler(
     }
 
     let runtime_concurrent_jobs = next_config.transcode.concurrent_jobs;
+    let runtime_engine_mode = next_config.system.engine_mode;
 
     let (hardware_info, probe_log) =
         match crate::system::hardware::detect_hardware_with_log(&next_config).await {
@@ -1175,6 +1187,8 @@ async fn setup_complete_handler(
 
     // Update Setup State (Hot Reload)
     state.setup_required.store(false, Ordering::Relaxed);
+    state.agent.set_manual_override(true);
+    *state.agent.engine_mode.write().await = runtime_engine_mode;
     state
         .agent
         .set_concurrent_jobs(runtime_concurrent_jobs)
@@ -1464,10 +1478,114 @@ async fn resume_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoR
     axum::Json(serde_json::json!({ "status": "running" }))
 }
 
+async fn drain_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.drain();
+    axum::Json(serde_json::json!({ "status": "draining" }))
+}
+
+async fn stop_drain_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.stop_drain();
+    axum::Json(serde_json::json!({ "status": "running" }))
+}
+
 async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     axum::Json(serde_json::json!({
-        "status": if state.agent.is_paused() { "paused" } else { "running" }
+        "status": if state.agent.is_draining() {
+            "draining"
+        } else if state.agent.is_paused() {
+            "paused"
+        } else {
+            "running"
+        },
+        "manual_paused": state.agent.is_manual_paused(),
+        "scheduler_paused": state.agent.is_scheduler_paused(),
+        "draining": state.agent.is_draining(),
+        "mode": state.agent.current_mode().await.as_str(),
+        "concurrent_limit": state.agent.concurrent_jobs_limit(),
+        "is_manual_override": state.agent.is_manual_override(),
     }))
+}
+
+async fn get_engine_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let cpu_count = {
+        let sys = state.sys.lock().unwrap_or_else(|e| e.into_inner());
+        sys.cpus().len()
+    };
+    drop(config);
+    axum::Json(serde_json::json!({
+        "mode": state.agent.current_mode().await.as_str(),
+        "is_manual_override": state.agent.is_manual_override(),
+        "concurrent_limit": state.agent.concurrent_jobs_limit(),
+        "cpu_count": cpu_count,
+        "computed_limits": {
+            "background": crate::config::EngineMode::Background
+                .concurrent_jobs_for_cpu_count(cpu_count),
+            "balanced": crate::config::EngineMode::Balanced
+                .concurrent_jobs_for_cpu_count(cpu_count),
+            "throughput": crate::config::EngineMode::Throughput
+                .concurrent_jobs_for_cpu_count(cpu_count),
+        }
+    }))
+}
+
+#[derive(Deserialize)]
+struct SetEngineModePayload {
+    mode: crate::config::EngineMode,
+    // Optional manual override of concurrent jobs.
+    // If provided, bypasses mode auto-computation.
+    concurrent_jobs_override: Option<usize>,
+    // Optional manual thread override (0 = auto).
+    threads_override: Option<usize>,
+}
+
+async fn set_engine_mode_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<SetEngineModePayload>,
+) -> impl IntoResponse {
+    let cpu_count = {
+        let sys = state.sys.lock().unwrap_or_else(|e| e.into_inner());
+        sys.cpus().len()
+    };
+
+    if let Some(override_jobs) = payload.concurrent_jobs_override {
+        if override_jobs == 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                "concurrent_jobs_override must be > 0",
+            )
+                .into_response();
+        }
+        state.agent.set_manual_override(true);
+        state.agent.set_concurrent_jobs(override_jobs).await;
+        *state.agent.engine_mode.write().await = payload.mode;
+    } else {
+        state.agent.apply_mode(payload.mode, cpu_count).await;
+    }
+
+    // Apply thread override to config if provided
+    if let Some(threads) = payload.threads_override {
+        let mut config = state.config.write().await;
+        config.transcode.threads = threads;
+    }
+
+    // Persist mode to config
+    {
+        let mut config = state.config.write().await;
+        config.system.engine_mode = payload.mode;
+    }
+    let config = state.config.read().await;
+    if let Err(e) = save_config_or_response(&state, &config).await {
+        return *e;
+    }
+
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "mode": payload.mode.as_str(),
+        "concurrent_limit": state.agent.concurrent_jobs_limit(),
+        "is_manual_override": state.agent.is_manual_override(),
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -3648,6 +3766,102 @@ mod tests {
         let persisted = crate::config::Config::load(config_path.as_path())?;
         assert_eq!(persisted.hardware.preferred_vendor.as_deref(), Some("cpu"));
         assert_eq!(persisted.hardware.device_path, None);
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn engine_mode_endpoint_applies_manual_override_and_persists_mode(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_json_request(
+                Method::POST,
+                "/api/engine/mode",
+                &token,
+                json!({
+                    "mode": "throughput",
+                    "concurrent_jobs_override": 2,
+                    "threads_override": 3
+                }),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+        assert_eq!(payload["mode"], "throughput");
+        assert_eq!(payload["concurrent_limit"], 2);
+        assert_eq!(payload["is_manual_override"], true);
+
+        assert_eq!(
+            state.agent.current_mode().await,
+            crate::config::EngineMode::Throughput
+        );
+        assert_eq!(state.agent.concurrent_jobs_limit(), 2);
+        assert!(state.agent.is_manual_override());
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/engine/mode",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+        assert_eq!(payload["mode"], "throughput");
+        assert_eq!(payload["concurrent_limit"], 2);
+        assert_eq!(payload["is_manual_override"], true);
+        assert!(payload["cpu_count"].as_u64().unwrap_or(0) > 0);
+
+        let persisted = crate::config::Config::load(config_path.as_path())?;
+        assert_eq!(
+            persisted.system.engine_mode,
+            crate::config::EngineMode::Throughput
+        );
+        assert_eq!(persisted.transcode.threads, 3);
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn engine_status_endpoint_reports_draining_state(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        state.agent.pause();
+        state.agent.set_scheduler_paused(true);
+        state.agent.set_manual_override(true);
+        state.agent.drain();
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/engine/status",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+        assert_eq!(payload["status"], "draining");
+        assert_eq!(payload["manual_paused"], true);
+        assert_eq!(payload["scheduler_paused"], true);
+        assert_eq!(payload["draining"], true);
+        assert_eq!(payload["mode"], "balanced");
+        assert_eq!(payload["concurrent_limit"], 1);
+        assert_eq!(payload["is_manual_override"], true);
 
         cleanup_paths(&[config_path, db_path]);
         Ok(())

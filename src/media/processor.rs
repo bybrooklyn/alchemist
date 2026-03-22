@@ -22,6 +22,9 @@ pub struct Agent {
     held_permits: Arc<Mutex<Vec<OwnedSemaphorePermit>>>,
     paused: Arc<AtomicBool>,
     scheduler_paused: Arc<AtomicBool>,
+    draining: Arc<AtomicBool>,
+    manual_override: Arc<AtomicBool>,
+    pub(crate) engine_mode: Arc<tokio::sync::RwLock<crate::config::EngineMode>>,
     dry_run: bool,
 }
 
@@ -37,6 +40,7 @@ impl Agent {
         // Read config asynchronously to avoid blocking atomic in async runtime
         let config_read = config.read().await;
         let concurrent_jobs = config_read.transcode.concurrent_jobs;
+        let engine_mode = config_read.system.engine_mode;
         drop(config_read);
 
         Self {
@@ -50,6 +54,9 @@ impl Agent {
             held_permits: Arc::new(Mutex::new(Vec::new())),
             paused: Arc::new(AtomicBool::new(false)),
             scheduler_paused: Arc::new(AtomicBool::new(false)),
+            draining: Arc::new(AtomicBool::new(false)),
+            manual_override: Arc::new(AtomicBool::new(false)),
+            engine_mode: Arc::new(tokio::sync::RwLock::new(engine_mode)),
             dry_run,
         }
     }
@@ -115,6 +122,49 @@ impl Agent {
     pub fn resume(&self) {
         self.paused.store(false, Ordering::SeqCst);
         info!("Engine resumed.");
+    }
+
+    pub fn drain(&self) {
+        // Stop accepting new jobs but finish active ones.
+        // Sets draining=true. Does NOT set paused=true.
+        self.draining.store(true, Ordering::SeqCst);
+        info!("Engine draining — finishing active jobs, no new jobs will start.");
+    }
+
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
+    }
+
+    pub fn stop_drain(&self) {
+        self.draining.store(false, Ordering::SeqCst);
+    }
+
+    pub async fn current_mode(&self) -> crate::config::EngineMode {
+        *self.engine_mode.read().await
+    }
+
+    /// Apply a resource mode. Computes the correct concurrent
+    /// job count from cpu_count and calls set_concurrent_jobs.
+    /// Clears manual override flag.
+    pub async fn apply_mode(&self, mode: crate::config::EngineMode, cpu_count: usize) {
+        let jobs = mode.concurrent_jobs_for_cpu_count(cpu_count);
+        *self.engine_mode.write().await = mode;
+        self.set_manual_override(false);
+        self.set_concurrent_jobs(jobs).await;
+        info!(
+            "Engine mode set to '{}' → {} concurrent jobs ({} CPUs)",
+            mode.as_str(),
+            jobs,
+            cpu_count
+        );
+    }
+
+    pub fn set_manual_override(&self, value: bool) {
+        self.manual_override.store(value, Ordering::SeqCst);
+    }
+
+    pub fn is_manual_override(&self) -> bool {
+        self.manual_override.load(Ordering::SeqCst)
     }
 
     pub async fn set_concurrent_jobs(&self, new_limit: usize) {
@@ -190,6 +240,12 @@ impl Agent {
                     continue;
                 }
             };
+
+            if self.is_draining() {
+                drop(permit);
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
 
             match self.db.claim_next_job().await {
                 Ok(Some(job)) => {

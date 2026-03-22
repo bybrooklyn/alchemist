@@ -229,6 +229,40 @@ impl SubtitleMode {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum EngineMode {
+    Background,
+    #[default]
+    Balanced,
+    Throughput,
+}
+
+impl EngineMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Balanced => "balanced",
+            Self::Throughput => "throughput",
+        }
+    }
+
+    /// Compute the appropriate concurrent job count for this
+    /// mode given the number of logical CPU cores available.
+    /// Returns 0 to signal "use the stored manual override".
+    pub fn concurrent_jobs_for_cpu_count(&self, cpu_count: usize) -> usize {
+        match self {
+            // Background: always 1 job, minimal impact
+            Self::Background => 1,
+            // Balanced: half the cores, minimum 1, maximum 4
+            Self::Balanced => (cpu_count / 2).max(1).min(4),
+            // Throughput: half the cores uncapped, minimum 1
+            Self::Throughput => (cpu_count / 2).max(1),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScannerConfig {
     pub directories: Vec<String>,
@@ -419,6 +453,8 @@ pub struct SystemConfig {
     pub enable_telemetry: bool,
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: Option<u32>,
+    #[serde(default)]
+    pub engine_mode: EngineMode,
 }
 
 fn default_true() -> bool {
@@ -443,6 +479,7 @@ impl Default for SystemConfig {
             monitoring_poll_interval: default_poll_interval(),
             enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
+            engine_mode: EngineMode::default(),
         }
     }
 }
@@ -556,6 +593,7 @@ impl Default for Config {
                 monitoring_poll_interval: default_poll_interval(),
                 enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
+                engine_mode: EngineMode::default(),
             },
         }
     }
@@ -801,5 +839,11 @@ mod tests {
         config.canonicalize_for_save();
         assert!(config.notifications.webhook_url.is_none());
         assert!(!config.notifications.notify_on_complete);
+    }
+
+    #[test]
+    fn engine_mode_defaults_to_balanced() {
+        assert_eq!(EngineMode::default(), EngineMode::Balanced);
+        assert_eq!(EngineMode::Balanced.concurrent_jobs_for_cpu_count(8), 4);
     }
 }
