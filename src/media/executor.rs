@@ -1,7 +1,7 @@
 use crate::db::{AlchemistEvent, Db, Job};
 use crate::error::Result;
 use crate::media::pipeline::{
-    ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
+    Encoder, ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
 };
 use crate::orchestrator::{ExecutionObserver, TranscodeRequest, Transcoder};
 use crate::system::hardware::HardwareInfo;
@@ -122,11 +122,13 @@ impl Executor for FfmpegExecutor {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| PathBuf::from(&job.output_path));
-        let encoder = plan.encoder.ok_or_else(|| {
-            crate::error::AlchemistError::Config("Transcode plan missing encoder".into())
-        })?;
-        let planned_output_codec = plan.output_codec.unwrap_or_else(|| encoder.output_codec());
-        let used_backend = plan.backend.unwrap_or_else(|| encoder.backend());
+        let encoder = plan.encoder;
+        let planned_output_codec = plan.output_codec.unwrap_or_else(|| {
+            encoder
+                .map(Encoder::output_codec)
+                .unwrap_or(plan.requested_codec)
+        });
+        let used_backend = plan.backend.or_else(|| encoder.map(Encoder::backend));
         let observer: Arc<dyn ExecutionObserver> = Arc::new(JobExecutionObserver::new(
             job.id,
             self.db.clone(),
@@ -182,13 +184,21 @@ impl Executor for FfmpegExecutor {
                     .clone()
                     .or_else(|| probe.format_encoder_tag.clone())
             })
-            .or_else(|| Some(encoder.ffmpeg_encoder_name().to_string()));
+            .or_else(|| {
+                if plan.is_remux {
+                    Some("copy".to_string())
+                } else {
+                    encoder.map(|encoder| encoder.ffmpeg_encoder_name().to_string())
+                }
+            });
         let codec_mismatch = actual_output_codec
             .is_some_and(|actual_output_codec| actual_output_codec != planned_output_codec);
-        let encoder_mismatch = actual_probe
-            .as_ref()
-            .and_then(|probe| probe.stream_encoder_tag.as_deref())
-            .is_some_and(|tag| !encoder_tag_matches(encoder, tag));
+        let encoder_mismatch = encoder.is_some_and(|encoder| {
+            actual_probe
+                .as_ref()
+                .and_then(|probe| probe.stream_encoder_tag.as_deref())
+                .is_some_and(|tag| !encoder_tag_matches(encoder, tag))
+        });
 
         if codec_mismatch {
             tracing::warn!(
@@ -205,7 +215,9 @@ impl Executor for FfmpegExecutor {
             tracing::warn!(
                 "Job {}: Planned encoder {} but stream tag reported {:?}",
                 job.id,
-                encoder.ffmpeg_encoder_name(),
+                encoder
+                    .expect("encoder mismatch implies requested encoder")
+                    .ffmpeg_encoder_name(),
                 actual_probe
                     .as_ref()
                     .and_then(|probe| probe.stream_encoder_tag.as_deref())

@@ -146,7 +146,7 @@ impl Transcoder {
             return Ok(());
         };
 
-        if let Some(sidecar_output) = request.plan.subtitles.sidecar_output() {
+        for sidecar_output in request.plan.subtitles.sidecar_outputs() {
             if let Some(parent) = sidecar_output.temp_path.parent() {
                 if !parent.as_os_str().is_empty() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {

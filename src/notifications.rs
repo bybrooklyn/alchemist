@@ -120,11 +120,11 @@ impl NotificationManager {
         status: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let color = match status {
-            "completed" => 0x00FF00, // Green
-            "failed" => 0xFF0000,    // Red
-            "queued" => 0xF1C40F,    // Yellow
-            "encoding" => 0x3498DB,  // Blue
-            _ => 0x95A5A6,           // Gray
+            "completed" => 0x00FF00,             // Green
+            "failed" => 0xFF0000,                // Red
+            "queued" => 0xF1C40F,                // Yellow
+            "encoding" | "remuxing" => 0x3498DB, // Blue
+            _ => 0x95A5A6,                       // Gray
         };
 
         let message = match event {

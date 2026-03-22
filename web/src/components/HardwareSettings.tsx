@@ -7,6 +7,12 @@ interface HardwareInfo {
     vendor: string;
     device_path: string | null;
     supported_codecs: string[];
+    backends?: Array<{
+        kind: string;
+        codec: string;
+        encoder: string;
+        device_path: string | null;
+    }>;
     detection_notes?: string[];
 }
 
@@ -135,11 +141,21 @@ export default function HardwareSettings() {
         }
     };
 
+    const intelTechLabel = (() => {
+        const backendKinds = new Set((info.backends ?? []).map((backend) => backend.kind.toLowerCase()));
+        const hasVaapi = backendKinds.has("vaapi");
+        const hasQsv = backendKinds.has("qsv");
+        if (hasVaapi && hasQsv) return "VAAPI/QSV";
+        if (hasVaapi) return "VAAPI";
+        if (hasQsv) return "QSV";
+        return "Auto";
+    })();
+
     const getVendorDetails = (vendor: string) => {
         switch (normalizeVendor(vendor)) {
             case "nvidia": return { name: "NVIDIA", tech: "NVENC", color: "text-emerald-500", bg: "bg-emerald-500/10" };
             case "amd": return { name: "AMD", tech: "VAAPI/AMF", color: "text-red-500", bg: "bg-red-500/10" };
-            case "intel": return { name: "Intel", tech: "QuickSync (QSV)", color: "text-blue-500", bg: "bg-blue-500/10" };
+            case "intel": return { name: "Intel", tech: intelTechLabel, color: "text-blue-500", bg: "bg-blue-500/10" };
             case "apple": return { name: "Apple", tech: "VideoToolbox", color: "text-helios-slate", bg: "bg-helios-slate/10" };
             default: return { name: "CPU", tech: "Software Fallback", color: "text-helios-solar", bg: "bg-helios-solar/10" };
         }
@@ -150,6 +166,7 @@ export default function HardwareSettings() {
     const detectionNotes = info.detection_notes ?? [];
     const failedProbeEntries = probeLog.entries.filter((entry) => !entry.success);
     const shouldShowProbeLog = vendor === "cpu" || failedProbeEntries.length > 0;
+    const intelVaapiDetected = vendor === "intel" && (info.backends ?? []).some((backend) => backend.kind.toLowerCase() === "vaapi");
 
     return (
         <div className="flex flex-col gap-6" aria-live="polite">
@@ -210,6 +227,17 @@ export default function HardwareSettings() {
                     </div>
                 </div>
             </div>
+
+            {intelVaapiDetected && (
+                <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3">
+                    <div className="flex gap-3">
+                        <AlertCircle className="shrink-0 text-blue-500" size={18} />
+                        <p className="text-xs leading-relaxed text-helios-slate">
+                            Intel Arc detected via VAAPI (i915/xe driver). This is the recommended path for Arc GPUs on Linux.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {vendor === "cpu" && (
                 <div className="p-4 bg-helios-solar/5 border border-helios-solar/10 rounded-lg">

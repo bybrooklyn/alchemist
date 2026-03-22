@@ -295,6 +295,10 @@ fn app_router(state: Arc<AppState>) -> Router {
             post(start_library_health_scan_handler),
         )
         .route(
+            "/api/library/health/scan/:id",
+            post(rescan_library_health_issue_handler),
+        )
+        .route(
             "/api/library/health/issues",
             get(get_library_health_issues_handler),
         )
@@ -604,7 +608,7 @@ async fn request_job_cancel(state: &AppState, job: &crate::db::Job) -> Result<bo
                 .await?;
             Ok(true)
         }
-        JobState::Encoding => Ok(state.transcoder.cancel_job(job.id)),
+        JobState::Encoding | JobState::Remuxing => Ok(state.transcoder.cancel_job(job.id)),
         _ => Ok(false),
     }
 }
@@ -1309,7 +1313,9 @@ async fn get_stats_data(db: &Db, concurrent_limit: usize) -> Result<StatsData> {
         .as_object()
         .map(|m| {
             m.iter()
-                .filter(|(k, _)| ["encoding", "analyzing", "resuming"].contains(&k.as_str()))
+                .filter(|(k, _)| {
+                    ["encoding", "analyzing", "remuxing", "resuming"].contains(&k.as_str())
+                })
                 .map(|(_, v)| v.as_i64().unwrap_or(0))
                 .sum::<i64>()
         })
@@ -1535,9 +1541,30 @@ async fn get_library_health_issues_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     match state.db.get_jobs_with_health_issues().await {
-        Ok(jobs) => axum::Json(jobs).into_response(),
+        Ok(jobs) => {
+            let issues = jobs
+                .into_iter()
+                .map(|row| {
+                    let (job, raw_health_issue) = row.into_parts();
+                    let report = serde_json::from_str::<crate::media::health::HealthIssueReport>(
+                        &raw_health_issue,
+                    )
+                    .unwrap_or_else(|_| {
+                        crate::media::health::categorize_health_output(&raw_health_issue)
+                    });
+                    LibraryHealthIssueResponse { job, report }
+                })
+                .collect::<Vec<_>>();
+            axum::Json(issues).into_response()
+        }
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     }
+}
+
+#[derive(Serialize)]
+struct LibraryHealthIssueResponse {
+    job: crate::db::Job,
+    report: crate::media::health::HealthIssueReport,
 }
 
 async fn run_library_health_scan(db: Arc<Db>) {
@@ -1588,7 +1615,7 @@ async fn run_library_health_scan(db: Arc<Db>) {
                             {
                                 Ok(issues) => {
                                     if let Err(err) =
-                                        db.record_health_check(job.id, issues.clone()).await
+                                        db.record_health_check(job.id, issues.as_ref()).await
                                     {
                                         error!(
                                             "Failed to record library health result for job {}: {}",
@@ -1599,10 +1626,7 @@ async fn run_library_health_scan(db: Arc<Db>) {
 
                                     let mut guard = counters.lock().await;
                                     guard.0 += 1;
-                                    if issues
-                                        .as_deref()
-                                        .is_some_and(|issues| !issues.trim().is_empty())
-                                    {
+                                    if issues.is_some() {
                                         guard.1 += 1;
                                     }
                                 }
@@ -1651,6 +1675,31 @@ async fn start_library_health_scan_handler(
         axum::Json(serde_json::json!({ "status": "accepted" })),
     )
         .into_response()
+}
+
+async fn rescan_library_health_issue_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let job = match state.db.get_job_by_id(id).await {
+        Ok(Some(job)) => job,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    match crate::media::health::HealthChecker::check_file(FsPath::new(&job.output_path)).await {
+        Ok(issue) => {
+            if let Err(err) = state.db.record_health_check(job.id, issue.as_ref()).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            }
+            axum::Json(serde_json::json!({
+                "job_id": job.id,
+                "issue_found": issue.is_some(),
+            }))
+            .into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -2855,7 +2904,8 @@ async fn get_job_detail_handler(
     let metadata = match job.status {
         crate::db::JobState::Queued
         | crate::db::JobState::Analyzing
-        | crate::db::JobState::Encoding => None,
+        | crate::db::JobState::Encoding
+        | crate::db::JobState::Remuxing => None,
         _ => {
             let analyzer = crate::media::analyzer::FfmpegAnalyzer;
             use crate::media::pipeline::Analyzer;
@@ -4193,10 +4243,7 @@ mod tests {
             payload["job_failure_summary"].as_str(),
             Some("No such file or directory")
         );
-        assert_eq!(
-            payload["job_logs"].as_array().map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(payload["job_logs"].as_array().map(Vec::len), Some(2));
         assert_eq!(
             payload["job_logs"][1]["message"].as_str(),
             Some("No such file or directory")

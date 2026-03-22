@@ -7,7 +7,7 @@ use crate::media::pipeline::{
 };
 use crate::system::hardware::{HardwareBackend, HardwareInfo, Vendor};
 use async_trait::async_trait;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -67,6 +67,42 @@ impl Planner for BasicPlanner {
             .unwrap_or(self.config.transcode.hdr_mode);
         let audio_mode = profile.map(|profile| audio_mode_from_profile(&profile.audio_mode));
         let crf_override = profile.and_then(|profile| profile.crf_override);
+        let decision = should_transcode(analysis, &self.config, requested_codec, &container);
+
+        if let TranscodeDecision::Skip { reason } = &decision {
+            return Ok(skip_plan(
+                reason.clone(),
+                container,
+                requested_codec,
+                self.config.transcode.allow_fallback,
+                self.config.transcode.threads,
+            ));
+        }
+
+        if let TranscodeDecision::Remux { reason } = &decision {
+            return Ok(TranscodePlan {
+                decision: TranscodeDecision::Remux {
+                    reason: reason.clone(),
+                },
+                is_remux: true,
+                output_path: None,
+                container,
+                requested_codec,
+                output_codec: Some(requested_codec),
+                encoder: None,
+                backend: None,
+                rate_control: None,
+                encoder_preset: None,
+                threads: self.config.transcode.threads,
+                audio: AudioStreamPlan::Copy,
+                audio_stream_indices: None,
+                subtitles: SubtitleStreamPlan::CopyAllCompatible,
+                filters: Vec::new(),
+                allow_fallback: self.config.transcode.allow_fallback,
+                fallback: None,
+            });
+        }
+
         let available_encoders =
             build_available_encoders(&self.config, self.hw_info.as_ref(), &self.encoder_caps);
 
@@ -88,18 +124,6 @@ impl Planner for BasicPlanner {
                     "Preferred codec {} unavailable and fallback disabled",
                     requested_codec.as_str()
                 ),
-                container,
-                requested_codec,
-                self.config.transcode.allow_fallback,
-                self.config.transcode.threads,
-            ));
-        }
-
-        let decision = should_transcode(analysis, &self.config, requested_codec);
-
-        if let TranscodeDecision::Skip { reason } = &decision {
-            return Ok(skip_plan(
-                reason.clone(),
                 container,
                 requested_codec,
                 self.config.transcode.allow_fallback,
@@ -156,6 +180,7 @@ impl Planner for BasicPlanner {
 
         Ok(TranscodePlan {
             decision,
+            is_remux: false,
             output_path: None,
             container,
             requested_codec,
@@ -184,6 +209,7 @@ fn skip_plan(
 ) -> TranscodePlan {
     TranscodePlan {
         decision: TranscodeDecision::Skip { reason },
+        is_remux: false,
         output_path: None,
         container,
         requested_codec,
@@ -222,26 +248,42 @@ fn should_transcode(
     analysis: &MediaAnalysis,
     config: &Config,
     target_codec: OutputCodec,
+    target_container: &str,
 ) -> TranscodeDecision {
     let metadata = &analysis.metadata;
     let target_codec_str = target_codec.as_str();
+    let input_container = primary_container(&metadata.container);
 
-    if metadata.codec_name.eq_ignore_ascii_case(target_codec_str) && metadata.bit_depth == Some(10)
+    let already_target_codec_reason = if metadata.codec_name.eq_ignore_ascii_case(target_codec_str)
+        && metadata.bit_depth == Some(10)
     {
-        return TranscodeDecision::Skip {
-            reason: format!("already_target_codec|codec={target_codec_str},bit_depth=10"),
-        };
-    }
-
-    if target_codec == OutputCodec::H264
+        Some(format!(
+            "already_target_codec|codec={target_codec_str},bit_depth=10"
+        ))
+    } else if target_codec == OutputCodec::H264
         && metadata.codec_name.eq_ignore_ascii_case("h264")
         && metadata.bit_depth.is_some_and(|depth| depth <= 8)
     {
+        Some(format!(
+            "already_target_codec|codec=h264,bit_depth={}",
+            metadata.bit_depth.unwrap_or(8)
+        ))
+    } else {
+        None
+    };
+
+    if let Some(skip_reason) = already_target_codec_reason {
+        if container_requires_remux(&input_container, target_container) {
+            return TranscodeDecision::Remux {
+                reason: format!(
+                    "already_target_codec_wrong_container|container={},target_extension={}",
+                    input_container, target_container
+                ),
+            };
+        }
+
         return TranscodeDecision::Skip {
-            reason: format!(
-                "already_target_codec|codec=h264,bit_depth={}",
-                metadata.bit_depth.unwrap_or(8)
-            ),
+            reason: skip_reason,
         };
     }
 
@@ -412,8 +454,8 @@ fn select_encoder(
     allow_fallback: bool,
 ) -> Option<(Encoder, Option<PlannedFallback>)> {
     if let Some(encoder) = first_available(
-        requested_gpu_candidates(target_codec),
         &available_encoders.gpu,
+        requested_gpu_candidates(target_codec),
     ) {
         return Some((encoder, None));
     }
@@ -421,22 +463,22 @@ fn select_encoder(
     if !available_encoders.gpu.is_empty() {
         if allow_fallback {
             if let Some(encoder) = first_available(
-                fallback_gpu_candidates(target_codec),
                 &available_encoders.gpu,
+                fallback_gpu_candidates(target_codec),
             ) {
                 return Some((encoder, Some(codec_fallback(target_codec, encoder))));
             }
 
             if let Some(encoder) = first_available(
-                requested_cpu_candidates(target_codec),
                 &available_encoders.cpu,
+                requested_cpu_candidates(target_codec),
             ) {
                 return Some((encoder, Some(cpu_fallback(target_codec, encoder))));
             }
 
             if let Some(encoder) = first_available(
-                fallback_cpu_candidates(target_codec),
                 &available_encoders.cpu,
+                fallback_cpu_candidates(target_codec),
             ) {
                 return Some((encoder, Some(cpu_fallback(target_codec, encoder))));
             }
@@ -446,16 +488,16 @@ fn select_encoder(
     }
 
     if let Some(encoder) = first_available(
-        requested_cpu_candidates(target_codec),
         &available_encoders.cpu,
+        requested_cpu_candidates(target_codec),
     ) {
         return Some((encoder, None));
     }
 
     if allow_fallback {
         if let Some(encoder) = first_available(
-            fallback_cpu_candidates(target_codec),
             &available_encoders.cpu,
+            fallback_cpu_candidates(target_codec),
         ) {
             return Some((encoder, Some(codec_fallback(target_codec, encoder))));
         }
@@ -464,11 +506,11 @@ fn select_encoder(
     None
 }
 
-fn first_available(candidates: &[Encoder], available_encoders: &[Encoder]) -> Option<Encoder> {
-    candidates
+fn first_available(available_encoders: &[Encoder], candidates: &[Encoder]) -> Option<Encoder> {
+    available_encoders
         .iter()
         .copied()
-        .find(|candidate| available_encoders.contains(candidate))
+        .find(|candidate| candidates.contains(candidate))
 }
 
 fn requested_gpu_candidates(target_codec: OutputCodec) -> &'static [Encoder] {
@@ -826,13 +868,12 @@ fn plan_subtitles(
             if subtitle_streams.is_empty() {
                 Ok(SubtitleStreamPlan::Drop)
             } else {
-                Ok(SubtitleStreamPlan::Extract {
-                    stream_indices: subtitle_streams
-                        .iter()
-                        .map(|stream| stream.stream_index)
-                        .collect(),
-                    sidecar_output: sidecar_output_for(output_path),
-                })
+                let outputs = sidecar_outputs_for(output_path, subtitle_streams);
+                if outputs.is_empty() {
+                    Ok(SubtitleStreamPlan::Drop)
+                } else {
+                    Ok(SubtitleStreamPlan::Extract { outputs })
+                }
             }
         }
     }
@@ -868,18 +909,116 @@ fn select_burn_subtitle_stream(
         .or_else(|| subtitle_streams.iter().find(|stream| stream.burnable))
 }
 
-fn sidecar_output_for(output_path: &Path) -> SidecarOutputPlan {
+fn sidecar_outputs_for(
+    output_path: &Path,
+    subtitle_streams: &[SubtitleStreamMetadata],
+) -> Vec<SidecarOutputPlan> {
     let parent = output_path.parent().unwrap_or_else(|| Path::new(""));
     let stem = output_path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("output");
-    let final_path = parent.join(format!("{stem}.subs.mks"));
-    let temp_name = format!("{stem}.subs.mks.alchemist-part");
-    SidecarOutputPlan {
-        final_path,
-        temp_path: parent.join(temp_name),
+    let mut language_counts = HashMap::new();
+    let mut outputs = Vec::new();
+
+    for stream in subtitle_streams {
+        let codec_name = stream.codec_name.to_ascii_lowercase();
+        let Some((codec, extension)) = subtitle_sidecar_codec_and_extension(&codec_name) else {
+            if matches!(
+                codec_name.as_str(),
+                "dvd_subtitle" | "dvdsub" | "hdmv_pgs_subtitle"
+            ) {
+                tracing::warn!(
+                    "Skipping subtitle stream {} ({}): bitmap subtitles cannot be extracted to text sidecars",
+                    stream.stream_index,
+                    stream.codec_name
+                );
+            } else {
+                tracing::warn!(
+                    "Skipping subtitle stream {} ({}): unsupported subtitle codec for sidecar extraction",
+                    stream.stream_index,
+                    stream.codec_name
+                );
+            }
+            continue;
+        };
+
+        let language = normalized_subtitle_language(stream.language.as_deref());
+        let ordinal = language_counts
+            .entry(language.clone())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+        let filename = if *ordinal == 1 {
+            format!("{stem}.{language}.{extension}")
+        } else {
+            format!("{stem}.{language}.{}.{extension}", *ordinal)
+        };
+        let final_path = parent.join(&filename);
+        let temp_path = parent.join(format!("{filename}.alchemist-part"));
+
+        outputs.push(SidecarOutputPlan {
+            stream_index: stream.stream_index,
+            codec: codec.to_string(),
+            final_path,
+            temp_path,
+        });
     }
+
+    outputs
+}
+
+fn subtitle_sidecar_codec_and_extension(codec_name: &str) -> Option<(&'static str, &'static str)> {
+    match codec_name {
+        "subrip" | "srt" => Some(("srt", "srt")),
+        "ass" | "ssa" => Some(("ass", "ass")),
+        "webvtt" => Some(("webvtt", "vtt")),
+        _ => None,
+    }
+}
+
+fn normalized_subtitle_language(language: Option<&str>) -> String {
+    let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) else {
+        return "und".to_string();
+    };
+
+    let normalized = language
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else if matches!(ch, '-' | '_') {
+                '-'
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .trim_matches('-')
+        .to_string();
+
+    if normalized.is_empty() {
+        "und".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn primary_container(container: &str) -> String {
+    container
+        .split(',')
+        .next()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "mkv".to_string())
+}
+
+fn is_mp4_family_container(container: &str) -> bool {
+    matches!(container, "mp4" | "m4v" | "mov")
+}
+
+fn container_requires_remux(input_container: &str, target_container: &str) -> bool {
+    is_mp4_family_container(input_container) && !is_mp4_family_container(target_container)
 }
 
 fn plan_filters(
@@ -1151,22 +1290,91 @@ mod tests {
         .expect("extract plan");
 
         match plan {
-            SubtitleStreamPlan::Extract {
-                stream_indices,
-                sidecar_output,
-            } => {
-                assert_eq!(stream_indices, vec![0]);
+            SubtitleStreamPlan::Extract { outputs } => {
+                assert_eq!(outputs.len(), 1);
+                assert_eq!(outputs[0].stream_index, 0);
+                assert_eq!(outputs[0].codec, "srt");
                 assert_eq!(
-                    sidecar_output.final_path,
-                    Path::new("/tmp/library/movie-alchemist.subs.mks")
+                    outputs[0].final_path,
+                    Path::new("/tmp/library/movie-alchemist.eng.srt")
                 );
                 assert_eq!(
-                    sidecar_output.temp_path,
-                    Path::new("/tmp/library/movie-alchemist.subs.mks.alchemist-part")
+                    outputs[0].temp_path,
+                    Path::new("/tmp/library/movie-alchemist.eng.srt.alchemist-part")
                 );
             }
             _ => panic!("expected extract plan"),
         }
+    }
+
+    #[test]
+    fn extract_sidecars_append_language_index_for_duplicates() {
+        let plan = plan_subtitles(
+            &[
+                SubtitleStreamMetadata {
+                    stream_index: 0,
+                    codec_name: "subrip".to_string(),
+                    language: Some("eng".to_string()),
+                    title: None,
+                    default: true,
+                    forced: false,
+                    burnable: true,
+                },
+                SubtitleStreamMetadata {
+                    stream_index: 1,
+                    codec_name: "ass".to_string(),
+                    language: Some("eng".to_string()),
+                    title: None,
+                    default: false,
+                    forced: false,
+                    burnable: true,
+                },
+            ],
+            "mkv",
+            Path::new("/tmp/library/movie-alchemist.mkv"),
+            SubtitleMode::Extract,
+        )
+        .expect("extract plan");
+
+        match plan {
+            SubtitleStreamPlan::Extract { outputs } => {
+                assert_eq!(outputs.len(), 2);
+                assert_eq!(
+                    outputs[0].final_path,
+                    Path::new("/tmp/library/movie-alchemist.eng.srt")
+                );
+                assert_eq!(
+                    outputs[1].final_path,
+                    Path::new("/tmp/library/movie-alchemist.eng.2.ass")
+                );
+            }
+            _ => panic!("expected extract plan"),
+        }
+    }
+
+    #[test]
+    fn mp4_target_codec_to_mkv_remuxes_instead_of_skipping() {
+        let mut source = analysis();
+        source.metadata.container = "mp4".to_string();
+        let decision = should_transcode(&source, &config(), OutputCodec::Hevc, "mkv");
+        assert!(matches!(decision, TranscodeDecision::Remux { .. }));
+    }
+
+    #[test]
+    fn already_target_codec_in_mkv_still_skips() {
+        let mut source = analysis();
+        source.metadata.container = "matroska".to_string();
+        let decision = should_transcode(&source, &config(), OutputCodec::Hevc, "mkv");
+        assert!(matches!(decision, TranscodeDecision::Skip { .. }));
+    }
+
+    #[test]
+    fn av1_in_mkv_still_skips_instead_of_remuxing() {
+        let mut source = analysis();
+        source.metadata.codec_name = "av1".to_string();
+        source.metadata.container = "matroska".to_string();
+        let decision = should_transcode(&source, &config(), OutputCodec::Av1, "mkv");
+        assert!(matches!(decision, TranscodeDecision::Skip { .. }));
     }
 
     #[test]
@@ -1180,6 +1388,19 @@ mod tests {
             select_encoder(OutputCodec::Av1, &inventory, true).expect("selected encoder");
         assert_eq!(encoder, Encoder::HevcQsv);
         assert_eq!(fallback.expect("fallback").kind, FallbackKind::Codec);
+    }
+
+    #[test]
+    fn encoder_selection_respects_detected_gpu_backend_order() {
+        let inventory = EncoderInventory {
+            gpu: vec![Encoder::Av1Vaapi, Encoder::Av1Qsv],
+            cpu: Vec::new(),
+        };
+
+        let (encoder, fallback) =
+            select_encoder(OutputCodec::Av1, &inventory, false).expect("selected encoder");
+        assert_eq!(encoder, Encoder::Av1Vaapi);
+        assert!(fallback.is_none());
     }
 
     #[test]

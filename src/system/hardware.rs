@@ -1,5 +1,5 @@
 use crate::error::Result;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ impl std::fmt::Display for Vendor {
         match self {
             Vendor::Nvidia => write!(f, "NVIDIA (NVENC)"),
             Vendor::Amd => write!(f, "AMD (VAAPI/AMF)"),
-            Vendor::Intel => write!(f, "Intel (QSV)"),
+            Vendor::Intel => write!(f, "Intel (VAAPI/QSV)"),
             Vendor::Apple => write!(f, "Apple (VideoToolbox)"),
             Vendor::Cpu => write!(f, "CPU (Software Encoding)"),
         }
@@ -305,7 +305,7 @@ fn collect_backend_capabilities<R: CommandRunner + ?Sized>(
             spec.device_path.as_deref(),
         );
     }
-    backends
+    dedupe_backend_capabilities_by_codec(backends)
 }
 
 fn collect_backend_capabilities_verbose<R: CommandRunner + ?Sized>(
@@ -350,7 +350,17 @@ fn collect_backend_capabilities_verbose<R: CommandRunner + ?Sized>(
         }
     }
 
+    dedupe_backend_capabilities_by_codec(backends)
+}
+
+fn dedupe_backend_capabilities_by_codec(
+    backends: Vec<BackendCapability>,
+) -> Vec<BackendCapability> {
+    let mut seen = HashSet::new();
     backends
+        .into_iter()
+        .filter(|backend| seen.insert(backend.codec.clone()))
+        .collect()
 }
 
 fn backend_probe_specs_for_vendor(
@@ -400,6 +410,24 @@ fn backend_probe_specs_for_vendor(
             },
         ],
         Vendor::Intel => vec![
+            BackendProbeSpec {
+                kind: HardwareBackend::Vaapi,
+                codec: "av1".to_string(),
+                encoder: "av1_vaapi".to_string(),
+                device_path: device_path.clone(),
+            },
+            BackendProbeSpec {
+                kind: HardwareBackend::Vaapi,
+                codec: "hevc".to_string(),
+                encoder: "hevc_vaapi".to_string(),
+                device_path: device_path.clone(),
+            },
+            BackendProbeSpec {
+                kind: HardwareBackend::Vaapi,
+                codec: "h264".to_string(),
+                encoder: "h264_vaapi".to_string(),
+                device_path: device_path.clone(),
+            },
             BackendProbeSpec {
                 kind: HardwareBackend::Qsv,
                 codec: "av1".to_string(),
@@ -779,11 +807,18 @@ fn note_for_failed_vendor(vendor: Vendor, probe_log: &HardwareProbeLog) -> Optio
         Vendor::Intel => {
             if let Some(device_path) = intel_render_device_path() {
                 let mut note = format!(
-                    "Intel QSV probe failed at {} — check that the i915/xe driver is loaded and the device is accessible",
+                    "Intel VAAPI/QSV probe failed at {} — check that the i915/xe driver is loaded and the device is accessible",
                     device_path
                 );
                 if let Some(stderr) =
-                    first_failed_probe_line(probe_log, HardwareBackend::Qsv, Some(&device_path))
+                    first_failed_probe_line(probe_log, HardwareBackend::Vaapi, Some(&device_path))
+                        .or_else(|| {
+                            first_failed_probe_line(
+                                probe_log,
+                                HardwareBackend::Qsv,
+                                Some(&device_path),
+                            )
+                        })
                 {
                     note.push_str(&format!(". FFmpeg said: {}", stderr));
                 }
@@ -897,7 +932,7 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
 
     if attempted_preferred_vendor != Some(Vendor::Intel) {
         if let Some(info) = try_detect_intel_with_runner_and_log(runner, &mut probe_log) {
-            info!("✓ Hardware acceleration: Intel Quick Sync Video (QSV)");
+            info!("✓ Hardware acceleration: Intel VAAPI/QSV");
             return Ok((info.with_detection_notes(detection_notes), probe_log));
         }
         if let Some(note) = note_for_failed_vendor(Vendor::Intel, &probe_log) {
@@ -1201,6 +1236,7 @@ mod tests {
         let runner = FakeRunner::with_successful_encoders(&[
             "av1_nvenc",
             "hevc_amf",
+            "av1_vaapi",
             "av1_qsv",
             "h264_vaapi",
             "hevc_videotoolbox",
@@ -1229,7 +1265,18 @@ mod tests {
             &runner,
             backend_probe_specs_for_vendor(Vendor::Intel, Some("/dev/dri/renderD129")),
         );
-        assert_eq!(intel[0].kind, HardwareBackend::Qsv);
+        assert_eq!(intel[0].kind, HardwareBackend::Vaapi);
+        assert_eq!(intel[0].codec, "av1");
+        assert!(intel
+            .iter()
+            .any(|backend| { backend.kind == HardwareBackend::Vaapi && backend.codec == "h264" }));
+        assert_eq!(
+            intel
+                .iter()
+                .filter(|backend| backend.codec == "av1")
+                .count(),
+            1
+        );
 
         let apple = collect_backend_capabilities(
             &runner,

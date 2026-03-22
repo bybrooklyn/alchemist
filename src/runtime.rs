@@ -30,9 +30,7 @@ fn default_data_dir() -> PathBuf {
         }
         if let Some(home) = env::var_os("HOME") {
             if !home.is_empty() {
-                return PathBuf::from(home)
-                    .join(".config")
-                    .join("alchemist");
+                return PathBuf::from(home).join(".config").join("alchemist");
             }
         }
         PathBuf::from(".")
@@ -50,17 +48,14 @@ fn default_data_dir() -> PathBuf {
     }
 
     // Any other platform: working directory
-    #[cfg(not(any(target_os = "linux", target_os = "macos",
-                  target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         PathBuf::from(".")
     }
 }
 
 pub fn config_path() -> PathBuf {
-    if let Ok(path) = env::var("ALCHEMIST_CONFIG_PATH")
-        .or_else(|_| env::var("ALCHEMIST_CONFIG"))
-    {
+    if let Ok(path) = env::var("ALCHEMIST_CONFIG_PATH").or_else(|_| env::var("ALCHEMIST_CONFIG")) {
         return PathBuf::from(path);
     }
     default_data_dir().join(DEFAULT_CONFIG_PATH)
@@ -90,23 +85,14 @@ mod tests {
     #[test]
     fn env_override_takes_priority_for_config() {
         // env vars always win regardless of platform
-        std::env::set_var(
-            "ALCHEMIST_CONFIG_PATH",
-            "/tmp/test-config.toml",
-        );
-        assert_eq!(
-            config_path(),
-            PathBuf::from("/tmp/test-config.toml")
-        );
+        std::env::set_var("ALCHEMIST_CONFIG_PATH", "/tmp/test-config.toml");
+        assert_eq!(config_path(), PathBuf::from("/tmp/test-config.toml"));
         std::env::remove_var("ALCHEMIST_CONFIG_PATH");
     }
 
     #[test]
     fn env_override_takes_priority_for_db() {
-        std::env::set_var(
-            "ALCHEMIST_DB_PATH",
-            "/tmp/test.db",
-        );
+        std::env::set_var("ALCHEMIST_DB_PATH", "/tmp/test.db");
         assert_eq!(db_path(), PathBuf::from("/tmp/test.db"));
         std::env::remove_var("ALCHEMIST_DB_PATH");
     }
@@ -114,10 +100,7 @@ mod tests {
     #[test]
     fn data_dir_override_for_db() {
         std::env::set_var("ALCHEMIST_DATA_DIR", "/tmp/data");
-        assert_eq!(
-            db_path(),
-            PathBuf::from("/tmp/data/alchemist.db")
-        );
+        assert_eq!(db_path(), PathBuf::from("/tmp/data/alchemist.db"));
         std::env::remove_var("ALCHEMIST_DATA_DIR");
     }
 
@@ -138,9 +121,7 @@ mod tests {
         std::env::remove_var("XDG_CONFIG_HOME");
         // HOME is always set in a test environment
         let home = std::env::var("HOME").unwrap();
-        let expected = PathBuf::from(&home)
-            .join(".config")
-            .join("alchemist");
+        let expected = PathBuf::from(&home).join(".config").join("alchemist");
         assert_eq!(default_data_dir(), expected);
     }
 }

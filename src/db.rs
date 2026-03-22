@@ -18,6 +18,7 @@ pub enum JobState {
     Queued,
     Analyzing,
     Encoding,
+    Remuxing,
     Completed,
     Skipped,
     Failed,
@@ -73,6 +74,7 @@ impl std::fmt::Display for JobState {
             JobState::Queued => "queued",
             JobState::Analyzing => "analyzing",
             JobState::Encoding => "encoding",
+            JobState::Remuxing => "remuxing",
             JobState::Completed => "completed",
             JobState::Skipped => "skipped",
             JobState::Failed => "failed",
@@ -96,6 +98,43 @@ pub struct Job {
     pub vmaf_score: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct JobWithHealthIssueRow {
+    pub id: i64,
+    pub input_path: String,
+    pub output_path: String,
+    pub status: JobState,
+    pub decision_reason: Option<String>,
+    pub priority: i32,
+    pub progress: f64,
+    pub attempt_count: i32,
+    pub vmaf_score: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub health_issues: String,
+}
+
+impl JobWithHealthIssueRow {
+    pub fn into_parts(self) -> (Job, String) {
+        (
+            Job {
+                id: self.id,
+                input_path: self.input_path,
+                output_path: self.output_path,
+                status: self.status,
+                decision_reason: self.decision_reason,
+                priority: self.priority,
+                progress: self.progress,
+                attempt_count: self.attempt_count,
+                vmaf_score: self.vmaf_score,
+                created_at: self.created_at,
+                updated_at: self.updated_at,
+            },
+            self.health_issues,
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -253,7 +292,7 @@ impl Job {
     pub fn is_active(&self) -> bool {
         matches!(
             self.status,
-            JobState::Encoding | JobState::Analyzing | JobState::Resuming
+            JobState::Encoding | JobState::Analyzing | JobState::Remuxing | JobState::Resuming
         )
     }
 
@@ -264,7 +303,7 @@ impl Job {
     pub fn status_class(&self) -> &'static str {
         match self.status {
             JobState::Completed => "badge-green",
-            JobState::Encoding | JobState::Resuming => "badge-yellow",
+            JobState::Encoding | JobState::Remuxing | JobState::Resuming => "badge-yellow",
             JobState::Analyzing => "badge-blue",
             JobState::Failed | JobState::Cancelled => "badge-red",
             _ => "badge-gray",
@@ -459,7 +498,7 @@ impl Db {
              SET status = 'queued',
                  progress = 0.0,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE status IN ('encoding', 'analyzing') AND archived = 0",
+             WHERE status IN ('encoding', 'analyzing', 'remuxing') AND archived = 0",
         )
         .execute(&self.pool)
         .await?;
@@ -1796,7 +1835,7 @@ impl Db {
             // Assuming JobState serialization matches stored strings ("queued", "active", etc)
             match status_str.as_str() {
                 "queued" => stats.queued += count,
-                "encoding" | "analyzing" | "resuming" => stats.active += count,
+                "encoding" | "analyzing" | "remuxing" | "resuming" => stats.active += count,
                 "completed" => stats.completed += count,
                 "failed" | "cancelled" => stats.failed += count,
                 _ => {}
@@ -1953,14 +1992,28 @@ impl Db {
         Ok(result.rows_affected())
     }
 
-    pub async fn record_health_check(&self, job_id: i64, issues: Option<String>) -> Result<()> {
+    pub async fn record_health_check(
+        &self,
+        job_id: i64,
+        issues: Option<&crate::media::health::HealthIssueReport>,
+    ) -> Result<()> {
+        let serialized_issues = issues
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|err| {
+                crate::error::AlchemistError::Unknown(format!(
+                    "Failed to serialize health issue report: {}",
+                    err
+                ))
+            })?;
+
         sqlx::query(
             "UPDATE jobs
              SET health_issues = ?,
                  last_health_check = datetime('now')
              WHERE id = ?",
         )
-        .bind(issues)
+        .bind(serialized_issues)
         .bind(job_id)
         .execute(&self.pool)
         .await?;
@@ -2037,15 +2090,16 @@ impl Db {
         Ok(jobs)
     }
 
-    pub async fn get_jobs_with_health_issues(&self) -> Result<Vec<Job>> {
-        let jobs = sqlx::query_as::<_, Job>(
+    pub async fn get_jobs_with_health_issues(&self) -> Result<Vec<JobWithHealthIssueRow>> {
+        let jobs = sqlx::query_as::<_, JobWithHealthIssueRow>(
             "SELECT j.id, j.input_path, j.output_path, j.status,
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority,
                     COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at
+                    j.created_at, j.updated_at,
+                    j.health_issues
              FROM jobs j
              WHERE j.archived = 0
                AND j.health_issues IS NOT NULL

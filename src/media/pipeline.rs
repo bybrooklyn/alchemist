@@ -125,6 +125,7 @@ impl DynamicRange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TranscodeDecision {
     Skip { reason: String },
+    Remux { reason: String },
     Transcode { reason: String },
 }
 
@@ -309,26 +310,23 @@ pub enum AudioStreamPlan {
 pub enum SubtitleStreamPlan {
     CopyAllCompatible,
     Drop,
-    Burn {
-        stream_index: usize,
-    },
-    Extract {
-        stream_indices: Vec<usize>,
-        sidecar_output: SidecarOutputPlan,
-    },
+    Burn { stream_index: usize },
+    Extract { outputs: Vec<SidecarOutputPlan> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SidecarOutputPlan {
+    pub stream_index: usize,
+    pub codec: String,
     pub final_path: PathBuf,
     pub temp_path: PathBuf,
 }
 
 impl SubtitleStreamPlan {
-    pub fn sidecar_output(&self) -> Option<&SidecarOutputPlan> {
+    pub fn sidecar_outputs(&self) -> &[SidecarOutputPlan] {
         match self {
-            SubtitleStreamPlan::Extract { sidecar_output, .. } => Some(sidecar_output),
-            _ => None,
+            SubtitleStreamPlan::Extract { outputs } => outputs.as_slice(),
+            _ => &[],
         }
     }
 }
@@ -353,6 +351,7 @@ pub enum FilterStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodePlan {
     pub decision: TranscodeDecision,
+    pub is_remux: bool,
     pub output_path: Option<PathBuf>,
     pub container: String,
     pub requested_codec: crate::config::OutputCodec,
@@ -376,9 +375,9 @@ pub struct TranscodePlan {
 pub struct ExecutionResult {
     pub requested_codec: crate::config::OutputCodec,
     pub planned_output_codec: crate::config::OutputCodec,
-    pub requested_encoder: Encoder,
-    pub used_encoder: Encoder,
-    pub used_backend: EncoderBackend,
+    pub requested_encoder: Option<Encoder>,
+    pub used_encoder: Option<Encoder>,
+    pub used_backend: Option<EncoderBackend>,
     pub fallback: Option<PlannedFallback>,
     pub fallback_occurred: bool,
     pub actual_output_codec: Option<crate::config::OutputCodec>,
@@ -704,11 +703,11 @@ impl Pipeline {
             }
         };
 
-        if matches!(plan.decision, TranscodeDecision::Transcode { .. }) {
+        if !matches!(plan.decision, TranscodeDecision::Skip { .. }) {
             plan.output_path = Some(temp_output_path.clone());
         }
 
-        if let Some(sidecar_output) = plan.subtitles.sidecar_output() {
+        for sidecar_output in plan.subtitles.sidecar_outputs() {
             if sidecar_output.temp_path.exists() {
                 if let Err(err) = std::fs::remove_file(&sidecar_output.temp_path) {
                     tracing::warn!(
@@ -721,12 +720,31 @@ impl Pipeline {
             }
         }
 
-        let (should_encode, reason) = match &plan.decision {
-            TranscodeDecision::Transcode { reason } => (true, reason.clone()),
-            TranscodeDecision::Skip { reason } => (false, reason.clone()),
+        let (should_execute, action, reason, next_status) = match &plan.decision {
+            TranscodeDecision::Transcode { reason } => (
+                true,
+                "encode",
+                reason.clone(),
+                crate::db::JobState::Encoding,
+            ),
+            TranscodeDecision::Remux { .. } => {
+                tracing::info!(
+                    "Job {}: Remuxing MP4→MKV (stream copy, no re-encode)",
+                    job.id
+                );
+                (
+                    true,
+                    "remux",
+                    "remux: mp4_to_mkv_stream_copy".to_string(),
+                    crate::db::JobState::Remuxing,
+                )
+            }
+            TranscodeDecision::Skip { reason } => {
+                (false, "skip", reason.clone(), crate::db::JobState::Skipped)
+            }
         };
 
-        if !should_encode {
+        if !should_execute {
             tracing::info!("Decision: SKIP Job {} - {}", job.id, &reason);
             let _ = self.db.add_decision(job.id, "skip", &reason).await;
             let _ = self
@@ -735,19 +753,20 @@ impl Pipeline {
             return Ok(());
         }
 
-        tracing::info!("Decision: ENCODE Job {} - {}", job.id, &reason);
-        let _ = self.db.add_decision(job.id, "encode", &reason).await;
+        tracing::info!(
+            "Decision: {} Job {} - {}",
+            action.to_ascii_uppercase(),
+            job.id,
+            &reason
+        );
+        let _ = self.db.add_decision(job.id, action, &reason).await;
         let _ = self.tx.send(crate::db::AlchemistEvent::Decision {
             job_id: job.id,
-            action: "encode".to_string(),
+            action: action.to_string(),
             reason: reason.clone(),
         });
 
-        if self
-            .update_job_state(job.id, crate::db::JobState::Encoding)
-            .await
-            .is_err()
-        {
+        if self.update_job_state(job.id, next_status).await.is_err() {
             return Err(JobFailure::Transient);
         }
         self.update_job_progress(job.id, 0.0).await;
@@ -948,7 +967,9 @@ impl Pipeline {
         let config = self.config.read().await;
         let telemetry_enabled = config.system.enable_telemetry;
 
-        if output_size == 0 || reduction < config.transcode.size_reduction_threshold {
+        if output_size == 0
+            || (!context.plan.is_remux && reduction < config.transcode.size_reduction_threshold)
+        {
             tracing::warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
                 job_id,
@@ -974,7 +995,7 @@ impl Pipeline {
         }
 
         let mut vmaf_score = None;
-        if config.quality.enable_vmaf {
+        if !context.plan.is_remux && config.quality.enable_vmaf {
             tracing::info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
             let input_clone = input_path.to_path_buf();
             let output_clone = context.temp_output_path.to_path_buf();
@@ -1084,12 +1105,25 @@ impl Pipeline {
         tracing::info!("  Duration:    {:.2}s", encode_duration);
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-        if let Some(sidecar_output) = context.plan.subtitles.sidecar_output() {
-            self.promote_temp_artifact(&sidecar_output.temp_path, &sidecar_output.final_path)?;
+        if !context.plan.subtitles.sidecar_outputs().is_empty() {
+            let mut promoted_sidecars = Vec::new();
+            for sidecar_output in context.plan.subtitles.sidecar_outputs() {
+                if let Err(err) = self
+                    .promote_temp_artifact(&sidecar_output.temp_path, &sidecar_output.final_path)
+                {
+                    for promoted in promoted_sidecars {
+                        let _ = std::fs::remove_file(promoted);
+                    }
+                    return Err(err);
+                }
+                promoted_sidecars.push(sidecar_output.final_path.clone());
+            }
             if let Err(err) =
                 self.promote_temp_artifact(context.temp_output_path, context.output_path)
             {
-                let _ = std::fs::remove_file(&sidecar_output.final_path);
+                for promoted in promoted_sidecars {
+                    let _ = std::fs::remove_file(promoted);
+                }
                 return Err(err);
             }
         } else {
@@ -1231,7 +1265,7 @@ struct TelemetryEventParams<'a> {
 }
 
 async fn cleanup_temp_subtitle_output(job_id: i64, plan: &TranscodePlan) {
-    if let Some(sidecar_output) = plan.subtitles.sidecar_output() {
+    for sidecar_output in plan.subtitles.sidecar_outputs() {
         if sidecar_output.temp_path.exists() {
             if let Err(err) = tokio::fs::remove_file(&sidecar_output.temp_path).await {
                 tracing::warn!(
@@ -1324,6 +1358,7 @@ mod tests {
             decision: TranscodeDecision::Transcode {
                 reason: "test".to_string(),
             },
+            is_remux: false,
             output_path: None,
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
@@ -1336,11 +1371,12 @@ mod tests {
             audio: AudioStreamPlan::Copy,
             audio_stream_indices: None,
             subtitles: SubtitleStreamPlan::Extract {
-                stream_indices: vec![0],
-                sidecar_output: SidecarOutputPlan {
-                    final_path: temp_root.join("movie.subs.mks"),
+                outputs: vec![SidecarOutputPlan {
+                    stream_index: 0,
+                    codec: "srt".to_string(),
+                    final_path: temp_root.join("movie.eng.srt"),
                     temp_path: temp_sidecar.clone(),
-                },
+                }],
             },
             filters: Vec::new(),
             allow_fallback: true,
@@ -1406,6 +1442,7 @@ mod tests {
             decision: TranscodeDecision::Transcode {
                 reason: "test".to_string(),
             },
+            is_remux: false,
             output_path: Some(temp_output.clone()),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
@@ -1449,9 +1486,9 @@ mod tests {
         let result = ExecutionResult {
             requested_codec: crate::config::OutputCodec::H264,
             planned_output_codec: crate::config::OutputCodec::H264,
-            requested_encoder: Encoder::H264X264,
-            used_encoder: Encoder::H264X264,
-            used_backend: EncoderBackend::Cpu,
+            requested_encoder: Some(Encoder::H264X264),
+            used_encoder: Some(Encoder::H264X264),
+            used_backend: Some(EncoderBackend::Cpu),
             fallback: None,
             fallback_occurred: false,
             actual_output_codec: Some(crate::config::OutputCodec::H264),

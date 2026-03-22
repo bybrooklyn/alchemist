@@ -234,6 +234,10 @@ async fn run() -> Result<()> {
             Ok(mut encoding_jobs) => jobs.append(&mut encoding_jobs),
             Err(err) => error!("Failed to load interrupted encoding jobs: {}", err),
         }
+        match db.get_jobs_by_status(db::JobState::Remuxing).await {
+            Ok(mut remuxing_jobs) => jobs.append(&mut remuxing_jobs),
+            Err(err) => error!("Failed to load interrupted remuxing jobs: {}", err),
+        }
         match db.get_jobs_by_status(db::JobState::Analyzing).await {
             Ok(mut analyzing_jobs) => jobs.append(&mut analyzing_jobs),
             Err(err) => error!("Failed to load interrupted analyzing jobs: {}", err),
@@ -619,7 +623,7 @@ async fn run() -> Result<()> {
                 .map(|m| {
                     m.iter()
                         .filter(|(k, _)| {
-                            ["encoding", "analyzing", "resuming"].contains(&k.as_str())
+                            ["encoding", "analyzing", "remuxing", "resuming"].contains(&k.as_str())
                         })
                         .map(|(_, v)| v.as_i64().unwrap_or(0))
                         .sum::<i64>()

@@ -315,7 +315,7 @@ export default function Dashboard() {
                                                 ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
                                                 : status === "failed"
                                                     ? "bg-red-500"
-                                                    : status === "encoding" || status === "analyzing"
+                                                    : status === "encoding" || status === "analyzing" || status === "remuxing"
                                                         ? "bg-amber-500 animate-pulse"
                                                         : "bg-helios-slate"
                                                 }`} />

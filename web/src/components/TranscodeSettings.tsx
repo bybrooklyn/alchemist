@@ -252,9 +252,12 @@ export default function TranscodeSettings() {
                         <option value="burn">Burn into video</option>
                         <option value="extract">Extract sidecar subtitles</option>
                     </select>
-                    <p className="text-[10px] text-helios-slate ml-1">
-                        `burn` and `extract` are exposed here for planning parity; current jobs will skip until those subtitle paths are implemented end to end.
-                    </p>
+                    {settings.subtitle_mode === "extract" && (
+                        <p className="text-xs text-helios-slate leading-relaxed mt-1">
+                            Text-based subtitle tracks (SRT, ASS, VTT) will be extracted as separate files alongside the output.
+                            Image-based subtitles (Blu-ray PGS, DVD) cannot be extracted and will be dropped.
+                        </p>
+                    )}
                 </div>
 
                 <div className="md:col-span-2 space-y-4 pt-2">
