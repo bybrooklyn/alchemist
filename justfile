@@ -269,7 +269,7 @@ update NEW_VERSION:
     echo "── Web verify ──"; \
     (cd web && bun install --frozen-lockfile && bun run verify); \
     echo "── Docs build ──"; \
-    (cd docs && bun install && bun run build); \
+    (cd docs && bun install --frozen-lockfile && bun run build); \
     echo "── E2E reliability ──"; \
     (cd web-e2e && bun install --frozen-lockfile && bun run test:reliability); \
     mapfile -t PACKAGE_FILES < <(git ls-files -- 'package.json' '*/package.json'); \
