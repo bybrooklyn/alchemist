@@ -844,6 +844,7 @@ mod tests {
                 encoder: "av1_qsv".to_string(),
                 device_path: Some(path.to_string()),
             }],
+            detection_notes: Vec::new(),
         }
     }
 

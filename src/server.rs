@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::{AlchemistError, Result};
-use crate::system::hardware::HardwareState;
+use crate::system::hardware::{HardwareProbeLog, HardwareState};
 use crate::Agent;
 use crate::Transcoder;
 use argon2::{
@@ -79,6 +79,7 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub config_mutable: bool,
     pub hardware_state: HardwareState,
+    pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
     login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
@@ -95,6 +96,7 @@ pub struct RunServerArgs {
     pub config_path: PathBuf,
     pub config_mutable: bool,
     pub hardware_state: HardwareState,
+    pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub notification_manager: Arc<crate::notifications::NotificationManager>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
 }
@@ -121,6 +123,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         config_path,
         config_mutable,
         hardware_state,
+        hardware_probe_log,
         notification_manager,
         file_watcher,
     } = args;
@@ -151,6 +154,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         config_path,
         config_mutable,
         hardware_state,
+        hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
@@ -281,6 +285,10 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
+        .route(
+            "/api/system/hardware/probe-log",
+            get(get_hardware_probe_log_handler),
+        )
         .route("/api/library/health", get(library_health_handler))
         .route(
             "/api/library/health/scan",
@@ -329,6 +337,15 @@ async fn refresh_file_watcher(state: &AppState) {
     {
         error!("Failed to update file watcher: {}", e);
     }
+}
+
+async fn replace_runtime_hardware(
+    state: &AppState,
+    hardware_info: crate::system::hardware::HardwareInfo,
+    probe_log: HardwareProbeLog,
+) {
+    state.hardware_state.replace(Some(hardware_info)).await;
+    *state.hardware_probe_log.write().await = probe_log;
 }
 
 async fn setup_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -730,9 +747,9 @@ async fn update_hardware_settings_handler(
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
-    let hardware_info =
-        match crate::system::hardware::detect_hardware_for_config(&next_config).await {
-            Ok(info) => info,
+    let (hardware_info, probe_log) =
+        match crate::system::hardware::detect_hardware_with_log(&next_config).await {
+            Ok(result) => result,
             Err(err) => return hardware_error_response(&err),
         };
 
@@ -744,7 +761,7 @@ async fn update_hardware_settings_handler(
         let mut config = state.config.write().await;
         *config = next_config;
     }
-    state.hardware_state.replace(Some(hardware_info)).await;
+    replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
 
     StatusCode::OK.into_response()
 }
@@ -856,10 +873,11 @@ async fn update_settings_bundle_handler(
         return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
     }
 
-    let hardware_info = match crate::system::hardware::detect_hardware_for_config(&payload).await {
-        Ok(info) => info,
-        Err(err) => return hardware_error_response(&err),
-    };
+    let (hardware_info, probe_log) =
+        match crate::system::hardware::detect_hardware_with_log(&payload).await {
+            Ok(result) => result,
+            Err(err) => return hardware_error_response(&err),
+        };
 
     if let Err(response) = save_config_or_response(&state, &payload).await {
         return *response;
@@ -874,7 +892,7 @@ async fn update_settings_bundle_handler(
         .agent
         .set_concurrent_jobs(payload.transcode.concurrent_jobs)
         .await;
-    state.hardware_state.replace(Some(hardware_info)).await;
+    replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
     refresh_file_watcher(&state).await;
     state.scheduler.trigger();
 
@@ -904,10 +922,11 @@ async fn update_settings_config_handler(
         Err(err) => return hardware_error_response(&err),
     };
 
-    let hardware_info = match crate::system::hardware::detect_hardware_for_config(&config).await {
-        Ok(info) => info,
-        Err(err) => return hardware_error_response(&err),
-    };
+    let (hardware_info, probe_log) =
+        match crate::system::hardware::detect_hardware_with_log(&config).await {
+            Ok(result) => result,
+            Err(err) => return hardware_error_response(&err),
+        };
 
     if !state.config_mutable {
         return config_write_blocked_response(state.config_path.as_path());
@@ -943,7 +962,7 @@ async fn update_settings_config_handler(
         .agent
         .set_concurrent_jobs(config.transcode.concurrent_jobs)
         .await;
-    state.hardware_state.replace(Some(hardware_info)).await;
+    replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
     refresh_file_watcher(&state).await;
     state.scheduler.trigger();
 
@@ -1039,8 +1058,8 @@ async fn setup_complete_handler(
                     return (
                         StatusCode::BAD_REQUEST,
                         format!(
-                            "Invalid settings format: {}. \
-                                 Check that all required fields are present.",
+                            "Setup configuration is invalid: {}. \
+                                 Please go back and check your settings.",
                             err
                         ),
                     )
@@ -1074,15 +1093,31 @@ async fn setup_complete_handler(
     };
     next_config.scanner.watch_enabled = true;
 
+    if next_config.scanner.directories.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "At least one library directory must be configured.",
+        )
+            .into_response();
+    }
+
+    if next_config.transcode.concurrent_jobs == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Concurrent jobs must be at least 1.",
+        )
+            .into_response();
+    }
+
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
     let runtime_concurrent_jobs = next_config.transcode.concurrent_jobs;
 
-    let hardware_info =
-        match crate::system::hardware::detect_hardware_for_config(&next_config).await {
-            Ok(info) => info,
+    let (hardware_info, probe_log) =
+        match crate::system::hardware::detect_hardware_with_log(&next_config).await {
+            Ok(result) => result,
             Err(err) => return hardware_error_response(&err),
         };
 
@@ -1140,7 +1175,7 @@ async fn setup_complete_handler(
         .agent
         .set_concurrent_jobs(runtime_concurrent_jobs)
         .await;
-    state.hardware_state.replace(Some(hardware_info)).await;
+    replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
     refresh_file_watcher(&state).await;
 
     // Start Scan (optional, but good for UX)
@@ -2802,6 +2837,8 @@ struct JobDetailResponse {
     job: crate::db::Job,
     metadata: Option<crate::media::pipeline::MediaMetadata>,
     encode_stats: Option<crate::db::DetailedEncodeStats>,
+    job_logs: Vec<crate::db::LogEntry>,
+    job_failure_summary: Option<String>,
 }
 
 async fn get_job_detail_handler(
@@ -2838,10 +2875,27 @@ async fn get_job_detail_handler(
         None
     };
 
+    let job_logs = match state.db.get_logs_for_job(id, 200).await {
+        Ok(logs) => logs,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    let job_failure_summary = if job.status == crate::db::JobState::Failed {
+        job_logs
+            .iter()
+            .rev()
+            .find(|entry| entry.level.eq_ignore_ascii_case("error"))
+            .map(|entry| entry.message.clone())
+    } else {
+        None
+    };
+
     axum::Json(JobDetailResponse {
         job,
         metadata,
         encode_stats,
+        job_logs,
+        job_failure_summary,
     })
     .into_response()
 }
@@ -3017,6 +3071,10 @@ async fn get_hardware_info_handler(State(state): State<Arc<AppState>>) -> impl I
         )
             .into_response(),
     }
+}
+
+async fn get_hardware_probe_log_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::Json(state.hardware_probe_log.read().await.clone()).into_response()
 }
 
 async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -3261,7 +3319,9 @@ mod tests {
             device_path: None,
             supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
             backends: Vec::new(),
+            detection_notes: Vec::new(),
         }));
+        let hardware_probe_log = Arc::new(RwLock::new(HardwareProbeLog::default()));
         let (tx, _rx) = broadcast::channel(tx_capacity);
         let transcoder = Arc::new(Transcoder::new());
         let agent = Arc::new(
@@ -3301,6 +3361,7 @@ mod tests {
             config_path: config_path.clone(),
             config_mutable: true,
             hardware_state,
+            hardware_probe_log,
             resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
             login_rate_limiter: Mutex::new(HashMap::new()),
             global_rate_limiter: Mutex::new(HashMap::new()),
@@ -3543,6 +3604,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hardware_probe_log_route_returns_runtime_log(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+
+        *state.hardware_probe_log.write().await = HardwareProbeLog {
+            entries: vec![crate::system::hardware::HardwareProbeEntry {
+                encoder: "hevc_videotoolbox".to_string(),
+                backend: "videotoolbox".to_string(),
+                device_path: None,
+                success: false,
+                stderr: Some("Unknown encoder".to_string()),
+            }],
+        };
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                "/api/system/hardware/probe-log",
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = body_text(response).await;
+        assert!(body.contains("\"encoder\":\"hevc_videotoolbox\""));
+        assert!(body.contains("\"stderr\":\"Unknown encoder\""));
+
+        cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let watch_dir = temp_path("alchemist_setup_watch", "dir");
@@ -3690,6 +3786,40 @@ mod tests {
         assert_eq!(state.agent.concurrent_jobs_limit(), 3);
 
         cleanup_paths(&[watch_dir, config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn setup_complete_rejects_nested_settings_without_library_directories(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+        let mut settings = crate::config::Config::default();
+        settings.scanner.directories = Vec::new();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/setup/complete")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "admin",
+                            "password": "password123",
+                            "settings": settings,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_text(response).await;
+        assert!(body.contains("At least one library directory must be configured."));
+
+        cleanup_paths(&[config_path, db_path]);
         Ok(())
     }
 
@@ -4028,6 +4158,51 @@ mod tests {
         assert!(rendered.contains("\"second\""));
 
         cleanup_paths(&[config_path, db_path]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn job_detail_route_includes_logs_and_failure_summary(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+        let token = create_session(state.db.as_ref()).await?;
+        let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Failed).await?;
+
+        state
+            .db
+            .add_log("info", Some(job.id), "ffmpeg started")
+            .await?;
+        state
+            .db
+            .add_log("error", Some(job.id), "No such file or directory")
+            .await?;
+
+        let response = app
+            .clone()
+            .oneshot(auth_request(
+                Method::GET,
+                &format!("/api/jobs/{}/details", job.id),
+                &token,
+                Body::empty(),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+        assert_eq!(
+            payload["job_failure_summary"].as_str(),
+            Some("No such file or directory")
+        );
+        assert_eq!(
+            payload["job_logs"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            payload["job_logs"][1]["message"].as_str(),
+            Some("No such file or directory")
+        );
+
+        cleanup_paths(&[input_path, output_path, config_path, db_path]);
         Ok(())
     }
 

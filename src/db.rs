@@ -1826,6 +1826,21 @@ impl Db {
         Ok(logs)
     }
 
+    pub async fn get_logs_for_job(&self, job_id: i64, limit: i64) -> Result<Vec<LogEntry>> {
+        sqlx::query_as::<_, LogEntry>(
+            "SELECT id, level, job_id, message, created_at
+             FROM logs
+             WHERE job_id = ?
+             ORDER BY created_at ASC
+             LIMIT ?",
+        )
+        .bind(job_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn clear_logs(&self) -> Result<()> {
         sqlx::query("DELETE FROM logs").execute(&self.pool).await?;
         Ok(())

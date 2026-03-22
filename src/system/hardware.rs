@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,12 +40,48 @@ pub enum HardwareBackend {
     Videotoolbox,
 }
 
+impl HardwareBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Nvenc => "nvenc",
+            Self::Amf => "amf",
+            Self::Qsv => "qsv",
+            Self::Vaapi => "vaapi",
+            Self::Videotoolbox => "videotoolbox",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Nvenc => "NVENC",
+            Self::Amf => "AMF",
+            Self::Qsv => "QSV",
+            Self::Vaapi => "VAAPI",
+            Self::Videotoolbox => "VideoToolbox",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendCapability {
     pub kind: HardwareBackend,
     pub codec: String,
     pub encoder: String,
     pub device_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HardwareProbeLog {
+    pub entries: Vec<HardwareProbeEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareProbeEntry {
+    pub encoder: String,
+    pub backend: String,
+    pub device_path: Option<String>,
+    pub success: bool,
+    pub stderr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +91,8 @@ pub struct HardwareInfo {
     pub supported_codecs: Vec<String>,
     #[serde(default)]
     pub backends: Vec<BackendCapability>,
+    #[serde(default)]
+    pub detection_notes: Vec<String>,
 }
 
 impl HardwareInfo {
@@ -74,11 +112,17 @@ impl HardwareInfo {
             device_path,
             supported_codecs,
             backends,
+            detection_notes: Vec::new(),
         }
     }
 
     pub fn supports_codec(&self, codec: &str) -> bool {
         self.supported_codecs.iter().any(|value| value == codec)
+    }
+
+    fn with_detection_notes(mut self, detection_notes: Vec<String>) -> Self {
+        self.detection_notes = detection_notes;
+        self
     }
 }
 
@@ -179,19 +223,43 @@ fn probe_args_for_backend(
     args
 }
 
+#[cfg(test)]
 fn probe_backend_encoder_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     backend: HardwareBackend,
     encoder: &str,
     device_path: Option<&str>,
 ) -> bool {
+    let (success, _) =
+        probe_backend_encoder_verbose_with_runner(runner, backend, encoder, device_path);
+    success
+}
+
+pub fn probe_backend_encoder_verbose(
+    backend: HardwareBackend,
+    encoder: &str,
+    device_path: Option<&str>,
+) -> (bool, String) {
+    probe_backend_encoder_verbose_with_runner(&SystemCommandRunner, backend, encoder, device_path)
+}
+
+fn probe_backend_encoder_verbose_with_runner<R: CommandRunner + ?Sized>(
+    runner: &R,
+    backend: HardwareBackend,
+    encoder: &str,
+    device_path: Option<&str>,
+) -> (bool, String) {
     let args = probe_args_for_backend(backend, encoder, device_path);
-    match runner.status("ffmpeg", &args) {
-        Ok(status) => status.success(),
-        Err(_) => false,
+    match runner.output("ffmpeg", &args) {
+        Ok(output) => (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ),
+        Err(e) => (false, format!("Failed to run ffmpeg: {}", e)),
     }
 }
 
+#[cfg(test)]
 fn push_backend_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     backends: &mut Vec<BackendCapability>,
@@ -221,6 +289,7 @@ fn parse_preferred_vendor(value: &str) -> Option<Vendor> {
     }
 }
 
+#[cfg(test)]
 fn collect_backend_capabilities<R: CommandRunner + ?Sized>(
     runner: &R,
     specs: Vec<BackendProbeSpec>,
@@ -236,6 +305,51 @@ fn collect_backend_capabilities<R: CommandRunner + ?Sized>(
             spec.device_path.as_deref(),
         );
     }
+    backends
+}
+
+fn collect_backend_capabilities_verbose<R: CommandRunner + ?Sized>(
+    runner: &R,
+    specs: Vec<BackendProbeSpec>,
+    probe_log: &mut HardwareProbeLog,
+) -> Vec<BackendCapability> {
+    let mut backends = Vec::new();
+
+    for spec in specs {
+        let (success, stderr) = probe_backend_encoder_verbose_with_runner(
+            runner,
+            spec.kind,
+            &spec.encoder,
+            spec.device_path.as_deref(),
+        );
+        let stderr = stderr.trim().to_string();
+        let stderr_value = (!stderr.is_empty()).then_some(stderr.clone());
+
+        probe_log.entries.push(HardwareProbeEntry {
+            encoder: spec.encoder.clone(),
+            backend: spec.kind.as_str().to_string(),
+            device_path: spec.device_path.clone(),
+            success,
+            stderr: stderr_value.clone(),
+        });
+
+        if success {
+            backends.push(BackendCapability {
+                kind: spec.kind,
+                codec: spec.codec,
+                encoder: spec.encoder,
+                device_path: spec.device_path,
+            });
+        } else {
+            debug!(
+                "{} probe failed for {}: {}",
+                spec.kind.display_name(),
+                spec.encoder,
+                stderr.lines().next().unwrap_or("unknown error"),
+            );
+        }
+    }
+
     backends
 }
 
@@ -367,57 +481,67 @@ fn vendor_from_explicit_device_path(device_path: &Path) -> Option<Vendor> {
     }
 }
 
+fn detect_backend_at_device_path_with_runner<R: CommandRunner + ?Sized>(
+    runner: &R,
+    vendor: Vendor,
+    device_path: &str,
+    probe_log: &mut HardwareProbeLog,
+) -> Option<HardwareInfo> {
+    let backends = collect_backend_capabilities_verbose(
+        runner,
+        backend_probe_specs_for_vendor(vendor, Some(device_path)),
+        probe_log,
+    );
+
+    if backends.is_empty() {
+        return None;
+    }
+
+    Some(HardwareInfo::new(
+        vendor,
+        Some(device_path.to_string()),
+        backends,
+    ))
+}
+
+#[allow(dead_code)]
 fn detect_intel_at_device_path_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     device_path: &str,
 ) -> Option<HardwareInfo> {
-    let backends = collect_backend_capabilities(
-        runner,
-        backend_probe_specs_for_vendor(Vendor::Intel, Some(device_path)),
-    );
-
-    if backends.is_empty() {
-        return None;
-    }
-
-    Some(HardwareInfo::new(
-        Vendor::Intel,
-        Some(device_path.to_string()),
-        backends,
-    ))
+    let mut probe_log = HardwareProbeLog::default();
+    detect_backend_at_device_path_with_runner(runner, Vendor::Intel, device_path, &mut probe_log)
 }
 
+#[allow(dead_code)]
 fn detect_amd_at_device_path_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     device_path: &str,
 ) -> Option<HardwareInfo> {
-    let backends = collect_backend_capabilities(
-        runner,
-        backend_probe_specs_for_vendor(Vendor::Amd, Some(device_path)),
-    );
-
-    if backends.is_empty() {
-        return None;
-    }
-
-    Some(HardwareInfo::new(
-        Vendor::Amd,
-        Some(device_path.to_string()),
-        backends,
-    ))
+    let mut probe_log = HardwareProbeLog::default();
+    detect_backend_at_device_path_with_runner(runner, Vendor::Amd, device_path, &mut probe_log)
 }
 
-fn detect_explicit_device_path(
-    device_path: &str,
-    preferred_vendor: Option<Vendor>,
-) -> Option<HardwareInfo> {
-    detect_explicit_device_path_with_runner(&SystemCommandRunner, device_path, preferred_vendor)
-}
-
+#[allow(dead_code)]
 fn detect_explicit_device_path_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     device_path: &str,
     preferred_vendor: Option<Vendor>,
+) -> Option<HardwareInfo> {
+    let mut probe_log = HardwareProbeLog::default();
+    detect_explicit_device_path_with_runner_and_log(
+        runner,
+        device_path,
+        preferred_vendor,
+        &mut probe_log,
+    )
+}
+
+fn detect_explicit_device_path_with_runner_and_log<R: CommandRunner + ?Sized>(
+    runner: &R,
+    device_path: &str,
+    preferred_vendor: Option<Vendor>,
+    probe_log: &mut HardwareProbeLog,
 ) -> Option<HardwareInfo> {
     if !cfg!(target_os = "linux") {
         return None;
@@ -430,21 +554,46 @@ fn detect_explicit_device_path_with_runner<R: CommandRunner + ?Sized>(
 
     let vendor = preferred_vendor.or_else(|| vendor_from_explicit_device_path(path));
     match vendor {
-        Some(Vendor::Intel) => detect_intel_at_device_path_with_runner(runner, device_path),
-        Some(Vendor::Amd) => detect_amd_at_device_path_with_runner(runner, device_path),
+        Some(Vendor::Intel) => {
+            detect_backend_at_device_path_with_runner(runner, Vendor::Intel, device_path, probe_log)
+        }
+        Some(Vendor::Amd) => {
+            detect_backend_at_device_path_with_runner(runner, Vendor::Amd, device_path, probe_log)
+        }
         Some(Vendor::Cpu) | Some(Vendor::Apple) | Some(Vendor::Nvidia) => None,
-        None => detect_intel_at_device_path_with_runner(runner, device_path)
-            .or_else(|| detect_amd_at_device_path_with_runner(runner, device_path)),
+        None => {
+            detect_backend_at_device_path_with_runner(runner, Vendor::Intel, device_path, probe_log)
+                .or_else(|| {
+                    detect_backend_at_device_path_with_runner(
+                        runner,
+                        Vendor::Amd,
+                        device_path,
+                        probe_log,
+                    )
+                })
+        }
     }
 }
 
+#[allow(dead_code)]
 fn try_detect_apple_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<HardwareInfo> {
+    let mut probe_log = HardwareProbeLog::default();
+    try_detect_apple_with_runner_and_log(runner, &mut probe_log)
+}
+
+fn try_detect_apple_with_runner_and_log<R: CommandRunner + ?Sized>(
+    runner: &R,
+    probe_log: &mut HardwareProbeLog,
+) -> Option<HardwareInfo> {
     if !cfg!(target_os = "macos") {
         return None;
     }
 
-    let backends =
-        collect_backend_capabilities(runner, backend_probe_specs_for_vendor(Vendor::Apple, None));
+    let backends = collect_backend_capabilities_verbose(
+        runner,
+        backend_probe_specs_for_vendor(Vendor::Apple, None),
+        probe_log,
+    );
 
     if backends.is_empty() {
         return None;
@@ -453,7 +602,16 @@ fn try_detect_apple_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option
     Some(HardwareInfo::new(Vendor::Apple, None, backends))
 }
 
+#[allow(dead_code)]
 fn try_detect_nvidia_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<HardwareInfo> {
+    let mut probe_log = HardwareProbeLog::default();
+    try_detect_nvidia_with_runner_and_log(runner, &mut probe_log)
+}
+
+fn try_detect_nvidia_with_runner_and_log<R: CommandRunner + ?Sized>(
+    runner: &R,
+    probe_log: &mut HardwareProbeLog,
+) -> Option<HardwareInfo> {
     let nvidia_likely = if cfg!(target_os = "windows") {
         true
     } else {
@@ -469,8 +627,11 @@ fn try_detect_nvidia_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Optio
         return None;
     }
 
-    let backends =
-        collect_backend_capabilities(runner, backend_probe_specs_for_vendor(Vendor::Nvidia, None));
+    let backends = collect_backend_capabilities_verbose(
+        runner,
+        backend_probe_specs_for_vendor(Vendor::Nvidia, None),
+        probe_log,
+    );
 
     if backends.is_empty() {
         return None;
@@ -479,41 +640,40 @@ fn try_detect_nvidia_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Optio
     Some(HardwareInfo::new(Vendor::Nvidia, None, backends))
 }
 
+#[allow(dead_code)]
 fn try_detect_intel_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<HardwareInfo> {
-    let device_path = if Path::new("/dev/dri/renderD129").exists() {
-        Some("/dev/dri/renderD129".to_string())
-    } else if Path::new("/dev/dri/renderD128").exists() {
+    let mut probe_log = HardwareProbeLog::default();
+    try_detect_intel_with_runner_and_log(runner, &mut probe_log)
+}
+
+fn intel_render_device_path() -> Option<String> {
+    if Path::new("/dev/dri/renderD129").exists() {
+        return Some("/dev/dri/renderD129".to_string());
+    }
+
+    if Path::new("/dev/dri/renderD128").exists() {
         let vendor_id = std::fs::read_to_string("/sys/class/drm/renderD128/device/vendor")
             .unwrap_or_default()
             .trim()
             .to_lowercase();
         if vendor_id.contains("0x8086") {
-            Some("/dev/dri/renderD128".to_string())
-        } else {
-            None
+            return Some("/dev/dri/renderD128".to_string());
         }
-    } else {
-        None
-    }?;
-
-    let backends = collect_backend_capabilities(
-        runner,
-        backend_probe_specs_for_vendor(Vendor::Intel, Some(&device_path)),
-    );
-
-    if backends.is_empty() {
-        return None;
     }
 
-    Some(HardwareInfo::new(
-        Vendor::Intel,
-        Some(device_path),
-        backends,
-    ))
+    None
 }
 
-fn try_detect_amd_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<HardwareInfo> {
-    let device_path = if cfg!(target_os = "windows") {
+fn try_detect_intel_with_runner_and_log<R: CommandRunner + ?Sized>(
+    runner: &R,
+    probe_log: &mut HardwareProbeLog,
+) -> Option<HardwareInfo> {
+    let device_path = intel_render_device_path()?;
+    detect_backend_at_device_path_with_runner(runner, Vendor::Intel, &device_path, probe_log)
+}
+
+fn amd_render_device_path() -> Option<String> {
+    if cfg!(target_os = "windows") {
         None
     } else if Path::new("/dev/dri/renderD128").exists() {
         let vendor_id = std::fs::read_to_string("/sys/class/drm/renderD128/device/vendor")
@@ -527,11 +687,27 @@ fn try_detect_amd_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<H
         }
     } else {
         None
-    };
+    }
+}
+
+#[allow(dead_code)]
+fn try_detect_amd_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<HardwareInfo> {
+    let mut probe_log = HardwareProbeLog::default();
+    try_detect_amd_with_runner_and_log(runner, &mut probe_log)
+}
+
+fn try_detect_amd_with_runner_and_log<R: CommandRunner + ?Sized>(
+    runner: &R,
+    probe_log: &mut HardwareProbeLog,
+) -> Option<HardwareInfo> {
+    let device_path = amd_render_device_path();
 
     if cfg!(target_os = "windows") {
-        let backends =
-            collect_backend_capabilities(runner, backend_probe_specs_for_vendor(Vendor::Amd, None));
+        let backends = collect_backend_capabilities_verbose(
+            runner,
+            backend_probe_specs_for_vendor(Vendor::Amd, None),
+            probe_log,
+        );
         if backends.is_empty() {
             return None;
         }
@@ -539,29 +715,232 @@ fn try_detect_amd_with_runner<R: CommandRunner + ?Sized>(runner: &R) -> Option<H
     }
 
     let device_path = device_path?;
-    let backends = collect_backend_capabilities(
-        runner,
-        backend_probe_specs_for_vendor(Vendor::Amd, Some(&device_path)),
-    );
-
-    if backends.is_empty() {
-        return None;
-    }
-
-    Some(HardwareInfo::new(Vendor::Amd, Some(device_path), backends))
+    detect_backend_at_device_path_with_runner(runner, Vendor::Amd, &device_path, probe_log)
 }
 
-fn detect_preferred_hardware_with_runner<R: CommandRunner + ?Sized>(
+fn detect_preferred_hardware_with_runner_and_log<R: CommandRunner + ?Sized>(
     runner: &R,
     preferred_vendor: Vendor,
+    probe_log: &mut HardwareProbeLog,
 ) -> Option<HardwareInfo> {
     match preferred_vendor {
-        Vendor::Nvidia => try_detect_nvidia_with_runner(runner),
-        Vendor::Amd => try_detect_amd_with_runner(runner),
-        Vendor::Intel => try_detect_intel_with_runner(runner),
-        Vendor::Apple => try_detect_apple_with_runner(runner),
+        Vendor::Nvidia => try_detect_nvidia_with_runner_and_log(runner, probe_log),
+        Vendor::Amd => try_detect_amd_with_runner_and_log(runner, probe_log),
+        Vendor::Intel => try_detect_intel_with_runner_and_log(runner, probe_log),
+        Vendor::Apple => try_detect_apple_with_runner_and_log(runner, probe_log),
         Vendor::Cpu => Some(HardwareInfo::new(Vendor::Cpu, None, Vec::new())),
     }
+}
+
+fn append_detection_note(notes: &mut Vec<String>, note: impl Into<String>) {
+    let note = note.into();
+    if !notes.iter().any(|existing| existing == &note) {
+        notes.push(note);
+    }
+}
+
+fn first_failed_probe_line(
+    probe_log: &HardwareProbeLog,
+    backend: HardwareBackend,
+    device_path: Option<&str>,
+) -> Option<String> {
+    probe_log
+        .entries
+        .iter()
+        .find(|entry| {
+            !entry.success
+                && entry.backend == backend.as_str()
+                && entry.device_path.as_deref() == device_path
+        })
+        .and_then(|entry| entry.stderr.as_deref())
+        .and_then(|stderr| stderr.lines().next())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+fn note_for_failed_vendor(vendor: Vendor, probe_log: &HardwareProbeLog) -> Option<String> {
+    match vendor {
+        Vendor::Apple if cfg!(target_os = "macos") => Some(
+            "VideoToolbox probe failed — check that FFmpeg was compiled with --enable-videotoolbox"
+                .to_string(),
+        ),
+        Vendor::Nvidia => {
+            if !cfg!(target_os = "windows") && !Path::new("/dev/nvidiactl").exists() {
+                Some("NVIDIA probe skipped — no /dev/nvidiactl found".to_string())
+            } else if let Some(stderr) =
+                first_failed_probe_line(probe_log, HardwareBackend::Nvenc, None)
+            {
+                Some(format!("NVIDIA probe failed — {}", stderr))
+            } else {
+                Some("NVIDIA probe failed — nvidia-smi not available or returned error".to_string())
+            }
+        }
+        Vendor::Intel => {
+            if let Some(device_path) = intel_render_device_path() {
+                let mut note = format!(
+                    "Intel QSV probe failed at {} — check that the i915/xe driver is loaded and the device is accessible",
+                    device_path
+                );
+                if let Some(stderr) =
+                    first_failed_probe_line(probe_log, HardwareBackend::Qsv, Some(&device_path))
+                {
+                    note.push_str(&format!(". FFmpeg said: {}", stderr));
+                }
+                Some(note)
+            } else {
+                Some(
+                    "Intel probe failed — no render node found at /dev/dri/renderD128 or renderD129"
+                        .to_string(),
+                )
+            }
+        }
+        Vendor::Amd if cfg!(target_os = "windows") => {
+            if let Some(stderr) = first_failed_probe_line(probe_log, HardwareBackend::Amf, None) {
+                Some(format!(
+                    "AMD AMF probe failed — check that FFmpeg was compiled with AMF support. FFmpeg said: {}",
+                    stderr
+                ))
+            } else {
+                Some(
+                    "AMD probe failed — AMF was unavailable. Check that FFmpeg was compiled with AMF support"
+                        .to_string(),
+                )
+            }
+        }
+        Vendor::Amd => {
+            if let Some(device_path) = amd_render_device_path() {
+                let mut note = format!(
+                    "AMD VAAPI probe failed at {} — check that the amdgpu driver is loaded and the device is accessible",
+                    device_path
+                );
+                if let Some(stderr) =
+                    first_failed_probe_line(probe_log, HardwareBackend::Vaapi, Some(&device_path))
+                {
+                    note.push_str(&format!(". FFmpeg said: {}", stderr));
+                }
+                Some(note)
+            } else {
+                Some("AMD probe failed — no render node found at /dev/dri/renderD128".to_string())
+            }
+        }
+        Vendor::Cpu => None,
+        Vendor::Apple => None,
+    }
+}
+
+fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
+    runner: &R,
+    allow_cpu_fallback: bool,
+    preferred_vendor: Option<String>,
+) -> Result<(HardwareInfo, HardwareProbeLog)> {
+    info!("=== Hardware Detection Starting ===");
+    info!("OS: {}", std::env::consts::OS);
+    info!("Architecture: {}", std::env::consts::ARCH);
+
+    let mut detection_notes = Vec::new();
+    let mut probe_log = HardwareProbeLog::default();
+    let mut attempted_preferred_vendor = None;
+
+    if let Some(preferred_vendor) = preferred_vendor {
+        if let Some(parsed_vendor) = parse_preferred_vendor(&preferred_vendor) {
+            if parsed_vendor == Vendor::Cpu && !allow_cpu_fallback {
+                warn!(
+                    "Preferred vendor '{}' requested but CPU fallback is disabled.",
+                    preferred_vendor
+                );
+            } else if let Some(info) =
+                detect_preferred_hardware_with_runner_and_log(runner, parsed_vendor, &mut probe_log)
+            {
+                info!(
+                    "✓ Using preferred vendor '{}' ({})",
+                    preferred_vendor, info.vendor
+                );
+                return Ok((info.with_detection_notes(detection_notes), probe_log));
+            } else {
+                if let Some(note) = note_for_failed_vendor(parsed_vendor, &probe_log) {
+                    append_detection_note(&mut detection_notes, note);
+                }
+                warn!(
+                    "Preferred vendor '{}' is unavailable. Falling back to auto detection.",
+                    preferred_vendor
+                );
+                attempted_preferred_vendor = Some(parsed_vendor);
+            }
+        } else {
+            warn!(
+                "Unknown preferred vendor '{}'. Falling back to auto detection.",
+                preferred_vendor
+            );
+        }
+    }
+
+    if attempted_preferred_vendor != Some(Vendor::Apple) {
+        if let Some(info) = try_detect_apple_with_runner_and_log(runner, &mut probe_log) {
+            info!("✓ Hardware acceleration: VideoToolbox");
+            return Ok((info.with_detection_notes(detection_notes), probe_log));
+        }
+        if let Some(note) = note_for_failed_vendor(Vendor::Apple, &probe_log) {
+            append_detection_note(&mut detection_notes, note);
+        }
+    }
+
+    if attempted_preferred_vendor != Some(Vendor::Nvidia) {
+        if let Some(info) = try_detect_nvidia_with_runner_and_log(runner, &mut probe_log) {
+            info!("✓ Hardware acceleration: NVENC");
+            return Ok((info.with_detection_notes(detection_notes), probe_log));
+        }
+        if let Some(note) = note_for_failed_vendor(Vendor::Nvidia, &probe_log) {
+            append_detection_note(&mut detection_notes, note);
+        }
+    }
+
+    if attempted_preferred_vendor != Some(Vendor::Intel) {
+        if let Some(info) = try_detect_intel_with_runner_and_log(runner, &mut probe_log) {
+            info!("✓ Hardware acceleration: Intel Quick Sync Video (QSV)");
+            return Ok((info.with_detection_notes(detection_notes), probe_log));
+        }
+        if let Some(note) = note_for_failed_vendor(Vendor::Intel, &probe_log) {
+            append_detection_note(&mut detection_notes, note);
+        }
+    }
+
+    if attempted_preferred_vendor != Some(Vendor::Amd) {
+        if let Some(info) = try_detect_amd_with_runner_and_log(runner, &mut probe_log) {
+            info!(
+                "✓ Hardware acceleration: {}",
+                if cfg!(target_os = "windows") {
+                    "AMF"
+                } else {
+                    "VAAPI"
+                }
+            );
+            return Ok((info.with_detection_notes(detection_notes), probe_log));
+        }
+        if let Some(note) = note_for_failed_vendor(Vendor::Amd, &probe_log) {
+            append_detection_note(&mut detection_notes, note);
+        }
+    }
+
+    if !allow_cpu_fallback {
+        error!("✗ No supported GPU detected and CPU fallback is disabled.");
+        return Err(crate::error::AlchemistError::Config(
+            "No GPU detected and CPU fallback disabled".into(),
+        ));
+    }
+
+    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    warn!("⚠  NO GPU DETECTED - FALLING BACK TO CPU ENCODING");
+    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    warn!("CPU encoding will be significantly slower than GPU acceleration.");
+    warn!("Expected performance: 10-50x slower depending on resolution.");
+    warn!("Software encoder: libsvtav1 (AV1) or libx264 (H.264)");
+    info!("✓ CPU fallback mode enabled");
+
+    Ok((
+        HardwareInfo::new(Vendor::Cpu, None, Vec::new()).with_detection_notes(detection_notes),
+        probe_log,
+    ))
 }
 
 pub fn detect_hardware_with_preference(
@@ -580,34 +959,8 @@ pub fn detect_hardware_with_preference_and_runner<R: CommandRunner + ?Sized>(
     allow_cpu_fallback: bool,
     preferred_vendor: Option<String>,
 ) -> Result<HardwareInfo> {
-    if let Some(preferred_vendor) = preferred_vendor {
-        if let Some(parsed_vendor) = parse_preferred_vendor(&preferred_vendor) {
-            if parsed_vendor == Vendor::Cpu && !allow_cpu_fallback {
-                warn!(
-                    "Preferred vendor '{}' requested but CPU fallback is disabled.",
-                    preferred_vendor
-                );
-            } else if let Some(info) = detect_preferred_hardware_with_runner(runner, parsed_vendor)
-            {
-                info!(
-                    "✓ Using preferred vendor '{}' ({})",
-                    preferred_vendor, info.vendor
-                );
-                return Ok(info);
-            }
-            warn!(
-                "Preferred vendor '{}' is unavailable. Falling back to auto detection.",
-                preferred_vendor
-            );
-        } else {
-            warn!(
-                "Unknown preferred vendor '{}'. Falling back to auto detection.",
-                preferred_vendor
-            );
-        }
-    }
-
-    detect_hardware_with_runner(runner, allow_cpu_fallback)
+    detect_hardware_with_preference_and_runner_inner(runner, allow_cpu_fallback, preferred_vendor)
+        .map(|(info, _)| info)
 }
 
 pub fn detect_hardware(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
@@ -618,53 +971,8 @@ pub fn detect_hardware_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     allow_cpu_fallback: bool,
 ) -> Result<HardwareInfo> {
-    info!("=== Hardware Detection Starting ===");
-    info!("OS: {}", std::env::consts::OS);
-    info!("Architecture: {}", std::env::consts::ARCH);
-
-    if let Some(info) = try_detect_apple_with_runner(runner) {
-        info!("✓ Hardware acceleration: VideoToolbox");
-        return Ok(info);
-    }
-
-    if let Some(info) = try_detect_nvidia_with_runner(runner) {
-        info!("✓ Hardware acceleration: NVENC");
-        return Ok(info);
-    }
-
-    if let Some(info) = try_detect_intel_with_runner(runner) {
-        info!("✓ Hardware acceleration: Intel Quick Sync Video (QSV)");
-        return Ok(info);
-    }
-
-    if let Some(info) = try_detect_amd_with_runner(runner) {
-        info!(
-            "✓ Hardware acceleration: {}",
-            if cfg!(target_os = "windows") {
-                "AMF"
-            } else {
-                "VAAPI"
-            }
-        );
-        return Ok(info);
-    }
-
-    if !allow_cpu_fallback {
-        error!("✗ No supported GPU detected and CPU fallback is disabled.");
-        return Err(crate::error::AlchemistError::Config(
-            "No GPU detected and CPU fallback disabled".into(),
-        ));
-    }
-
-    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    warn!("⚠  NO GPU DETECTED - FALLING BACK TO CPU ENCODING");
-    warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    warn!("CPU encoding will be significantly slower than GPU acceleration.");
-    warn!("Expected performance: 10-50x slower depending on resolution.");
-    warn!("Software encoder: libsvtav1 (AV1) or libx264 (H.264)");
-    info!("✓ CPU fallback mode enabled");
-
-    Ok(HardwareInfo::new(Vendor::Cpu, None, Vec::new()))
+    detect_hardware_with_preference_and_runner_inner(runner, allow_cpu_fallback, None)
+        .map(|(info, _)| info)
 }
 
 pub async fn detect_hardware_async(allow_cpu_fallback: bool) -> Result<HardwareInfo> {
@@ -686,7 +994,10 @@ pub async fn detect_hardware_async_with_preference(
     .map_err(|e| crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e)))?
 }
 
-pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Result<HardwareInfo> {
+fn detect_hardware_for_config_with_runner<R: CommandRunner + ?Sized>(
+    runner: &R,
+    config: &crate::config::Config,
+) -> Result<(HardwareInfo, HardwareProbeLog)> {
     if let Some(device_path) = config
         .hardware
         .device_path
@@ -700,13 +1011,19 @@ pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Resul
                 .preferred_vendor
                 .as_deref()
                 .and_then(parse_preferred_vendor);
-            let info =
-                detect_explicit_device_path(device_path, preferred_vendor).ok_or_else(|| {
-                    crate::error::AlchemistError::Config(format!(
-                        "Configured device path '{}' did not expose a supported encoder",
-                        device_path
-                    ))
-                })?;
+            let mut probe_log = HardwareProbeLog::default();
+            let info = detect_explicit_device_path_with_runner_and_log(
+                runner,
+                device_path,
+                preferred_vendor,
+                &mut probe_log,
+            )
+            .ok_or_else(|| {
+                crate::error::AlchemistError::Config(format!(
+                    "Configured device path '{}' did not expose a supported encoder",
+                    device_path
+                ))
+            })?;
 
             if info.vendor == Vendor::Cpu && !config.hardware.allow_cpu_encoding {
                 return Err(crate::error::AlchemistError::Config(
@@ -714,7 +1031,7 @@ pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Resul
                 ));
             }
 
-            return Ok(info);
+            return Ok((info, probe_log));
         }
 
         warn!(
@@ -724,11 +1041,11 @@ pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Resul
         );
     }
 
-    let info = detect_hardware_async_with_preference(
+    let (info, probe_log) = detect_hardware_with_preference_and_runner_inner(
+        runner,
         config.hardware.allow_cpu_fallback,
         config.hardware.preferred_vendor.clone(),
-    )
-    .await?;
+    )?;
 
     if info.vendor == Vendor::Cpu && !config.hardware.allow_cpu_encoding {
         return Err(crate::error::AlchemistError::Config(
@@ -736,7 +1053,22 @@ pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Resul
         ));
     }
 
-    Ok(info)
+    Ok((info, probe_log))
+}
+
+pub async fn detect_hardware_with_log(
+    config: &crate::config::Config,
+) -> Result<(HardwareInfo, HardwareProbeLog)> {
+    let config = config.clone();
+    tokio::task::spawn_blocking(move || {
+        detect_hardware_for_config_with_runner(&SystemCommandRunner, &config)
+    })
+    .await
+    .map_err(|e| crate::error::AlchemistError::Config(format!("spawn_blocking failed: {}", e)))?
+}
+
+pub async fn detect_hardware_for_config(config: &crate::config::Config) -> Result<HardwareInfo> {
+    detect_hardware_with_log(config).await.map(|(info, _)| info)
 }
 
 #[cfg(test)]
@@ -761,7 +1093,7 @@ mod tests {
     }
 
     impl CommandRunner for FakeRunner {
-        fn output(&self, program: &str, _args: &[String]) -> std::io::Result<Output> {
+        fn output(&self, program: &str, args: &[String]) -> std::io::Result<Output> {
             match program {
                 "nvidia-smi" if self.nvidia_smi_ok => Ok(Output {
                     status: exit_status(true),
@@ -773,11 +1105,20 @@ mod tests {
                     stdout: Vec::new(),
                     stderr: b"missing".to_vec(),
                 }),
-                "ffmpeg" => Ok(Output {
-                    status: exit_status(true),
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                }),
+                "ffmpeg" => {
+                    let success = args
+                        .iter()
+                        .any(|arg| self.successful_encoders.contains(arg));
+                    Ok(Output {
+                        status: exit_status(success),
+                        stdout: Vec::new(),
+                        stderr: if success {
+                            Vec::new()
+                        } else {
+                            b"encoder unavailable".to_vec()
+                        },
+                    })
+                }
                 _ => Ok(Output {
                     status: exit_status(false),
                     stdout: Vec::new(),
