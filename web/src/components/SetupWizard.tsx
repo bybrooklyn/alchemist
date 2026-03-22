@@ -48,6 +48,24 @@ export default function SetupWizard() {
         validatorRef.current = validator;
     }, []);
 
+    const showError = useCallback((message: string) => {
+        const normalized = message.toLowerCase();
+        let nextMessage = message;
+
+        if (normalized.includes("directory") || normalized.includes("folder")) {
+            nextMessage += " Go back to the Library step and verify the folder path is correct and accessible from the server.";
+        }
+        if (normalized.includes("concurrent")) {
+            nextMessage += " Go back to the Processing step and set at least 1 concurrent job.";
+        }
+
+        setError(nextMessage);
+        setTimeout(() => {
+            document.querySelector('[role="alert"]')
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+    }, []);
+
     useEffect(() => {
         validatorRef.current = async () => null;
     }, [step]);
@@ -68,12 +86,12 @@ export default function SetupWizard() {
                 setError(null);
             } catch (err) {
                 const message = isApiError(err) ? err.message : "Failed to load setup defaults.";
-                setError(message);
+                showError(message);
             }
         };
 
         void loadBootstrap();
-    }, []);
+    }, [showError]);
 
     const handleSubmit = async () => {
         setSubmitting(true);
@@ -107,7 +125,7 @@ export default function SetupWizard() {
                     message = err.message;
                 }
             }
-            setError(message);
+            showError(message);
         } finally {
             setSubmitting(false);
         }
@@ -116,7 +134,7 @@ export default function SetupWizard() {
     const handleNext = async () => {
         const validationMessage = await validatorRef.current();
         if (validationMessage) {
-            setError(validationMessage);
+            showError(validationMessage);
             return;
         }
         setError(null);

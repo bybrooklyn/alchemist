@@ -293,6 +293,7 @@ where
             device_path: None,
             supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
             backends: Vec::new(),
+            detection_notes: Vec::new(),
         })),
         Arc::new(broadcast::channel(16).0),
         false,

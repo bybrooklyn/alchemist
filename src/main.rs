@@ -65,10 +65,11 @@ async fn apply_reloaded_config(
     config_state: &Arc<RwLock<config::Config>>,
     agent: &Arc<Agent>,
     hardware_state: &hardware::HardwareState,
+    hardware_probe_log: &Arc<RwLock<hardware::HardwareProbeLog>>,
 ) -> Result<hardware::HardwareInfo> {
     let new_config = config::Config::load(config_path)
         .map_err(|err| alchemist::error::AlchemistError::Config(err.to_string()))?;
-    let detected_hardware = hardware::detect_hardware_for_config(&new_config).await?;
+    let (detected_hardware, probe_log) = hardware::detect_hardware_with_log(&new_config).await?;
     let new_limit = new_config.transcode.concurrent_jobs;
     alchemist::settings::project_config_to_db(db.as_ref(), &new_config).await?;
 
@@ -80,6 +81,7 @@ async fn apply_reloaded_config(
     hardware_state
         .replace(Some(detected_hardware.clone()))
         .await;
+    *hardware_probe_log.write().await = probe_log;
     agent.set_concurrent_jobs(new_limit).await;
 
     Ok(detected_hardware)
@@ -325,16 +327,12 @@ async fn run() -> Result<()> {
 
     // 2. Hardware Detection (using async version to avoid blocking runtime)
     let hw_start = Instant::now();
-    let allow_cpu_fallback = if setup_mode {
-        true
-    } else {
-        config.hardware.allow_cpu_fallback
-    };
-    let hw_info = hardware::detect_hardware_async_with_preference(
-        allow_cpu_fallback,
-        config.hardware.preferred_vendor.clone(),
-    )
-    .await?;
+    let mut detection_config = config.clone();
+    if setup_mode {
+        detection_config.hardware.allow_cpu_fallback = true;
+    }
+    let (hw_info, initial_probe_log) =
+        hardware::detect_hardware_with_log(&detection_config).await?;
     info!(
         target: "startup",
         "Hardware detection completed in {} ms",
@@ -376,6 +374,7 @@ async fn run() -> Result<()> {
 
     let transcoder = Arc::new(Transcoder::new());
     let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
+    let hardware_probe_log = Arc::new(RwLock::new(initial_probe_log));
     let config = Arc::new(RwLock::new(config));
 
     let maintenance_db = db.clone();
@@ -498,6 +497,7 @@ async fn run() -> Result<()> {
         let reload_watcher_clone = reload_watcher.clone();
         let agent_for_config = agent.clone();
         let hardware_state_for_config = hardware_state.clone();
+        let hardware_probe_log_for_config = hardware_probe_log.clone();
         let config_watch_path = config_path.clone();
         let db_for_config = db.clone();
 
@@ -542,6 +542,7 @@ async fn run() -> Result<()> {
                                     &config_watcher_arc,
                                     &agent_for_config,
                                     &hardware_state_for_config,
+                                    &hardware_probe_log_for_config,
                                 )
                                 .await
                                 {
@@ -581,6 +582,7 @@ async fn run() -> Result<()> {
             config_path: config_path.clone(),
             config_mutable,
             hardware_state,
+            hardware_probe_log,
             notification_manager: notification_manager.clone(),
             file_watcher,
         })
@@ -710,7 +712,9 @@ mod tests {
             device_path: None,
             supported_codecs: vec!["av1".to_string()],
             backends: Vec::new(),
+            detection_notes: Vec::new(),
         }));
+        let hardware_probe_log = Arc::new(RwLock::new(hardware::HardwareProbeLog::default()));
         let transcoder = Arc::new(Transcoder::new());
         let (tx, _rx) = broadcast::channel(8);
         let agent = Arc::new(
@@ -738,6 +742,7 @@ mod tests {
             &config_state,
             &agent,
             &hardware_state,
+            &hardware_probe_log,
         )
         .await?;
 

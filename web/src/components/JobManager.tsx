@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
     Search, RefreshCw, Trash2, Ban,
-    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp
+    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp, AlertCircle
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
@@ -54,6 +54,40 @@ export function humanizeSkipReason(reason: string): { human: string; technical: 
     return { human, technical };
 }
 
+function explainFailureSummary(summary: string): string {
+    const normalized = summary.toLowerCase();
+
+    if (normalized.includes("no such file or directory")) {
+        return "The source file could not be found. It may have been moved or deleted.";
+    }
+    if (normalized.includes("invalid data found") || normalized.includes("moov atom not found")) {
+        return "This file appears to be corrupt or incomplete. Try running a Library Doctor scan.";
+    }
+    if (normalized.includes("permission denied")) {
+        return "Alchemist doesn't have permission to read this file. Check the file permissions.";
+    }
+    if (normalized.includes("encoder not found") || normalized.includes("unknown encoder")) {
+        return "The required encoder is not available in your FFmpeg installation.";
+    }
+    if (normalized.includes("out of memory") || normalized.includes("cannot allocate memory")) {
+        return "The system ran out of memory during encoding. Try reducing concurrent jobs.";
+    }
+
+    return summary;
+}
+
+function logLevelClass(level: string): string {
+    switch (level.toLowerCase()) {
+        case "error":
+            return "text-status-error";
+        case "warn":
+        case "warning":
+            return "text-amber-500";
+        default:
+            return "text-helios-slate";
+    }
+}
+
 interface Job {
     id: number;
     input_path: string;
@@ -97,6 +131,13 @@ interface JobDetail {
     job: Job;
     metadata?: JobMetadata;
     encode_stats?: EncodeStats;
+    job_logs?: Array<{
+        id: number;
+        level: string;
+        message: string;
+        created_at: string;
+    }>;
+    job_failure_summary?: string;
 }
 
 interface CountMessageResponse {
@@ -498,6 +539,13 @@ export default function JobManager() {
     const focusedDecision = focusedJob?.job.decision_reason
         ? humanizeSkipReason(focusedJob.job.decision_reason)
         : null;
+    const focusedJobLogs = focusedJob?.job_logs ?? [];
+    const focusedFailureExplanation = focusedJob?.job_failure_summary
+        ? explainFailureSummary(focusedJob.job_failure_summary)
+        : null;
+    const shouldShowFfmpegOutput = focusedJob
+        ? ["failed", "completed", "skipped"].includes(focusedJob.job.status) && focusedJobLogs.length > 0
+        : false;
 
     return (
         <div className="space-y-6 relative">
@@ -1056,6 +1104,69 @@ export default function JobManager() {
                                                 </details>
                                             ) : null}
                                         </div>
+                                    )}
+
+                                    {focusedJob.job.status === "failed" && (
+                                        <div className="p-4 rounded-xl bg-status-error/5 border border-status-error/15">
+                                            <div className="flex items-center gap-2 text-status-error mb-2">
+                                                <AlertCircle size={14} />
+                                                <span className="text-sm font-semibold">What went wrong</span>
+                                            </div>
+                                            {focusedJob.job_failure_summary ? (
+                                                <>
+                                                    <p className="text-sm text-helios-ink leading-relaxed">
+                                                        {focusedJob.job_failure_summary}
+                                                    </p>
+                                                    {focusedFailureExplanation && focusedFailureExplanation !== focusedJob.job_failure_summary && (
+                                                        <p className="mt-2 text-sm text-helios-slate leading-relaxed">
+                                                            {focusedFailureExplanation}
+                                                        </p>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <p className="text-sm text-helios-slate leading-relaxed">
+                                                    No error summary was recorded. Review the FFmpeg output below for the last encoder messages.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {focusedJob.job.status === "skipped" && focusedJob.job.decision_reason && (
+                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10">
+                                            <p className="text-sm text-helios-ink leading-relaxed">
+                                                Alchemist analysed this file and decided not to transcode it. Here&apos;s why:
+                                            </p>
+                                            <p className="mt-2 text-sm text-helios-slate leading-relaxed">
+                                                {focusedDecision?.human ?? focusedJob.job.decision_reason}
+                                            </p>
+                                            <p className="mt-3 text-xs font-semibold text-helios-slate">
+                                                Technical analysis:
+                                            </p>
+                                            <p className="mt-1 font-mono text-xs text-helios-slate/80 break-words leading-relaxed">
+                                                {focusedJob.job.decision_reason}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {shouldShowFfmpegOutput && (
+                                        <details className="rounded-xl border border-helios-line/15 bg-helios-surface-soft/40 p-4">
+                                            <summary className="cursor-pointer text-xs text-helios-solar">
+                                                Show FFmpeg output ({focusedJobLogs.length} lines)
+                                            </summary>
+                                            <div className="mt-3 max-h-48 overflow-y-auto rounded-lg bg-helios-main/70 p-3">
+                                                {focusedJobLogs.map((entry) => (
+                                                    <div
+                                                        key={entry.id}
+                                                        className={cn(
+                                                            "font-mono text-xs leading-relaxed whitespace-pre-wrap break-words",
+                                                            logLevelClass(entry.level)
+                                                        )}
+                                                    >
+                                                        {entry.message}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </details>
                                     )}
 
                                     {/* Action Toolbar */}

@@ -1,12 +1,25 @@
 import { useState, useEffect } from "react";
-import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle, Save } from "lucide-react";
+import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle, Save, XCircle } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
 interface HardwareInfo {
-    vendor: "Nvidia" | "Amd" | "Intel" | "Apple" | "Cpu";
+    vendor: string;
     device_path: string | null;
     supported_codecs: string[];
+    detection_notes?: string[];
+}
+
+interface HardwareProbeEntry {
+    encoder: string;
+    backend: string;
+    device_path: string | null;
+    success: boolean;
+    stderr?: string | null;
+}
+
+interface HardwareProbeLog {
+    entries: HardwareProbeEntry[];
 }
 
 interface HardwareSettings {
@@ -20,13 +33,14 @@ interface HardwareSettings {
 export default function HardwareSettings() {
     const [info, setInfo] = useState<HardwareInfo | null>(null);
     const [settings, setSettings] = useState<HardwareSettings | null>(null);
+    const [probeLog, setProbeLog] = useState<HardwareProbeLog>({ entries: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [saving, setSaving] = useState(false);
     const [draftDevicePath, setDraftDevicePath] = useState("");
 
     useEffect(() => {
-        void Promise.all([fetchHardware(), fetchSettings()]).finally(() => setLoading(false));
+        void Promise.all([fetchHardware(), fetchSettings(), fetchProbeLog()]).finally(() => setLoading(false));
     }, []);
 
     const fetchHardware = async () => {
@@ -51,6 +65,15 @@ export default function HardwareSettings() {
         }
     };
 
+    const fetchProbeLog = async () => {
+        try {
+            const data = await apiJson<HardwareProbeLog>("/api/system/hardware/probe-log");
+            setProbeLog(data);
+        } catch {
+            setProbeLog({ entries: [] });
+        }
+    };
+
     const persistSettings = async (nextSettings: HardwareSettings, message: string) => {
         setSaving(true);
         try {
@@ -60,7 +83,7 @@ export default function HardwareSettings() {
                 body: JSON.stringify(nextSettings),
             });
             setError("");
-            await Promise.all([fetchHardware(), fetchSettings()]);
+            await Promise.all([fetchHardware(), fetchSettings(), fetchProbeLog()]);
             showToast({ kind: "success", title: "Hardware", message });
         } catch (err) {
             const errorMessage = isApiError(err) ? err.message : "Failed to update hardware settings";
@@ -102,17 +125,31 @@ export default function HardwareSettings() {
         );
     }
 
+    const normalizeVendor = (vendor: string): "nvidia" | "amd" | "intel" | "apple" | "cpu" => {
+        switch (vendor.toLowerCase()) {
+            case "nvidia": return "nvidia";
+            case "amd": return "amd";
+            case "intel": return "intel";
+            case "apple": return "apple";
+            default: return "cpu";
+        }
+    };
+
     const getVendorDetails = (vendor: string) => {
-        switch (vendor) {
-            case "Nvidia": return { name: "NVIDIA", tech: "NVENC", color: "text-emerald-500", bg: "bg-emerald-500/10" };
-            case "Amd": return { name: "AMD", tech: "VAAPI/AMF", color: "text-red-500", bg: "bg-red-500/10" };
-            case "Intel": return { name: "Intel", tech: "QuickSync (QSV)", color: "text-blue-500", bg: "bg-blue-500/10" };
-            case "Apple": return { name: "Apple", tech: "VideoToolbox", color: "text-helios-slate", bg: "bg-helios-slate/10" };
+        switch (normalizeVendor(vendor)) {
+            case "nvidia": return { name: "NVIDIA", tech: "NVENC", color: "text-emerald-500", bg: "bg-emerald-500/10" };
+            case "amd": return { name: "AMD", tech: "VAAPI/AMF", color: "text-red-500", bg: "bg-red-500/10" };
+            case "intel": return { name: "Intel", tech: "QuickSync (QSV)", color: "text-blue-500", bg: "bg-blue-500/10" };
+            case "apple": return { name: "Apple", tech: "VideoToolbox", color: "text-helios-slate", bg: "bg-helios-slate/10" };
             default: return { name: "CPU", tech: "Software Fallback", color: "text-helios-solar", bg: "bg-helios-solar/10" };
         }
     };
 
+    const vendor = normalizeVendor(info.vendor);
     const details = getVendorDetails(info.vendor);
+    const detectionNotes = info.detection_notes ?? [];
+    const failedProbeEntries = probeLog.entries.filter((entry) => !entry.success);
+    const shouldShowProbeLog = vendor === "cpu" || failedProbeEntries.length > 0;
 
     return (
         <div className="flex flex-col gap-6" aria-live="polite">
@@ -122,7 +159,7 @@ export default function HardwareSettings() {
                     <p className="text-xs text-helios-slate mt-0.5">Detected acceleration engines and codec support.</p>
                 </div>
                 <div className={`p-2 ${details.bg} rounded-xl ${details.color}`}>
-                    {info.vendor === "Cpu" ? <Cpu size={20} /> : <Zap size={20} />}
+                    {vendor === "cpu" ? <Cpu size={20} /> : <Zap size={20} />}
                 </div>
             </div>
 
@@ -142,7 +179,7 @@ export default function HardwareSettings() {
                         <div>
                             <span className="text-xs font-medium text-helios-slate uppercase tracking-wide block mb-1.5 ml-0.5">Device Path</span>
                             <div className="bg-helios-surface-soft border border-helios-line/30 rounded-lg px-3 py-2 font-mono text-xs text-helios-ink shadow-inner">
-                                {info.device_path || (info.vendor === "Nvidia" ? "NVIDIA Driver (Direct)" : "Auto-detected Interface")}
+                                {info.device_path || (vendor === "nvidia" ? "NVIDIA Driver (Direct)" : "Auto-detected Interface")}
                             </div>
                         </div>
                     </div>
@@ -174,7 +211,7 @@ export default function HardwareSettings() {
                 </div>
             </div>
 
-            {info.vendor === "Cpu" && (
+            {vendor === "cpu" && (
                 <div className="p-4 bg-helios-solar/5 border border-helios-solar/10 rounded-lg">
                     <div className="flex gap-3">
                         <AlertCircle className="text-helios-solar shrink-0" size={18} />
@@ -183,9 +220,76 @@ export default function HardwareSettings() {
                             <p className="text-xs text-helios-slate leading-relaxed">
                                 GPU acceleration was not detected or is incompatible. Alchemist will use software encoding (SVT-AV1 / x264), which is significantly more resource intensive.
                             </p>
+                            {detectionNotes.length > 0 && (
+                                <div className="bg-amber-500/10 border border-amber-500/20 rounded-md px-4 py-3 mt-3">
+                                    <p className="text-xs font-semibold text-amber-600">What was tried:</p>
+                                    <ul className="mt-2 list-disc pl-4 space-y-1 text-xs text-helios-slate leading-relaxed">
+                                        {detectionNotes.map((note) => (
+                                            <li key={note}>{note}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
+            )}
+
+            {vendor !== "cpu" && detectionNotes.length > 0 && (
+                <details className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-helios-slate hover:text-helios-ink">
+                        Detection notes
+                    </summary>
+                    <ul className="mt-3 list-disc pl-4 space-y-1 text-xs text-helios-slate leading-relaxed">
+                        {detectionNotes.map((note) => (
+                            <li key={note}>{note}</li>
+                        ))}
+                    </ul>
+                </details>
+            )}
+
+            {shouldShowProbeLog && (
+                <details className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 px-4 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-helios-slate hover:text-helios-ink">
+                        Show detection log
+                    </summary>
+                    <div className="mt-3 space-y-2">
+                        {probeLog.entries.length > 0 ? probeLog.entries.map((entry, index) => {
+                            const firstLine = entry.stderr?.split("\n")[0]?.trim();
+                            const iconClassName = entry.success ? "text-emerald-500" : "text-red-500";
+
+                            return (
+                                <details
+                                    key={`${entry.encoder}-${entry.backend}-${entry.device_path ?? "auto"}-${index}`}
+                                    className="rounded-md border border-helios-line/15 bg-helios-surface/60 px-3 py-2"
+                                >
+                                    <summary className="cursor-pointer text-xs text-helios-slate">
+                                        <span className="inline-flex items-center gap-2">
+                                            {entry.success ? <CheckCircle2 size={12} className={iconClassName} /> : <XCircle size={12} className={iconClassName} />}
+                                            <span className="font-medium text-helios-ink">{entry.encoder}</span>
+                                            {!entry.success && firstLine && (
+                                                <span className="text-helios-slate">{firstLine}</span>
+                                            )}
+                                        </span>
+                                    </summary>
+                                    <div className="mt-2 space-y-2">
+                                        <p className="text-[11px] text-helios-slate">
+                                            {entry.backend}
+                                            {entry.device_path ? ` • ${entry.device_path}` : ""}
+                                        </p>
+                                        {entry.stderr && (
+                                            <pre className="overflow-x-auto rounded bg-helios-main/70 p-2 text-xs text-helios-slate font-mono whitespace-pre-wrap break-words">
+                                                {entry.stderr}
+                                            </pre>
+                                        )}
+                                    </div>
+                                </details>
+                            );
+                        }) : (
+                            <p className="text-xs text-helios-slate">No encoder probes were recorded during detection.</p>
+                        )}
+                    </div>
+                </details>
             )}
 
             {settings && (
