@@ -8,6 +8,8 @@ web/node_modules
 docs/node_modules
 web/dist
 web/.astro
+docs/dist
+docs/.astro
 web/package-lock.json
 web.zip
 .DS_Store
