@@ -36,7 +36,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "sh -c 'mkdir -p .runtime/media && cargo run --no-default-features --manifest-path ../Cargo.toml -- --reset-auth'",
+    command: "sh -c 'mkdir -p .runtime/media && cd .. && cargo run --no-default-features -- --reset-auth'",
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
