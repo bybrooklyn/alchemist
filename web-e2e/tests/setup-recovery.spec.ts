@@ -114,7 +114,7 @@ test("setup step 5 shows retry and back recovery on scan failures", async ({ pag
   });
 
   await page.goto("/setup");
-  await expect(page.getByRole("heading", { name: "Alchemist Setup" })).toBeVisible();
+  await expect(page.getByPlaceholder("admin")).toBeVisible();
 
   await page.getByPlaceholder("admin").fill("playwright");
   await page.getByPlaceholder("Choose a strong password").fill("playwright-password");
@@ -247,8 +247,8 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByPlaceholder("Paste a server path or use Browse").fill("/srv/media");
   await page.getByRole("button", { name: /^Add$/ }).click();
-  await page.getByRole("button", { name: "H.264" }).click();
   await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "H.264" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Build Engine" }).click();

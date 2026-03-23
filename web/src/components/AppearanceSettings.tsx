@@ -291,9 +291,9 @@ export default function AppearanceSettings() {
     const [error, setError] = useState("");
 
     useEffect(() => {
-        void apiJson<{ settings: { appearance: { active_theme_id?: string | null } } }>("/api/settings/bundle")
-            .then((bundle) => {
-                const themeId = bundle.settings.appearance.active_theme_id;
+        void apiJson<{ active_theme_id?: string | null }>("/api/ui/preferences")
+            .then((preferences) => {
+                const themeId = preferences.active_theme_id;
                 if (themeId) {
                     setActiveThemeId(themeId);
                     applyRootTheme(themeId);
@@ -308,7 +308,7 @@ export default function AppearanceSettings() {
 
     const handleSelect = useCallback(
         async (themeId: string) => {
-            if (!themeId || themeId === activeThemeId || savingThemeId) {
+            if (!themeId || savingThemeId) {
                 return;
             }
 
@@ -318,15 +318,10 @@ export default function AppearanceSettings() {
             applyRootTheme(themeId);
 
             try {
-                const bundle = await apiJson<{ settings: { appearance: { active_theme_id?: string | null } } & Record<string, unknown> }>("/api/settings/bundle");
-                await apiAction("/api/settings/bundle", {
-                    method: "PUT",
+                await apiAction("/api/ui/preferences", {
+                    method: "POST",
                     body: JSON.stringify({
-                        ...bundle.settings,
-                        appearance: {
-                            ...(bundle.settings.appearance ?? {}),
-                            active_theme_id: themeId,
-                        },
+                        active_theme_id: themeId,
                     }),
                 });
             } catch (saveError) {
@@ -376,7 +371,7 @@ export default function AppearanceSettings() {
                                     <button
                                         key={theme.id}
                                         onClick={() => handleSelect(theme.id)}
-                                        disabled={isActive || Boolean(savingThemeId)}
+                                        disabled={Boolean(savingThemeId)}
                                         className={cn(
                                             "group relative flex flex-col items-start gap-4 rounded-lg border p-4 text-left transition-all duration-300 outline-none",
                                             isActive

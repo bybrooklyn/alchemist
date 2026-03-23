@@ -16,10 +16,12 @@ const jobsTable = [
   },
 ];
 
+test.use({ storageState: undefined });
+
 test.beforeEach(async ({ page }) => {
   await mockEngineStatus(page);
 
-  await page.route("**/api/jobs/table**", async (route) => {
+  await page.route("**/api/jobs**", async (route) => {
     await fulfillJson(route, 200, jobsTable);
   });
 });
@@ -78,7 +80,7 @@ test("single job delete failure is surfaced to the user", async ({ page }) => {
 });
 
 test("active jobs hide delete and disable batch restart/delete", async ({ page }) => {
-  await page.route("**/api/jobs/table**", async (route) => {
+  await page.route("**/api/jobs**", async (route) => {
     await fulfillJson(route, 200, [
       {
         id: 2,
