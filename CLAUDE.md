@@ -1,0 +1,111 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Project Is
+
+Alchemist is a self-hosted media transcoding pipeline. It scans a media library, analyzes video files for transcoding opportunities, and intelligently encodes them using hardware acceleration (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox) with CPU fallback. It includes a web UI for configuration and monitoring.
+
+**Stack:** Rust (Axum + SQLite/sqlx + tokio) backend, Astro 5 + React 18 + TypeScript frontend.
+
+## Commands
+
+All common tasks are in the `justfile` — use `just` as the task runner.
+
+### Development
+```bash
+just dev          # Backend (watch) + frontend dev server concurrently
+just run          # Backend only
+just web          # Frontend dev server only
+```
+
+### Build
+```bash
+just build        # Full production build (frontend first, then Rust binary)
+just web-build    # Frontend assets only
+just rust-build   # Rust binary only (assumes web/dist exists)
+```
+
+### Checks & Linting (mirrors CI exactly)
+```bash
+just check        # All checks: fmt + clippy + typecheck + frontend build
+just check-rust   # Rust only (faster)
+just check-web    # Frontend only
+```
+
+### Tests
+```bash
+just test                      # All Rust tests
+just test-filter <pattern>     # Single test by name (e.g., just test-filter stream_rules)
+just test-verbose              # All tests with stdout visible
+just test-e2e                  # Playwright e2e tests (headless)
+just test-e2e-headed           # E2e with browser visible
+```
+
+Integration tests require FFmpeg and FFprobe installed locally.
+
+### Database
+```bash
+just db-reset       # Wipe dev database (keeps config)
+just db-reset-all   # Wipe database AND config (triggers setup wizard on next run)
+just db-shell       # SQLite shell
+```
+
+## Architecture
+
+### Rust Backend (`src/`)
+
+The backend is structured around a central `AppState` (holding SQLite pool, config, broadcast channels) passed to Axum handlers:
+
+- **`server.rs`** (~4700 LOC) — All HTTP routes, WebSocket/SSE events, authentication (Argon2 + sessions), rate limiting, and static asset serving. This is the largest file.
+- **`db.rs`** (~2400 LOC) — SQLite connection pool, all queries, migration runner. Direct sqlx usage; no ORM.
+- **`config.rs`** (~850 LOC) — TOML config structs for all user-facing settings.
+- **`media/`** — The core pipeline:
+  - `scanner.rs` — File discovery (glob patterns, exclusion rules)
+  - `analyzer.rs` — FFprobe-based stream inspection
+  - `planner.rs` — Decision logic for whether/how to transcode
+  - `pipeline.rs` — Orchestrates scan → analyze → plan → execute
+  - `processor.rs` — Job queue controller (concurrency, pausing, draining)
+  - `ffmpeg/` — FFmpeg command builder and progress parser, with platform-specific encoder modules
+- **`orchestrator.rs`** — Spawns and monitors FFmpeg processes, streams progress back via channels
+- **`system/`** — Hardware detection (`hardware.rs`), file watcher (`watcher.rs`), library scanner (`scanner.rs`)
+- **`scheduler.rs`** — Off-peak cron scheduling
+- **`notifications.rs`** — Discord, Gotify, Webhook integrations
+- **`wizard.rs`** — First-run setup flow
+
+### Frontend (`web/src/`)
+
+Astro pages with React islands. UI reflects backend state via Server-Sent Events (SSE) — avoid optimistic UI unless reconciled with backend truth.
+
+### Database Schema
+
+Migrations in `migrations/` are **additive only** — never rename or drop columns. Databases from v0.2.5+ must remain usable. When adding schema: add columns with defaults or nullable, or add new tables.
+
+## Key Design Constraints
+
+From `DESIGN_PHILOSOPHY.md` — these are binding:
+
+- **Never overwrite user media by default.** Always prefer reversible actions.
+- **Backwards compatibility:** DBs from v0.2.5+ must work with all future versions.
+- **Schema changes are additive only** — no renames, no drops.
+- **No data loss on failure** — fail safe, not fail open.
+- **All core features must work on macOS, Linux, and Windows.**
+- **Deterministic behavior** — no clever heuristics; explicit error handling over implicit fallbacks.
+- If a change risks data loss or breaks older data: do not merge it.
+
+## Environment Variables
+
+```
+ALCHEMIST_CONFIG_PATH   # Config file path (default: ~/.config/alchemist/config.toml)
+ALCHEMIST_DB_PATH       # Database path (default: ~/.config/alchemist/alchemist.db)
+ALCHEMIST_CONFIG_MUTABLE # Allow runtime config changes (default: true)
+RUST_LOG                # Log level (e.g., info, alchemist=debug)
+```
+
+## Release Process
+
+```bash
+just update <VERSION>   # Validates, runs tests, bumps version everywhere, commits, tags, pushes
+```
+
+CI runs on GitHub Actions: `rust-check`, `rust-test`, `frontend-check` (see `.github/workflows/ci.yml`). Releases build for Linux x86_64/ARM64, Windows x86_64, macOS Intel/Apple Silicon, and Docker (linux/amd64 + linux/arm64).
