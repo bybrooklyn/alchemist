@@ -284,8 +284,10 @@ update NEW_VERSION:
     fi; \
     echo "Using web-e2e port ${E2E_PORT}"; \
     (cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT="${E2E_PORT}" bun run test:reliability); \
-    mapfile -t PACKAGE_FILES < <(git ls-files -- 'package.json' '*/package.json'); \
-    mapfile -t CHANGED_TRACKED < <(git diff --name-only --); \
+    PACKAGE_FILES=(); \
+    while IFS= read -r line; do [ -n "$line" ] && PACKAGE_FILES+=("$line"); done < <(git ls-files -- 'package.json' '*/package.json'); \
+    CHANGED_TRACKED=(); \
+    while IFS= read -r line; do [ -n "$line" ] && CHANGED_TRACKED+=("$line"); done < <(git diff --name-only --); \
     if [ "${#CHANGED_TRACKED[@]}" -eq 0 ]; then \
         echo "error: bump completed but no tracked files changed" >&2; \
         exit 1; \
