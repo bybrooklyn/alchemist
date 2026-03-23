@@ -15,3 +15,5 @@ web.zip
 .DS_Store
 alchemist.db-shm
 alchemist.db-wal
+.claude/worktrees/
+!.claude/settings.local.json

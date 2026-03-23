@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just update:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh pr:*)",
+      "Bash(cargo check:*)",
+      "Bash(just --shell)",
+      "Bash(bash --version)",
+      "Bash(git tag:*)"
+    ]
+  }
+}
