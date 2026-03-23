@@ -7,8 +7,8 @@ use crate::db::Db;
 use crate::error::{AlchemistError, Result};
 use crate::media::scanner::Scanner;
 use notify::{
-    event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RenameMode},
     Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+    event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RenameMode},
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -428,10 +428,11 @@ mod tests {
             std::fs::canonicalize(&queued[0].input_path)?,
             std::fs::canonicalize(&input_path)?
         );
-        assert!(db
-            .get_job_by_input_path(generated_output.to_string_lossy().as_ref())
-            .await?
-            .is_none());
+        assert!(
+            db.get_job_by_input_path(generated_output.to_string_lossy().as_ref())
+                .await?
+                .is_none()
+        );
         assert!(Path::new(&queued[0].output_path).ends_with("movie-alchemist.mkv"));
 
         watcher.watch(&[])?;

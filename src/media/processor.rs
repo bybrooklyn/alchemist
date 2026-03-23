@@ -1,14 +1,14 @@
+use crate::Transcoder;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db};
 use crate::error::Result;
 use crate::media::pipeline::Pipeline;
 use crate::media::scanner::Scanner;
 use crate::system::hardware::HardwareState;
-use crate::Transcoder;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
 use tracing::{error, info};
 
 pub struct Agent {

@@ -1,5 +1,5 @@
 use crate::db::{AlchemistEvent, Db, NotificationTarget};
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::{Client, Url, redirect::Policy};
 use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -280,8 +280,8 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[tokio::test]
-    async fn test_webhook_errors_on_non_success(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn test_webhook_errors_on_non_success()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_notifications_test_{}.db", token));

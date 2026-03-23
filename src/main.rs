@@ -1,6 +1,6 @@
 use alchemist::error::Result;
 use alchemist::system::hardware;
-use alchemist::{config, db, runtime, Agent, Transcoder};
+use alchemist::{Agent, Transcoder, config, db, runtime};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,8 +9,8 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use notify::{RecursiveMode, Watcher};
-use tokio::sync::broadcast;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -121,11 +121,21 @@ async fn run() -> Result<()> {
     let boot_start = Instant::now();
 
     // Startup Banner
-    info!(" ______     __         ______     __  __     ______     __    __     __     ______     ______ ");
-    info!("/\\  __ \\   /\\ \\       /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\ \"-./  \\   /\\ \\   /\\  ___\\   /\\__  _\\");
-    info!("\\ \\  __ \\  \\ \\ \\____  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\-./\\ \\  \\ \\ \\  \\ \\___  \\  \\/_/\\ \\/");
-    info!(" \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\ \\_\\  \\ \\_\\  \\/\\_____\\    \\ \\_\\");
-    info!("  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/");
+    info!(
+        " ______     __         ______     __  __     ______     __    __     __     ______     ______ "
+    );
+    info!(
+        "/\\  __ \\   /\\ \\       /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\ \"-./  \\   /\\ \\   /\\  ___\\   /\\__  _\\"
+    );
+    info!(
+        "\\ \\  __ \\  \\ \\ \\____  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\-./\\ \\  \\ \\ \\  \\ \\___  \\  \\/_/\\ \\/"
+    );
+    info!(
+        " \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\ \\_\\  \\ \\_\\  \\/\\_____\\    \\ \\_\\"
+    );
+    info!(
+        "  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/"
+    );
     info!("");
     info!("");
     let version = env!("CARGO_PKG_VERSION");
@@ -647,8 +657,8 @@ mod tests {
     use super::*;
     use clap::Parser;
     use notify::{
-        event::{CreateKind, ModifyKind, RenameMode},
         Event, EventKind,
+        event::{CreateKind, ModifyKind, RenameMode},
     };
     fn temp_db_path(prefix: &str) -> PathBuf {
         let mut db_path = std::env::temp_dir();
@@ -702,8 +712,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_reload_refreshes_runtime_hardware_state(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn config_reload_refreshes_runtime_hardware_state()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db_path = temp_db_path("alchemist_config_reload");
         let config_path = temp_config_path("alchemist_config_reload");
         let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);

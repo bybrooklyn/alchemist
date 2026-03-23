@@ -5,14 +5,13 @@ use crate::media::executor::FfmpegExecutor;
 use crate::media::planner::BasicPlanner;
 use crate::orchestrator::Transcoder;
 use crate::system::hardware::HardwareState;
-use crate::telemetry::{encoder_label, hardware_label, resolution_bucket, TelemetryEvent};
-use async_trait::async_trait;
+use crate::telemetry::{TelemetryEvent, encoder_label, hardware_label, resolution_bucket};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -394,12 +393,12 @@ pub enum JobFailure {
     PlannerBug,
 }
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait Analyzer: Send + Sync {
     async fn analyze(&self, path: &Path) -> Result<MediaAnalysis>;
 }
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait Planner: Send + Sync {
     async fn plan(
         &self,
@@ -409,7 +408,7 @@ pub trait Planner: Send + Sync {
     ) -> Result<TranscodePlan>;
 }
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait Executor: Send + Sync {
     async fn execute(
         &self,
@@ -1016,8 +1015,7 @@ impl Pipeline {
                                 return Err(crate::error::AlchemistError::QualityCheckFailed(
                                     format!(
                                         "VMAF score {:.1} fell below the minimum threshold of {:.1}. The original file has been preserved.",
-                                        s,
-                                        threshold
+                                        s, threshold
                                     ),
                                 ));
                             }
@@ -1291,11 +1289,11 @@ fn map_failure(error: &crate::error::AlchemistError) -> JobFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Transcoder;
     use crate::db::Db;
     use crate::system::hardware::{HardwareInfo, HardwareState, Vendor};
-    use crate::Transcoder;
     use std::sync::Arc;
-    use tokio::sync::{broadcast, RwLock};
+    use tokio::sync::{RwLock, broadcast};
 
     #[test]
     fn generated_output_pattern_matches_default_suffix() {
@@ -1311,8 +1309,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enqueue_discovered_rejects_known_output_paths(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn enqueue_discovered_rejects_known_output_paths()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         db_path.push(format!(
             "alchemist_output_filter_{}.db",
@@ -1525,9 +1523,10 @@ mod tests {
         assert!(!temp_output.exists());
 
         let logs = db.get_logs(10, 0).await?;
-        assert!(logs
-            .iter()
-            .any(|entry| entry.message.contains("Finalization failed")));
+        assert!(
+            logs.iter()
+                .any(|entry| entry.message.contains("Finalization failed"))
+        );
 
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);

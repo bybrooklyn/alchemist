@@ -5,11 +5,10 @@ use crate::media::pipeline::{
 };
 use crate::orchestrator::{ExecutionObserver, TranscodeRequest, Transcoder};
 use crate::system::hardware::HardwareInfo;
-use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 pub struct FfmpegExecutor {
     transcoder: Arc<Transcoder>,
@@ -55,60 +54,65 @@ impl JobExecutionObserver {
     }
 }
 
-#[async_trait]
 impl ExecutionObserver for JobExecutionObserver {
-    async fn on_log(&self, message: String) {
-        let _ = self.event_tx.send(AlchemistEvent::Log {
-            level: "info".to_string(),
-            job_id: Some(self.job_id),
-            message: message.clone(),
-        });
-        if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
-            tracing::warn!(
-                "Failed to persist transcode log for job {}: {}",
-                self.job_id,
-                err
-            );
-        }
-    }
-
-    async fn on_progress(
+    fn on_log(
         &self,
-        progress: crate::media::ffmpeg::FFmpegProgress,
-        total_duration: f64,
-    ) {
-        let percentage = progress.percentage(total_duration).clamp(0.0, 100.0);
-        let now = Instant::now();
-        let mut last_progress = self.last_progress.lock().await;
-        let should_persist = match *last_progress {
-            Some((last_pct, last_time)) => {
-                percentage >= last_pct + 0.5
-                    || now.duration_since(last_time) >= Duration::from_secs(2)
-            }
-            None => true,
-        };
-
-        if should_persist {
-            if let Err(err) = self.db.update_job_progress(self.job_id, percentage).await {
+        message: String,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let _ = self.event_tx.send(AlchemistEvent::Log {
+                level: "info".to_string(),
+                job_id: Some(self.job_id),
+                message: message.clone(),
+            });
+            if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
                 tracing::warn!(
-                    "Failed to persist progress for job {}: {}",
+                    "Failed to persist transcode log for job {}: {}",
                     self.job_id,
                     err
                 );
-            } else {
-                *last_progress = Some((percentage, now));
             }
-        }
+        })
+    }
 
-        let _ = self.event_tx.send(AlchemistEvent::Progress {
-            job_id: self.job_id,
-            percentage,
-            time: progress.time,
-        });
+    fn on_progress(
+        &self,
+        progress: crate::media::ffmpeg::FFmpegProgress,
+        total_duration: f64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let percentage = progress.percentage(total_duration).clamp(0.0, 100.0);
+            let now = Instant::now();
+            let mut last_progress = self.last_progress.lock().await;
+            let should_persist = match *last_progress {
+                Some((last_pct, last_time)) => {
+                    percentage >= last_pct + 0.5
+                        || now.duration_since(last_time) >= Duration::from_secs(2)
+                }
+                None => true,
+            };
+
+            if should_persist {
+                if let Err(err) = self.db.update_job_progress(self.job_id, percentage).await {
+                    tracing::warn!(
+                        "Failed to persist progress for job {}: {}",
+                        self.job_id,
+                        err
+                    );
+                } else {
+                    *last_progress = Some((percentage, now));
+                }
+            }
+
+            let _ = self.event_tx.send(AlchemistEvent::Progress {
+                job_id: self.job_id,
+                percentage,
+                time: progress.time,
+            });
+        })
     }
 }
 
-#[async_trait]
 impl Executor for FfmpegExecutor {
     async fn execute(
         &self,
@@ -337,8 +341,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn job_execution_observer_persists_logs_and_progress(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn job_execution_observer_persists_logs_and_progress()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db_path = temp_db_path("alchemist_observer");
         let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
         let _ = db

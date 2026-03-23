@@ -3,13 +3,13 @@ use alchemist::db::{Db, JobState};
 use alchemist::media::pipeline::Pipeline;
 use alchemist::orchestrator::Transcoder;
 use alchemist::system::hardware::{HardwareInfo, HardwareState, Vendor};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 #[derive(Clone)]
 struct SubtitleInputSpec {

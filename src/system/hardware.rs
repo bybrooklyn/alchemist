@@ -1267,9 +1267,11 @@ mod tests {
         );
         assert_eq!(intel[0].kind, HardwareBackend::Vaapi);
         assert_eq!(intel[0].codec, "av1");
-        assert!(intel
-            .iter()
-            .any(|backend| { backend.kind == HardwareBackend::Vaapi && backend.codec == "h264" }));
+        assert!(
+            intel.iter().any(|backend| {
+                backend.kind == HardwareBackend::Vaapi && backend.codec == "h264"
+            })
+        );
         assert_eq!(
             intel
                 .iter()

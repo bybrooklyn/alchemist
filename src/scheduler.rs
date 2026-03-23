@@ -1,5 +1,5 @@
-use crate::db::Db;
 use crate::Agent;
+use crate::db::Db;
 use chrono::{Datelike, Local, Timelike};
 use std::sync::Arc;
 use tokio::sync::Notify;
