@@ -369,7 +369,7 @@ export default function WatchFolders() {
                             disabled={!libraryPath.trim() || syncingLibrary}
                             className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
                         >
-                            <Plus size={16} /> Add
+                            <Plus size={16} /> Add Library
                         </button>
                     </div>
                     <div className="space-y-2">

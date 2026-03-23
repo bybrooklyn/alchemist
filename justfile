@@ -271,7 +271,19 @@ update NEW_VERSION:
     echo "── Docs build ──"; \
     (cd docs && bun install --frozen-lockfile && bun run build); \
     echo "── E2E reliability ──"; \
-    (cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT=4173 bun run test:reliability); \
+    E2E_PORT=""; \
+    for port in $(seq 4173 4273); do \
+        if python3 -c "import socket, sys; s = socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1', $port)) != 0 else 1)" >/dev/null 2>&1; then \
+            E2E_PORT="$port"; \
+            break; \
+        fi; \
+    done; \
+    if [ -z "$E2E_PORT" ]; then \
+        echo "error: no free web-e2e port found in 4173-4273" >&2; \
+        exit 1; \
+    fi; \
+    echo "Using web-e2e port ${E2E_PORT}"; \
+    (cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT="${E2E_PORT}" bun run test:reliability); \
     mapfile -t PACKAGE_FILES < <(git ls-files -- 'package.json' '*/package.json'); \
     mapfile -t CHANGED_TRACKED < <(git diff --name-only --); \
     if [ "${#CHANGED_TRACKED[@]}" -eq 0 ]; then \

@@ -17,6 +17,11 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
     const updateTranscode = (patch: Partial<SetupSettings["transcode"]>) => onTranscodeChange({ ...transcode, ...patch });
     const updateFiles = (patch: Partial<SetupSettings["files"]>) => onFilesChange({ ...files, ...patch });
     const updateQuality = (patch: Partial<SetupSettings["quality"]>) => onQualityChange({ ...quality, ...patch });
+    const codecLabels: Record<SetupSettings["transcode"]["output_codec"], string> = {
+        av1: "AV1",
+        hevc: "HEVC",
+        h264: "H.264",
+    };
 
     return (
         <motion.div key="processing" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-8">
@@ -36,7 +41,7 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                                 onClick={() => updateTranscode({ output_codec: codec })}
                                 className={clsx("rounded-lg border px-4 py-4 text-left transition-all", transcode.output_codec === codec ? "border-helios-solar bg-helios-solar/10 text-helios-ink" : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate")}
                             >
-                                <div className="font-semibold uppercase">{codec}</div>
+                                <div className="font-semibold uppercase">{codecLabels[codec]}</div>
                                 <div className="text-[10px] mt-2 opacity-80">{codec === "av1" ? "Best compression" : codec === "hevc" ? "Broad modern compatibility" : "Maximum playback compatibility"}</div>
                             </button>
                         ))}

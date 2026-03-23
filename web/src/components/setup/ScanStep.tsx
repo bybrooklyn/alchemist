@@ -74,7 +74,7 @@ export default function ScanStep({ runId, onBackToReview }: ScanStepProps) {
 
             {scanError && (
                 <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm text-red-500 space-y-3">
-                    <p className="font-semibold">The initial scan hit an error.</p>
+                    <p className="font-semibold">Scan failed or became unavailable.</p>
                     <p>{scanError}</p>
                     <div className="flex flex-col sm:flex-row gap-2">
                         <button type="button" onClick={() => void startScan()} disabled={starting} className="rounded-xl bg-red-500/20 px-4 py-2 font-semibold disabled:opacity-50">{starting ? "Retrying..." : "Retry Scan"}</button>

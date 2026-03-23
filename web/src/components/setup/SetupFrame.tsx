@@ -51,7 +51,7 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
                             Back
                         </button>
                         <button type="button" onClick={onNext} disabled={submitting || !configMutable} className="flex items-center gap-2 rounded-md bg-helios-solar px-6 py-3 font-semibold text-helios-main hover:opacity-90 transition-opacity disabled:opacity-50">
-                            {submitting ? "Working..." : step === 5 ? "Finish Setup" : "Next"}
+                            {submitting ? "Working..." : step === 5 ? "Build Engine" : "Next"}
                             {!submitting && <ArrowRight size={18} />}
                         </button>
                     </div>
