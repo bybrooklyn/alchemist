@@ -5,6 +5,7 @@ public/pkg/alchemist.css
 build_log_2.txt
 alchemist.db
 web/node_modules
+docs/node_modules
 web/dist
 web/.astro
 web/package-lock.json

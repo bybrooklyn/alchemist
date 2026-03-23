@@ -1,107 +1,127 @@
 # Alchemist Codebase Audit
 
-Alchemist is an intelligent video transcoding automation system written in Rust. It utilizes a background queue with hardware acceleration and CPU fallback to efficiently convert user media libraries to modern codecs (AV1, HEVC, H.264) based on bitrate, resolution, and BPP (bits per pixel) heuristics.
+Alchemist is an intelligent video transcoding automation system written in Rust. It maintains a background queue with hardware acceleration and CPU fallback to convert media libraries to modern codecs (AV1, HEVC, H.264) based on bitrate, resolution, and BPP (bits per pixel) heuristics.
 
-This audit documentation provides a detailed breakdown of the codebase's architecture, core modules, data structures, and the flow of media processing.
+*Last updated: v0.3.0-rc.3*
 
 ## 1. System Architecture & Entry Point
 
 Alchemist can run in two modes:
-1. **Server Mode (Default):** Runs an Axum web server providing a REST API and a Web UI. It operates a background loop, monitors watch directories, and processes files according to a schedule.
-2. **CLI Mode (`--cli`):** Runs a one-off scan and transcode job over provided directories and exits upon completion.
+1. **Server Mode (Default):** Runs an Axum web server providing a REST API and web UI. Monitors watch directories, processes jobs according to schedule, and emits real-time events via SSE.
+2. **CLI Mode (`--cli`):** Runs a one-off scan and transcode job over provided directories and exits.
 
 ### `src/main.rs` & `src/lib.rs`
-- **Boot Sequence:** Reads command line arguments using `clap`. Initializes the application environment, logging (`tracing`), and database. It dynamically detects hardware (GPU/CPU encoders) and sets up the orchestrator and `Agent` (processor).
-- **Configuration Reloading:** Monitors `config.toml` changes using `notify`. On change, it dynamically re-applies configuration, re-detects hardware capabilities, updates concurrent limits, and resets file watchers.
+- **Boot Sequence:** Parses CLI args (`clap`), initializes logging (`tracing`), runs database migrations, performs hardware detection, and starts the orchestrator and `Agent`.
+- **Configuration Reloading:** Monitors `config.toml` via `notify`. On change, re-applies config, re-detects hardware, updates concurrency limits, and resets file watchers.
 
 ### `src/server.rs`
-- The REST API built with `axum`. Serves the frontend (via `rust-embed` or local files) and exposes endpoints to control jobs, retrieve stats, manage configuration, browse the server filesystem (`fs_browser`), and handle authentication (sessions and argon2 password hashing).
-- Exposes Server-Sent Events (SSE) at `/api/events` to push realtime logs, progress updates, and job state changes to the web dashboard.
-- Utilizes `RateLimitEntry` to manage global and login rate limits.
+- REST API built with Axum (~4700 LOC). Serves the frontend (embedded via `rust-embed` with the `embed-web` feature, or from `web/dist/` on disk otherwise) and handles authentication (Argon2 password hashing, session tokens), rate limiting, SSE events, filesystem browsing, and all API endpoints.
+- **SSE at `/api/events`:** pushes real-time logs, progress updates, and job state changes to the dashboard.
+- **Engine runtime modes:** `background`, `balanced`, and `throughput` — exposed through the API and dashboard header, with manual concurrency overrides and drain/resume controls.
 
 ---
 
 ## 2. Core State & Data Management
 
 ### `src/db.rs`
-- Built on `sqlx` and SQLite (`alchemist.db`), using Write-Ahead Logging (WAL) for concurrency.
-- **Job Tracking:** Stores the state (`queued`, `analyzing`, `encoding`, `completed`, `skipped`, `failed`, `cancelled`), retry attempts, priority, progress, and logs for each media file.
-- **State Projection:** To ensure robust interaction between the web UI and transcode engine, certain configurations (watch directories, schedule windows, UI preferences, notifications) are "projected" from the central `.toml` config to the database.
-- Handles atomic enqueueing of jobs, deduping by file modification time (`mtime_hash`). Includes robust stats aggregation functions (`get_aggregated_stats`, `get_daily_stats`).
+- SQLite with `sqlx` and WAL mode for concurrent reads.
+- **Job states:** `queued → analyzing → encoding → completed | skipped | failed | cancelled`.
+- **Retry backoff:** Failed jobs re-enter `queued` with exponential delay — attempt 1: +5 min, attempt 2: +15 min, attempt 3: +60 min, attempt 4+: +360 min. Implemented directly in SQL (`CASE WHEN attempt_count = N THEN datetime(updated_at, '+N minutes')`).
+- **Deduplication:** Jobs are keyed on `input_path` + `mtime_hash` to prevent re-enqueueing unchanged files.
+- **State projection:** Watch directories, schedule windows, UI preferences, and notifications are "projected" from `config.toml` into the database so the web UI and engine share a single source of truth.
+- **Log retention:** Configurable pruning (default 30 days) prevents unbounded growth.
+- **Session cleanup:** Expired auth sessions are pruned at startup and every 24 hours.
 
 ### `src/config.rs` & `src/settings.rs`
-- Defines the hierarchical structure of `config.toml` (`TranscodeConfig`, `HardwareConfig`, `ScannerConfig`, `ScheduleConfig`, etc.).
-- Enums handle configuration mappings like `QualityProfile` (Quality/Balanced/Speed) and map them to their FFmpeg respective CRF/preset flags.
-- `settings.rs` manages the logic of hydrating the database with the active state of `config.toml` via `save_config_and_project()`.
+- Defines the hierarchical `config.toml` structure (`TranscodeConfig`, `HardwareConfig`, `ScannerConfig`, `QualityConfig`, `ScheduleConfig`, `FilesConfig`, `StreamRules`, etc.).
+- `QualityProfile` (Quality/Balanced/Speed) maps to FFmpeg CRF and preset flags.
+- **Stream rules** (`StreamRules`): strip audio tracks by title keyword (e.g. commentary), filter by language (`keep_audio_languages`), keep only the default audio track.
+- **Per-library profiles** (`BuiltInLibraryProfile`): four built-in presets (Space Saver, Quality First, Balanced, Streaming) that each watch folder can override globally.
+- `settings.rs::save_config_and_project()` atomically persists config to disk and projects it to the database.
 
 ---
 
 ## 3. Media Pipeline
 
-The processing of media files involves a multi-stage pipeline, orchestrating scanning, probing, decision making, execution, and verification.
-
 ### `src/media/pipeline.rs`
-This module defines the architectural interfaces and data structures of the entire transcode process.
-- **Interfaces:** `Analyzer` (probes the file), `Planner` (decides what to do), `Executor` (runs the transcode).
-- **Structures:** `MediaMetadata`, `MediaAnalysis`, `TranscodePlan`, `ExecutionResult`.
-- **Pipeline Loop (`Pipeline::process_job`):**
-  1. Verifies the input and temp output paths.
-  2. Runs the Analyzer.
-  3. Runs the Planner. If `TranscodeDecision::Skip` is returned, marks the job as skipped.
-  4. Dispatches the TranscodePlan to the Executor.
-  5. Computes VMAF scores (if enabled) against the temporary transcoded artifact to ensure quality hasn't drastically degraded.
-  6. Promotes the artifact to the final path and updates the database with exact encode sizes and statistics.
+Defines the `Analyzer`, `Planner`, and `Executor` interfaces and the `Pipeline::process_job` loop:
+1. Verifies input path and reserves a temp output path.
+2. Runs the `Analyzer` (FFprobe).
+3. Runs the `Planner`. Returns `TranscodeDecision::Skip` → job marked skipped.
+4. Dispatches the `TranscodePlan` to the `Executor` (FFmpeg).
+5. Optionally computes VMAF score against the temp artifact. If below `min_vmaf_score`, the encode is rejected and the job fails (no silent quality loss).
+6. Promotes the artifact to the final path, records output size and savings statistics.
 
 ### `src/media/processor.rs` (`Agent`)
-- Acts as the background task runner. Manages a `tokio::sync::Semaphore` based on the configured concurrency limit.
-- Sits in an infinite loop claiming queued jobs from the database and spawning asynchronous tasks to run `Pipeline::process_job`.
-- Exposes `pause()`, `resume()`, and `set_scheduler_paused()` hooks to control the global state of the engine.
+- Background task runner managing a `tokio::sync::Semaphore` for concurrency.
+- Claims queued jobs from the database (respecting retry backoff) and spawns async tasks via `Pipeline::process_job`.
+- Exposes `pause()`, `resume()`, `drain()`, and `set_scheduler_paused()` for engine control.
 
 ### `src/media/analyzer.rs` (`FfmpegAnalyzer`)
-- Wraps `ffprobe` using a blocking OS process.
-- Parses video metadata (duration, FPS, resolution, codec, BPP, 10-bit color, HDR transfer functions like PQ/HLG) and outputs an `AnalysisConfidence` (High, Medium, Low) based on how complete the metadata is.
+- Wraps `ffprobe` as a blocking subprocess.
+- Parses video metadata: duration, FPS, resolution, codec, BPP, 10-bit color, HDR transfer functions (PQ/HLG).
+- Emits `AnalysisConfidence` (High/Medium/Low) based on metadata completeness.
 
 ### `src/media/planner.rs` (`BasicPlanner`)
-The intelligence layer of Alchemist.
-- **Decision Engine (`should_transcode`):** Skips files that are already the target codec and 10-bit. Calculates the Bits-Per-Pixel (BPP) and normalizes it based on resolution. If the BPP is lower than the quality threshold (to avoid generational quality loss), or if the file is smaller than `min_file_size_mb`, it skips the file.
-- **Encoder Selection (`select_encoder`):** Evaluates `HardwareInfo` (available hardware backends) against the requested output codec. It prefers GPU encoders (NVENC, QSV, VAAPI, AMF, VideoToolbox) and falls back to CPU encoders (SVT-AV1, libx265) only if configured.
-- **Subtitles & Audio:** Determines if audio can be copied or must be transcoded (Opus/AAC) based on container compatibility (e.g. mp4 vs mkv) and "heavy" codecs (TrueHD/FLAC). Plans subtitle burn-ins or sidecar extraction (`.mks`).
+The decision layer:
+- **Skip conditions:** already target codec and 10-bit; BPP below quality threshold (avoids generational loss); file smaller than `min_file_size_mb`; matches stream rules exclusion.
+- **Encoder selection:** prefers GPU (NVENC → QSV → VAAPI/AMF → VideoToolbox) then falls back to CPU (SVT-AV1, libx265, libx264) only if configured.
+- **Remux planning:** detects cases where only a container change is needed (no re-encode).
+- **Audio:** copy or transcode to Opus/AAC based on container compatibility and heavy codec detection (TrueHD/FLAC). Stream rules applied here.
+- **Subtitles:** burn-in or sidecar extraction (`.mks`).
 
 ### `src/media/executor.rs` (`FfmpegExecutor`)
-- Implements the `Executor` trait. Links `TranscodePlan` to the `Transcoder`.
-- Provides an implementation of `ExecutionObserver` which listens to standard error outputs from FFmpeg to persist textual logs and calculated percentage progress to the database and SSE broadcast channel.
-- Runs a post-transcode probe on the output to ensure the actual executed codec and hardware tags match the requested plan (detecting transparent failures).
+- Connects `TranscodePlan` to the `Transcoder`.
+- `ExecutionObserver` streams FFmpeg stderr line-by-line, persisting logs and progress % to the database and SSE channel.
+- Post-transcode probe verifies the output codec and hardware tags match the plan (catches transparent failures).
+
+### `src/media/health.rs` (`HealthChecker`)
+- Library Doctor: runs per-file health checks (probes for corrupt/truncated files) on demand from System Settings.
+- Results recorded via `db.record_health_check()`; runs tracked with `create_health_scan_run()` / `complete_health_scan_run()`.
 
 ---
 
 ## 4. Execution & Orchestration
 
 ### `src/orchestrator.rs` (`Transcoder`)
-- A robust, low-level wrapper around the `ffmpeg` subprocess.
-- Manages an internal state of `cancel_channels` and `pending_cancels` (`HashMap<i64, oneshot::Sender<()>>`). If a job is cancelled via the UI, it sends a kill signal to the exact tokio process.
-- Streams FFmpeg output to observers line-by-line while simultaneously detecting crashes, emitting `AlchemistError::FFmpeg` with the last 20 lines of standard error context if the process fails.
+- Low-level `ffmpeg` subprocess wrapper.
+- `cancel_channels: HashMap<i64, oneshot::Sender<()>>` — cancellation sends a kill signal to the exact process.
+- On FFmpeg crash, emits `AlchemistError::FFmpeg` with the last 20 lines of stderr for diagnostics.
 
 ---
 
 ## 5. System Components
 
 ### `src/system/hardware.rs`
-- Automatically probes the host for GPU acceleration capabilities.
-- Determines the active vendor (Nvidia, AMD, Intel, Apple, CPU).
-- Executes dummy FFmpeg `lavfi` (black frame) encode tests against known hardware encoder strings (e.g. `hevc_vaapi`, `av1_qsv`, `h264_nvenc`) to empirically verify that the system environment/drivers are correctly configured before claiming an encoder is available.
-- Handles explicit `/dev/dri/renderD128` overrides for Linux Docker containers.
+- Probes for GPU acceleration at startup by running dummy `lavfi` (black frame) encodes against known encoder strings (`hevc_vaapi`, `av1_qsv`, `h264_nvenc`, etc.).
+- Handles `/dev/dri/renderD128` overrides for Linux Docker containers.
+- Results cached in `HardwareState` and re-probed on config reload.
 
 ### `src/media/scanner.rs`
-- Utilizes `rayon` for fast, parallel recursive file-system scanning.
-- Filters target directories based on user-defined file extensions. Returns a sorted list of `DiscoveredMedia` ready for DB ingestion.
+- `rayon`-parallel recursive filesystem scan.
+- Filters by configured extensions; returns sorted `DiscoveredMedia` for DB ingestion.
+
+### `src/system/watcher.rs`
+- Uses the `notify` crate to watch configured directories for new files, triggering immediate enqueue without waiting for a scheduled scan.
 
 ### `src/scheduler.rs`
-- Checks an array of configured `ScheduleWindow` records from the DB every 60 seconds.
-- Calculates if the current minute of the current day lies within an active window.
-- Dynamically invokes `agent.set_scheduler_paused()` to restrict the CPU/GPU workload outside of allowed server hours.
+- Polls configured `ScheduleWindow` records every 60 seconds.
+- Calls `agent.set_scheduler_paused()` to halt processing outside allowed hours.
+
+### `src/notifications.rs`
+- Discord webhook, Gotify, and generic webhook integration.
+- Triggered on job completion/failure events.
+
+---
+
+## 6. Statistics & Reporting
+
+### Storage savings dashboard
+- `/api/stats` aggregates total space recovered, average reduction %, per-codec breakdowns, and daily savings over time via `db.get_aggregated_stats()` / `db.get_daily_stats()`.
+- Data displayed on the Stats page with charts (Recharts).
 
 ---
 
 ## Summary
 
-Alchemist combines a highly concurrent Rust backend (`tokio`, `axum`) with empirical validation mechanisms (VMAF scoring, FFmpeg test probes). Its architecture heavily isolates **Planning** (heuristic decision logic) from **Execution** (running the transcode), ensuring that the system can gracefully fall back, test different hardware topologies, and avoid re-transcoding media without degrading video quality.
+Alchemist isolates **Planning** (heuristic decision logic) from **Execution** (FFmpeg subprocess management), with empirical validation at each boundary — hardware probes confirm encoders work before committing to them, VMAF scoring rejects encodes that degrade quality, and a post-transcode codec probe catches silent failures. The retry backoff, orphan cleanup on startup, and additive-only schema migrations reflect a reliability-first design philosophy.
