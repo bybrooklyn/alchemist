@@ -127,6 +127,21 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         notification_manager,
         file_watcher,
     } = args;
+    #[cfg(not(feature = "embed-web"))]
+    {
+        let web_dist = PathBuf::from("web/dist");
+        if !web_dist.exists() {
+            let cwd = std::env::current_dir()
+                .map(|p| format!("{}/", p.display()))
+                .unwrap_or_default();
+            warn!(
+                "web/dist not found at {}web/dist — frontend will not be served. \
+                 Build it first with `just web-build` or run from the repo root.",
+                cwd
+            );
+        }
+    }
+
     // Initialize sysinfo
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_usage();

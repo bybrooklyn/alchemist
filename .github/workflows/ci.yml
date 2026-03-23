@@ -125,3 +125,52 @@ jobs:
 
       - name: Build frontend
         run: bun run build
+
+  e2e-reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [frontend-check]
+    defaults:
+      run:
+        working-directory: web-e2e
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ci-e2e
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontend
+        run: cd ../web && bun install --frozen-lockfile && bun run build
+
+      - name: Install e2e dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run reliability tests
+        run: bun run test:reliability
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reliability-artifacts
+          path: web-e2e/test-results/
+          retention-days: 3
