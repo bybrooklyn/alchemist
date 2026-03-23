@@ -6,7 +6,6 @@ use crate::media::pipeline::{
     TranscodeDecision, TranscodePlan,
 };
 use crate::system::hardware::{HardwareBackend, HardwareInfo, Vendor};
-use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,7 +46,6 @@ impl EncoderInventory {
     }
 }
 
-#[async_trait]
 impl Planner for BasicPlanner {
     async fn plan(
         &self,
@@ -159,7 +157,7 @@ impl Planner for BasicPlanner {
                     requested_codec,
                     self.config.transcode.allow_fallback,
                     self.config.transcode.threads,
-                ))
+                ));
             }
         };
 

@@ -200,10 +200,11 @@ mod tests {
         let queued = db.get_jobs_by_status(crate::db::JobState::Queued).await?;
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].input_path, input_path.to_string_lossy());
-        assert!(db
-            .get_job_by_input_path(generated_output.to_string_lossy().as_ref())
-            .await?
-            .is_none());
+        assert!(
+            db.get_job_by_input_path(generated_output.to_string_lossy().as_ref())
+                .await?
+                .is_none()
+        );
 
         cleanup_paths(&[watch_dir, db_path]);
         Ok(())

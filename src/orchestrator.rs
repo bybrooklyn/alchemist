@@ -2,9 +2,10 @@ use crate::error::{AlchemistError, Result};
 use crate::media::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress, FFmpegProgressState};
 use crate::media::pipeline::TranscodePlan;
 use crate::system::hardware::HardwareInfo;
-use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -27,10 +28,13 @@ pub struct TranscodeRequest<'a> {
     pub observer: Option<Arc<dyn ExecutionObserver>>,
 }
 
-#[async_trait]
 pub trait ExecutionObserver: Send + Sync {
-    async fn on_log(&self, message: String);
-    async fn on_progress(&self, progress: FFmpegProgress, total_duration: f64);
+    fn on_log(&self, message: String) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+    fn on_progress(
+        &self,
+        progress: FFmpegProgress,
+        total_duration: f64,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
 impl Default for Transcoder {

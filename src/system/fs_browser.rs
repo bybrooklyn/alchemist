@@ -581,10 +581,12 @@ mod tests {
 
         assert_eq!(response.total_media_files, 1);
         assert_eq!(response.directories.len(), 1);
-        assert!(response.directories[0]
-            .sample_files
-            .iter()
-            .any(|sample| sample.ends_with("movie.mkv")));
+        assert!(
+            response.directories[0]
+                .sample_files
+                .iter()
+                .any(|sample| sample.ends_with("movie.mkv"))
+        );
 
         let _ = std::fs::remove_file(media_file);
         let _ = std::fs::remove_dir_all(root);

@@ -1,31 +1,32 @@
+use crate::Agent;
+use crate::Transcoder;
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, JobState};
 use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareProbeLog, HardwareState};
-use crate::Agent;
-use crate::Transcoder;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::{
+    Router,
     extract::{ConnectInfo, Path, Query, Request, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{HeaderMap, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{
-        sse::{Event as AxumEvent, Sse},
         IntoResponse, Response,
+        sse::{Event as AxumEvent, Sse},
     },
     routing::{delete, get, post},
-    Router,
 };
 use chrono::Utc;
 use futures::{
-    stream::{self, Stream},
     FutureExt, StreamExt,
+    stream::{self, Stream},
 };
-use rand::rngs::OsRng;
 use rand::Rng;
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use reqwest::Url;
 #[cfg(feature = "embed-web")]
 use rust_embed::RustEmbed;
@@ -36,11 +37,11 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::net::lookup_host;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio::time::Duration;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -1171,7 +1172,24 @@ async fn setup_complete_handler(
     }
 
     // Create User and Initial Session after config persistence succeeds.
-    let salt = SaltString::generate(&mut OsRng);
+    let mut salt_bytes = [0u8; 16];
+    if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to generate salt: {}", e),
+        )
+            .into_response();
+    }
+    let salt = match SaltString::encode_b64(&salt_bytes) {
+        Ok(salt) => salt,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to encode salt: {}", e),
+            )
+                .into_response();
+        }
+    };
     let argon2 = Argon2::default();
     let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
         Ok(h) => h.to_string(),
@@ -1180,7 +1198,7 @@ async fn setup_complete_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Hashing failed: {}", e),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -1191,12 +1209,13 @@ async fn setup_complete_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to create user: {}", e),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    let token: String = OsRng
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let mut rng = OsRng.unwrap_err();
+    let token: String = (&mut rng)
+        .sample_iter(rand::distr::Alphanumeric)
         .take(64)
         .map(char::from)
         .collect();
@@ -1868,7 +1887,7 @@ async fn login_handler(
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
         Ok(h) => h,
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response();
         }
     };
 
@@ -1880,8 +1899,9 @@ async fn login_handler(
     }
 
     // Create session
-    let token: String = OsRng
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let mut rng = OsRng.unwrap_err();
+    let token: String = (&mut rng)
+        .sample_iter(rand::distr::Alphanumeric)
         .take(64)
         .map(char::from)
         .collect();
@@ -2310,11 +2330,7 @@ async fn jobs_table_handler(
             .split(',')
             .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
             .collect();
-        if list.is_empty() {
-            None
-        } else {
-            Some(list)
-        }
+        if list.is_empty() { None } else { Some(list) }
     } else {
         None
     };
@@ -2943,7 +2959,7 @@ async fn assign_watch_dir_profile_handler(
             Ok(Some(_)) => {}
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
             }
         }
     }
@@ -3475,8 +3491,8 @@ fn is_private_ip(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
     use axum::{
-        body::{to_bytes, Body},
-        http::{header, Method, Request},
+        body::{Body, to_bytes},
+        http::{Method, Request, header},
     };
     use futures::StreamExt;
     use http_body_util::BodyExt;
@@ -3750,8 +3766,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hardware_settings_route_updates_runtime_state(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn hardware_settings_route_updates_runtime_state()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -3797,8 +3813,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn engine_mode_endpoint_applies_manual_override_and_persists_mode(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn engine_mode_endpoint_applies_manual_override_and_persists_mode()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -3858,8 +3874,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn engine_status_endpoint_reports_draining_state(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn engine_status_endpoint_reports_draining_state()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -3893,8 +3909,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hardware_probe_log_route_returns_runtime_log(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn hardware_probe_log_route_returns_runtime_log()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -3928,8 +3944,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let watch_dir = temp_path("alchemist_setup_watch", "dir");
         std::fs::create_dir_all(&watch_dir)?;
 
@@ -3989,9 +4005,11 @@ mod tests {
         assert!(persisted.scanner.watch_enabled);
         assert_eq!(
             persisted.scanner.directories,
-            vec![std::fs::canonicalize(&watch_dir)?
-                .to_string_lossy()
-                .to_string()]
+            vec![
+                std::fs::canonicalize(&watch_dir)?
+                    .to_string_lossy()
+                    .to_string()
+            ]
         );
 
         let response = app
@@ -4014,8 +4032,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_complete_accepts_nested_settings_payload(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn setup_complete_accepts_nested_settings_payload()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let watch_dir = temp_path("alchemist_setup_nested_watch", "dir");
         std::fs::create_dir_all(&watch_dir)?;
 
@@ -4079,8 +4097,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_complete_rejects_nested_settings_without_library_directories(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn setup_complete_rejects_nested_settings_without_library_directories()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
 
         let mut settings = crate::config::Config::default();
@@ -4113,8 +4131,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fs_endpoints_are_available_during_setup(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn fs_endpoints_are_available_during_setup()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let browse_root = temp_path("alchemist_fs_browse", "dir");
         std::fs::create_dir_all(&browse_root)?;
         let media_dir = browse_root.join("movies");
@@ -4165,8 +4183,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transcode_settings_round_trip_subtitle_mode(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn transcode_settings_round_trip_subtitle_mode()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -4221,8 +4239,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn system_settings_round_trip_watch_enabled(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn system_settings_round_trip_watch_enabled()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
             config.scanner.watch_enabled = true;
         })
@@ -4265,8 +4283,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settings_bundle_put_projects_extended_settings_to_db(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn settings_bundle_put_projects_extended_settings_to_db()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -4334,8 +4352,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_config_put_overwrites_divergent_db_projection(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn raw_config_put_overwrites_divergent_db_projection()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -4369,8 +4387,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hardware_settings_get_exposes_configured_device_path(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn hardware_settings_get_exposes_configured_device_path()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let explicit_path = if cfg!(target_os = "linux") {
             "/dev/dri/renderD128".to_string()
         } else {
@@ -4400,8 +4418,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sse_route_emits_lagged_event_and_recovers(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn sse_route_emits_lagged_event_and_recovers()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 1, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
 
@@ -4451,8 +4469,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn job_detail_route_includes_logs_and_failure_summary(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn job_detail_route_includes_logs_and_failure_summary()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Failed).await?;
@@ -4493,8 +4511,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_active_job_returns_conflict(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn delete_active_job_returns_conflict()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (job, input_path, output_path) =
@@ -4519,8 +4537,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batch_delete_and_restart_block_active_jobs(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn batch_delete_and_restart_block_active_jobs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (active_job, active_input, active_output) =
@@ -4559,8 +4577,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_completed_archives_jobs_and_preserves_stats(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn clear_completed_archives_jobs_and_preserves_stats()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (job, input_path, output_path) =
@@ -4606,8 +4624,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_queued_job_updates_status(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn cancel_queued_job_updates_status()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Queued).await?;
@@ -4631,8 +4649,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn priority_endpoint_updates_job_priority(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn priority_endpoint_updates_job_priority()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
         let token = create_session(state.db.as_ref()).await?;
         let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Queued).await?;
@@ -4658,8 +4676,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_dir_paths_are_canonicalized_and_deduplicated(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn watch_dir_paths_are_canonicalized_and_deduplicated()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let watch_root = temp_path("alchemist_watch_root", "dir");
         let watch_dir = watch_root.join("library");
         std::fs::create_dir_all(&watch_dir)?;

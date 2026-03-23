@@ -3,7 +3,6 @@ use crate::media::pipeline::{
     AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, AudioStreamMetadata,
     DynamicRange, MediaAnalysis, MediaMetadata, SubtitleStreamMetadata, TranscodeDecision,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
@@ -62,7 +61,6 @@ pub struct Format {
 
 pub struct FfmpegAnalyzer;
 
-#[async_trait]
 impl AnalyzerTrait for FfmpegAnalyzer {
     async fn analyze(&self, path: &Path) -> Result<MediaAnalysis> {
         let path = path.to_path_buf();

@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode},
     Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -918,7 +918,7 @@ impl Db {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET status = 'queued', progress = 0.0, updated_at = CURRENT_TIMESTAMP WHERE id IN ("
+            "UPDATE jobs SET status = 'queued', progress = 0.0, updated_at = CURRENT_TIMESTAMP WHERE id IN (",
         );
         let mut separated = qb.separated(", ");
         for id in ids {
@@ -2247,8 +2247,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_enqueue_job_reports_change_state(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn test_enqueue_job_reports_change_state()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_enqueue_test_{}.db", token));
@@ -2273,8 +2273,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_claim_next_job_marks_analyzing(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn test_claim_next_job_marks_analyzing()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_test_{}.db", token));
@@ -2314,8 +2314,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_next_job_respects_attempt_backoff(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn claim_next_job_respects_attempt_backoff()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_backoff_test_{}.db", token));
@@ -2362,8 +2362,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_completed_archives_jobs_but_preserves_encode_stats(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    async fn clear_completed_archives_jobs_but_preserves_encode_stats()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db_path = std::env::temp_dir();
         let token: u64 = rand::random();
         db_path.push(format!("alchemist_archive_completed_{}.db", token));

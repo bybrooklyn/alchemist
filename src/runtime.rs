@@ -85,40 +85,45 @@ mod tests {
     #[test]
     fn env_override_takes_priority_for_config() {
         // env vars always win regardless of platform
-        std::env::set_var("ALCHEMIST_CONFIG_PATH", "/tmp/test-config.toml");
+        // SAFETY: single-threaded test; no other threads read this env var concurrently.
+        unsafe { std::env::set_var("ALCHEMIST_CONFIG_PATH", "/tmp/test-config.toml") };
         assert_eq!(config_path(), PathBuf::from("/tmp/test-config.toml"));
-        std::env::remove_var("ALCHEMIST_CONFIG_PATH");
+        unsafe { std::env::remove_var("ALCHEMIST_CONFIG_PATH") };
     }
 
     #[test]
     fn env_override_takes_priority_for_db() {
-        std::env::set_var("ALCHEMIST_DB_PATH", "/tmp/test.db");
+        // SAFETY: single-threaded test.
+        unsafe { std::env::set_var("ALCHEMIST_DB_PATH", "/tmp/test.db") };
         assert_eq!(db_path(), PathBuf::from("/tmp/test.db"));
-        std::env::remove_var("ALCHEMIST_DB_PATH");
+        unsafe { std::env::remove_var("ALCHEMIST_DB_PATH") };
     }
 
     #[test]
     fn data_dir_override_for_db() {
-        std::env::set_var("ALCHEMIST_DATA_DIR", "/tmp/data");
+        // SAFETY: single-threaded test.
+        unsafe { std::env::set_var("ALCHEMIST_DATA_DIR", "/tmp/data") };
         assert_eq!(db_path(), PathBuf::from("/tmp/data/alchemist.db"));
-        std::env::remove_var("ALCHEMIST_DATA_DIR");
+        unsafe { std::env::remove_var("ALCHEMIST_DATA_DIR") };
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn default_dir_respects_xdg_config_home() {
-        std::env::remove_var("ALCHEMIST_CONFIG_PATH");
-        std::env::remove_var("ALCHEMIST_CONFIG");
-        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg");
+        // SAFETY: single-threaded test.
+        unsafe { std::env::remove_var("ALCHEMIST_CONFIG_PATH") };
+        unsafe { std::env::remove_var("ALCHEMIST_CONFIG") };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg") };
         let dir = default_data_dir();
         assert_eq!(dir, PathBuf::from("/tmp/xdg/alchemist"));
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn default_dir_falls_back_to_home_config() {
-        std::env::remove_var("XDG_CONFIG_HOME");
+        // SAFETY: single-threaded test.
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         // HOME is always set in a test environment
         let home = std::env::var("HOME").unwrap();
         let expected = PathBuf::from(&home).join(".config").join("alchemist");
