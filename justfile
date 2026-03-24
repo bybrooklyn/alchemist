@@ -26,9 +26,11 @@ default:
 # Start backend (watch mode) + frontend dev server concurrently
 dev:
     @echo "Starting Alchemist dev servers..."
-    @trap 'kill 0' INT; \
-        (cd web && bun run dev) & \
-        cargo watch -x run & \
+    @trap 'kill 0' INT EXIT; \
+        (cd web && bun run dev) & WEB_PID=$!; \
+        cargo watch -x run & RUST_PID=$!; \
+        wait -n 2>/dev/null || true; \
+        kill $WEB_PID $RUST_PID 2>/dev/null; \
         wait
 
 # Start the backend only
@@ -72,9 +74,7 @@ check:
     @echo "── Rust check ──"
     cargo check --all-targets
     @echo "── Frontend typecheck ──"
-    cd web && bun install --frozen-lockfile && bun run typecheck
-    @echo "── Frontend build ──"
-    cd web && bun run build
+    cd web && bun install --frozen-lockfile && bun run typecheck && echo "── Frontend build ──" && bun run build
     @echo "All checks passed ✓"
 
 # Rust checks only (faster)
@@ -123,7 +123,7 @@ test-e2e-ui:
 db-reset:
     @DB="${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}"; \
         echo "Deleting $DB"; \
-        rm -f "$DB"; \
+        rm -f "$DB" "$DB-wal" "$DB-shm"; \
         echo "Done — next run will re-apply migrations."
 
 # Wipe dev database AND config (full clean slate, triggers setup wizard)
@@ -131,7 +131,7 @@ db-reset-all:
     @DB="${ALCHEMIST_DB_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/alchemist.db}"; \
         CFG="${ALCHEMIST_CONFIG_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/alchemist/config.toml}"; \
         echo "Deleting $DB and $CFG"; \
-        rm -f "$DB" "$CFG"; \
+        rm -f "$DB" "$DB-wal" "$DB-shm" "$CFG"; \
         echo "Done — setup wizard will run on next launch."
 
 # Open the dev database in sqlite3
@@ -151,7 +151,7 @@ db-migrations:
 docker-build:
     docker build -t alchemist:dev .
 
-# Build multi-arch image (requires buildx)
+# Build multi-arch image (requires buildx; add --push to push to registry)
 docker-build-multi:
     docker buildx build --platform linux/amd64,linux/arm64 -t alchemist:dev .
 
@@ -352,7 +352,7 @@ release-check:
 
 # Start the docs dev server
 docs-dev:
-    cd docs && bun install && bun run dev
+    cd docs && bun install --frozen-lockfile && bun run dev
 
 # Build the docs site
 docs-build:
@@ -374,13 +374,13 @@ clean:
 # Count lines of source code
 loc:
     @echo "── Rust ──"
-    @find src -name "*.rs" | xargs wc -l | tail -1
+    @find src -name "*.rs" -print0 | xargs -0 wc -l | tail -1
     @echo "── Frontend ──"
-    @find web/src -name "*.ts" -o -name "*.tsx" -o -name "*.astro" \
-        | xargs wc -l | tail -1
+    @find web/src \( -name "*.ts" -o -name "*.tsx" -o -name "*.astro" \) -print0 \
+        | xargs -0 wc -l | tail -1
     @echo "── Tests ──"
-    @find tests web-e2e/tests -name "*.rs" -o -name "*.ts" \
-        2>/dev/null | xargs wc -l | tail -1
+    @find tests web-e2e/tests \( -name "*.rs" -o -name "*.ts" \) -print0 \
+        2>/dev/null | xargs -0 wc -l | tail -1
 
 # Show all environment variables Alchemist respects
 env-help:

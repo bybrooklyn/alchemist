@@ -5,7 +5,35 @@ use crate::media::pipeline::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Command;
+use tokio::process::Command;
+
+const FFPROBE_TIMEOUT_SECS: u64 = 120;
+
+async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(FFPROBE_TIMEOUT_SECS),
+        Command::new("ffprobe").args(args).arg(path).output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => {
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
+            }
+            Ok(output)
+        }
+        Ok(Err(e)) => Err(AlchemistError::Analyzer(format!(
+            "Failed to run ffprobe: {}",
+            e
+        ))),
+        Err(_) => Err(AlchemistError::Analyzer(format!(
+            "ffprobe timed out after {}s: {}",
+            FFPROBE_TIMEOUT_SECS,
+            path.display()
+        ))),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FfprobeMetadata {
@@ -65,29 +93,24 @@ impl AnalyzerTrait for FfmpegAnalyzer {
     async fn analyze(&self, path: &Path) -> Result<MediaAnalysis> {
         let path = path.to_path_buf();
 
+        let output = run_ffprobe(
+            &[
+                "-v",
+                "quiet",
+                "-analyzeduration",
+                "1M",
+                "-probesize",
+                "1M",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
+            ],
+            &path,
+        )
+        .await?;
+
         tokio::task::spawn_blocking(move || {
-            let output = Command::new("ffprobe")
-                .args([
-                    "-v",
-                    "quiet",
-                    "-analyzeduration",
-                    "1M",
-                    "-probesize",
-                    "1M",
-                    "-print_format",
-                    "json",
-                    "-show_entries",
-                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
-                ])
-                .arg(&path)
-                .output()
-                .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
-
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr);
-                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
-            }
-
             let metadata: FfprobeMetadata =
                 serde_json::from_slice(&output.stdout).map_err(|e| {
                     AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
@@ -169,10 +192,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                     .unwrap_or(""),
             )
             .or_else(|| {
-                let stream_duration = video_stream
-                    .duration
-                    .as_deref()
-                    .and_then(parse_f64);
+                let stream_duration = video_stream.duration.as_deref().and_then(parse_f64);
                 let format_duration = parse_f64(&metadata.format.duration);
                 let duration = stream_duration.or(format_duration)?;
                 let frames = video_stream.nb_frames.as_deref().and_then(parse_f64)?;
@@ -188,11 +208,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 .or_else(|| video_stream.duration.as_deref().and_then(parse_f64))
                 .or_else(|| {
                     let frames = video_stream.nb_frames.as_deref().and_then(parse_f64)?;
-                    if fps > 0.0 {
-                        Some(frames / fps)
-                    } else {
-                        None
-                    }
+                    if fps > 0.0 { Some(frames / fps) } else { None }
                 })
                 .unwrap_or(0.0);
 
@@ -231,10 +247,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 path: path.clone(),
                 duration_secs,
                 codec_name: video_stream.codec_name.clone(),
-                width: video_stream
-                    .width
-                    .or(video_stream.coded_width)
-                    .unwrap_or(0),
+                width: video_stream.width.or(video_stream.coded_width).unwrap_or(0),
                 height: video_stream
                     .height
                     .or(video_stream.coded_height)
@@ -281,68 +294,47 @@ pub struct OutputProbe {
 impl Analyzer {
     /// Async version of probe that doesn't block the runtime
     pub async fn probe_async(path: &Path) -> Result<FfprobeMetadata> {
-        let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            let output = Command::new("ffprobe")
-                .args([
-                    "-v",
-                    "error",
-                    "-analyzeduration",
-                    "1M",
-                    "-probesize",
-                    "1M",
-                    "-print_format",
-                    "json",
-                    "-show_entries",
-                    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
-                ])
-                .arg(&path)
-                .output()
-                .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
+        let output = run_ffprobe(
+            &[
+                "-v",
+                "error",
+                "-analyzeduration",
+                "1M",
+                "-probesize",
+                "1M",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
+            ],
+            path,
+        )
+        .await?;
 
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr);
-                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
-            }
+        let metadata: FfprobeMetadata = serde_json::from_slice(&output.stdout).map_err(|e| {
+            AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+        })?;
 
-            let metadata: FfprobeMetadata =
-                serde_json::from_slice(&output.stdout).map_err(|e| {
-                    AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
-                })?;
-
-            Ok(metadata)
-        })
-        .await
-        .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?
+        Ok(metadata)
     }
 
     pub async fn probe_video_codec(path: &Path) -> Result<String> {
-        let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            let output = Command::new("ffprobe")
-                .args([
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=codec_name",
-                    "-of",
-                    "default=nokey=1:noprint_wrappers=1",
-                ])
-                .arg(&path)
-                .output()
-                .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
+        let output = run_ffprobe(
+            &[
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+            ],
+            path,
+        )
+        .await?;
 
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr);
-                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
-            }
-
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        })
-        .await
-        .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     pub async fn probe_output_details(path: &Path) -> Result<OutputProbe> {
@@ -371,44 +363,34 @@ impl Analyzer {
             encoder: Option<String>,
         }
 
-        let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            let output = Command::new("ffprobe")
-                .args([
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-print_format",
-                    "json",
-                    "-show_entries",
-                    "stream=codec_name:stream_tags=encoder:format_tags=encoder",
-                ])
-                .arg(&path)
-                .output()
-                .map_err(|e| AlchemistError::Analyzer(format!("Failed to run ffprobe: {}", e)))?;
+        let output = run_ffprobe(
+            &[
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "stream=codec_name:stream_tags=encoder:format_tags=encoder",
+            ],
+            path,
+        )
+        .await?;
 
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr);
-                return Err(AlchemistError::Analyzer(format!("ffprobe failed: {}", err)));
-            }
-
-            let parsed: ProbeData = serde_json::from_slice(&output.stdout).map_err(|e| {
-                AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
-            })?;
-            let codec_name = parsed
-                .streams
-                .first()
-                .and_then(|s| s.codec_name.clone())
-                .unwrap_or_default();
-            Ok(OutputProbe {
-                codec_name,
-                stream_encoder_tag: parsed.streams.first().and_then(|s| s.tags.encoder.clone()),
-                format_encoder_tag: parsed.format.tags.encoder,
-            })
+        let parsed: ProbeData = serde_json::from_slice(&output.stdout).map_err(|e| {
+            AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+        })?;
+        let codec_name = parsed
+            .streams
+            .first()
+            .and_then(|s| s.codec_name.clone())
+            .unwrap_or_default();
+        Ok(OutputProbe {
+            codec_name,
+            stream_encoder_tag: parsed.streams.first().and_then(|s| s.tags.encoder.clone()),
+            format_encoder_tag: parsed.format.tags.encoder,
         })
-        .await
-        .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?
     }
 
     // ... should_transcode adapted below ...

@@ -73,7 +73,16 @@ impl Scheduler {
 
         for window in enabled_windows {
             // Parse days
-            let days: Vec<i32> = serde_json::from_str(&window.days_of_week).unwrap_or_default();
+            let days: Vec<i32> = match serde_json::from_str(&window.days_of_week) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        "Failed to parse days_of_week for schedule window {}: {}",
+                        window.id, e
+                    );
+                    continue;
+                }
+            };
 
             let start_minutes = match parse_schedule_minutes(&window.start_time) {
                 Some(value) => value,
