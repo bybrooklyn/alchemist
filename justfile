@@ -374,13 +374,26 @@ clean:
 # Count lines of source code
 loc:
     @echo "── Rust ──"
-    @find src -name "*.rs" -print0 | xargs -0 wc -l | tail -1
+    @count=0; \
+        if [ -d src ]; then \
+            count=$(find src -type f -name "*.rs" -exec cat {} + | wc -l | tr -d '[:space:]'); \
+        fi; \
+        printf "%8s total\n" "$count"
     @echo "── Frontend ──"
-    @find web/src \( -name "*.ts" -o -name "*.tsx" -o -name "*.astro" \) -print0 \
-        | xargs -0 wc -l | tail -1
+    @count=0; \
+        if [ -d web/src ]; then \
+            count=$(find web/src -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.astro" \) -exec cat {} + | wc -l | tr -d '[:space:]'); \
+        fi; \
+        printf "%8s total\n" "$count"
     @echo "── Tests ──"
-    @find tests web-e2e/tests \( -name "*.rs" -o -name "*.ts" \) -print0 \
-        2>/dev/null | xargs -0 wc -l | tail -1
+    @count=0; \
+        paths=(); \
+        [ -d tests ] && paths+=(tests); \
+        [ -d web-e2e/tests ] && paths+=(web-e2e/tests); \
+        if [ ${#paths[@]} -gt 0 ]; then \
+            count=$(find "${paths[@]}" -type f \( -name "*.rs" -o -name "*.ts" \) -exec cat {} + | wc -l | tr -d '[:space:]'); \
+        fi; \
+        printf "%8s total\n" "$count"
 
 # Show all environment variables Alchemist respects
 env-help:
