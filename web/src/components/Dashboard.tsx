@@ -59,13 +59,13 @@ const DEFAULT_STATS = {
 
 function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     return (
-        <div className="p-5 rounded-lg bg-helios-surface border border-helios-line/40 shadow-sm hover:bg-helios-surface-soft transition-colors">
-            <div className="flex flex-col gap-1">
-                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-helios-slate">
-                    <Icon size={16} className={`${colorClass} opacity-60`} />
+        <div className="px-4 py-3 rounded-lg bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft transition-colors">
+            <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-helios-slate flex items-center gap-1.5">
+                    <Icon size={14} className={`${colorClass} opacity-70`} />
                     {label}
                 </span>
-                <span className={`text-3xl font-bold font-mono tracking-tight ${colorClass}`}>{value}</span>
+                <span className={`text-xl font-bold font-mono ${colorClass}`}>{value}</span>
             </div>
         </div>
     );
@@ -249,86 +249,84 @@ export default function Dashboard() {
     }, [bundle, stats.active, stats.failed, stats.total]);
 
     return (
-        <div className="flex flex-col gap-6 flex-1 min-h-0 overflow-hidden">
+        <div className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden">
+
+            {/* Engine paused banner */}
             {engineStatus === "paused" && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-500">Engine Paused</div>
-                    <div className="mt-2 text-sm text-helios-ink">
-                        The queue can still fill up, but Alchemist will not start encoding until you click <span className="font-bold">Start</span> in the header.
-                    </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 flex items-center gap-3">
+                    <span className="text-amber-500 shrink-0 text-xs font-semibold">ENGINE PAUSED</span>
+                    <span className="text-sm text-helios-ink">
+                        The queue can fill up but Alchemist won't start encoding until you click
+                        <span className="font-bold"> Start</span>
+                        {" "}in the header.
+                    </span>
                 </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Stat row — compact horizontal strip */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-amber-500" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-emerald-500" />
-                <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-red-500" />
+                <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />
                 <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
             </div>
 
-            {bundle && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Library Roots</div>
-                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.scanner.directories.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Notification Targets</div>
-                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.notifications.targets.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                        <div className="text-xs font-medium uppercase tracking-wide text-helios-slate">Schedule Windows</div>
-                        <div className="mt-2 text-2xl font-bold text-helios-ink">{bundle.settings.schedule.windows.length}</div>
-                    </div>
-                </div>
-            )}
+            {/* Main content row */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 flex-1 min-h-0">
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-                <div className="lg:col-span-2 p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm flex flex-col">
-                    <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
-                            <Activity size={20} className="text-helios-solar" />
+                {/* Recent Activity — takes 2/3 */}
+                <div className="lg:col-span-2 rounded-lg bg-helios-surface border border-helios-line/30 flex flex-col overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-helios-line/20">
+                        <h3 className="text-sm font-semibold text-helios-ink flex items-center gap-2">
+                            <Activity size={16} className="text-helios-solar" />
                             Recent Activity
                         </h3>
-                        <a href="/jobs" className="text-xs font-bold text-helios-solar hover:underline uppercase tracking-wide">View All</a>
+                        <a href="/jobs" className="text-xs font-medium text-helios-solar hover:underline">
+                            View all
+                        </a>
                     </div>
-
-                    <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1 p-3 overflow-y-auto flex-1">
                         {jobsLoading && jobs.length === 0 ? (
                             <div className="py-2">
-                                {Array.from({ length: 5 }).map((_, index) => (
-                                    <div
-                                        key={index}
-                                        className={`h-10 w-full rounded-md bg-helios-surface-soft/60 animate-pulse ${index < 4 ? "mb-2" : ""}`}
-                                    />
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                    <div key={i} className="h-9 w-full rounded-lg bg-helios-surface-soft/60 animate-pulse mb-1.5" />
                                 ))}
                             </div>
                         ) : jobs.length === 0 ? (
-                            <div className="text-center py-8 text-helios-slate/60 italic">No recent activity found.</div>
+                            <div className="flex flex-col items-center justify-center py-10 gap-2">
+                                <span className="text-sm text-helios-slate/60">
+                                    No recent activity.
+                                </span>
+                                <a href="/settings" className="text-xs text-helios-solar hover:underline">
+                                    Add a library folder
+                                </a>
+                            </div>
                         ) : (
                             jobs.map((job) => {
-                                const status = (job.status || "").toLowerCase();
+                                const s = (job.status || "").toLowerCase();
                                 return (
-                                    <div key={job.id} className="flex items-center justify-between p-3 rounded-md bg-helios-surface-soft hover:bg-helios-surface-soft/60 transition-colors border border-transparent hover:border-helios-line/20">
+                                    <div key={job.id} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-helios-surface-soft/60 transition-colors group">
                                         <div className="flex items-center gap-3 min-w-0">
-                                            <div className={`w-2 h-2 rounded-full shrink-0 ${status === "completed"
-                                                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
-                                                : status === "failed"
-                                                    ? "bg-red-500"
-                                                    : status === "encoding" || status === "analyzing" || status === "remuxing"
-                                                        ? "bg-amber-500 animate-pulse"
-                                                        : "bg-helios-slate"
-                                                }`} />
+                                            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                s === "completed"
+                                                    ? "bg-emerald-500"
+                                                : s === "failed"
+                                                    ? "bg-status-error"
+                                                : s === "encoding" || s === "analyzing"
+                                                    ? "bg-amber-500 animate-pulse"
+                                                : "bg-helios-slate/40"
+                                            }`} />
                                             <div className="flex flex-col min-w-0">
                                                 <span className="text-sm font-medium text-helios-ink truncate" title={job.input_path}>
                                                     {job.input_path.split(/[/\\]/).pop()}
                                                 </span>
                                                 <span className="text-xs text-helios-slate/70">
-                                                    {job.status} · {formatRelativeTime(job.created_at)}
+                                                    {job.status} ·{" "}
+                                                    {formatRelativeTime(job.created_at)}
                                                 </span>
                                             </div>
                                         </div>
-                                        <span className="text-xs font-mono text-helios-slate/60 whitespace-nowrap ml-4">
+                                        <span className="text-xs font-mono text-helios-slate/50 whitespace-nowrap ml-4">
                                             #{job.id}
                                         </span>
                                     </div>
@@ -338,36 +336,80 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                <div className="p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm h-full">
-                    <h3 className="text-lg font-bold text-helios-ink mb-6 flex items-center gap-2">
-                        <Zap size={20} className="text-helios-solar" />
-                        Quick Start
-                    </h3>
-                    <div className="flex flex-col gap-4">
-                        {quickStartItems.map(({ title, body, icon: Icon, tone, bg }) => (
-                            <div className="flex gap-4 items-start" key={title}>
-                                <div className={`p-2.5 rounded-xl ${bg} ${tone} mt-0.5 shadow-inner`}>
-                                    <Icon size={18} />
+                {/* Right column: Quick Start + bundle stats */}
+                <div className="flex flex-col gap-4">
+
+                    {/* Quick Start — only when there's something actionable */}
+                    {quickStartItems.length > 0 && (
+                        <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5">
+                            <h3 className="text-sm font-semibold text-helios-ink mb-4 flex items-center gap-2">
+                                <Zap size={15} className="text-helios-solar" />
+                                Quick Start
+                            </h3>
+                            <div className="flex flex-col gap-3">
+                                {quickStartItems.map(({ title, body, icon: Icon, tone, bg }) => (
+                                    <div key={title} className="flex gap-3 items-start">
+                                        <div className={`p-2 rounded-lg ${bg} ${tone} shrink-0`}>
+                                            <Icon size={15} />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h4 className="text-xs font-semibold text-helios-ink">
+                                                {title}
+                                            </h4>
+                                            <p className="text-xs text-helios-slate mt-0.5 leading-relaxed">
+                                                {body}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Config summary */}
+                    {bundle && (
+                        <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5 space-y-3">
+                            <h3 className="text-sm font-semibold text-helios-ink">Configuration</h3>
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">
+                                        Library roots
+                                    </span>
+                                    <span className="font-medium text-helios-ink font-mono">
+                                        {bundle.settings.scanner.directories.length}
+                                    </span>
                                 </div>
-                                <div>
-                                    <h4 className="text-sm font-bold text-helios-ink">{title}</h4>
-                                    <p className="text-xs text-helios-slate mt-1 leading-relaxed">{body}</p>
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">
+                                        Notification targets
+                                    </span>
+                                    <span className="font-medium text-helios-ink font-mono">
+                                        {bundle.settings.notifications.targets.length}
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">
+                                        Schedule windows
+                                    </span>
+                                    <span className="font-medium text-helios-ink font-mono">
+                                        {bundle.settings.schedule.windows.length}
+                                    </span>
                                 </div>
                             </div>
-                        ))}
-                    </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            <div className="p-6 rounded-xl bg-helios-surface border border-helios-line/40 shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
-                    <Activity size={18} className="text-helios-solar" />
-                    <h3 className="text-sm font-semibold text-helios-slate">
-                        System Health
-                    </h3>
-                </div>
+            {/* Resource Monitor */}
+            <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5">
+                <h3 className="text-sm font-semibold text-helios-slate mb-5 flex items-center gap-2">
+                    <Activity size={15} className="text-helios-solar" />
+                    System Health
+                </h3>
                 <ResourceMonitor />
             </div>
+
         </div>
     );
 }

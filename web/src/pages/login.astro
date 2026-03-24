@@ -5,65 +5,63 @@ import { ArrowRight } from "lucide-react";
 
 <Layout title="Alchemist | Login">
     <div class="min-h-screen bg-helios-main flex items-center justify-center p-4">
-        <div class="w-full max-w-md bg-helios-surface border border-helios-line/60 rounded-xl shadow-xl overflow-hidden p-8">
-            <div class="flex flex-col items-center mb-8">
-                <div class="w-10 h-10 rounded-lg bg-helios-solar text-helios-main flex items-center justify-center mb-4">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" class="h-5 w-5" aria-hidden="true">
-                        <path d="M10 3h4" />
-                        <path d="M11 3v5.5l-5 7.5a3 3 0 0 0 2.5 5h7a3 3 0 0 0
-                            2.5-5l-5-7.5V3" />
-                        <path d="M9 14h6" />
-                        <path d="M8.5 17h7" />
-                    </svg>
-                </div>
-                <h1 class="text-2xl font-bold text-helios-ink">Welcome Back</h1>
-                <p class="text-helios-slate">Sign in to your dashboard</p>
+        <div class="w-full max-w-sm">
+
+            <div class="text-center mb-8">
+                <span class="text-2xl font-bold tracking-tight text-helios-ink">
+                    Alchemist
+                </span>
+                <p class="text-sm text-helios-slate mt-1">
+                    Sign in to continue
+                </p>
             </div>
 
-            <form id="login-form" class="space-y-6">
-                <div class="space-y-4">
-                    <div>
-                        <label for="username" class="block text-sm font-medium text-helios-slate mb-2">Username</label>
-                        <div class="relative">
-                            <input
-                                id="username"
-                                type="text"
-                                name="username"
-                                required
-                                class="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg pl-4 pr-3 py-3 text-helios-ink focus:border-helios-solar outline-none transition-colors"
-                                placeholder="Enter your username"
-                            />
-                        </div>
-                    </div>
-                    <div>
-                        <label for="password" class="block text-sm font-medium text-helios-slate mb-2">Password</label>
-                        <div class="relative">
-                             <input
-                                id="password"
-                                type="password"
-                                name="password"
-                                required
-                                class="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg pl-4 pr-3 py-3 text-helios-ink focus:border-helios-solar outline-none transition-colors"
-                                placeholder="••••••••"
-                            />
-                        </div>
-                    </div>
-                </div>
+            <div class="bg-helios-surface border border-helios-line/40 rounded-xl p-6 shadow-xl">
 
-                <div id="error-msg" class="hidden p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm flex items-center gap-2">
-                    <span>Invalid credentials</span>
-                </div>
+                <form id="login-form" class="space-y-4">
+                    <div>
+                        <label for="username" class="block text-xs font-medium text-helios-slate mb-1.5">
+                            Username
+                        </label>
+                        <input
+                            id="username"
+                            type="text"
+                            name="username"
+                            required
+                            autocomplete="username"
+                            class="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2.5 text-sm text-helios-ink focus:border-helios-solar outline-none transition-colors placeholder:text-helios-slate/40"
+                            placeholder="admin"
+                        />
+                    </div>
 
-                <button
-                    type="submit"
-                    class="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-helios-solar text-helios-main font-bold hover:opacity-90 transition-opacity"
-                >
-                    Sign In
-                    <ArrowRight size={18} />
-                </button>
-            </form>
+                    <div>
+                        <label for="password" class="block text-xs font-medium text-helios-slate mb-1.5">
+                            Password
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            name="password"
+                            required
+                            autocomplete="current-password"
+                            class="w-full bg-helios-surface-soft border border-helios-line/40 rounded-lg px-3 py-2.5 text-sm text-helios-ink focus:border-helios-solar outline-none transition-colors placeholder:text-helios-slate/40"
+                            placeholder="••••••••"
+                        />
+                    </div>
+
+                    <div id="error-msg" class="hidden px-3 py-2.5 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
+                        <span>Invalid credentials</span>
+                    </div>
+
+                    <button
+                        type="submit"
+                        class="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-helios-solar text-helios-main text-sm font-semibold hover:opacity-90 transition-opacity mt-2"
+                    >
+                        Sign In
+                        <ArrowRight size={16} />
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 </Layout>
