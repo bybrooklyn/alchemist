@@ -55,8 +55,8 @@ impl Transcoder {
         let mut channels = match self.cancel_channels.lock() {
             Ok(channels) => channels,
             Err(e) => {
-                error!("Cancel channels lock poisoned: {}", e);
-                return false;
+                error!("Cancel channels lock poisoned, recovering: {}", e);
+                e.into_inner()
             }
         };
         match channels.remove(&job_id) {
@@ -72,8 +72,10 @@ impl Transcoder {
                         true
                     }
                     Err(e) => {
-                        error!("Pending cancels lock poisoned: {}", e);
-                        false
+                        error!("Pending cancels lock poisoned, recovering: {}", e);
+                        let mut pending = e.into_inner();
+                        pending.insert(job_id);
+                        true
                     }
                 }
             }
@@ -180,14 +182,16 @@ impl Transcoder {
         cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
         if let Some(id) = job_id {
-            match self.pending_cancels.lock() {
-                Ok(mut pending) => {
-                    if pending.remove(&id) {
-                        warn!("Job {id} cancelled before FFmpeg spawn");
-                        return Err(AlchemistError::Cancelled);
-                    }
+            let mut pending = match self.pending_cancels.lock() {
+                Ok(pending) => pending,
+                Err(e) => {
+                    error!("Pending cancels lock poisoned, recovering: {}", e);
+                    e.into_inner()
                 }
-                Err(e) => error!("Pending cancels lock poisoned: {}", e),
+            };
+            if pending.remove(&id) {
+                warn!("Job {id} cancelled before FFmpeg spawn");
+                return Err(AlchemistError::Cancelled);
             }
         }
 
@@ -206,19 +210,24 @@ impl Transcoder {
                 Ok(mut channels) => {
                     channels.insert(id, kill_tx);
                 }
-                Err(e) => error!("Cancel channels lock poisoned: {}", e),
+                Err(e) => {
+                    error!("Cancel channels lock poisoned, recovering: {}", e);
+                    e.into_inner().insert(id, kill_tx);
+                }
             }
-            match self.pending_cancels.lock() {
-                Ok(mut pending) => {
-                    if pending.remove(&id) {
-                        if let Ok(mut channels) = self.cancel_channels.lock() {
-                            if let Some(tx) = channels.remove(&id) {
-                                let _ = tx.send(());
-                            }
-                        }
+            let mut pending = match self.pending_cancels.lock() {
+                Ok(pending) => pending,
+                Err(e) => {
+                    error!("Pending cancels lock poisoned, recovering: {}", e);
+                    e.into_inner()
+                }
+            };
+            if pending.remove(&id) {
+                if let Ok(mut channels) = self.cancel_channels.lock() {
+                    if let Some(tx) = channels.remove(&id) {
+                        let _ = tx.send(());
                     }
                 }
-                Err(e) => error!("Pending cancels lock poisoned: {}", e),
             }
         }
 
@@ -233,6 +242,11 @@ impl Transcoder {
                 line_res = reader.next_line() => {
                     match line_res {
                         Ok(Some(line)) => {
+                            let line = if line.len() > 4096 {
+                                format!("{}...[truncated]", &line[..4096])
+                            } else {
+                                line
+                            };
                             last_lines.push_back(line.clone());
                             if last_lines.len() > 20 {
                                 last_lines.pop_front();
@@ -260,10 +274,9 @@ impl Transcoder {
                     let _ = child.kill().await;
                     killed = true;
                     if let Some(id) = job_id {
-                        if let Ok(mut channels) = self.cancel_channels.lock() {
-                            channels.remove(&id);
-                        } else {
-                            error!("Cancel channels lock poisoned while removing job: {}", id);
+                        match self.cancel_channels.lock() {
+                            Ok(mut channels) => { channels.remove(&id); }
+                            Err(e) => { e.into_inner().remove(&id); }
                         }
                     }
                     break;
@@ -274,13 +287,21 @@ impl Transcoder {
         let status = child.wait().await?;
 
         if let Some(id) = job_id {
-            if let Ok(mut channels) = self.cancel_channels.lock() {
-                channels.remove(&id);
-            } else {
-                error!("Cancel channels lock poisoned while removing job: {}", id);
+            match self.cancel_channels.lock() {
+                Ok(mut channels) => {
+                    channels.remove(&id);
+                }
+                Err(e) => {
+                    e.into_inner().remove(&id);
+                }
             }
-            if let Ok(mut pending) = self.pending_cancels.lock() {
-                pending.remove(&id);
+            match self.pending_cancels.lock() {
+                Ok(mut pending) => {
+                    pending.remove(&id);
+                }
+                Err(e) => {
+                    e.into_inner().remove(&id);
+                }
             }
         }
 

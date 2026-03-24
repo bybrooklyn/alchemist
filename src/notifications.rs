@@ -26,15 +26,6 @@ impl NotificationManager {
     }
 
     pub fn start_listener(&self, mut rx: broadcast::Receiver<AlchemistEvent>) {
-        let _db = self.db.clone();
-        let _client = self.client.clone();
-
-        // Spawn a new manager instance/logic for the loop?
-        // Or just move clones into the async block.
-        // Self is not Clone? It has Db (Clone) and Client (Clone).
-        // I can derive Clone for NotificationManager.
-        // Or just move db/client.
-
         let manager_clone = self.clone();
 
         tokio::spawn(async move {
@@ -88,7 +79,16 @@ impl NotificationManager {
             if !target.enabled {
                 continue;
             }
-            let allowed: Vec<String> = serde_json::from_str(&target.events).unwrap_or_default();
+            let allowed: Vec<String> = match serde_json::from_str(&target.events) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        "Failed to parse events for notification target '{}': {}",
+                        target.name, e
+                    );
+                    Vec::new()
+                }
+            };
 
             if allowed.contains(&status) {
                 self.send(&target, &event, &status).await?;
