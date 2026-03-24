@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import clsx from "clsx";
 import { SETUP_STEP_COUNT } from "./constants";
+import { showToast } from "../../lib/toast";
 
 interface SetupFrameProps {
     step: number;
@@ -15,48 +16,90 @@ interface SetupFrameProps {
 }
 
 export default function SetupFrame({ step, configMutable, error, submitting, onBack, onNext, children }: SetupFrameProps) {
+    useEffect(() => {
+        if (error) {
+            showToast({ kind: "error", title: "Setup", message: error });
+        }
+    }, [error]);
+
     return (
-        <div className="bg-helios-surface border border-helios-line/60 rounded-xl overflow-hidden shadow-2xl max-w-5xl w-full mx-auto">
-            <div className="h-1 bg-helios-surface-soft w-full flex">
-                <motion.div className="bg-helios-solar h-full" initial={{ width: 0 }} animate={{ width: `${(step / SETUP_STEP_COUNT) * 100}%` }} />
+        <div className="flex flex-col flex-1 min-h-0">
+
+            {/* Progress bar — 2px solar line at top of app-main */}
+            <div className="h-0.5 w-full bg-helios-surface-soft shrink-0">
+                <motion.div
+                    className="bg-helios-solar h-full"
+                    initial={{ width: 0 }}
+                    animate={{
+                        width: `${(step / SETUP_STEP_COUNT) * 100}%`
+                    }}
+                    transition={{ duration: 0.3 }}
+                />
             </div>
 
-            <div className="p-8 lg:p-10">
-                <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-8">
-                    <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-helios-ink to-helios-slate tracking-tight">
-                            Alchemist Setup
-                        </h1>
-                        <p className="text-helios-slate mt-2 text-sm">
-                            Configure the server once, preview the library, and
-                            leave with a production-ready baseline.
-                        </p>
-                    </div>
+            {/* Read-only config warning */}
+            {!configMutable && (
+                <div className="mx-6 mt-4 rounded-lg border
+                    border-status-error/30 bg-status-error/10
+                    px-4 py-3 text-sm text-status-error">
+                    The config file is read-only. Setup cannot
+                    finish until the TOML file is writable.
+                </div>
+            )}
 
-                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 px-4 py-3 text-xs text-helios-slate max-w-sm">
-                        <p className="font-bold uppercase tracking-wider text-helios-ink">Server-side selection</p>
-                        <p className="mt-1">All folders here refer to the filesystem available to the Alchemist server process, not your browser’s local machine.</p>
-                    </div>
-                </header>
+            {/* Step content */}
+            <div className="flex-1 overflow-y-auto">
+                <div className="max-w-4xl mx-auto px-6 py-8">
+                    <AnimatePresence mode="wait">
+                        {children}
+                    </AnimatePresence>
+                </div>
+            </div>
 
-                {!configMutable && <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">The config file is read-only right now. Setup cannot finish until the TOML file is writable.</div>}
-
-                <AnimatePresence mode="wait">{children}</AnimatePresence>
-
-                {error && step < 6 && <div className="mt-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">{error}</div>}
-
-                {step < 6 && (
-                    <div className="mt-8 flex items-center justify-between gap-4 border-t border-helios-line/20 pt-6">
-                        <button type="button" onClick={onBack} disabled={step === 1 || submitting} className={clsx("rounded-md px-4 py-2 text-sm font-semibold transition-colors", step === 1 ? "text-helios-line cursor-not-allowed" : "text-helios-slate hover:bg-helios-surface-soft")}>
+            {/* Navigation footer */}
+            {step < 6 && (
+                <div className="shrink-0 border-t border-helios-line/20
+                    bg-helios-surface/50 px-6 py-4">
+                    <div className="max-w-4xl mx-auto flex items-center
+                        justify-between gap-4">
+                        <button
+                            type="button"
+                            onClick={onBack}
+                            disabled={step === 1 || submitting}
+                            className={clsx(
+                                "rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+                                step === 1
+                                    ? "text-helios-slate/30 cursor-not-allowed"
+                                    : "text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink"
+                            )}
+                        >
                             Back
                         </button>
-                        <button type="button" onClick={onNext} disabled={submitting || !configMutable} className="flex items-center gap-2 rounded-md bg-helios-solar px-6 py-3 font-semibold text-helios-main hover:opacity-90 transition-opacity disabled:opacity-50">
-                            {submitting ? "Working..." : step === 5 ? "Build Engine" : "Next"}
-                            {!submitting && <ArrowRight size={18} />}
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <span className="text-xs text-helios-slate/50">
+                                Step {step} of {SETUP_STEP_COUNT}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={onNext}
+                                disabled={submitting || !configMutable}
+                                className="flex items-center gap-2 rounded-lg
+                                    bg-helios-solar px-6 py-2.5 text-sm
+                                    font-semibold text-helios-main
+                                    hover:opacity-90 transition-opacity
+                                    disabled:opacity-50"
+                            >
+                                {submitting
+                                    ? "Working..."
+                                    : step === 5
+                                        ? "Complete Setup"
+                                        : "Next"}
+                                {!submitting && <ArrowRight size={16} />}
+                            </button>
+                        </div>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

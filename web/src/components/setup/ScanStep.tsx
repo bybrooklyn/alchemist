@@ -77,15 +77,15 @@ export default function ScanStep({ runId, onBackToReview }: ScanStepProps) {
                     <p className="font-semibold">Scan failed or became unavailable.</p>
                     <p>{scanError}</p>
                     <div className="flex flex-col sm:flex-row gap-2">
-                        <button type="button" onClick={() => void startScan()} disabled={starting} className="rounded-xl bg-red-500/20 px-4 py-2 font-semibold disabled:opacity-50">{starting ? "Retrying..." : "Retry Scan"}</button>
-                        <button type="button" onClick={onBackToReview} className="rounded-xl border border-red-500/30 px-4 py-2 font-semibold">Back to Review</button>
+                        <button type="button" onClick={() => void startScan()} disabled={starting} className="rounded-lg bg-red-500/20 px-4 py-2 text-sm font-semibold disabled:opacity-50">{starting ? "Retrying..." : "Retry Scan"}</button>
+                        <button type="button" onClick={onBackToReview} className="rounded-lg border border-red-500/30 px-4 py-2 text-sm font-semibold">Back to Review</button>
                     </div>
                 </div>
             )}
 
             {scanStatus && (
                 <div className="space-y-4">
-                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                    <div className="flex justify-between text-xs font-medium text-helios-slate">
                         <span>Found: {scanStatus.files_found}</span>
                         <span>Queued: {scanStatus.files_added}</span>
                     </div>
@@ -93,7 +93,7 @@ export default function ScanStep({ runId, onBackToReview }: ScanStepProps) {
                         <motion.div className="h-full bg-helios-solar" animate={{ width: `${scanStatus.files_found > 0 ? (scanStatus.files_added / scanStatus.files_found) * 100 : 0}%` }} />
                     </div>
                     {scanStatus.current_folder && <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3 font-mono text-xs text-helios-slate">{scanStatus.current_folder}</div>}
-                    {!scanStatus.is_running && <button type="button" onClick={() => { window.location.href = "/"; }} className="w-full rounded-lg bg-helios-solar px-6 py-4 font-bold text-helios-main shadow-lg shadow-helios-solar/20 hover:opacity-90">Enter Dashboard</button>}
+                    {!scanStatus.is_running && <button type="button" onClick={() => { window.location.href = "/"; }} className="w-full rounded-lg bg-helios-solar px-6 py-3 text-sm font-semibold text-helios-main hover:opacity-90 transition-opacity">Enter Dashboard</button>}
                 </div>
             )}
         </motion.div>

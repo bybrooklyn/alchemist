@@ -1,13 +1,15 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import SetupWizard from "../components/SetupWizard";
+import SetupSidebar from "../components/SetupSidebar.astro";
 ---
 
 <Layout title="Alchemist | Setup">
-    <div class="min-h-screen bg-helios-main overflow-y-auto">
-        <div class="w-full max-w-5xl mx-auto px-4 py-8">
+    <div class="app-shell">
+        <SetupSidebar />
+        <main class="app-main overflow-y-auto">
             <SetupWizard client:only="react" />
-        </div>
+        </main>
     </div>
 </Layout>
 

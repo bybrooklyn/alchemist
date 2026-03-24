@@ -93,7 +93,7 @@ export function ToggleRow({ title, body, checked, onChange }: ToggleRowProps) {
 export function ReviewCard({ title, lines }: ReviewCardProps) {
     return (
         <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-5">
-            <div className="text-xs font-semibold uppercase tracking-wide text-helios-slate/70 pb-2 mb-3 border-b border-helios-line/20">
+            <div className="text-xs font-medium text-helios-slate/70 pb-2 mb-2 border-b border-helios-line/20">
                 {title}
             </div>
             <div className="mt-3 space-y-2">

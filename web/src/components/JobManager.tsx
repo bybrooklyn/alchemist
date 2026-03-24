@@ -525,7 +525,7 @@ export default function JobManager() {
             resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
         };
         return (
-            <span className={cn("px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wider border", styles[status] || styles.queued)}>
+            <span className={cn("px-2.5 py-1 rounded-md text-xs font-medium border capitalize", styles[status] || styles.queued)}>
                 {status}
             </span>
         );
@@ -554,23 +554,29 @@ export default function JobManager() {
 
     return (
         <div className="space-y-6 relative">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-xs font-medium text-helios-slate">Visible Active</div>
-                    <div className="mt-2 text-2xl font-bold text-helios-ink">{activeCount}</div>
-                </div>
-                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-xs font-medium text-helios-slate">Visible Failed</div>
-                    <div className="mt-2 text-2xl font-bold text-red-500">{failedCount}</div>
-                </div>
-                <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-5 py-4">
-                    <div className="text-xs font-medium text-helios-slate">Visible Completed</div>
-                    <div className="mt-2 text-2xl font-bold text-emerald-500">{completedCount}</div>
-                </div>
+            <div className="flex items-center gap-4 px-1 text-xs text-helios-slate">
+                <span>
+                    <span className="font-medium text-helios-ink">
+                        {activeCount}
+                    </span>
+                    {" "}active
+                </span>
+                <span>
+                    <span className="font-medium text-red-500">
+                        {failedCount}
+                    </span>
+                    {" "}failed
+                </span>
+                <span>
+                    <span className="font-medium text-emerald-500">
+                        {completedCount}
+                    </span>
+                    {" "}completed
+                </span>
             </div>
 
             {/* Toolbar */}
-            <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-helios-surface/50 p-1 rounded-xl border border-helios-line/10">
+            <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-helios-surface/50 p-1 rounded-lg border border-helios-line/10">
                 <div className="flex gap-1 p-1 bg-helios-surface border border-helios-line/10 rounded-lg">
                     {(["all", "active", "queued", "completed", "failed", "skipped", "archived"] as TabType[]).map((tab) => (
                         <button
@@ -636,14 +642,14 @@ export default function JobManager() {
             </div>
 
             {actionError && (
-                <div role="alert" aria-live="polite" className="rounded-xl border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error">
+                <div role="alert" aria-live="polite" className="rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error">
                     {actionError}
                 </div>
             )}
 
             {/* Batch Actions Bar */}
             {selected.size > 0 && (
-                <div className="flex items-center justify-between bg-helios-solar/10 border border-helios-solar/20 px-6 py-3 rounded-xl animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center justify-between bg-helios-solar/10 border border-helios-solar/20 px-6 py-3 rounded-lg animate-in fade-in slide-in-from-top-2">
                     <div>
                         <span className="text-sm font-bold text-helios-solar">
                             {selected.size} jobs selected
@@ -708,7 +714,7 @@ export default function JobManager() {
             {/* Table */}
             <div className="bg-helios-surface/50 border border-helios-line/20 rounded-lg overflow-hidden shadow-sm">
                 <table className="w-full text-left border-collapse">
-                    <thead className="bg-helios-surface border-b border-helios-line/20 text-xs font-bold text-helios-slate uppercase tracking-wider">
+                    <thead className="bg-helios-surface border-b border-helios-line/20 text-xs font-medium text-helios-slate">
                         <tr>
                             <th className="px-6 py-4 w-10">
                                 <input type="checkbox"
@@ -815,7 +821,7 @@ export default function JobManager() {
                                                         initial={{ opacity: 0, y: 6 }}
                                                         animate={{ opacity: 1, y: 0 }}
                                                         exit={{ opacity: 0, y: 6 }}
-                                                        className="absolute right-0 mt-2 w-44 rounded-xl border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden"
+                                                        className="absolute right-0 mt-2 w-44 rounded-lg border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden"
                                                     >
                                                         <button
                                                             onClick={() => {
@@ -987,7 +993,7 @@ export default function JobManager() {
                                     )}
                                     {/* Stats Grid */}
                                     <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
+                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Activity size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Video Codec</span>
@@ -1000,7 +1006,7 @@ export default function JobManager() {
                                             </p>
                                         </div>
 
-                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
+                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Maximize2 size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Resolution</span>
@@ -1013,7 +1019,7 @@ export default function JobManager() {
                                             </p>
                                         </div>
 
-                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10 space-y-1">
+                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
                                             <div className="flex items-center gap-2 text-helios-slate mb-1">
                                                 <Clock size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Duration</span>
@@ -1027,7 +1033,7 @@ export default function JobManager() {
                                     {/* Media Details */}
                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-semibold uppercase tracking-wide text-helios-slate/60 flex items-center gap-2">
+                                            <h3 className="text-xs font-medium text-helios-slate/70 flex items-center gap-2">
                                                 <Database size={12} /> Input Details
                                             </h3>
                                             <div className="space-y-3">
@@ -1053,7 +1059,7 @@ export default function JobManager() {
                                         </div>
 
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-semibold uppercase tracking-wide text-helios-solar flex items-center gap-2">
+                                            <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
                                                 <Zap size={12} /> Output Details
                                             </h3>
                                             {focusedJob.encode_stats ? (
@@ -1081,7 +1087,7 @@ export default function JobManager() {
                                                     </div>
                                                 </div>
                                             ) : (
-                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-xl text-xs text-helios-slate italic">
+                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-lg text-xs text-helios-slate italic">
                                                     {focusedJob.job.status === "encoding"
                                                         ? "Encoding in progress..."
                                                         : focusedJob.job.status === "remuxing"
@@ -1094,7 +1100,7 @@ export default function JobManager() {
 
                                     {/* Decision Info */}
                                     {focusedJob.job.decision_reason && (
-                                        <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/10">
+                                        <div className="p-4 rounded-lg bg-amber-500/5 border border-amber-500/10">
                                             <div className="flex items-center gap-2 text-amber-600 mb-1">
                                                 <Info size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Decision Context</span>
@@ -1116,7 +1122,7 @@ export default function JobManager() {
                                     )}
 
                                     {focusedJob.job.status === "failed" && (
-                                        <div className="p-4 rounded-xl bg-status-error/5 border border-status-error/15">
+                                        <div className="p-4 rounded-lg bg-status-error/5 border border-status-error/15">
                                             <div className="flex items-center gap-2 text-status-error mb-2">
                                                 <AlertCircle size={14} />
                                                 <span className="text-sm font-semibold">What went wrong</span>
@@ -1141,7 +1147,7 @@ export default function JobManager() {
                                     )}
 
                                     {focusedJob.job.status === "skipped" && focusedJob.job.decision_reason && (
-                                        <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/10">
+                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/10">
                                             <p className="text-sm text-helios-ink leading-relaxed">
                                                 Alchemist analysed this file and decided not to transcode it. Here&apos;s why:
                                             </p>
@@ -1158,7 +1164,7 @@ export default function JobManager() {
                                     )}
 
                                     {shouldShowFfmpegOutput && (
-                                        <details className="rounded-xl border border-helios-line/15 bg-helios-surface-soft/40 p-4">
+                                        <details className="rounded-lg border border-helios-line/15 bg-helios-surface-soft/40 p-4">
                                             <summary className="cursor-pointer text-xs text-helios-solar">
                                                 Show FFmpeg output ({focusedJobLogs.length} lines)
                                             </summary>

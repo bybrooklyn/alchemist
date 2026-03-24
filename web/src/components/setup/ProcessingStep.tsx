@@ -42,7 +42,7 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
                                 className={clsx("rounded-lg border px-4 py-4 text-left transition-all", transcode.output_codec === codec ? "border-helios-solar bg-helios-solar/10 text-helios-ink" : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate")}
                             >
                                 <div className="font-semibold uppercase">{codecLabels[codec]}</div>
-                                <div className="text-[10px] mt-2 opacity-80">{codec === "av1" ? "Best compression" : codec === "hevc" ? "Broad modern compatibility" : "Maximum playback compatibility"}</div>
+                                <div className="text-xs mt-2 opacity-70">{codec === "av1" ? "Best compression" : codec === "hevc" ? "Broad modern compatibility" : "Maximum playback compatibility"}</div>
                             </button>
                         ))}
                     </div>

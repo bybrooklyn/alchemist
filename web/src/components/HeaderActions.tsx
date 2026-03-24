@@ -15,21 +15,8 @@ interface EngineStatus {
     is_manual_override: boolean;
 }
 
-interface EngineMode {
-    mode: "background" | "balanced" | "throughput";
-    is_manual_override: boolean;
-    concurrent_limit: number;
-    cpu_count: number;
-    computed_limits: {
-        background: number;
-        balanced: number;
-        throughput: number;
-    };
-}
-
 export default function HeaderActions() {
     const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
-    const [engineMode, setEngineMode] = useState<EngineMode | null>(null);
     const [engineLoading, setEngineLoading] = useState(false);
     const [showAbout, setShowAbout] = useState(false);
 
@@ -57,28 +44,18 @@ export default function HeaderActions() {
         return data;
     };
 
-    const refreshEngineMode = async () => {
-        const data = await apiJson<EngineMode>("/api/engine/mode");
-        setEngineMode(data);
-        return data;
-    };
-
     useEffect(() => {
         let cancelled = false;
 
         const load = async () => {
             try {
-                const [status, mode] = await Promise.all([
-                    apiJson<EngineStatus>("/api/engine/status"),
-                    apiJson<EngineMode>("/api/engine/mode"),
-                ]);
+                const status = await apiJson<EngineStatus>("/api/engine/status");
 
                 if (cancelled) {
                     return;
                 }
 
                 setEngineStatus(status);
-                setEngineMode(mode);
             } catch {
                 // Ignore transient header control failures.
             }
@@ -164,55 +141,6 @@ export default function HeaderActions() {
                 kind: "error",
                 title: "Engine",
                 message: "Failed to update engine state.",
-            });
-        } finally {
-            setEngineLoading(false);
-        }
-    };
-
-    const handleModeChange = async (mode: EngineStatus["mode"]) => {
-        setEngineLoading(true);
-        try {
-            await apiAction("/api/engine/mode", {
-                method: "POST",
-                body: JSON.stringify({ mode }),
-            });
-            const [status, nextMode] = await Promise.all([
-                refreshEngineStatus(),
-                refreshEngineMode(),
-            ]);
-            setEngineStatus(status);
-        } catch {
-            showToast({
-                kind: "error",
-                title: "Engine",
-                message: "Failed to update engine mode.",
-            });
-        } finally {
-            setEngineLoading(false);
-        }
-    };
-
-    const handleApplyAdvanced = async () => {
-        const currentMode = engineStatus?.mode ?? engineMode?.mode;
-        if (!currentMode) {
-            return;
-        }
-
-        setEngineLoading(true);
-        try {
-            await apiAction("/api/engine/mode", {
-                method: "POST",
-                body: JSON.stringify({
-                    mode: currentMode,
-                }),
-            });
-            await Promise.all([refreshEngineStatus(), refreshEngineMode()]);
-        } catch {
-            showToast({
-                kind: "error",
-                title: "Engine",
-                message: "Failed to apply advanced engine settings.",
             });
         } finally {
             setEngineLoading(false);
