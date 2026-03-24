@@ -194,7 +194,8 @@ fn probe_args_for_backend(
                 args.push(device_path.to_string());
             }
         }
-        HardwareBackend::Nvenc | HardwareBackend::Amf | HardwareBackend::Videotoolbox => {}
+        HardwareBackend::Nvenc | HardwareBackend::Amf => {}
+        HardwareBackend::Videotoolbox => {}
     }
 
     args.extend([
@@ -209,9 +210,22 @@ fn probe_args_for_backend(
         args.push("format=nv12,hwupload".to_string());
     }
 
+    if backend == HardwareBackend::Videotoolbox {
+        args.push("-vf".to_string());
+        args.push("format=yuv420p".to_string());
+    }
+
     args.extend([
         "-c:v".to_string(),
         encoder.to_string(),
+    ]);
+
+    if backend == HardwareBackend::Videotoolbox {
+        args.push("-allow_sw".to_string());
+        args.push("1".to_string());
+    }
+
+    args.extend([
         "-frames:v".to_string(),
         "1".to_string(),
         "-f".to_string(),
@@ -1229,6 +1243,13 @@ mod tests {
             probe_args_for_backend(HardwareBackend::Qsv, "av1_qsv", Some("/dev/dri/renderD129"));
         assert!(args.contains(&"-init_hw_device".to_string()));
         assert!(args.contains(&"qsv=qsv:/dev/dri/renderD129".to_string()));
+    }
+
+    #[test]
+    fn videotoolbox_probe_uses_yuv420p_filter_and_software_fallback() {
+        let args = probe_args_for_backend(HardwareBackend::Videotoolbox, "hevc_videotoolbox", None);
+        assert!(args.contains(&"format=yuv420p".to_string()));
+        assert!(args.contains(&"-allow_sw".to_string()));
     }
 
     #[test]
