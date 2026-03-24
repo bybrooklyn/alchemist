@@ -456,8 +456,8 @@
     }
 
     html {
-        background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.05), transparent 65%),
-            linear-gradient(180deg, rgb(var(--bg-main)), rgb(var(--bg-panel)));
+        background: radial-gradient(circle at top, rgb(var(--accent-primary) / 0.04), transparent 60%),
+            linear-gradient(180deg, color-mix(in srgb, rgb(var(--bg-main)) 85%, black), rgb(var(--bg-panel)));
     }
 
     body {
@@ -495,8 +495,8 @@
 }
 
 *::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
 }
 
 *::-webkit-scrollbar-track {

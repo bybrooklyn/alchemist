@@ -8,34 +8,28 @@ import HeaderActions from "../components/HeaderActions.tsx";
 <Layout title="Alchemist | Page Not Found">
     <div class="app-shell">
         <Sidebar />
-        <main class="app-main p-4 sm:p-6 lg:p-8 overflow-hidden">
-            <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 sm:mb-8">
-                <div>
-                    <h1
-                        class="text-2xl sm:text-3xl font-bold text-helios-ink tracking-tight"
-                    >
-                        Page Not Found
-                    </h1>
-                </div>
+        <main class="app-main overflow-hidden">
+            <div class="flex items-center justify-end px-6 py-3 border-b border-helios-line/20">
                 <HeaderActions client:load />
-            </header>
-
-            <div class="min-h-[60vh] flex items-center justify-center">
-                <div class="flex flex-col items-center text-center">
-                    <div class="text-8xl font-bold font-mono text-helios-solar">404</div>
-                    <h2 class="mt-4 text-2xl font-semibold text-helios-ink">
-                        This page doesn't exist
-                    </h2>
-                    <p class="mt-2 max-w-sm text-center text-sm text-helios-slate">
-                        The page you're looking for couldn't be found. It may have moved or the URL might be wrong.
-                    </p>
-                    <a
-                        href="/"
-                        class="inline-flex items-center gap-2 mt-6 bg-helios-solar text-helios-main rounded-md px-5 py-2.5 text-sm font-semibold hover:opacity-90 transition-opacity"
-                    >
-                        <Home size={16} />
-                        <span>Go to Dashboard</span>
-                    </a>
+            </div>
+            <div class="p-6">
+                <div class="min-h-[60vh] flex items-center justify-center">
+                    <div class="flex flex-col items-center text-center">
+                        <div class="text-8xl font-bold font-mono text-helios-solar">404</div>
+                        <h2 class="mt-4 text-2xl font-semibold text-helios-ink">
+                            This page doesn't exist
+                        </h2>
+                        <p class="mt-2 max-w-sm text-center text-sm text-helios-slate">
+                            The page you're looking for couldn't be found. It may have moved or the URL might be wrong.
+                        </p>
+                        <a
+                            href="/"
+                            class="inline-flex items-center gap-2 mt-6 bg-helios-solar text-helios-main rounded-lg px-5 py-2.5 text-sm font-semibold hover:opacity-90 transition-opacity"
+                        >
+                            <Home size={16} />
+                            <span>Go to Dashboard</span>
+                        </a>
+                    </div>
                 </div>
             </div>
         </main>

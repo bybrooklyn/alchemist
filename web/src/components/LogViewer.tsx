@@ -178,95 +178,219 @@ export default function LogViewer() {
         return haystack.includes(query.trim().toLowerCase());
     });
 
+    type LogGroup =
+        | { kind: "system"; entries: LogEntry[] }
+        | { kind: "job"; job_id: number; entries: LogEntry[] };
+
+    const groupedLogs = (() => {
+        const groups: LogGroup[] = [];
+        const currentJobGroup: Map<number, { entries: LogEntry[]; index: number }> = new Map();
+
+        for (const entry of filteredLogs) {
+            if (!entry.job_id) {
+                const last = groups[groups.length - 1];
+                if (last?.kind === "system") {
+                    last.entries.push(entry);
+                } else {
+                    groups.push({
+                        kind: "system",
+                        entries: [entry],
+                    });
+                }
+            } else {
+                if (!currentJobGroup.has(entry.job_id)) {
+                    const group: LogGroup = {
+                        kind: "job",
+                        job_id: entry.job_id,
+                        entries: [],
+                    };
+                    groups.push(group);
+                    currentJobGroup.set(entry.job_id, {
+                        entries: (group as Extract<LogGroup, { kind: "job" }>).entries,
+                        index: groups.length - 1,
+                    });
+                }
+                currentJobGroup.get(entry.job_id)!.entries.push(entry);
+            }
+        }
+        return groups;
+    })();
+
+    const [expandedJobs, setExpandedJobs] = useState<Set<number>>(new Set());
+
+    const toggleJob = (jobId: number) => {
+        setExpandedJobs((prev) => {
+            const next = new Set(prev);
+            if (next.has(jobId)) next.delete(jobId);
+            else next.add(jobId);
+            return next;
+        });
+    };
+
     return (
-        <div className="flex flex-col h-full rounded-lg border border-helios-line/40 bg-[#0d1117] overflow-hidden shadow-2xl">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20 bg-helios-surface/50 backdrop-blur">
-                <div className="flex items-center gap-2 text-helios-slate" aria-live="polite">
-                    <Terminal size={16} />
-                    <span className="text-xs font-bold uppercase tracking-widest">Server Logs</span>
-                    {loading && <span className="text-xs animate-pulse opacity-50 ml-2">Loading history...</span>}
+        <div className="flex flex-col h-full rounded-lg border border-helios-line/40 bg-[#0d1117] overflow-hidden">
+
+            {/* Toolbar */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20 bg-helios-surface/50 shrink-0">
+                <div className="flex items-center gap-2 text-helios-slate">
+                    <Terminal size={15} />
+                    <span className="text-xs font-semibold text-helios-slate">
+                        Server Logs
+                    </span>
+                    {loading && (
+                        <span className="text-xs animate-pulse opacity-50 ml-1">
+                            Loading…
+                        </span>
+                    )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                     <button
                         onClick={() => void fetchHistory()}
                         className="p-1.5 rounded-lg hover:bg-helios-line/10 text-helios-slate transition-colors"
                         title="Reload History"
                     >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={13} />
                     </button>
                     <button
                         onClick={() => setPaused(!paused)}
                         className="p-1.5 rounded-lg hover:bg-helios-line/10 text-helios-slate transition-colors"
                         title={paused ? "Resume Auto-scroll" : "Pause Auto-scroll"}
                     >
-                        {paused ? <Play size={14} /> : <Pause size={14} />}
+                        {paused ? <Play size={13} /> : <Pause size={13} />}
                     </button>
                     <button
                         onClick={() => setConfirmClear(true)}
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-helios-slate hover:text-red-400 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-status-error/10 text-helios-slate hover:text-status-error transition-colors"
                         title="Clear Server Logs"
                     >
-                        <Trash2 size={14} />
+                        <Trash2 size={13} />
                     </button>
                 </div>
             </div>
 
-            <div className="border-b border-helios-line/10 bg-helios-surface/30 px-4 py-3 flex flex-col md:flex-row gap-3">
+            {/* Filters */}
+            <div className="flex gap-3 px-4 py-2.5 border-b border-helios-line/10 bg-helios-surface/30 shrink-0">
                 <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-helios-slate/50" size={13} />
                     <input
                         type="text"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Filter logs by text or job id…"
-                        className="w-full rounded-lg border border-helios-line/20 bg-helios-surface px-9 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
+                        placeholder="Filter by text or job id…"
+                        className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-8 py-1.5 text-xs text-helios-ink focus:border-helios-solar outline-none placeholder:text-helios-slate/40"
                     />
                 </div>
                 <select
                     value={levelFilter}
-                    onChange={(e) => setLevelFilter(e.target.value as "all" | "info" | "warn" | "error")}
-                    className="rounded-lg border border-helios-line/20 bg-helios-surface px-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
+                    onChange={(e) => setLevelFilter(e.target.value as typeof levelFilter)}
+                    className="rounded-lg border border-helios-line/30 bg-helios-surface px-3 py-1.5 text-xs text-helios-ink focus:border-helios-solar outline-none"
                 >
-                    <option value="all">All Levels</option>
+                    <option value="all">All levels</option>
                     <option value="info">Info</option>
                     <option value="warn">Warnings</option>
                     <option value="error">Errors</option>
                 </select>
             </div>
 
+            {/* Log content */}
             <div
                 ref={scrollRef}
-                className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-helios-line/20 scrollbar-track-transparent"
+                className="flex-1 overflow-y-auto"
                 aria-live="polite"
             >
-                {streamError && <div className="text-amber-400 text-center py-4 text-[11px] font-semibold">{streamError}</div>}
-                {filteredLogs.length === 0 && !loading && !streamError && (
-                    <div className="text-helios-slate/30 text-center py-10 italic">No logs found.</div>
-                )}
-                {filteredLogs.map((log) => (
-                    <div key={log.id} className="flex gap-3 hover:bg-white/5 px-2 py-0.5 rounded -mx-2 group">
-                        <span className="text-helios-slate/50 shrink-0 select-none w-20 text-right">{formatTime(log.created_at)}</span>
-
-                        <div className="flex-1 min-w-0 break-all">
-                            {log.job_id && (
-                                <span className="inline-block px-1.5 py-0.5 rounded bg-white/5 text-helios-slate/80 mr-2 text-[10px]">
-                                    #{log.job_id}
-                                </span>
-                            )}
-                            <span
-                                className={cn(
-                                    log.level.toLowerCase().includes("error")
-                                        ? "text-red-400 font-bold"
-                                        : log.level.toLowerCase().includes("warn")
-                                            ? "text-amber-400"
-                                            : "text-white/90"
-                                )}
-                            >
-                                {log.message}
-                            </span>
-                        </div>
+                {streamError && (
+                    <div className="text-amber-400 text-center py-4 text-xs px-4">
+                        {streamError}
                     </div>
-                ))}
+                )}
+
+                {groupedLogs.length === 0 && !loading && !streamError && (
+                    <div className="text-helios-slate/30 text-center py-12 text-xs italic">
+                        No logs found.
+                    </div>
+                )}
+
+                {groupedLogs.map((group, gi) => {
+                    if (group.kind === "system") {
+                        return (
+                            <div key={`sys-${gi}`} className="font-mono text-xs">
+                                {group.entries.map((log) => (
+                                    <div key={log.id} className="flex gap-3 px-4 py-0.5 hover:bg-helios-line/10 group">
+                                        <span className="text-helios-slate/40 shrink-0 w-20 text-right select-none tabular-nums">
+                                            {formatTime(log.created_at)}
+                                        </span>
+                                        <span className={cn(
+                                            "flex-1 min-w-0 break-all",
+                                            log.level.toLowerCase().includes("error")
+                                                ? "text-status-error"
+                                            : log.level.toLowerCase().includes("warn")
+                                                ? "text-amber-400"
+                                            : "text-white/90"
+                                        )}>
+                                            {log.message}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    }
+
+                    const isExpanded = expandedJobs.has(group.job_id);
+                    const hasError = group.entries.some((e) =>
+                        e.level.toLowerCase().includes("error")
+                    );
+                    const firstMsg = group.entries[0]?.message ?? "";
+
+                    return (
+                        <div key={`job-${group.job_id}`} className="border-b border-helios-line/10">
+                            <button
+                                onClick={() => toggleJob(group.job_id)}
+                                className="w-full flex items-center gap-3 px-4 py-2 hover:bg-helios-line/10 transition-colors text-left"
+                            >
+                                <span className={cn(
+                                    "text-xs font-mono shrink-0",
+                                    "text-helios-slate/50"
+                                )}>
+                                    {isExpanded ? "▾" : "▸"}
+                                </span>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-helios-line/20 text-helios-slate/80 font-mono text-xs shrink-0">
+                                    #{group.job_id}
+                                </span>
+                                {hasError && (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-status-error shrink-0" />
+                                )}
+                                <span className="text-xs text-helios-slate/70 truncate font-mono flex-1 min-w-0">
+                                    {firstMsg}
+                                </span>
+                                <span className="text-xs text-helios-slate/40 shrink-0">
+                                    {group.entries.length} lines
+                                </span>
+                            </button>
+
+                            {isExpanded && (
+                                <div className="font-mono text-xs bg-helios-surface/20 pb-1">
+                                    {group.entries.map((log) => (
+                                        <div key={log.id} className="flex gap-3 px-10 py-0.5 hover:bg-helios-line/10">
+                                            <span className="text-helios-slate/40 shrink-0 w-20 text-right select-none tabular-nums">
+                                                {formatTime(log.created_at)}
+                                            </span>
+                                            <span className={cn(
+                                                "flex-1 min-w-0 break-all",
+                                                log.level.toLowerCase().includes("error")
+                                                    ? "text-status-error"
+                                                : log.level.toLowerCase().includes("warn")
+                                                    ? "text-amber-400"
+                                                : "text-white/90"
+                                            )}>
+                                                {log.message}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
 
             <ConfirmDialog
