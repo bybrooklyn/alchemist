@@ -88,5 +88,3 @@ jobs:
         Alchemist ${{ needs.release-meta.outputs.version }}
       prerelease: ${{ needs.release-meta.outputs.prerelease == 'true' }}
       make_latest: ${{ needs.release-meta.outputs.make_latest == 'true' }}
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

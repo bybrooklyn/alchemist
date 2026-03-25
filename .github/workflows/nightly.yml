@@ -62,10 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short=7 "${GITHUB_SHA}")
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "version_suffix=-nightly+${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "release_name=Nightly — ${SHORT_SHA} ($(date -u +%Y-%m-%d))" \
-            >> "$GITHUB_OUTPUT"
+          {
+            echo "short_sha=${SHORT_SHA}"
+            echo "version_suffix=-nightly+${SHORT_SHA}"
+            echo "release_name=Nightly — ${SHORT_SHA} ($(date -u +%Y-%m-%d))"
+          } >> "$GITHUB_OUTPUT"
 
   force-nightly-tag:
     needs: [ci-gate, compute-meta]
@@ -99,5 +100,3 @@ jobs:
       release_name: ${{ needs.compute-meta.outputs.release_name }}
       prerelease: true
       make_latest: false
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
