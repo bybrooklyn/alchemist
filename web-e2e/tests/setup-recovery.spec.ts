@@ -73,7 +73,7 @@ test("setup shows a persistent inline alert and disables telemetry", async ({ pa
   await expect(page.getByRole("heading", { name: "Library Selection" })).toBeVisible();
   await page.getByRole("button", { name: "Next" }).click();
 
-  const alert = page.getByRole("alert");
+  const alert = page.getByRole("alert").first();
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("Select at least one server folder before continuing.");
 });

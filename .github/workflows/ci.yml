@@ -4,22 +4,19 @@ on:
   push:
     branches:
       - main
-      - master
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
-      - 'deploy/helm/**'
   pull_request:
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
-      - 'deploy/helm/**'
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -48,10 +45,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Lint Rust
+      - name: Lint
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Check Rust
+      - name: Check
         run: cargo check --locked --all-targets --all-features
 
   rust-test:
@@ -78,10 +75,10 @@ jobs:
         with:
           prefix-key: ci-test
 
-      - name: Run Rust tests
+      - name: Run tests
         run: cargo test --locked --all-targets -- --test-threads=4
 
-      - name: Upload test artifacts on failure
+      - name: Upload artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -106,24 +103,23 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Restore Bun modules cache
+      - name: Restore Bun cache
         uses: actions/cache@v4
         with:
           path: web/node_modules
-          key: bun-${{ hashFiles('web/bun.lock') }}
-          restore-keys: |
-            bun-
+          key: bun-ci-${{ hashFiles('web/bun.lock') }}
+          restore-keys: bun-ci-
 
-      - name: Install frontend dependencies
+      - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck frontend
+      - name: Typecheck
         run: bun run typecheck
 
       - name: Astro diagnostics
         run: bun run check
 
-      - name: Build frontend
+      - name: Build
         run: bun run build
 
   e2e-reliability:
@@ -156,7 +152,10 @@ jobs:
           bun-version: latest
 
       - name: Build frontend
-        run: cd ../web && bun install --frozen-lockfile && bun run build
+        run: |
+          cd ../web
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Install e2e dependencies
         run: bun install --frozen-lockfile
@@ -167,7 +166,7 @@ jobs:
       - name: Run reliability tests
         run: bun run test:reliability
 
-      - name: Upload test artifacts on failure
+      - name: Upload artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
