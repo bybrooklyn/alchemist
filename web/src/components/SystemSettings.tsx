@@ -1,6 +1,11 @@
 import { useState, useEffect } from "react";
 import { Activity, Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import {
+    TELEMETRY_TEMPORARILY_DISABLED,
+    TELEMETRY_TEMPORARILY_DISABLED_MESSAGE,
+    TELEMETRY_USAGE_COPY,
+} from "../lib/telemetryAvailability";
 import { showToast } from "../lib/toast";
 import LibraryDoctor from "./LibraryDoctor";
 
@@ -59,7 +64,7 @@ export default function SystemSettings() {
     const fetchSettings = async () => {
         try {
             const data = await apiJson<SystemSettingsPayload>("/api/settings/system");
-            setSettings(data);
+            setSettings({ ...data, enable_telemetry: false });
             setError("");
         } catch (err) {
             setError(isApiError(err) ? err.message : "Unable to load system settings.");
@@ -77,7 +82,7 @@ export default function SystemSettings() {
         try {
             await apiAction("/api/settings/system", {
                 method: "POST",
-                body: JSON.stringify(settings),
+                body: JSON.stringify({ ...settings, enable_telemetry: false }),
             });
             setSuccess(true);
             showToast({ kind: "success", title: "System", message: "System settings saved." });
@@ -279,16 +284,19 @@ export default function SystemSettings() {
                         <h4 className="text-xs font-medium text-helios-slate">
                             Anonymous Telemetry
                         </h4>
-                        <p className="text-xs text-helios-slate mt-1">Help improve the app by sending anonymous crash reports and usage data.</p>
+                        <p className="mt-1 text-xs text-helios-slate">{TELEMETRY_TEMPORARILY_DISABLED_MESSAGE}</p>
+                        <p className="mt-1 text-xs text-helios-slate/80">{TELEMETRY_USAGE_COPY}</p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                         <input
                             type="checkbox"
-                            checked={settings.enable_telemetry}
+                            aria-label="Anonymous Telemetry"
+                            checked={false}
+                            disabled={TELEMETRY_TEMPORARILY_DISABLED}
                             onChange={(e) => setSettings({ ...settings, enable_telemetry: e.target.checked })}
                             className="sr-only peer"
                         />
-                        <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
+                        <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white peer-checked:bg-helios-solar rtl:peer-checked:after:-translate-x-full peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
                     </label>
                 </div>
             </div>

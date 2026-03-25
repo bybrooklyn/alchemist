@@ -30,6 +30,7 @@ interface ToggleRowProps {
     checked: boolean;
     onChange: (checked: boolean) => void;
     children?: ReactNode;
+    disabled?: boolean;
 }
 
 interface ReviewCardProps {
@@ -81,13 +82,13 @@ export function LabeledSelect({ label, value, onChange, options }: LabeledSelect
     );
 }
 
-export function ToggleRow({ title, body, checked, onChange, children }: ToggleRowProps) {
+export function ToggleRow({ title, body, checked, onChange, children, disabled = false }: ToggleRowProps) {
     const inputId = useId();
 
     return (
-        <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
+        <div className={`rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4 ${disabled ? "opacity-70" : ""}`}>
             <div className="flex items-start justify-between gap-4">
-                <label htmlFor={inputId} className="block flex-1 cursor-pointer">
+                <label htmlFor={inputId} className={`block flex-1 ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
                     <p className="text-sm font-semibold text-helios-ink">{title}</p>
                     <p className="mt-1 text-xs text-helios-slate">{body}</p>
                 </label>
@@ -96,6 +97,7 @@ export function ToggleRow({ title, body, checked, onChange, children }: ToggleRo
                     type="checkbox"
                     checked={checked}
                     onChange={(e) => onChange(e.target.checked)}
+                    disabled={disabled}
                     className="mt-0.5 h-5 w-5 shrink-0 rounded border-helios-line/30 accent-helios-solar"
                 />
             </div>

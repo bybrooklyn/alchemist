@@ -282,9 +282,115 @@ test("hardware update failure is visible", async ({ page }) => {
   });
 
   await page.goto("/settings?tab=hardware");
-  await page.locator("button.relative.inline-flex").first().click();
+  await page.getByLabel("Allow CPU Encoding").uncheck({ force: true });
 
   await expectVisibleError(page, "forced hardware failure");
+});
+
+test("hardware settings save the device path on blur", async ({ page }) => {
+  let savedBody: Record<string, unknown> | null = null;
+
+  await page.route("**/api/system/hardware", async (route) => {
+    await fulfillJson(route, 200, {
+      vendor: "Intel",
+      device_path: null,
+      supported_codecs: ["h264", "hevc"],
+      backends: [],
+      detection_notes: [],
+    });
+  });
+
+  await page.route("**/api/system/hardware/probe-log", async (route) => {
+    await fulfillJson(route, 200, { entries: [] });
+  });
+
+  await page.route("**/api/settings/hardware", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        allow_cpu_fallback: true,
+        allow_cpu_encoding: true,
+        cpu_preset: "medium",
+        preferred_vendor: null,
+        device_path: null,
+      });
+      return;
+    }
+
+    savedBody = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfillJson(route, 200, { status: "ok" });
+  });
+
+  await page.goto("/settings?tab=hardware");
+  const devicePath = page.getByLabel("Explicit Device Path");
+  await devicePath.fill("/dev/dri/renderD129");
+  await devicePath.blur();
+
+  expect(savedBody).toMatchObject({
+    device_path: "/dev/dri/renderD129",
+  });
+});
+
+test("hardware immediate-save changes keep the current device-path draft", async ({ page }) => {
+  const savedBodies: Array<Record<string, unknown>> = [];
+
+  await page.route("**/api/system/hardware", async (route) => {
+    await fulfillJson(route, 200, {
+      vendor: "Intel",
+      device_path: null,
+      supported_codecs: ["h264", "hevc"],
+      backends: [],
+      detection_notes: [],
+    });
+  });
+
+  await page.route("**/api/system/hardware/probe-log", async (route) => {
+    await fulfillJson(route, 200, { entries: [] });
+  });
+
+  await page.route("**/api/settings/hardware", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        allow_cpu_fallback: true,
+        allow_cpu_encoding: true,
+        cpu_preset: "medium",
+        preferred_vendor: null,
+        device_path: null,
+      });
+      return;
+    }
+
+    savedBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await fulfillJson(route, 200, { status: "ok" });
+  });
+
+  await page.goto("/settings?tab=hardware");
+  await page.getByLabel("Explicit Device Path").fill("/dev/dri/renderD129");
+  await page.getByLabel("Preferred Vendor").selectOption("intel");
+
+  expect(savedBodies.at(-1)).toMatchObject({
+    preferred_vendor: "intel",
+    device_path: "/dev/dri/renderD129",
+  });
+});
+
+test("runtime telemetry is disabled in the UI while Alembic stabilizes", async ({ page }) => {
+  await page.route("**/api/settings/system", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        monitoring_poll_interval: 2,
+        enable_telemetry: true,
+        watch_enabled: true,
+      });
+      return;
+    }
+    await fulfillJson(route, 200, "Settings updated");
+  });
+
+  await page.goto("/settings?tab=system");
+
+  await expect(page.getByText("Temporarily unavailable while Alembic stabilizes. Telemetry stays off for now.")).toBeVisible();
+  await expect(page.getByLabel("Anonymous Telemetry")).toBeDisabled();
+  await expect(page.getByLabel("Anonymous Telemetry")).not.toBeChecked();
 });
 
 test("system settings save failure is visible", async ({ page }) => {
@@ -292,7 +398,8 @@ test("system settings save failure is visible", async ({ page }) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, 200, {
         monitoring_poll_interval: 2,
-        enable_telemetry: true,
+        enable_telemetry: false,
+        watch_enabled: true,
       });
       return;
     }

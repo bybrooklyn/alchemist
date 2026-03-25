@@ -1,6 +1,83 @@
 import { expect, test } from "@playwright/test";
 import { fulfillJson } from "./helpers";
 
+test("setup shows a persistent inline alert and disables telemetry", async ({ page }) => {
+  await page.route("**/api/setup/status", async (route) => {
+    await fulfillJson(route, 200, {
+      setup_required: true,
+      enable_telemetry: false,
+    });
+  });
+
+  await page.route("**/api/system/hardware", async (route) => {
+    await fulfillJson(route, 200, {
+      vendor: "Cpu",
+      device_path: null,
+      supported_codecs: ["h264", "hevc", "av1"],
+    });
+  });
+
+  await page.route("**/api/settings/bundle", async (route) => {
+    await fulfillJson(route, 200, {
+      settings: {
+        appearance: { active_theme_id: "helios-orange" },
+        scanner: { directories: [], watch_enabled: true, extra_watch_dirs: [] },
+        transcode: {
+          concurrent_jobs: 2,
+          size_reduction_threshold: 0.3,
+          min_bpp_threshold: 0.1,
+          min_file_size_mb: 100,
+          output_codec: "av1",
+          quality_profile: "balanced",
+          allow_fallback: true,
+          subtitle_mode: "copy",
+        },
+        hardware: {
+          allow_cpu_encoding: true,
+          allow_cpu_fallback: true,
+          preferred_vendor: null,
+          cpu_preset: "medium",
+          device_path: null,
+        },
+        files: {
+          delete_source: false,
+          output_extension: "mkv",
+          output_suffix: "-alchemist",
+          replace_strategy: "keep",
+          output_root: null,
+        },
+        quality: {
+          enable_vmaf: false,
+          min_vmaf_score: 90,
+          revert_on_low_quality: true,
+        },
+        notifications: { enabled: false, targets: [] },
+        schedule: { windows: [] },
+        system: { enable_telemetry: false, monitoring_poll_interval: 2 },
+      },
+    });
+  });
+
+  await page.route("**/api/fs/recommendations", async (route) => {
+    await fulfillJson(route, 200, { recommendations: [] });
+  });
+
+  await page.goto("/setup");
+
+  await expect(page.getByLabel("Anonymous Usage Telemetry")).toBeDisabled();
+  await expect(page.getByText("Temporarily unavailable while Alembic stabilizes. Telemetry stays off for now.")).toBeVisible();
+
+  await page.getByPlaceholder("admin").fill("playwright");
+  await page.getByPlaceholder("Choose a strong password").fill("playwright-password");
+  await page.getByRole("button", { name: "Next" }).click();
+  await expect(page.getByRole("heading", { name: "Library Selection" })).toBeVisible();
+  await page.getByRole("button", { name: "Next" }).click();
+
+  const alert = page.getByRole("alert");
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("Select at least one server folder before continuing.");
+});
+
 test("setup step 5 shows retry and back recovery on scan failures", async ({ page }) => {
   let scanStartAttempts = 0;
 
