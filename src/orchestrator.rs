@@ -28,6 +28,15 @@ pub struct TranscodeRequest<'a> {
     pub observer: Option<Arc<dyn ExecutionObserver>>,
 }
 
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(AsyncExecutionObserver: Send)]
+pub trait LocalExecutionObserver {
+    async fn on_log(&self, message: String);
+    async fn on_progress(&self, progress: FFmpegProgress, total_duration: f64);
+}
+
+// The transcoder stores a trait object, so keep a dyn-safe adapter at the boundary
+// while letting implementers use native async trait methods.
 pub trait ExecutionObserver: Send + Sync {
     fn on_log(&self, message: String) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     fn on_progress(
@@ -35,6 +44,27 @@ pub trait ExecutionObserver: Send + Sync {
         progress: FFmpegProgress,
         total_duration: f64,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+impl<T> ExecutionObserver for T
+where
+    T: AsyncExecutionObserver + Send + Sync,
+{
+    fn on_log(&self, message: String) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(AsyncExecutionObserver::on_log(self, message))
+    }
+
+    fn on_progress(
+        &self,
+        progress: FFmpegProgress,
+        total_duration: f64,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(AsyncExecutionObserver::on_progress(
+            self,
+            progress,
+            total_duration,
+        ))
+    }
 }
 
 impl Default for Transcoder {

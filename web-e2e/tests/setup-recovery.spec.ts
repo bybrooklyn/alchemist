@@ -126,7 +126,7 @@ test("setup step 5 shows retry and back recovery on scan failures", async ({ pag
   await page.getByRole("button", { name: "Next" }).click();
 
   await expect(page.getByRole("heading", { name: "Final Review" })).toBeVisible();
-  await page.getByRole("button", { name: "Build Engine" }).click();
+  await page.getByRole("button", { name: "Complete Setup" }).click();
 
   await expect(page.getByText("Scan failed or became unavailable.")).toBeVisible();
   await expect(page.getByText("forced scan start failure")).toBeVisible();
@@ -134,7 +134,7 @@ test("setup step 5 shows retry and back recovery on scan failures", async ({ pag
   await page.getByRole("button", { name: "Back to Review" }).click();
   await expect(page.getByRole("heading", { name: "Final Review" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Build Engine" }).click();
+  await page.getByRole("button", { name: "Complete Setup" }).click();
   await expect(page.getByText("Scan failed or became unavailable.")).toBeVisible();
 
   await page.getByRole("button", { name: "Retry Scan" }).click();
@@ -251,7 +251,7 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
   await page.getByRole("button", { name: "H.264" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
-  await page.getByRole("button", { name: "Build Engine" }).click();
+  await page.getByRole("button", { name: "Complete Setup" }).click();
   await expect(page.getByRole("button", { name: "Enter Dashboard" })).toBeVisible();
 
   expect((submittedBody?.settings as { transcode?: { output_codec?: string } })?.transcode?.output_codec).toBe("h264");

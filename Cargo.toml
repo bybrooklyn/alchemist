@@ -45,6 +45,7 @@ rand = "0.9"
 sysinfo = "0.32"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
+trait-variant = "0.1.2"
 
 [dev-dependencies]
 http-body-util = "0.1"

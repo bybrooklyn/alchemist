@@ -215,10 +215,7 @@ fn probe_args_for_backend(
         args.push("format=yuv420p".to_string());
     }
 
-    args.extend([
-        "-c:v".to_string(),
-        encoder.to_string(),
-    ]);
+    args.extend(["-c:v".to_string(), encoder.to_string()]);
 
     if backend == HardwareBackend::Videotoolbox {
         args.push("-allow_sw".to_string());
