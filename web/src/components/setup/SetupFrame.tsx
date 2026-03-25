@@ -56,18 +56,6 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
                 </div>
             </div>
 
-            {error && (
-                <div className="mx-6 pb-4">
-                    <div
-                        role="alert"
-                        aria-live="polite"
-                        className="mx-auto max-w-4xl rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error"
-                    >
-                        {error}
-                    </div>
-                </div>
-            )}
-
             {/* Navigation footer */}
             {step < 6 && (
                 <div className="shrink-0 border-t border-helios-line/20
