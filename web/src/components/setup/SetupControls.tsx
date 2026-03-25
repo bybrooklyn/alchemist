@@ -1,3 +1,5 @@
+import { useId, type ReactNode } from "react";
+
 interface RangeControlProps {
     label: string;
     min: number;
@@ -27,6 +29,7 @@ interface ToggleRowProps {
     body: string;
     checked: boolean;
     onChange: (checked: boolean) => void;
+    children?: ReactNode;
 }
 
 interface ReviewCardProps {
@@ -78,15 +81,26 @@ export function LabeledSelect({ label, value, onChange, options }: LabeledSelect
     );
 }
 
-export function ToggleRow({ title, body, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({ title, body, checked, onChange, children }: ToggleRowProps) {
+    const inputId = useId();
+
     return (
-        <label className="flex items-center justify-between gap-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
-            <div>
-                <p className="text-sm font-semibold text-helios-ink">{title}</p>
-                <p className="text-xs text-helios-slate mt-1">{body}</p>
+        <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
+            <div className="flex items-start justify-between gap-4">
+                <label htmlFor={inputId} className="block flex-1 cursor-pointer">
+                    <p className="text-sm font-semibold text-helios-ink">{title}</p>
+                    <p className="mt-1 text-xs text-helios-slate">{body}</p>
+                </label>
+                <input
+                    id={inputId}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => onChange(e.target.checked)}
+                    className="mt-0.5 h-5 w-5 shrink-0 rounded border-helios-line/30 accent-helios-solar"
+                />
             </div>
-            <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 rounded border-helios-line/30 accent-helios-solar" />
-        </label>
+            {children && <div className="mt-3 border-t border-helios-line/10 pt-3">{children}</div>}
+        </div>
     );
 }
 

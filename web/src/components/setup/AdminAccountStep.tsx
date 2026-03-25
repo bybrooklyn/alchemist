@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { UserCircle } from "lucide-react";
+import { ToggleRow } from "./SetupControls";
 import type { StepValidator } from "./types";
 
 interface AdminAccountStepProps {
@@ -78,47 +79,26 @@ export default function AdminAccountStep({
                     />
                 </div>
 
-                <div className="rounded-md border border-helios-line/20 bg-helios-surface-soft/50 p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-1 flex-1">
-                            <p className="text-sm font-semibold text-helios-ink">
-                                Anonymous Usage Telemetry
-                            </p>
-                            <p className="text-xs text-helios-slate leading-relaxed">
-                                Alchemist can send anonymous,
-                                non-identifying signals to help improve
-                                hardware compatibility and default
-                                settings. No file names, paths, library
-                                contents, or personal data are ever
-                                collected. Off by default.
-                            </p>
-                        </div>
-                        <input
-                            type="checkbox"
-                            checked={telemetryEnabled}
-                            onChange={(e) =>
-                                onTelemetryChange(e.target.checked)
-                            }
-                            className="h-5 w-5 mt-0.5 shrink-0 rounded border-helios-line/30 accent-helios-solar"
-                        />
-                    </div>
+                <ToggleRow
+                    title="Anonymous Usage Telemetry"
+                    body="Alchemist can send anonymous, non-identifying signals to help improve hardware compatibility and default settings. No file names, paths, library contents, or personal data are ever collected. Off by default."
+                    checked={telemetryEnabled}
+                    onChange={onTelemetryChange}
+                >
                     <details>
-                        <summary className="text-xs text-helios-solar cursor-pointer hover:underline select-none list-none flex items-center gap-1">
+                        <summary className="flex list-none items-center gap-1 cursor-pointer select-none text-xs text-helios-solar hover:underline">
                             What gets sent?
                         </summary>
-                        <ul className="mt-2 space-y-1 pl-4 text-xs text-helios-slate/80 list-disc">
+                        <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-helios-slate/80">
                             <li>App version and OS/architecture</li>
                             <li>Whether running in Docker</li>
-                            <li>CPU core count and total RAM
-                                (no identifiers)</li>
+                            <li>CPU core count and total RAM (no identifiers)</li>
                             <li>Encoder type (NVENC, QSV, CPU, etc.)</li>
-                            <li>Codec and resolution bucket (1080p, 4K)
-                                — no filenames</li>
-                            <li>Encode speed and success/failure
-                                outcome</li>
+                            <li>Codec and resolution bucket (1080p, 4K) — no filenames</li>
+                            <li>Encode speed and success/failure outcome</li>
                         </ul>
                     </details>
-                </div>
+                </ToggleRow>
             </div>
         </motion.div>
     );

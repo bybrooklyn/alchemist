@@ -3,7 +3,9 @@ use crate::error::Result;
 use crate::media::pipeline::{
     Encoder, ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
 };
-use crate::orchestrator::{ExecutionObserver, TranscodeRequest, Transcoder};
+use crate::orchestrator::{
+    AsyncExecutionObserver, ExecutionObserver, TranscodeRequest, Transcoder,
+};
 use crate::system::hardware::HardwareInfo;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,62 +56,55 @@ impl JobExecutionObserver {
     }
 }
 
-impl ExecutionObserver for JobExecutionObserver {
-    fn on_log(
-        &self,
-        message: String,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            let _ = self.event_tx.send(AlchemistEvent::Log {
-                level: "info".to_string(),
-                job_id: Some(self.job_id),
-                message: message.clone(),
-            });
-            if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
-                tracing::warn!(
-                    "Failed to persist transcode log for job {}: {}",
-                    self.job_id,
-                    err
-                );
-            }
-        })
+impl AsyncExecutionObserver for JobExecutionObserver {
+    async fn on_log(&self, message: String) {
+        let _ = self.event_tx.send(AlchemistEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(self.job_id),
+            message: message.clone(),
+        });
+        if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
+            tracing::warn!(
+                "Failed to persist transcode log for job {}: {}",
+                self.job_id,
+                err
+            );
+        }
     }
 
-    fn on_progress(
+    async fn on_progress(
         &self,
         progress: crate::media::ffmpeg::FFmpegProgress,
         total_duration: f64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            let percentage = progress.percentage(total_duration).clamp(0.0, 100.0);
-            let now = Instant::now();
-            let mut last_progress = self.last_progress.lock().await;
-            let should_persist = match *last_progress {
-                Some((last_pct, last_time)) => {
-                    percentage >= last_pct + 0.5
-                        || now.duration_since(last_time) >= Duration::from_secs(2)
-                }
-                None => true,
-            };
-
-            if should_persist {
-                if let Err(err) = self.db.update_job_progress(self.job_id, percentage).await {
-                    tracing::warn!(
-                        "Failed to persist progress for job {}: {}",
-                        self.job_id,
-                        err
-                    );
-                } else {
-                    *last_progress = Some((percentage, now));
-                }
+    ) {
+        let percentage = progress.percentage(total_duration).clamp(0.0, 100.0);
+        let now = Instant::now();
+        let mut last_progress = self.last_progress.lock().await;
+        let should_persist = match *last_progress {
+            Some((last_pct, last_time)) => {
+                percentage >= last_pct + 0.5
+                    || now.duration_since(last_time) >= Duration::from_secs(2)
             }
+            None => true,
+        };
 
-            let _ = self.event_tx.send(AlchemistEvent::Progress {
-                job_id: self.job_id,
-                percentage,
-                time: progress.time,
-            });
-        })
+        if should_persist {
+            if let Err(err) = self.db.update_job_progress(self.job_id, percentage).await {
+                tracing::warn!(
+                    "Failed to persist progress for job {}: {}",
+                    self.job_id,
+                    err
+                );
+            } else {
+                *last_progress = Some((percentage, now));
+            }
+        }
+
+        let _ = self.event_tx.send(AlchemistEvent::Progress {
+            job_id: self.job_id,
+            percentage,
+            time: progress.time,
+        });
     }
 }
 
@@ -292,6 +287,7 @@ mod tests {
     use super::*;
     use crate::db::Db;
     use crate::media::pipeline::Encoder;
+    use crate::orchestrator::LocalExecutionObserver;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::SystemTime;
@@ -356,17 +352,17 @@ mod tests {
         let (tx, mut rx) = broadcast::channel(8);
         let observer = JobExecutionObserver::new(job.id, db.clone(), Arc::new(tx));
 
-        observer.on_log("ffmpeg line".to_string()).await;
-        observer
-            .on_progress(
-                crate::media::ffmpeg::FFmpegProgress {
-                    time: "00:00:02.00".to_string(),
-                    time_seconds: 2.0,
-                    ..Default::default()
-                },
-                10.0,
-            )
-            .await;
+        LocalExecutionObserver::on_log(&observer, "ffmpeg line".to_string()).await;
+        LocalExecutionObserver::on_progress(
+            &observer,
+            crate::media::ffmpeg::FFmpegProgress {
+                time: "00:00:02.00".to_string(),
+                time_seconds: 2.0,
+                ..Default::default()
+            },
+            10.0,
+        )
+        .await;
 
         let logs = db.get_logs(10, 0).await?;
         assert_eq!(logs[0].message, "ffmpeg line");

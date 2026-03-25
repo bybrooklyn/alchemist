@@ -9,7 +9,6 @@ interface LibraryStepProps {
     dirInput: string;
     directories: string[];
     recommendations: FsRecommendation[];
-    preview: FsPreviewResponse | null;
     onDirInputChange: (value: string) => void;
     onDirectoriesChange: (value: string[]) => void;
     onPreviewChange: (value: FsPreviewResponse | null) => void;
@@ -20,24 +19,24 @@ export default function LibraryStep({
     dirInput,
     directories,
     recommendations,
-    preview,
     onDirInputChange,
     onDirectoriesChange,
     onPreviewChange,
     registerValidator,
 }: LibraryStepProps) {
-    const [previewLoading, setPreviewLoading] = useState(false);
-    const [previewError, setPreviewError] = useState<string | null>(null);
     const [pickerOpen, setPickerOpen] = useState(false);
+
+    const previewFailureMessage = (err: unknown) =>
+        isApiError(err)
+            ? err.message
+            : "Failed to preview the selected folders. Double-check the path and that the Alchemist server can read it.";
 
     const fetchPreview = useCallback(async (): Promise<FsPreviewResponse | null> => {
         if (directories.length === 0) {
             onPreviewChange(null);
-            setPreviewError(null);
             return null;
         }
 
-        setPreviewLoading(true);
         try {
             const data = await apiJson<FsPreviewResponse>("/api/fs/preview", {
                 method: "POST",
@@ -45,14 +44,10 @@ export default function LibraryStep({
                 body: JSON.stringify({ directories }),
             });
             onPreviewChange(data);
-            setPreviewError(null);
             return data;
         } catch (err) {
-            const message = isApiError(err) ? err.message : "Failed to preview selected folders.";
-            setPreviewError(message);
-            return null;
-        } finally {
-            setPreviewLoading(false);
+            onPreviewChange(null);
+            throw new Error(previewFailureMessage(err));
         }
     }, [directories, onPreviewChange]);
 
@@ -61,7 +56,14 @@ export default function LibraryStep({
             if (directories.length === 0) {
                 return "Select at least one server folder before continuing.";
             }
-            const nextPreview = await fetchPreview();
+            let nextPreview: FsPreviewResponse | null;
+            try {
+                nextPreview = await fetchPreview();
+            } catch (err) {
+                return err instanceof Error
+                    ? err.message
+                    : "Failed to preview the selected folders. Double-check the path and that the Alchemist server can read it.";
+            }
             if (nextPreview && nextPreview.total_media_files === 0) {
                 return "Preview did not find any supported media files yet. Double-check the chosen folders.";
             }
@@ -73,7 +75,9 @@ export default function LibraryStep({
         if (directories.length === 0) {
             return;
         }
-        const handle = window.setTimeout(() => void fetchPreview(), 350);
+        const handle = window.setTimeout(() => {
+            void fetchPreview().catch(() => undefined);
+        }, 350);
         return () => window.clearTimeout(handle);
     }, [directories, fetchPreview]);
 
@@ -272,13 +276,6 @@ export default function LibraryStep({
                     </div>
                 </div>
 
-                {previewError && (
-                    <div className="rounded-lg border border-status-error/20
-                        bg-status-error/10 px-4 py-3 text-sm
-                        text-status-error">
-                        {previewError}
-                    </div>
-                )}
             </motion.div>
 
             <ServerDirectoryPicker

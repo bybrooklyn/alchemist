@@ -176,7 +176,6 @@ export default function SetupWizard() {
                         dirInput={dirInput}
                         directories={settings.scanner.directories}
                         recommendations={recommendations}
-                        preview={preview}
                         onDirInputChange={setDirInput}
                         onDirectoriesChange={(directories) => setSettings((current) => ({ ...current, scanner: { ...current.scanner, directories } }))}
                         onPreviewChange={setPreview}

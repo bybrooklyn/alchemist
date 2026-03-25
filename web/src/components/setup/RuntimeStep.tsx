@@ -74,7 +74,7 @@ export default function RuntimeStep({
                                 </p>
                             </div>
                         </div>
-                        <LabeledInput label="Explicit Device Path" value={hardware.device_path ?? ""} onChange={(device_path) => updateHardware({ device_path: device_path || null })} placeholder="/dev/dri/renderD128" />
+                        <LabeledInput label="Explicit Device Path" value={hardware.device_path ?? ""} onChange={(device_path) => updateHardware({ device_path: device_path || null })} placeholder="Optional — Linux only (e.g. /dev/dri/renderD128)" />
                         <ToggleRow title="Allow CPU Fallback" body="Use software encoding if the preferred GPU path is unavailable." checked={hardware.allow_cpu_fallback} onChange={(allow_cpu_fallback) => updateHardware({ allow_cpu_fallback })} />
                         <ToggleRow title="Allow CPU Encoding" body="Permit CPU encoders even when GPU options exist." checked={hardware.allow_cpu_encoding} onChange={(allow_cpu_encoding) => updateHardware({ allow_cpu_encoding })} />
                     </div>

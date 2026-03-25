@@ -36,7 +36,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "sh -c 'mkdir -p .runtime/media && cd .. && cargo run --no-default-features -- --reset-auth'",
+    command: "sh -c 'mkdir -p .runtime/media && cd .. && (cd web && bun install --frozen-lockfile && bun run build) && cargo run --no-default-features -- --reset-auth'",
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
