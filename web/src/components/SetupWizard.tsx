@@ -67,10 +67,6 @@ export default function SetupWizard() {
     }, []);
 
     useEffect(() => {
-        validatorRef.current = async () => null;
-    }, [step]);
-
-    useEffect(() => {
         const loadBootstrap = async () => {
             try {
                 const [status, bundle, hw, recommendationData] = await Promise.all([
@@ -156,6 +152,8 @@ export default function SetupWizard() {
         [preview, settings.notifications.targets.length, settings.schedule.windows.length, settings.scanner.directories.length]
     );
 
+    validatorRef.current = async () => null;
+
     const currentStep = (() => {
         switch (step) {
             case 1:
@@ -163,10 +161,8 @@ export default function SetupWizard() {
                     <AdminAccountStep
                         username={username}
                         password={password}
-                        telemetryEnabled={settings.system.enable_telemetry}
                         onUsernameChange={setUsername}
                         onPasswordChange={setPassword}
-                        onTelemetryChange={(enable_telemetry) => setSettings((current) => ({ ...current, system: { ...current.system, enable_telemetry } }))}
                         registerValidator={registerValidator}
                     />
                 );

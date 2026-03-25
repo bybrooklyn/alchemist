@@ -96,10 +96,7 @@ export function mergeSetupSettings(status: SetupStatusResponse, bundle: Settings
         system: {
             ...DEFAULT_SETTINGS.system,
             ...bundle.settings.system,
-            enable_telemetry:
-                typeof status.enable_telemetry === "boolean"
-                    ? status.enable_telemetry
-                    : bundle.settings.system.enable_telemetry,
+            enable_telemetry: false,
         },
     };
 }

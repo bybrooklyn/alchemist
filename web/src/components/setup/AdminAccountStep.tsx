@@ -1,36 +1,34 @@
-import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { UserCircle } from "lucide-react";
+import {
+    TELEMETRY_TEMPORARILY_DISABLED,
+    TELEMETRY_TEMPORARILY_DISABLED_MESSAGE,
+    TELEMETRY_USAGE_COPY,
+} from "../../lib/telemetryAvailability";
 import { ToggleRow } from "./SetupControls";
 import type { StepValidator } from "./types";
 
 interface AdminAccountStepProps {
     username: string;
     password: string;
-    telemetryEnabled: boolean;
     onUsernameChange: (value: string) => void;
     onPasswordChange: (value: string) => void;
-    onTelemetryChange: (value: boolean) => void;
     registerValidator: (validator: StepValidator) => void;
 }
 
 export default function AdminAccountStep({
     username,
     password,
-    telemetryEnabled,
     onUsernameChange,
     onPasswordChange,
-    onTelemetryChange,
     registerValidator,
 }: AdminAccountStepProps) {
-    useEffect(() => {
-        registerValidator(async () => {
-            if (!username.trim() || !password.trim()) {
-                return "Please provide an admin username and password.";
-            }
-            return null;
-        });
-    }, [password, registerValidator, username]);
+    registerValidator(async () => {
+        if (!username.trim() || !password.trim()) {
+            return "Please provide an admin username and password.";
+        }
+        return null;
+    });
 
     return (
         <motion.div
@@ -81,23 +79,12 @@ export default function AdminAccountStep({
 
                 <ToggleRow
                     title="Anonymous Usage Telemetry"
-                    body="Alchemist can send anonymous, non-identifying signals to help improve hardware compatibility and default settings. No file names, paths, library contents, or personal data are ever collected. Off by default."
-                    checked={telemetryEnabled}
-                    onChange={onTelemetryChange}
+                    body={TELEMETRY_TEMPORARILY_DISABLED_MESSAGE}
+                    checked={false}
+                    onChange={() => undefined}
+                    disabled={TELEMETRY_TEMPORARILY_DISABLED}
                 >
-                    <details>
-                        <summary className="flex list-none items-center gap-1 cursor-pointer select-none text-xs text-helios-solar hover:underline">
-                            What gets sent?
-                        </summary>
-                        <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-helios-slate/80">
-                            <li>App version and OS/architecture</li>
-                            <li>Whether running in Docker</li>
-                            <li>CPU core count and total RAM (no identifiers)</li>
-                            <li>Encoder type (NVENC, QSV, CPU, etc.)</li>
-                            <li>Codec and resolution bucket (1080p, 4K) — no filenames</li>
-                            <li>Encode speed and success/failure outcome</li>
-                        </ul>
-                    </details>
+                    <p className="text-xs text-helios-slate/80">{TELEMETRY_USAGE_COPY}</p>
                 </ToggleRow>
             </div>
         </motion.div>

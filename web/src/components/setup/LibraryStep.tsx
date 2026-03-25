@@ -51,25 +51,23 @@ export default function LibraryStep({
         }
     }, [directories, onPreviewChange]);
 
-    useEffect(() => {
-        registerValidator(async () => {
-            if (directories.length === 0) {
-                return "Select at least one server folder before continuing.";
-            }
-            let nextPreview: FsPreviewResponse | null;
-            try {
-                nextPreview = await fetchPreview();
-            } catch (err) {
-                return err instanceof Error
-                    ? err.message
-                    : "Failed to preview the selected folders. Double-check the path and that the Alchemist server can read it.";
-            }
-            if (nextPreview && nextPreview.total_media_files === 0) {
-                return "Preview did not find any supported media files yet. Double-check the chosen folders.";
-            }
-            return null;
-        });
-    }, [directories, fetchPreview, registerValidator]);
+    registerValidator(async () => {
+        if (directories.length === 0) {
+            return "Select at least one server folder before continuing.";
+        }
+        let nextPreview: FsPreviewResponse | null;
+        try {
+            nextPreview = await fetchPreview();
+        } catch (err) {
+            return err instanceof Error
+                ? err.message
+                : "Failed to preview the selected folders. Double-check the path and that the Alchemist server can read it.";
+        }
+        if (nextPreview && nextPreview.total_media_files === 0) {
+            return "Preview did not find any supported media files yet. Double-check the chosen folders.";
+        }
+        return null;
+    });
 
     useEffect(() => {
         if (directories.length === 0) {

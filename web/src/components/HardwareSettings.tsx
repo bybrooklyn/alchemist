@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle, Save, XCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Cpu, Zap, HardDrive, CheckCircle2, AlertCircle, XCircle } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -44,6 +44,8 @@ export default function HardwareSettings() {
     const [error, setError] = useState("");
     const [saving, setSaving] = useState(false);
     const [draftDevicePath, setDraftDevicePath] = useState("");
+    const [devicePathDirty, setDevicePathDirty] = useState(false);
+    const hardwareSettingsRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         void Promise.all([fetchHardware(), fetchSettings(), fetchProbeLog()]).finally(() => setLoading(false));
@@ -63,7 +65,9 @@ export default function HardwareSettings() {
         try {
             const data = await apiJson<HardwareSettings>("/api/settings/hardware");
             setSettings(data);
-            setDraftDevicePath(data.device_path ?? "");
+            if (!devicePathDirty) {
+                setDraftDevicePath(data.device_path ?? "");
+            }
         } catch (err) {
             if (!error) {
                 setError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
@@ -80,8 +84,14 @@ export default function HardwareSettings() {
         }
     };
 
-    const persistSettings = async (nextSettings: HardwareSettings, message: string) => {
+    const persistSettings = async (
+        previousSettings: HardwareSettings,
+        nextSettings: HardwareSettings,
+        message: string,
+        syncDevicePath: boolean,
+    ) => {
         setSaving(true);
+        setSettings(nextSettings);
         try {
             await apiAction("/api/settings/hardware", {
                 method: "POST",
@@ -89,10 +99,15 @@ export default function HardwareSettings() {
                 body: JSON.stringify(nextSettings),
             });
             setError("");
-            await Promise.all([fetchHardware(), fetchSettings(), fetchProbeLog()]);
+            if (syncDevicePath) {
+                setDraftDevicePath(nextSettings.device_path ?? "");
+                setDevicePathDirty(false);
+            }
+            await Promise.all([fetchHardware(), fetchProbeLog()]);
             showToast({ kind: "success", title: "Hardware", message });
         } catch (err) {
             const errorMessage = isApiError(err) ? err.message : "Failed to update hardware settings";
+            setSettings(previousSettings);
             setError(errorMessage);
             showToast({ kind: "error", title: "Hardware", message: errorMessage });
         } finally {
@@ -100,16 +115,38 @@ export default function HardwareSettings() {
         }
     };
 
-    const updateCpuEncoding = async (enabled: boolean) => {
+    const normalizedDraftDevicePath = () => draftDevicePath.trim() || null;
+
+    const saveImmediateSettings = async (patch: Partial<HardwareSettings>) => {
         if (!settings) return;
-        await persistSettings({ ...settings, allow_cpu_encoding: enabled }, "Hardware settings saved.");
+        const previousSettings = settings;
+        const shouldSyncDevicePath = devicePathDirty;
+        const nextSettings: HardwareSettings = {
+            ...settings,
+            ...patch,
+            device_path: shouldSyncDevicePath ? normalizedDraftDevicePath() : settings.device_path,
+        };
+        await persistSettings(
+            previousSettings,
+            nextSettings,
+            "Hardware settings saved.",
+            shouldSyncDevicePath,
+        );
     };
 
-    const saveAllSettings = async () => {
+    const commitDevicePath = async () => {
         if (!settings) return;
+        const nextDevicePath = normalizedDraftDevicePath();
+        if (nextDevicePath === settings.device_path) {
+            setDraftDevicePath(settings.device_path ?? "");
+            setDevicePathDirty(false);
+            return;
+        }
         await persistSettings(
-            { ...settings, device_path: draftDevicePath.trim() || null },
+            settings,
+            { ...settings, device_path: nextDevicePath },
             "Hardware settings saved.",
+            true,
         );
     };
 
@@ -167,6 +204,14 @@ export default function HardwareSettings() {
     const failedProbeEntries = probeLog.entries.filter((entry) => !entry.success);
     const shouldShowProbeLog = vendor === "cpu" || failedProbeEntries.length > 0;
     const intelVaapiDetected = vendor === "intel" && (info.backends ?? []).some((backend) => backend.kind.toLowerCase() === "vaapi");
+
+    const handleHardwareSettingsBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+        const nextTarget = event.relatedTarget as Node | null;
+        if (nextTarget && hardwareSettingsRef.current?.contains(nextTarget)) {
+            return;
+        }
+        void commitDevicePath();
+    };
 
     return (
         <div className="flex flex-col gap-6" aria-live="polite">
@@ -321,7 +366,11 @@ export default function HardwareSettings() {
             )}
 
             {settings && (
-                <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm space-y-5">
+                <div
+                    ref={hardwareSettingsRef}
+                    onBlurCapture={handleHardwareSettingsBlur}
+                    className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm space-y-5"
+                >
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
@@ -334,22 +383,26 @@ export default function HardwareSettings() {
                                 </p>
                             </div>
                         </div>
-                        <button
-                            onClick={() => void updateCpuEncoding(!settings.allow_cpu_encoding)}
-                            disabled={saving}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.allow_cpu_encoding ? "bg-emerald-500" : "bg-helios-line/50"} ${saving ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                        >
-                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.allow_cpu_encoding ? "translate-x-6" : "translate-x-1"}`} />
-                        </button>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                aria-label="Allow CPU Encoding"
+                                checked={settings.allow_cpu_encoding}
+                                onChange={(e) => void saveImmediateSettings({ allow_cpu_encoding: e.target.checked })}
+                                disabled={saving}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-white after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
+                        </label>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-helios-line/10 pt-5">
                         <div className="space-y-2">
-                            <label className="text-xs font-medium uppercase tracking-wide text-helios-slate">Preferred Vendor</label>
+                            <label htmlFor="hardware-preferred-vendor" className="text-xs font-medium uppercase tracking-wide text-helios-slate">Preferred Vendor</label>
                             <select
+                                id="hardware-preferred-vendor"
                                 value={settings.preferred_vendor ?? ""}
-                                onChange={(e) => setSettings({
-                                    ...settings,
+                                onChange={(e) => void saveImmediateSettings({
                                     preferred_vendor: e.target.value || null,
                                 })}
                                 className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
@@ -364,10 +417,11 @@ export default function HardwareSettings() {
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-xs font-medium uppercase tracking-wide text-helios-slate">CPU Preset</label>
+                            <label htmlFor="hardware-cpu-preset" className="text-xs font-medium uppercase tracking-wide text-helios-slate">CPU Preset</label>
                             <select
+                                id="hardware-cpu-preset"
                                 value={settings.cpu_preset}
-                                onChange={(e) => setSettings({ ...settings, cpu_preset: e.target.value })}
+                                onChange={(e) => void saveImmediateSettings({ cpu_preset: e.target.value })}
                                 className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             >
                                 <option value="slow">Slow</option>
@@ -386,11 +440,13 @@ export default function HardwareSettings() {
                         <label className="relative inline-flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
+                                aria-label="Allow CPU Fallback"
                                 checked={settings.allow_cpu_fallback}
-                                onChange={(e) => setSettings({ ...settings, allow_cpu_fallback: e.target.checked })}
+                                onChange={(e) => void saveImmediateSettings({ allow_cpu_fallback: e.target.checked })}
+                                disabled={saving}
                                 className="sr-only peer"
                             />
-                            <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
+                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-white after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
                         </label>
                     </div>
 
@@ -398,25 +454,30 @@ export default function HardwareSettings() {
                         <div>
                             <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Explicit Device Path</h4>
                             <p className="text-[10px] text-helios-slate font-bold mt-1">
-                                Pin Linux QSV or VAAPI detection to a specific render node. Leave blank to auto-detect.
+                                Optional — Linux only. Pin QSV or VAAPI detection to a specific render node, or leave blank to auto-detect.
                             </p>
                         </div>
-                        <div className="flex flex-col sm:flex-row gap-3">
+                        <div className="flex flex-col gap-2">
                             <input
+                                aria-label="Explicit Device Path"
                                 type="text"
                                 value={draftDevicePath}
-                                onChange={(e) => setDraftDevicePath(e.target.value)}
-                                placeholder="/dev/dri/renderD128"
+                                onChange={(e) => {
+                                    setDraftDevicePath(e.target.value);
+                                    setDevicePathDirty(true);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        void commitDevicePath();
+                                    }
+                                }}
+                                placeholder="Optional — Linux only (e.g. /dev/dri/renderD128)"
                                 className="flex-1 bg-helios-surface-soft border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink font-mono text-sm focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             />
-                            <button
-                                onClick={() => void saveAllSettings()}
-                                disabled={saving}
-                                className="flex items-center justify-center gap-2 bg-helios-solar text-helios-main font-bold px-5 py-3 rounded-md hover:opacity-90 transition-opacity disabled:opacity-50"
-                            >
-                                <Save size={16} />
-                                {saving ? "Saving..." : "Apply"}
-                            </button>
+                            <p className="text-[10px] text-helios-slate">
+                                Saves on blur or Enter. Other hardware changes will also carry the current device-path draft if you tab or click away.
+                            </p>
                         </div>
                     </div>
                 </div>
