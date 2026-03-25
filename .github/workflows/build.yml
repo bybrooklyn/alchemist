@@ -46,10 +46,6 @@ on:
         type: boolean
         required: false
         default: false
-    secrets:
-      GITHUB_TOKEN:
-        required: true
-
 env:
   IMAGE_NAME: ghcr.io/bybrooklyn/alchemist
 
@@ -309,7 +305,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -352,4 +348,4 @@ jobs:
           generate_release_notes: false
           files: release-assets/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
