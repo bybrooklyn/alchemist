@@ -456,6 +456,9 @@ pub struct SystemConfig {
     pub log_retention_days: Option<u32>,
     #[serde(default)]
     pub engine_mode: EngineMode,
+    /// Enable HSTS header (only enable if running behind HTTPS)
+    #[serde(default)]
+    pub https_only: bool,
 }
 
 fn default_true() -> bool {
@@ -481,6 +484,7 @@ impl Default for SystemConfig {
             enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
             engine_mode: EngineMode::default(),
+            https_only: false,
         }
     }
 }
@@ -595,6 +599,7 @@ impl Default for Config {
                 enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
                 engine_mode: EngineMode::default(),
+                https_only: false,
             },
         }
     }

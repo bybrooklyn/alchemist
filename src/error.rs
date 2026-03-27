@@ -41,6 +41,9 @@ pub enum AlchemistError {
     #[error("Job paused")]
     Paused,
 
+    #[error("Query timeout after {0}s: {1}")]
+    QueryTimeout(u64, String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }

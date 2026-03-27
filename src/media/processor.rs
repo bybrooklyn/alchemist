@@ -1,6 +1,6 @@
 use crate::Transcoder;
 use crate::config::Config;
-use crate::db::{AlchemistEvent, Db};
+use crate::db::{AlchemistEvent, Db, EventChannels, JobEvent, SystemEvent};
 use crate::error::Result;
 use crate::media::pipeline::Pipeline;
 use crate::media::scanner::Scanner;
@@ -17,6 +17,7 @@ pub struct Agent {
     config: Arc<RwLock<Config>>,
     hardware_state: HardwareState,
     tx: Arc<broadcast::Sender<AlchemistEvent>>,
+    event_channels: Arc<EventChannels>,
     semaphore: Arc<Semaphore>,
     semaphore_limit: Arc<AtomicUsize>,
     held_permits: Arc<Mutex<Vec<OwnedSemaphorePermit>>>,
@@ -35,6 +36,7 @@ impl Agent {
         config: Arc<RwLock<Config>>,
         hardware_state: HardwareState,
         tx: broadcast::Sender<AlchemistEvent>,
+        event_channels: Arc<EventChannels>,
         dry_run: bool,
     ) -> Self {
         // Read config asynchronously to avoid blocking atomic in async runtime
@@ -49,6 +51,7 @@ impl Agent {
             config,
             hardware_state,
             tx: Arc::new(tx),
+            event_channels,
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
             semaphore_limit: Arc::new(AtomicUsize::new(concurrent_jobs)),
             held_permits: Arc::new(Mutex::new(Vec::new())),
@@ -63,6 +66,10 @@ impl Agent {
 
     pub async fn scan_and_enqueue(&self, directories: Vec<PathBuf>) -> Result<()> {
         info!("Starting manual scan of directories: {:?}", directories);
+
+        // Notify scan started via typed channel
+        let _ = self.event_channels.system.send(SystemEvent::ScanStarted);
+
         let files = tokio::task::spawn_blocking(move || {
             let scanner = Scanner::new();
             scanner.scan(directories)
@@ -79,10 +86,20 @@ impl Agent {
             }
         }
 
+        // Notify via typed channel
+        let _ = self.event_channels.jobs.send(JobEvent::StateChanged {
+            job_id: 0,
+            status: crate::db::JobState::Queued,
+        });
+        // Also send to legacy channel for backwards compatibility
         let _ = self.tx.send(AlchemistEvent::JobStateChanged {
             job_id: 0,
             status: crate::db::JobState::Queued,
-        }); // Trigger UI refresh
+        });
+
+        // Notify scan completed
+        let _ = self.event_channels.system.send(SystemEvent::ScanCompleted);
+
         Ok(())
     }
 
@@ -286,7 +303,50 @@ impl Agent {
             self.config.clone(),
             self.hardware_state.clone(),
             self.tx.clone(),
+            self.event_channels.clone(),
             self.dry_run,
         )
+    }
+
+    /// Gracefully shutdown the agent.
+    /// Drains active jobs and waits up to `timeout` for them to complete.
+    /// After timeout, forcefully cancels remaining jobs.
+    pub async fn graceful_shutdown(&self, timeout: std::time::Duration) {
+        info!("Initiating graceful shutdown...");
+
+        // Stop accepting new jobs
+        self.pause();
+        self.drain();
+
+        // Wait for active jobs to complete (with timeout)
+        let start = std::time::Instant::now();
+        let check_interval = std::time::Duration::from_millis(500);
+
+        while start.elapsed() < timeout {
+            let active = self.orchestrator.active_job_count();
+            if active == 0 {
+                info!("All jobs completed gracefully.");
+                return;
+            }
+            info!(
+                "Waiting for {} active job(s) to complete... ({:.0}s remaining)",
+                active,
+                (timeout - start.elapsed()).as_secs_f64()
+            );
+            tokio::time::sleep(check_interval).await;
+        }
+
+        // Timeout reached - force cancel remaining jobs
+        let cancelled = self.orchestrator.cancel_all_jobs();
+        if cancelled > 0 {
+            tracing::warn!(
+                "Shutdown timeout reached. Forcefully cancelled {} job(s).",
+                cancelled
+            );
+            // Give FFmpeg processes a moment to terminate
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+
+        info!("Graceful shutdown complete.");
     }
 }

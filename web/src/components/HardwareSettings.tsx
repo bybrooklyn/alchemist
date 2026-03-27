@@ -217,10 +217,10 @@ export default function HardwareSettings() {
         <div className="flex flex-col gap-6" aria-live="polite">
             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
-                    <h3 className="text-base font-bold text-helios-ink tracking-tight uppercase tracking-[0.1em]">Transcoding Hardware</h3>
+                    <h3 className="text-base font-bold text-helios-ink tracking-tight">Transcoding Hardware</h3>
                     <p className="text-xs text-helios-slate mt-0.5">Detected acceleration engines and codec support.</p>
                 </div>
-                <div className={`p-2 ${details.bg} rounded-xl ${details.color}`}>
+                <div className={`p-2 ${details.bg} rounded-lg ${details.color}`}>
                     {vendor === "cpu" ? <Cpu size={20} /> : <Zap size={20} />}
                 </div>
             </div>
@@ -228,18 +228,18 @@ export default function HardwareSettings() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className={`p-2.5 rounded-xl ${details.bg} ${details.color}`}>
+                        <div className={`p-2.5 rounded-lg ${details.bg} ${details.color}`}>
                             <HardDrive size={18} />
                         </div>
                         <div>
-                            <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Active Device</h4>
-                            <p className="text-[10px] text-helios-slate font-bold">{details.name} {details.tech}</p>
+                            <h4 className="text-sm font-bold text-helios-ink">Active Device</h4>
+                            <p className="text-xs text-helios-slate font-bold">{details.name} {details.tech}</p>
                         </div>
                     </div>
 
                     <div className="space-y-4">
                         <div>
-                            <span className="text-xs font-medium text-helios-slate uppercase tracking-wide block mb-1.5 ml-0.5">Device Path</span>
+                            <span className="text-xs font-medium text-helios-slate block mb-1.5 ml-0.5">Device Path</span>
                             <div className="bg-helios-surface-soft border border-helios-line/30 rounded-lg px-3 py-2 font-mono text-xs text-helios-ink shadow-inner">
                                 {info.device_path || (vendor === "nvidia" ? "NVIDIA Driver (Direct)" : "Auto-detected Interface")}
                             </div>
@@ -249,18 +249,18 @@ export default function HardwareSettings() {
 
                 <div className="bg-helios-surface border border-helios-line/30 rounded-lg p-5 shadow-sm">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
+                        <div className="p-2.5 rounded-lg bg-purple-500/10 text-purple-500">
                             <CheckCircle2 size={18} />
                         </div>
                         <div>
-                            <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Codec Support</h4>
-                            <p className="text-[10px] text-helios-slate font-bold">Hardware verified encoders</p>
+                            <h4 className="text-sm font-bold text-helios-ink">Codec Support</h4>
+                            <p className="text-xs text-helios-slate font-bold">Hardware verified encoders</p>
                         </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
                         {info.supported_codecs.length > 0 ? info.supported_codecs.map(codec => (
-                            <div key={codec} className="px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+                            <div key={codec} className="px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-2">
                                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                                 {codec}
                             </div>
@@ -289,7 +289,7 @@ export default function HardwareSettings() {
                     <div className="flex gap-3">
                         <AlertCircle className="text-helios-solar shrink-0" size={18} />
                         <div className="space-y-1">
-                            <h5 className="text-sm font-bold text-helios-ink uppercase tracking-wider">CPU Fallback Active</h5>
+                            <h5 className="text-sm font-bold text-helios-ink">CPU Fallback Active</h5>
                             <p className="text-xs text-helios-slate leading-relaxed">
                                 GPU acceleration was not detected or is incompatible. Alchemist will use software encoding (SVT-AV1 / x264), which is significantly more resource intensive.
                             </p>
@@ -346,7 +346,7 @@ export default function HardwareSettings() {
                                         </span>
                                     </summary>
                                     <div className="mt-2 space-y-2">
-                                        <p className="text-[11px] text-helios-slate">
+                                        <p className="text-xs text-helios-slate">
                                             {entry.backend}
                                             {entry.device_path ? ` • ${entry.device_path}` : ""}
                                         </p>
@@ -373,12 +373,12 @@ export default function HardwareSettings() {
                 >
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                            <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
+                            <div className="p-2.5 rounded-lg bg-blue-500/10 text-blue-500">
                                 <Cpu size={18} />
                             </div>
                             <div>
-                                <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">CPU Encoding</h4>
-                                <p className="text-[10px] text-helios-slate font-bold">
+                                <h4 className="text-sm font-bold text-helios-ink">CPU Encoding</h4>
+                                <p className="text-xs text-helios-slate font-bold">
                                     {settings.allow_cpu_encoding ? "Enabled - CPU can be used for encoding" : "Disabled - GPU only mode"}
                                 </p>
                             </div>
@@ -398,14 +398,14 @@ export default function HardwareSettings() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-helios-line/10 pt-5">
                         <div className="space-y-2">
-                            <label htmlFor="hardware-preferred-vendor" className="text-xs font-medium uppercase tracking-wide text-helios-slate">Preferred Vendor</label>
+                            <label htmlFor="hardware-preferred-vendor" className="text-xs font-medium text-helios-slate">Preferred Vendor</label>
                             <select
                                 id="hardware-preferred-vendor"
                                 value={settings.preferred_vendor ?? ""}
                                 onChange={(e) => void saveImmediateSettings({
                                     preferred_vendor: e.target.value || null,
                                 })}
-                                className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             >
                                 <option value="">Auto-detect</option>
                                 <option value="nvidia">NVIDIA</option>
@@ -417,12 +417,12 @@ export default function HardwareSettings() {
                         </div>
 
                         <div className="space-y-2">
-                            <label htmlFor="hardware-cpu-preset" className="text-xs font-medium uppercase tracking-wide text-helios-slate">CPU Preset</label>
+                            <label htmlFor="hardware-cpu-preset" className="text-xs font-medium text-helios-slate">CPU Preset</label>
                             <select
                                 id="hardware-cpu-preset"
                                 value={settings.cpu_preset}
                                 onChange={(e) => void saveImmediateSettings({ cpu_preset: e.target.value })}
-                                className="w-full rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             >
                                 <option value="slow">Slow</option>
                                 <option value="medium">Medium</option>
@@ -434,8 +434,8 @@ export default function HardwareSettings() {
 
                     <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                         <div>
-                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow CPU Fallback</p>
-                            <p className="text-[10px] text-helios-slate mt-1">Permit software encoding when the preferred GPU path is unavailable.</p>
+                            <p className="text-xs font-bold text-helios-slate">Allow CPU Fallback</p>
+                            <p className="text-xs text-helios-slate mt-1">Permit software encoding when the preferred GPU path is unavailable.</p>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
                             <input
@@ -452,8 +452,8 @@ export default function HardwareSettings() {
 
                     <div className="border-t border-helios-line/10 pt-5 space-y-3">
                         <div>
-                            <h4 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Explicit Device Path</h4>
-                            <p className="text-[10px] text-helios-slate font-bold mt-1">
+                            <h4 className="text-sm font-bold text-helios-ink">Explicit Device Path</h4>
+                            <p className="text-xs text-helios-slate font-bold mt-1">
                                 Optional — Linux only. Pin QSV or VAAPI detection to a specific render node, or leave blank to auto-detect.
                             </p>
                         </div>
@@ -473,9 +473,9 @@ export default function HardwareSettings() {
                                     }
                                 }}
                                 placeholder="Optional — Linux only (e.g. /dev/dri/renderD128)"
-                                className="flex-1 bg-helios-surface-soft border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink font-mono text-sm focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="flex-1 bg-helios-surface-soft border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink font-mono text-sm focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             />
-                            <p className="text-[10px] text-helios-slate">
+                            <p className="text-xs text-helios-slate">
                                 Saves on blur or Enter. Other hardware changes will also carry the current device-path draft if you tab or click away.
                             </p>
                         </div>

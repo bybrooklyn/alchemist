@@ -1,3 +1,4 @@
+use alchemist::db::EventChannels;
 use alchemist::error::Result;
 use alchemist::system::hardware;
 use alchemist::{Agent, Transcoder, config, db, runtime};
@@ -376,8 +377,21 @@ async fn run() -> Result<()> {
     }
     info!("");
 
-    // 3. Initialize Broadcast Channel, Orchestrator, and Processor
+    // 3. Initialize Broadcast Channels, Orchestrator, and Processor
     let services_start = Instant::now();
+
+    // Create separate event channels by type and volume
+    let (jobs_tx, _jobs_rx) = broadcast::channel(1000); // High volume - job events
+    let (config_tx, _config_rx) = broadcast::channel(50); // Low volume - config events
+    let (system_tx, _system_rx) = broadcast::channel(100); // Medium volume - system events
+
+    let event_channels = Arc::new(EventChannels {
+        jobs: jobs_tx,
+        config: config_tx,
+        system: system_tx,
+    });
+
+    // Keep legacy channel for transition compatibility
     let (tx, _rx) = broadcast::channel(100);
 
     // Initialize Notification Manager
@@ -425,6 +439,7 @@ async fn run() -> Result<()> {
             config.clone(),
             hardware_state.clone(),
             tx.clone(),
+            event_channels.clone(),
             args.dry_run,
         )
         .await,
@@ -591,6 +606,7 @@ async fn run() -> Result<()> {
             agent,
             transcoder,
             scheduler: scheduler_handle,
+            event_channels,
             tx,
             setup_required: setup_mode,
             config_path: config_path.clone(),
@@ -731,6 +747,14 @@ mod tests {
         let hardware_probe_log = Arc::new(RwLock::new(hardware::HardwareProbeLog::default()));
         let transcoder = Arc::new(Transcoder::new());
         let (tx, _rx) = broadcast::channel(8);
+        let (jobs_tx, _) = broadcast::channel(100);
+        let (config_tx, _) = broadcast::channel(10);
+        let (system_tx, _) = broadcast::channel(10);
+        let event_channels = Arc::new(EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
         let agent = Arc::new(
             Agent::new(
                 db.clone(),
@@ -738,6 +762,7 @@ mod tests {
                 config_state.clone(),
                 hardware_state.clone(),
                 tx,
+                event_channels,
                 true,
             )
             .await,

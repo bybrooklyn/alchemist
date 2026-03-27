@@ -424,6 +424,7 @@ pub struct Pipeline {
     config: Arc<RwLock<crate::config::Config>>,
     hardware_state: HardwareState,
     tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
+    event_channels: Arc<crate::db::EventChannels>,
     dry_run: bool,
 }
 
@@ -452,6 +453,7 @@ impl Pipeline {
         config: Arc<RwLock<crate::config::Config>>,
         hardware_state: HardwareState,
         tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
+        event_channels: Arc<crate::db::EventChannels>,
         dry_run: bool,
     ) -> Self {
         Self {
@@ -460,6 +462,7 @@ impl Pipeline {
             config,
             hardware_state,
             tx,
+            event_channels,
             dry_run,
         }
     }
@@ -552,6 +555,11 @@ async fn skip_reason_for_discovered_path(
     Ok(None)
 }
 
+/// Creates a temporary output path for encoding.
+/// Uses a predictable `.alchemist.tmp` suffix - this is acceptable because:
+/// 1. The suffix is unique to Alchemist and unlikely to conflict
+/// 2. Files are created in user-owned media directories
+/// 3. Same-file concurrent transcodes are prevented at the job level
 fn temp_output_path_for(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let filename = path
@@ -800,6 +808,7 @@ impl Pipeline {
             self.db.clone(),
             hw_info.clone(),
             self.tx.clone(),
+            self.event_channels.clone(),
             self.dry_run,
         );
 
@@ -1427,12 +1436,21 @@ mod tests {
             detection_notes: Vec::new(),
         }));
         let (tx, _rx) = broadcast::channel(8);
+        let (jobs_tx, _) = broadcast::channel(100);
+        let (config_tx, _) = broadcast::channel(10);
+        let (system_tx, _) = broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
         let pipeline = Pipeline::new(
             db.clone(),
             Arc::new(Transcoder::new()),
             config.clone(),
             hardware_state,
             Arc::new(tx),
+            event_channels,
             true,
         );
 
