@@ -112,6 +112,34 @@ impl Transcoder {
         }
     }
 
+    /// Cancel all currently running jobs. Used during graceful shutdown.
+    pub fn cancel_all_jobs(&self) -> usize {
+        let mut channels = match self.cancel_channels.lock() {
+            Ok(channels) => channels,
+            Err(e) => {
+                error!(
+                    "Cancel channels lock poisoned during shutdown, recovering: {}",
+                    e
+                );
+                e.into_inner()
+            }
+        };
+        let count = channels.len();
+        for (job_id, tx) in channels.drain() {
+            info!("Cancelling job {} for shutdown", job_id);
+            let _ = tx.send(());
+        }
+        count
+    }
+
+    /// Returns the number of currently active transcode jobs.
+    pub fn active_job_count(&self) -> usize {
+        match self.cancel_channels.lock() {
+            Ok(channels) => channels.len(),
+            Err(e) => e.into_inner().len(),
+        }
+    }
+
     pub async fn transcode_media(&self, request: TranscodeRequest<'_>) -> Result<()> {
         if request.dry_run {
             info!(

@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{AlchemistError, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +9,7 @@ use sqlx::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::time::timeout;
 use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -66,6 +67,130 @@ pub enum AlchemistEvent {
         job_id: Option<i64>,
         message: String,
     },
+}
+
+// New typed event channels for separating high-volume vs low-volume events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum JobEvent {
+    StateChanged {
+        job_id: i64,
+        status: JobState,
+    },
+    Progress {
+        job_id: i64,
+        percentage: f64,
+        time: String,
+    },
+    Decision {
+        job_id: i64,
+        action: String,
+        reason: String,
+    },
+    Log {
+        level: String,
+        job_id: Option<i64>,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum ConfigEvent {
+    Updated(Box<crate::config::Config>),
+    WatchFolderAdded(String),
+    WatchFolderRemoved(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum SystemEvent {
+    ScanStarted,
+    ScanCompleted,
+    EngineStatusChanged,
+    HardwareStateChanged,
+}
+
+pub struct EventChannels {
+    pub jobs: tokio::sync::broadcast::Sender<JobEvent>, // 1000 capacity - high volume
+    pub config: tokio::sync::broadcast::Sender<ConfigEvent>, // 50 capacity - rare
+    pub system: tokio::sync::broadcast::Sender<SystemEvent>, // 100 capacity - medium
+}
+
+// Convert JobEvent to legacy AlchemistEvent for backwards compatibility
+impl From<JobEvent> for AlchemistEvent {
+    fn from(job_event: JobEvent) -> Self {
+        match job_event {
+            JobEvent::StateChanged { job_id, status } => {
+                AlchemistEvent::JobStateChanged { job_id, status }
+            }
+            JobEvent::Progress {
+                job_id,
+                percentage,
+                time,
+            } => AlchemistEvent::Progress {
+                job_id,
+                percentage,
+                time,
+            },
+            JobEvent::Decision {
+                job_id,
+                action,
+                reason,
+            } => AlchemistEvent::Decision {
+                job_id,
+                action,
+                reason,
+            },
+            JobEvent::Log {
+                level,
+                job_id,
+                message,
+            } => AlchemistEvent::Log {
+                level,
+                job_id,
+                message,
+            },
+        }
+    }
+}
+
+// Convert AlchemistEvent to JobEvent for migration
+impl From<AlchemistEvent> for JobEvent {
+    fn from(alchemist_event: AlchemistEvent) -> Self {
+        match alchemist_event {
+            AlchemistEvent::JobStateChanged { job_id, status } => {
+                JobEvent::StateChanged { job_id, status }
+            }
+            AlchemistEvent::Progress {
+                job_id,
+                percentage,
+                time,
+            } => JobEvent::Progress {
+                job_id,
+                percentage,
+                time,
+            },
+            AlchemistEvent::Decision {
+                job_id,
+                action,
+                reason,
+            } => JobEvent::Decision {
+                job_id,
+                action,
+                reason,
+            },
+            AlchemistEvent::Log {
+                level,
+                job_id,
+                message,
+            } => JobEvent::Log {
+                level,
+                job_id,
+                message,
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for JobState {
@@ -453,6 +578,24 @@ pub struct Decision {
     pub created_at: DateTime<Utc>,
 }
 
+/// Default timeout for potentially slow database queries
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Execute a query with a timeout to prevent blocking the job loop
+async fn timed_query<T, F, Fut>(operation: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    match timeout(QUERY_TIMEOUT, f()).await {
+        Ok(result) => result,
+        Err(_) => Err(AlchemistError::QueryTimeout(
+            QUERY_TIMEOUT.as_secs(),
+            operation.to_string(),
+        )),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Db {
     pool: SqlitePool,
@@ -657,22 +800,26 @@ impl Db {
     }
 
     pub async fn get_all_jobs(&self) -> Result<Vec<Job>> {
-        let jobs = sqlx::query_as::<_, Job>(
-            "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                    COALESCE(j.priority, 0) as priority, 
-                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                    COALESCE(j.attempt_count, 0) as attempt_count,
-                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at
-             FROM jobs j
-             WHERE j.archived = 0
-             ORDER BY j.updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_all_jobs", || async {
+            let jobs = sqlx::query_as::<_, Job>(
+                "SELECT j.id, j.input_path, j.output_path, j.status, 
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority, 
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE j.archived = 0
+                 ORDER BY j.updated_at DESC",
+            )
+            .fetch_all(pool)
+            .await?;
 
-        Ok(jobs)
+            Ok(jobs)
+        })
+        .await
     }
 
     pub async fn get_job_decision(&self, job_id: i64) -> Result<Option<Decision>> {
@@ -687,19 +834,23 @@ impl Db {
     }
 
     pub async fn get_stats(&self) -> Result<serde_json::Value> {
-        let stats = sqlx::query("SELECT status, count(*) as count FROM jobs GROUP BY status")
-            .fetch_all(&self.pool)
-            .await?;
+        let pool = &self.pool;
+        timed_query("get_stats", || async {
+            let stats = sqlx::query("SELECT status, count(*) as count FROM jobs GROUP BY status")
+                .fetch_all(pool)
+                .await?;
 
-        let mut map = serde_json::Map::new();
-        for row in stats {
-            use sqlx::Row;
-            let status: String = row.get("status");
-            let count: i64 = row.get("count");
-            map.insert(status, serde_json::Value::Number(count.into()));
-        }
+            let mut map = serde_json::Map::new();
+            for row in stats {
+                use sqlx::Row;
+                let status: String = row.get("status");
+                let count: i64 = row.get("count");
+                map.insert(status, serde_json::Value::Number(count.into()));
+            }
 
-        Ok(serde_json::Value::Object(map))
+            Ok(serde_json::Value::Object(map))
+        })
+        .await
     }
 
     /// Update job progress (for resume support)
@@ -800,83 +951,91 @@ impl Db {
 
     /// Get jobs by status
     pub async fn get_jobs_by_status(&self, status: JobState) -> Result<Vec<Job>> {
-        let jobs = sqlx::query_as::<_, Job>(
-            "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                    COALESCE(j.priority, 0) as priority, 
-                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                    COALESCE(j.attempt_count, 0) as attempt_count,
-                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at
-             FROM jobs j
-             WHERE j.status = ? AND j.archived = 0
-             ORDER BY j.priority DESC, j.created_at ASC",
-        )
-        .bind(status)
-        .fetch_all(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_jobs_by_status", || async {
+            let jobs = sqlx::query_as::<_, Job>(
+                "SELECT j.id, j.input_path, j.output_path, j.status, 
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority, 
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE j.status = ? AND j.archived = 0
+                 ORDER BY j.priority DESC, j.created_at ASC",
+            )
+            .bind(status)
+            .fetch_all(pool)
+            .await?;
 
-        Ok(jobs)
+            Ok(jobs)
+        })
+        .await
     }
 
     /// Get jobs with filtering, sorting and pagination
     pub async fn get_jobs_filtered(&self, query: JobFilterQuery) -> Result<Vec<Job>> {
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "SELECT j.id, j.input_path, j.output_path, j.status, 
-                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                    COALESCE(j.priority, 0) as priority, 
-                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                    COALESCE(j.attempt_count, 0) as attempt_count,
-                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at
-             FROM jobs j
-             WHERE 1 = 1 "
-        );
+        let pool = &self.pool;
+        timed_query("get_jobs_filtered", || async {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "SELECT j.id, j.input_path, j.output_path, j.status, 
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority, 
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE 1 = 1 "
+            );
 
-        match query.archived {
-            Some(true) => {
-                qb.push(" AND j.archived = 1 ");
-            }
-            Some(false) => {
-                qb.push(" AND j.archived = 0 ");
-            }
-            None => {}
-        }
-
-        if let Some(statuses) = query.statuses {
-            if !statuses.is_empty() {
-                qb.push(" AND j.status IN (");
-                let mut separated = qb.separated(", ");
-                for status in statuses {
-                    separated.push_bind(status);
+            match query.archived {
+                Some(true) => {
+                    qb.push(" AND j.archived = 1 ");
                 }
-                separated.push_unseparated(") ");
+                Some(false) => {
+                    qb.push(" AND j.archived = 0 ");
+                }
+                None => {}
             }
-        }
 
-        if let Some(search) = query.search {
-            qb.push(" AND j.input_path LIKE ");
-            qb.push_bind(format!("%{}%", search));
-        }
+            if let Some(ref statuses) = query.statuses {
+                if !statuses.is_empty() {
+                    qb.push(" AND j.status IN (");
+                    let mut separated = qb.separated(", ");
+                    for status in statuses {
+                        separated.push_bind(*status);
+                    }
+                    separated.push_unseparated(") ");
+                }
+            }
 
-        qb.push(" ORDER BY ");
-        let sort_col = match query.sort_by.as_deref() {
-            Some("created_at") => "j.created_at",
-            Some("updated_at") => "j.updated_at",
-            Some("input_path") => "j.input_path",
-            Some("size") => "(SELECT input_size_bytes FROM encode_stats WHERE job_id = j.id)",
-            _ => "j.updated_at",
-        };
-        qb.push(sort_col);
-        qb.push(if query.sort_desc { " DESC" } else { " ASC" });
+            if let Some(ref search) = query.search {
+                qb.push(" AND j.input_path LIKE ");
+                qb.push_bind(format!("%{}%", search));
+            }
 
-        qb.push(" LIMIT ");
-        qb.push_bind(query.limit);
-        qb.push(" OFFSET ");
-        qb.push_bind(query.offset);
+            qb.push(" ORDER BY ");
+            let sort_col = match query.sort_by.as_deref() {
+                Some("created_at") => "j.created_at",
+                Some("updated_at") => "j.updated_at",
+                Some("input_path") => "j.input_path",
+                Some("size") => "(SELECT input_size_bytes FROM encode_stats WHERE job_id = j.id)",
+                _ => "j.updated_at",
+            };
+            qb.push(sort_col);
+            qb.push(if query.sort_desc { " DESC" } else { " ASC" });
 
-        let jobs = qb.build_query_as::<Job>().fetch_all(&self.pool).await?;
-        Ok(jobs)
+            qb.push(" LIMIT ");
+            qb.push_bind(query.limit);
+            qb.push(" OFFSET ");
+            qb.push_bind(query.offset);
+
+            let jobs = qb.build_query_as::<Job>().fetch_all(pool).await?;
+            Ok(jobs)
+        })
+        .await
     }
 
     pub async fn batch_cancel_jobs(&self, ids: &[i64]) -> Result<u64> {
@@ -1590,156 +1749,173 @@ impl Db {
     }
 
     pub async fn get_aggregated_stats(&self) -> Result<AggregatedStats> {
-        let row = sqlx::query(
-            "SELECT 
-                (SELECT COUNT(*) FROM jobs) as total_jobs,
-                (SELECT COUNT(*) FROM jobs WHERE status = 'completed') as completed_jobs,
-                COALESCE(SUM(input_size_bytes), 0) as total_input_size,
-                COALESCE(SUM(output_size_bytes), 0) as total_output_size,
-                AVG(vmaf_score) as avg_vmaf,
-                COALESCE(SUM(encode_time_seconds), 0.0) as total_encode_time
-             FROM encode_stats",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_aggregated_stats", || async {
+            let row = sqlx::query(
+                "SELECT 
+                    (SELECT COUNT(*) FROM jobs) as total_jobs,
+                    (SELECT COUNT(*) FROM jobs WHERE status = 'completed') as completed_jobs,
+                    COALESCE(SUM(input_size_bytes), 0) as total_input_size,
+                    COALESCE(SUM(output_size_bytes), 0) as total_output_size,
+                    AVG(vmaf_score) as avg_vmaf,
+                    COALESCE(SUM(encode_time_seconds), 0.0) as total_encode_time
+                 FROM encode_stats",
+            )
+            .fetch_one(pool)
+            .await?;
 
-        Ok(AggregatedStats {
-            total_jobs: row.get("total_jobs"),
-            completed_jobs: row.get("completed_jobs"),
-            total_input_size: row.get("total_input_size"),
-            total_output_size: row.get("total_output_size"),
-            avg_vmaf: row.get("avg_vmaf"),
-            total_encode_time_seconds: row.get("total_encode_time"),
+            Ok(AggregatedStats {
+                total_jobs: row.get("total_jobs"),
+                completed_jobs: row.get("completed_jobs"),
+                total_input_size: row.get("total_input_size"),
+                total_output_size: row.get("total_output_size"),
+                avg_vmaf: row.get("avg_vmaf"),
+                total_encode_time_seconds: row.get("total_encode_time"),
+            })
         })
+        .await
     }
 
     /// Get daily statistics for the last N days (for time-series charts)
     pub async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>> {
-        let rows = sqlx::query(
-            "SELECT 
-                DATE(e.created_at) as date,
-                COUNT(*) as jobs_completed,
-                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved,
-                COALESCE(SUM(e.input_size_bytes), 0) as total_input_bytes,
-                COALESCE(SUM(e.output_size_bytes), 0) as total_output_bytes
-             FROM encode_stats e
-             WHERE e.created_at >= DATE('now', ? || ' days')
-             GROUP BY DATE(e.created_at)
-             ORDER BY date ASC",
-        )
-        .bind(format!("-{}", days))
-        .fetch_all(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        let days_str = format!("-{}", days);
+        timed_query("get_daily_stats", || async {
+            let rows = sqlx::query(
+                "SELECT 
+                    DATE(e.created_at) as date,
+                    COUNT(*) as jobs_completed,
+                    COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved,
+                    COALESCE(SUM(e.input_size_bytes), 0) as total_input_bytes,
+                    COALESCE(SUM(e.output_size_bytes), 0) as total_output_bytes
+                 FROM encode_stats e
+                 WHERE e.created_at >= DATE('now', ? || ' days')
+                 GROUP BY DATE(e.created_at)
+                 ORDER BY date ASC",
+            )
+            .bind(&days_str)
+            .fetch_all(pool)
+            .await?;
 
-        let stats = rows
-            .iter()
-            .map(|row| DailyStats {
-                date: row.get("date"),
-                jobs_completed: row.get("jobs_completed"),
-                bytes_saved: row.get("bytes_saved"),
-                total_input_bytes: row.get("total_input_bytes"),
-                total_output_bytes: row.get("total_output_bytes"),
-            })
-            .collect();
+            let stats = rows
+                .iter()
+                .map(|row| DailyStats {
+                    date: row.get("date"),
+                    jobs_completed: row.get("jobs_completed"),
+                    bytes_saved: row.get("bytes_saved"),
+                    total_input_bytes: row.get("total_input_bytes"),
+                    total_output_bytes: row.get("total_output_bytes"),
+                })
+                .collect();
 
-        Ok(stats)
+            Ok(stats)
+        })
+        .await
     }
 
     /// Get detailed per-job encoding statistics (most recent first)
     pub async fn get_detailed_encode_stats(&self, limit: i32) -> Result<Vec<DetailedEncodeStats>> {
-        let stats = sqlx::query_as::<_, DetailedEncodeStats>(
-            "SELECT 
-                e.job_id,
-                j.input_path,
-                e.input_size_bytes,
-                e.output_size_bytes,
-                e.compression_ratio,
-                e.encode_time_seconds,
-                e.encode_speed,
-                e.avg_bitrate_kbps,
-                e.vmaf_score,
-                e.created_at
-             FROM encode_stats e
-             JOIN jobs j ON e.job_id = j.id
-             ORDER BY e.created_at DESC
-             LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_detailed_encode_stats", || async {
+            let stats = sqlx::query_as::<_, DetailedEncodeStats>(
+                "SELECT 
+                    e.job_id,
+                    j.input_path,
+                    e.input_size_bytes,
+                    e.output_size_bytes,
+                    e.compression_ratio,
+                    e.encode_time_seconds,
+                    e.encode_speed,
+                    e.avg_bitrate_kbps,
+                    e.vmaf_score,
+                    e.created_at
+                 FROM encode_stats e
+                 JOIN jobs j ON e.job_id = j.id
+                 ORDER BY e.created_at DESC
+                 LIMIT ?",
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
 
-        Ok(stats)
+            Ok(stats)
+        })
+        .await
     }
 
     pub async fn get_savings_summary(&self) -> Result<SavingsSummary> {
-        let totals = sqlx::query(
-            "SELECT
-                COALESCE(SUM(input_size_bytes), 0) as total_input_bytes,
-                COALESCE(SUM(output_size_bytes), 0) as total_output_bytes,
-                COUNT(*) as job_count
-             FROM encode_stats
-             WHERE output_size_bytes IS NOT NULL",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_savings_summary", || async {
+            let totals = sqlx::query(
+                "SELECT
+                    COALESCE(SUM(input_size_bytes), 0) as total_input_bytes,
+                    COALESCE(SUM(output_size_bytes), 0) as total_output_bytes,
+                    COUNT(*) as job_count
+                 FROM encode_stats
+                 WHERE output_size_bytes IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await?;
 
-        let total_input_bytes: i64 = totals.get("total_input_bytes");
-        let total_output_bytes: i64 = totals.get("total_output_bytes");
-        let job_count: i64 = totals.get("job_count");
-        let total_bytes_saved = (total_input_bytes - total_output_bytes).max(0);
-        let savings_percent = if total_input_bytes > 0 {
-            (total_bytes_saved as f64 / total_input_bytes as f64) * 100.0
-        } else {
-            0.0
-        };
+            let total_input_bytes: i64 = totals.get("total_input_bytes");
+            let total_output_bytes: i64 = totals.get("total_output_bytes");
+            let job_count: i64 = totals.get("job_count");
+            let total_bytes_saved = (total_input_bytes - total_output_bytes).max(0);
+            let savings_percent = if total_input_bytes > 0 {
+                (total_bytes_saved as f64 / total_input_bytes as f64) * 100.0
+            } else {
+                0.0
+            };
 
-        let savings_by_codec = sqlx::query(
-            "SELECT
-                COALESCE(NULLIF(TRIM(e.output_codec), ''), 'unknown') as codec,
-                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
-             FROM encode_stats e
-             JOIN jobs j ON j.id = e.job_id
-             WHERE e.output_size_bytes IS NOT NULL
-             GROUP BY codec
-             ORDER BY bytes_saved DESC, codec ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .map(|row| CodecSavings {
-            codec: row.get("codec"),
-            bytes_saved: row.get("bytes_saved"),
+            let savings_by_codec = sqlx::query(
+                "SELECT
+                    COALESCE(NULLIF(TRIM(e.output_codec), ''), 'unknown') as codec,
+                    COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
+                 FROM encode_stats e
+                 JOIN jobs j ON j.id = e.job_id
+                 WHERE e.output_size_bytes IS NOT NULL
+                 GROUP BY codec
+                 ORDER BY bytes_saved DESC, codec ASC",
+            )
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| CodecSavings {
+                codec: row.get("codec"),
+                bytes_saved: row.get("bytes_saved"),
+            })
+            .collect::<Vec<_>>();
+
+            let savings_over_time = sqlx::query(
+                "SELECT
+                    DATE(e.created_at) as date,
+                    COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
+                 FROM encode_stats e
+                 WHERE e.output_size_bytes IS NOT NULL
+                   AND e.created_at >= datetime('now', '-30 days')
+                 GROUP BY DATE(e.created_at)
+                 ORDER BY date ASC",
+            )
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| DailySavings {
+                date: row.get("date"),
+                bytes_saved: row.get("bytes_saved"),
+            })
+            .collect::<Vec<_>>();
+
+            Ok(SavingsSummary {
+                total_input_bytes,
+                total_output_bytes,
+                total_bytes_saved,
+                savings_percent,
+                job_count,
+                savings_by_codec,
+                savings_over_time,
+            })
         })
-        .collect::<Vec<_>>();
-
-        let savings_over_time = sqlx::query(
-            "SELECT
-                DATE(e.created_at) as date,
-                COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
-             FROM encode_stats e
-             WHERE e.output_size_bytes IS NOT NULL
-               AND e.created_at >= datetime('now', '-30 days')
-             GROUP BY DATE(e.created_at)
-             ORDER BY date ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .map(|row| DailySavings {
-            date: row.get("date"),
-            bytes_saved: row.get("bytes_saved"),
-        })
-        .collect::<Vec<_>>();
-
-        Ok(SavingsSummary {
-            total_input_bytes,
-            total_output_bytes,
-            total_bytes_saved,
-            savings_percent,
-            job_count,
-            savings_by_codec,
-            savings_over_time,
-        })
+        .await
     }
 
     /// Batch update job statuses (for batch operations)
@@ -1822,26 +1998,30 @@ impl Db {
     }
 
     pub async fn get_job_stats(&self) -> Result<JobStats> {
-        let rows = sqlx::query("SELECT status, COUNT(*) as count FROM jobs GROUP BY status")
-            .fetch_all(&self.pool)
-            .await?;
+        let pool = &self.pool;
+        timed_query("get_job_stats", || async {
+            let rows = sqlx::query("SELECT status, COUNT(*) as count FROM jobs GROUP BY status")
+                .fetch_all(pool)
+                .await?;
 
-        let mut stats = JobStats::default();
-        for row in rows {
-            let status_str: String = row.get("status");
-            let count: i64 = row.get("count");
+            let mut stats = JobStats::default();
+            for row in rows {
+                let status_str: String = row.get("status");
+                let count: i64 = row.get("count");
 
-            // Map status string to JobStats fields
-            // Assuming JobState serialization matches stored strings ("queued", "active", etc)
-            match status_str.as_str() {
-                "queued" => stats.queued += count,
-                "encoding" | "analyzing" | "remuxing" | "resuming" => stats.active += count,
-                "completed" => stats.completed += count,
-                "failed" | "cancelled" => stats.failed += count,
-                _ => {}
+                // Map status string to JobStats fields
+                // Assuming JobState serialization matches stored strings ("queued", "active", etc)
+                match status_str.as_str() {
+                    "queued" => stats.queued += count,
+                    "encoding" | "analyzing" | "remuxing" | "resuming" => stats.active += count,
+                    "completed" => stats.completed += count,
+                    "failed" | "cancelled" => stats.failed += count,
+                    _ => {}
+                }
             }
-        }
-        Ok(stats)
+            Ok(stats)
+        })
+        .await
     }
 
     pub async fn add_log(&self, level: &str, job_id: Option<i64>, message: &str) -> Result<()> {
@@ -2021,22 +2201,26 @@ impl Db {
     }
 
     pub async fn get_health_summary(&self) -> Result<HealthSummary> {
-        let row = sqlx::query(
-            "SELECT
-                (SELECT COUNT(*) FROM jobs WHERE last_health_check IS NOT NULL) as total_checked,
-                (SELECT COUNT(*)
-                 FROM jobs
-                 WHERE health_issues IS NOT NULL AND TRIM(health_issues) != '') as issues_found,
-                (SELECT MAX(started_at) FROM health_scan_runs) as last_run",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let pool = &self.pool;
+        timed_query("get_health_summary", || async {
+            let row = sqlx::query(
+                "SELECT
+                    (SELECT COUNT(*) FROM jobs WHERE last_health_check IS NOT NULL) as total_checked,
+                    (SELECT COUNT(*)
+                     FROM jobs
+                     WHERE health_issues IS NOT NULL AND TRIM(health_issues) != '') as issues_found,
+                    (SELECT MAX(started_at) FROM health_scan_runs) as last_run",
+            )
+            .fetch_one(pool)
+            .await?;
 
-        Ok(HealthSummary {
-            total_checked: row.get("total_checked"),
-            issues_found: row.get("issues_found"),
-            last_run: row.get("last_run"),
+            Ok(HealthSummary {
+                total_checked: row.get("total_checked"),
+                issues_found: row.get("issues_found"),
+                last_run: row.get("last_run"),
+            })
         })
+        .await
     }
 
     pub async fn create_health_scan_run(&self) -> Result<i64> {
@@ -2069,46 +2253,54 @@ impl Db {
     }
 
     pub async fn get_jobs_needing_health_check(&self) -> Result<Vec<Job>> {
-        let jobs = sqlx::query_as::<_, Job>(
-            "SELECT j.id, j.input_path, j.output_path, j.status,
-                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                    COALESCE(j.priority, 0) as priority,
-                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                    COALESCE(j.attempt_count, 0) as attempt_count,
-                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at
-             FROM jobs j
-             WHERE j.status = 'completed'
-               AND (
-                    j.last_health_check IS NULL
-                    OR j.last_health_check < datetime('now', '-7 days')
-               )
-             ORDER BY COALESCE(j.last_health_check, '1970-01-01') ASC, j.updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(jobs)
+        let pool = &self.pool;
+        timed_query("get_jobs_needing_health_check", || async {
+            let jobs = sqlx::query_as::<_, Job>(
+                "SELECT j.id, j.input_path, j.output_path, j.status,
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority,
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE j.status = 'completed'
+                   AND (
+                        j.last_health_check IS NULL
+                        OR j.last_health_check < datetime('now', '-7 days')
+                   )
+                 ORDER BY COALESCE(j.last_health_check, '1970-01-01') ASC, j.updated_at DESC",
+            )
+            .fetch_all(pool)
+            .await?;
+            Ok(jobs)
+        })
+        .await
     }
 
     pub async fn get_jobs_with_health_issues(&self) -> Result<Vec<JobWithHealthIssueRow>> {
-        let jobs = sqlx::query_as::<_, JobWithHealthIssueRow>(
-            "SELECT j.id, j.input_path, j.output_path, j.status,
-                    (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                    COALESCE(j.priority, 0) as priority,
-                    COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                    COALESCE(j.attempt_count, 0) as attempt_count,
-                    (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at,
-                    j.health_issues
-             FROM jobs j
-             WHERE j.archived = 0
-               AND j.health_issues IS NOT NULL
-               AND TRIM(j.health_issues) != ''
-             ORDER BY j.updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(jobs)
+        let pool = &self.pool;
+        timed_query("get_jobs_with_health_issues", || async {
+            let jobs = sqlx::query_as::<_, JobWithHealthIssueRow>(
+                "SELECT j.id, j.input_path, j.output_path, j.status,
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority,
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at,
+                        j.health_issues
+                 FROM jobs j
+                 WHERE j.archived = 0
+                   AND j.health_issues IS NOT NULL
+                   AND TRIM(j.health_issues) != ''
+                 ORDER BY j.updated_at DESC",
+            )
+            .fetch_all(pool)
+            .await?;
+            Ok(jobs)
+        })
+        .await
     }
 
     pub async fn reset_auth(&self) -> Result<()> {
@@ -2150,6 +2342,20 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
 }
 
+/// Hash a session token using SHA256 for secure storage.
+///
+/// # Security: Timing Attack Resistance
+///
+/// Session tokens are hashed before storage and lookup. Token validation uses
+/// SQL `WHERE token = ?` with the hashed value, so the comparison occurs in
+/// SQLite rather than in Rust code. This is inherently constant-time from the
+/// application's perspective because:
+/// 1. The database performs the comparison, not our code
+/// 2. Database query time doesn't leak information about partial matches
+/// 3. No early-exit comparison in application code
+///
+/// This design makes timing attacks infeasible without requiring the `subtle`
+/// crate for constant-time comparison.
 fn hash_session_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());

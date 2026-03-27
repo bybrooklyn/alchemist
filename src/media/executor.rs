@@ -1,4 +1,4 @@
-use crate::db::{AlchemistEvent, Db, Job};
+use crate::db::{AlchemistEvent, Db, EventChannels, Job, JobEvent};
 use crate::error::Result;
 use crate::media::pipeline::{
     Encoder, ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
@@ -17,6 +17,7 @@ pub struct FfmpegExecutor {
     db: Arc<Db>,
     hw_info: Option<HardwareInfo>,
     event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
+    event_channels: Arc<EventChannels>,
     dry_run: bool,
 }
 
@@ -26,6 +27,7 @@ impl FfmpegExecutor {
         db: Arc<Db>,
         hw_info: Option<HardwareInfo>,
         event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
+        event_channels: Arc<EventChannels>,
         dry_run: bool,
     ) -> Self {
         Self {
@@ -33,6 +35,7 @@ impl FfmpegExecutor {
             db,
             hw_info,
             event_tx,
+            event_channels,
             dry_run,
         }
     }
@@ -42,15 +45,22 @@ struct JobExecutionObserver {
     job_id: i64,
     db: Arc<Db>,
     event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
+    event_channels: Arc<EventChannels>,
     last_progress: Mutex<Option<(f64, Instant)>>,
 }
 
 impl JobExecutionObserver {
-    fn new(job_id: i64, db: Arc<Db>, event_tx: Arc<broadcast::Sender<AlchemistEvent>>) -> Self {
+    fn new(
+        job_id: i64,
+        db: Arc<Db>,
+        event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
+        event_channels: Arc<EventChannels>,
+    ) -> Self {
         Self {
             job_id,
             db,
             event_tx,
+            event_channels,
             last_progress: Mutex::new(None),
         }
     }
@@ -58,6 +68,13 @@ impl JobExecutionObserver {
 
 impl AsyncExecutionObserver for JobExecutionObserver {
     async fn on_log(&self, message: String) {
+        // Send to typed channel
+        let _ = self.event_channels.jobs.send(JobEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(self.job_id),
+            message: message.clone(),
+        });
+        // Also send to legacy channel for backwards compatibility
         let _ = self.event_tx.send(AlchemistEvent::Log {
             level: "info".to_string(),
             job_id: Some(self.job_id),
@@ -100,6 +117,13 @@ impl AsyncExecutionObserver for JobExecutionObserver {
             }
         }
 
+        // Send to typed channel
+        let _ = self.event_channels.jobs.send(JobEvent::Progress {
+            job_id: self.job_id,
+            percentage,
+            time: progress.time.clone(),
+        });
+        // Also send to legacy channel for backwards compatibility
         let _ = self.event_tx.send(AlchemistEvent::Progress {
             job_id: self.job_id,
             percentage,
@@ -132,6 +156,7 @@ impl Executor for FfmpegExecutor {
             job.id,
             self.db.clone(),
             self.event_tx.clone(),
+            self.event_channels.clone(),
         ));
 
         self.transcoder
@@ -350,7 +375,15 @@ mod tests {
             .await?;
         let job = db.get_job_by_input_path("input.mkv").await?.expect("job");
         let (tx, mut rx) = broadcast::channel(8);
-        let observer = JobExecutionObserver::new(job.id, db.clone(), Arc::new(tx));
+        let (jobs_tx, _) = broadcast::channel(100);
+        let (config_tx, _) = broadcast::channel(10);
+        let (system_tx, _) = broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let observer = JobExecutionObserver::new(job.id, db.clone(), Arc::new(tx), event_channels);
 
         LocalExecutionObserver::on_log(&observer, "ffmpeg line".to_string()).await;
         LocalExecutionObserver::on_progress(

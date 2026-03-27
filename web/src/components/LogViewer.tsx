@@ -129,6 +129,21 @@ export default function LogViewer() {
                 }
             });
 
+            eventSource.addEventListener("lagged", () => {
+                showToast({
+                    kind: "warning",
+                    title: "Connection interrupted",
+                    message: "Refreshing data…",
+                });
+                void fetchHistory();
+                eventSource?.close();
+                eventSource = null;
+                if (reconnectTimeoutRef.current !== null) {
+                    window.clearTimeout(reconnectTimeoutRef.current);
+                }
+                reconnectTimeoutRef.current = window.setTimeout(connect, 100);
+            });
+
             eventSource.onerror = () => {
                 eventSource?.close();
                 eventSource = null;

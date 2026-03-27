@@ -294,6 +294,16 @@ where
     config.hardware.allow_cpu_fallback = true;
     configure(&mut config);
 
+    // Create event channels for the pipeline
+    let (jobs_tx, _) = broadcast::channel(100);
+    let (config_tx, _) = broadcast::channel(10);
+    let (system_tx, _) = broadcast::channel(10);
+    let event_channels = Arc::new(alchemist::db::EventChannels {
+        jobs: jobs_tx,
+        config: config_tx,
+        system: system_tx,
+    });
+
     let pipeline = Pipeline::new(
         db.clone(),
         Arc::new(Transcoder::new()),
@@ -306,6 +316,7 @@ where
             detection_notes: Vec::new(),
         })),
         Arc::new(broadcast::channel(16).0),
+        event_channels,
         false,
     );
 

@@ -132,22 +132,22 @@ export default function TranscodeSettings() {
         <div className="flex flex-col gap-6">
             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
-                    <h3 className="text-base font-bold text-helios-ink tracking-tight uppercase tracking-[0.1em]">Transcoding Engine</h3>
+                    <h3 className="text-base font-bold text-helios-ink tracking-tight">Transcoding Engine</h3>
                     <p className="text-xs text-helios-slate mt-0.5">Configure encoder behavior and performance limits.</p>
                 </div>
-                <div className="p-2 bg-helios-solar/10 rounded-xl text-helios-solar">
+                <div className="p-2 bg-helios-solar/10 rounded-lg text-helios-solar">
                     <Cpu size={20} />
                 </div>
             </div>
 
             {error && (
-                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-sm font-semibold">
+                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-sm font-semibold">
                     {error}
                 </div>
             )}
 
             {success && (
-                <div className="p-4 bg-green-500/10 border border-green-500/20 text-green-500 rounded-xl text-sm font-semibold">
+                <div className="p-4 bg-green-500/10 border border-green-500/20 text-green-500 rounded-lg text-sm font-semibold">
                     Settings saved successfully.
                 </div>
             )}
@@ -155,7 +155,7 @@ export default function TranscodeSettings() {
             <div className="grid gap-6 md:grid-cols-2">
                 {/* Codec Selection */}
                 <div className="md:col-span-2 space-y-3">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Video size={14} /> Preferred Codec
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -200,7 +200,7 @@ export default function TranscodeSettings() {
 
                 {/* Quality Profile */}
                 <div className="md:col-span-2 space-y-3 pt-4">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Gauge size={14} /> Quality Profile
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -223,8 +223,8 @@ export default function TranscodeSettings() {
 
                 <div className="md:col-span-2 flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
                     <div>
-                        <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Allow Fallback</p>
-                        <p className="text-[10px] text-helios-slate mt-1">If preferred codec is unavailable, use the best available fallback.</p>
+                        <p className="text-xs font-bold text-helios-slate">Allow Fallback</p>
+                        <p className="text-xs text-helios-slate mt-1">If preferred codec is unavailable, use the best available fallback.</p>
                     </div>
                     <div className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -239,13 +239,13 @@ export default function TranscodeSettings() {
                 </div>
 
                 <div className="md:col-span-2 space-y-3 pt-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Film size={14} /> Subtitle Handling
                     </label>
                     <select
                         value={settings.subtitle_mode}
                         onChange={(e) => setSettings({ ...settings, subtitle_mode: e.target.value as TranscodeSettingsPayload["subtitle_mode"] })}
-                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     >
                         <option value="copy">Copy subtitles</option>
                         <option value="none">Drop subtitles</option>
@@ -261,14 +261,14 @@ export default function TranscodeSettings() {
                 </div>
 
                 <div className="md:col-span-2 space-y-4 pt-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Film size={14} /> Stream Rules
                     </label>
 
                     <div className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
                         <div>
-                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Strip commentary tracks</p>
-                            <p className="text-[10px] text-helios-slate mt-1">Adds built-in title keywords for common commentary tracks.</p>
+                            <p className="text-xs font-bold text-helios-slate">Strip commentary tracks</p>
+                            <p className="text-xs text-helios-slate mt-1">Adds built-in title keywords for common commentary tracks.</p>
                         </div>
                         <div className="relative inline-flex items-center cursor-pointer">
                             <input
@@ -309,7 +309,7 @@ export default function TranscodeSettings() {
                     </div>
 
                     <div className="space-y-3">
-                        <label className="text-xs font-bold uppercase tracking-wider text-helios-slate">
+                        <label className="text-xs font-bold text-helios-slate">
                             Strip Audio Tracks By Title Keyword
                         </label>
                         <input
@@ -321,15 +321,15 @@ export default function TranscodeSettings() {
                                 })
                             }
                             placeholder="commentary, director's commentary"
-                            className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                         />
-                        <p className="text-[10px] text-helios-slate ml-1">
+                        <p className="text-xs text-helios-slate ml-1">
                             Audio tracks whose title contains any of these words will be removed. Separate multiple keywords with commas.
                         </p>
                     </div>
 
                     <div className="space-y-3">
-                        <label className="text-xs font-bold uppercase tracking-wider text-helios-slate">
+                        <label className="text-xs font-bold text-helios-slate">
                             Keep Only These Audio Languages
                         </label>
                         <input
@@ -341,17 +341,17 @@ export default function TranscodeSettings() {
                                 })
                             }
                             placeholder="eng, jpn"
-                            className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                            className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                         />
-                        <p className="text-[10px] text-helios-slate ml-1">
+                        <p className="text-xs text-helios-slate ml-1">
                             Only keep audio tracks matching these language codes. Tracks with no language tag are always kept. Leave blank to keep all languages.
                         </p>
                     </div>
 
                     <div className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4">
                         <div>
-                            <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Keep only default audio track</p>
-                            <p className="text-[10px] text-helios-slate mt-1">Strip all audio tracks except the one marked as default by the source file.</p>
+                            <p className="text-xs font-bold text-helios-slate">Keep only default audio track</p>
+                            <p className="text-xs text-helios-slate mt-1">Strip all audio tracks except the one marked as default by the source file.</p>
                         </div>
                         <div className="relative inline-flex items-center cursor-pointer">
                             <input
@@ -372,7 +372,7 @@ export default function TranscodeSettings() {
 
                 {/* HDR + Tonemapping */}
                 <div className="md:col-span-2 space-y-3 pt-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Film size={14} /> HDR Handling
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -406,24 +406,24 @@ export default function TranscodeSettings() {
                 {settings.hdr_mode === "tonemap" && (
                     <>
                         <div className="space-y-3">
-                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                            <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                                 <Gauge size={14} /> Tonemap Algorithm
                             </label>
                             <select
                                 value={settings.tonemap_algorithm}
                                 onChange={(e) => setSettings({ ...settings, tonemap_algorithm: e.target.value as TranscodeSettingsPayload["tonemap_algorithm"] })}
-                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             >
                                 <option value="hable">Hable</option>
                                 <option value="mobius">Mobius</option>
                                 <option value="reinhard">Reinhard</option>
                                 <option value="clip">Clip</option>
                             </select>
-                            <p className="text-[10px] text-helios-slate ml-1">Choose the tone curve for HDR → SDR conversion.</p>
+                            <p className="text-xs text-helios-slate ml-1">Choose the tone curve for HDR → SDR conversion.</p>
                         </div>
 
                         <div className="space-y-3">
-                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                            <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                                 <Scale size={14} /> Tonemap Peak (nits)
                             </label>
                             <input
@@ -432,13 +432,13 @@ export default function TranscodeSettings() {
                                 max="1000"
                                 value={settings.tonemap_peak}
                                 onChange={(e) => setSettings({ ...settings, tonemap_peak: parseFloat(e.target.value) || 100 })}
-                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             />
-                            <p className="text-[10px] text-helios-slate ml-1">Peak brightness used for tone mapping.</p>
+                            <p className="text-xs text-helios-slate ml-1">Peak brightness used for tone mapping.</p>
                         </div>
 
                         <div className="space-y-3">
-                            <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                            <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                                 <Zap size={14} /> Tonemap Desaturation
                             </label>
                             <input
@@ -448,16 +448,16 @@ export default function TranscodeSettings() {
                                 step="0.1"
                                 value={settings.tonemap_desat}
                                 onChange={(e) => setSettings({ ...settings, tonemap_desat: parseFloat(e.target.value) || 0 })}
-                                className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                                className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                             />
-                            <p className="text-[10px] text-helios-slate ml-1">Reduce oversaturated highlights after tonemapping.</p>
+                            <p className="text-xs text-helios-slate ml-1">Reduce oversaturated highlights after tonemapping.</p>
                         </div>
                     </>
                 )}
 
                 {/* Numeric Inputs */}
                 <div className="space-y-3">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Cpu size={14} /> Encoding Threads (libsvtav1/x265)
                     </label>
                     <input
@@ -465,13 +465,13 @@ export default function TranscodeSettings() {
                         min="0"
                         value={settings.threads}
                         onChange={(e) => setSettings({ ...settings, threads: parseInt(e.target.value) || 0 })}
-                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     />
-                    <p className="text-[10px] text-helios-slate ml-1">Number of threads to allocate for software encoding (0 = Auto).</p>
+                    <p className="text-xs text-helios-slate ml-1">Number of threads to allocate for software encoding (0 = Auto).</p>
                 </div>
 
                 <div className="space-y-3">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Zap size={14} /> Concurrent Jobs
                     </label>
                     <input
@@ -480,13 +480,13 @@ export default function TranscodeSettings() {
                         max="8"
                         value={settings.concurrent_jobs}
                         onChange={(e) => setSettings({ ...settings, concurrent_jobs: parseInt(e.target.value) || 1 })}
-                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     />
-                    <p className="text-[10px] text-helios-slate ml-1">Maximum number of files to process simultaneously.</p>
+                    <p className="text-xs text-helios-slate ml-1">Maximum number of files to process simultaneously.</p>
                 </div>
 
                 <div className="space-y-3">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Scale size={14} /> Min. Reduction (%)
                     </label>
                     <input
@@ -496,13 +496,13 @@ export default function TranscodeSettings() {
                         step="5"
                         value={Math.round(settings.size_reduction_threshold * 100)}
                         onChange={(e) => setSettings({ ...settings, size_reduction_threshold: (parseInt(e.target.value) || 0) / 100 })}
-                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     />
-                    <p className="text-[10px] text-helios-slate ml-1">Files must shrink by at least this percentage or they are reverted.</p>
+                    <p className="text-xs text-helios-slate ml-1">Files must shrink by at least this percentage or they are reverted.</p>
                 </div>
 
                 <div className="space-y-3">
-                    <label className="text-xs font-bold uppercase tracking-wider text-helios-slate flex items-center gap-2">
+                    <label className="text-xs font-bold text-helios-slate flex items-center gap-2">
                         <Film size={14} /> Min. File Size (MB)
                     </label>
                     <input
@@ -510,7 +510,7 @@ export default function TranscodeSettings() {
                         min="0"
                         value={settings.min_file_size_mb}
                         onChange={(e) => setSettings({ ...settings, min_file_size_mb: parseInt(e.target.value) || 0 })}
-                        className="w-full bg-helios-surface border border-helios-line/30 rounded-xl px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
+                        className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                     />
                 </div>
             </div>

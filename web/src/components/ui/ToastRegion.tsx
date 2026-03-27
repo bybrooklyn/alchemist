@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2, Info, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X, type LucideIcon } from "lucide-react";
 import { subscribeToToasts, type ToastKind, type ToastMessage } from "../../lib/toast";
 
 const DEFAULT_DURATION_MS = 3500;
@@ -16,6 +16,12 @@ function kindStyles(kind: ToastKind): { icon: LucideIcon; className: string } {
         return {
             icon: AlertCircle,
             className: "border-status-error/30 bg-status-error/10 text-status-error",
+        };
+    }
+    if (kind === "warning") {
+        return {
+            icon: AlertTriangle,
+            className: "border-amber-500/30 bg-amber-500/10 text-amber-500",
         };
     }
     return {

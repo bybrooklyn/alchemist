@@ -324,7 +324,7 @@ export default function WatchFolders() {
                 <button
                     onClick={() => void triggerScan()}
                     disabled={scanning}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
                 >
                     <Play size={14} className={scanning ? "animate-spin" : ""} />
                     {scanning ? "Scanning..." : "Scan Now"}
@@ -340,8 +340,8 @@ export default function WatchFolders() {
             <form onSubmit={addDir} className="space-y-3">
                 <div className="space-y-3 rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 p-4">
                     <div>
-                        <h3 className="text-sm font-bold text-helios-ink uppercase tracking-wider">Library Directories</h3>
-                        <p className="text-[10px] text-helios-slate mt-1">
+                        <h3 className="text-sm font-bold text-helios-ink">Library Directories</h3>
+                        <p className="text-xs text-helios-slate mt-1">
                             Canonical library roots from setup/TOML. These are stored in the main config file and synchronized into runtime watchers.
                         </p>
                     </div>
@@ -353,13 +353,13 @@ export default function WatchFolders() {
                                 value={libraryPath}
                                 onChange={(e) => setLibraryPath(e.target.value)}
                                 placeholder="Add library directory..."
-                                className="w-full bg-helios-surface border border-helios-line/20 rounded-xl pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
+                                className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
                             />
                         </div>
                         <button
                             type="button"
                             onClick={() => setPickerOpen("library")}
-                            className="rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
+                            className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
                         >
                             Browse
                         </button>
@@ -367,14 +367,14 @@ export default function WatchFolders() {
                             type="button"
                             onClick={() => void addLibraryDir()}
                             disabled={!libraryPath.trim() || syncingLibrary}
-                            className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
+                            className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
                         >
                             <Plus size={16} /> Add Library
                         </button>
                     </div>
                     <div className="space-y-2">
                         {libraryDirs.map((dir) => (
-                            <div key={dir} className="flex items-center justify-between rounded-xl border border-helios-line/10 bg-helios-surface px-3 py-2">
+                            <div key={dir} className="flex items-center justify-between rounded-lg border border-helios-line/10 bg-helios-surface px-3 py-2">
                                 <span className="truncate font-mono text-sm text-helios-ink" title={dir}>{dir}</span>
                                 <button
                                     type="button"
@@ -400,20 +400,20 @@ export default function WatchFolders() {
                             value={path}
                             onChange={(e) => setPath(e.target.value)}
                             placeholder="Enter full directory path..."
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded-xl pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
+                            className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
                         />
                     </div>
                     <button
                         type="button"
                         onClick={() => setPickerOpen("watch")}
-                        className="rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
+                        className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
                     >
                         Browse
                     </button>
                     <button
                         type="submit"
                         disabled={!path.trim()}
-                        className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
+                        className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
                     >
                         <Plus size={16} /> Add
                     </button>
@@ -431,7 +431,7 @@ export default function WatchFolders() {
 
             <div className="space-y-2">
                 {dirs.map((dir) => (
-                    <div key={dir.id} className="flex flex-col gap-3 p-3 bg-helios-surface border border-helios-line/10 rounded-xl group hover:border-helios-line/30 hover:shadow-sm transition-all">
+                    <div key={dir.id} className="flex flex-col gap-3 p-3 bg-helios-surface border border-helios-line/10 rounded-lg group hover:border-helios-line/30 hover:shadow-sm transition-all">
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-3 overflow-hidden">
                                 <div className="p-1.5 bg-helios-slate/5 rounded-lg text-helios-slate">
@@ -440,7 +440,7 @@ export default function WatchFolders() {
                                 <span className="text-sm font-mono text-helios-ink truncate max-w-[400px]" title={dir.path}>
                                     {dir.path}
                                 </span>
-                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-helios-slate">
+                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
                                     {dir.is_recursive ? "Recursive" : "Top level"}
                                 </span>
                             </div>
@@ -464,7 +464,7 @@ export default function WatchFolders() {
                                     );
                                 }}
                                 disabled={assigningDirId === dir.id}
-                                className="w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-2.5 text-sm text-helios-ink outline-none focus:border-helios-solar disabled:opacity-60"
+                                className="w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-2.5 text-sm text-helios-ink outline-none focus:border-helios-solar disabled:opacity-60"
                             >
                                 <option value="">No profile (use global settings)</option>
                                 {builtinProfiles.map((profile) => (
@@ -525,7 +525,7 @@ export default function WatchFolders() {
 
             {customizeDir && profileDraft ? (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
-                    <div className="w-full max-w-2xl rounded-xl border border-helios-line/20 bg-helios-surface p-6 shadow-2xl">
+                    <div className="w-full max-w-2xl rounded-lg border border-helios-line/20 bg-helios-surface p-6 shadow-2xl">
                         <div className="flex items-start justify-between gap-4">
                             <div>
                                 <h3 className="text-lg font-semibold text-helios-ink">Customize Profile</h3>
@@ -548,24 +548,24 @@ export default function WatchFolders() {
                         <form onSubmit={saveCustomProfile} className="mt-6 space-y-4">
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         Name
                                     </label>
                                     <input
                                         type="text"
                                         value={profileDraft.name}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     />
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         Starting preset
                                     </label>
                                     <select
                                         value={profileDraft.preset}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, preset: event.target.value as ProfileDraft["preset"] })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     >
                                         {presets.map((preset) => (
                                             <option key={preset.id} value={preset.preset}>
@@ -575,13 +575,13 @@ export default function WatchFolders() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         Codec
                                     </label>
                                     <select
                                         value={profileDraft.codec}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, codec: event.target.value as ProfileDraft["codec"] })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     >
                                         <option value="av1">AV1</option>
                                         <option value="hevc">HEVC</option>
@@ -589,13 +589,13 @@ export default function WatchFolders() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         Quality profile
                                     </label>
                                     <select
                                         value={profileDraft.quality_profile}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, quality_profile: event.target.value as ProfileDraft["quality_profile"] })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     >
                                         <option value="speed">Speed</option>
                                         <option value="balanced">Balanced</option>
@@ -603,26 +603,26 @@ export default function WatchFolders() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         HDR mode
                                     </label>
                                     <select
                                         value={profileDraft.hdr_mode}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, hdr_mode: event.target.value as ProfileDraft["hdr_mode"] })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     >
                                         <option value="preserve">Preserve</option>
                                         <option value="tonemap">Tonemap</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         Audio mode
                                     </label>
                                     <select
                                         value={profileDraft.audio_mode}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, audio_mode: event.target.value as ProfileDraft["audio_mode"] })}
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     >
                                         <option value="copy">Copy</option>
                                         <option value="aac">AAC</option>
@@ -630,7 +630,7 @@ export default function WatchFolders() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                    <label className="text-xs font-bold text-helios-slate">
                                         CRF override
                                     </label>
                                     <input
@@ -638,20 +638,20 @@ export default function WatchFolders() {
                                         value={profileDraft.crf_override}
                                         onChange={(event) => setProfileDraft({ ...profileDraft, crf_override: event.target.value })}
                                         placeholder="Leave blank to use the preset default"
-                                        className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                        className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                     />
                                 </div>
                             </div>
 
                             <div>
-                                <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                <label className="text-xs font-bold text-helios-slate">
                                     Notes
                                 </label>
                                 <textarea
                                     value={profileDraft.notes}
                                     onChange={(event) => setProfileDraft({ ...profileDraft, notes: event.target.value })}
                                     rows={3}
-                                    className="mt-2 w-full rounded-xl border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
+                                    className="mt-2 w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar"
                                 />
                             </div>
 
@@ -659,7 +659,7 @@ export default function WatchFolders() {
                                 <button
                                     type="submit"
                                     disabled={savingProfile}
-                                    className="rounded-xl bg-helios-solar px-5 py-3 text-sm font-semibold text-helios-main disabled:opacity-60"
+                                    className="rounded-lg bg-helios-solar px-5 py-3 text-sm font-semibold text-helios-main disabled:opacity-60"
                                 >
                                     {savingProfile ? "Saving..." : "Save Custom Profile"}
                                 </button>

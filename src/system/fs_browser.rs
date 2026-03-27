@@ -106,6 +106,15 @@ pub async fn preview(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
 
 fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
     let path = canonical_or_original(path)?;
+
+    // Check if the resolved path is now in a sensitive location
+    // (handles symlinks pointing to sensitive directories)
+    if is_sensitive_path(&path) {
+        return Err(AlchemistError::Watch(
+            "Access to this directory is restricted".to_string(),
+        ));
+    }
+
     let readable = path.is_dir();
     let mut warnings = directory_warnings(&path, readable);
     if !readable {
@@ -121,17 +130,31 @@ fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
                 if !entry_path.is_dir() {
                     return None;
                 }
+
+                // Check for symlinks and warn about them
+                let is_symlink = entry_path
+                    .symlink_metadata()
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
+
                 let name = entry.file_name().to_string_lossy().to_string();
                 let hidden = is_hidden(&name, &entry_path);
                 let readable = std::fs::read_dir(&entry_path).is_ok();
                 let media_hint = classify_media_hint(&entry_path);
+
+                let warning = if is_symlink {
+                    Some("This is a symbolic link".to_string())
+                } else {
+                    entry_warning(&entry_path, readable)
+                };
+
                 Some(FsDirEntry {
                     name,
                     path: entry_path.to_string_lossy().to_string(),
                     readable,
                     hidden,
                     media_hint,
-                    warning: entry_warning(&entry_path, readable),
+                    warning,
                 })
             })
             .collect::<Vec<_>>()
@@ -282,9 +305,74 @@ fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
 
 fn resolve_browse_path(path: Option<&str>) -> Result<PathBuf> {
     match path.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => Ok(PathBuf::from(value)),
+        Some(value) => {
+            let path = PathBuf::from(value);
+
+            // Normalize and resolve the path
+            let resolved = if path.exists() {
+                std::fs::canonicalize(&path).map_err(AlchemistError::Io)?
+            } else {
+                path
+            };
+
+            // Block sensitive system directories
+            if is_sensitive_path(&resolved) {
+                return Err(AlchemistError::Watch(
+                    "Access to this directory is restricted".to_string(),
+                ));
+            }
+
+            Ok(resolved)
+        }
         None => default_browse_root(),
     }
+}
+
+/// Check if a path is a sensitive system directory that shouldn't be browsed.
+fn is_sensitive_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+
+    #[cfg(unix)]
+    {
+        // Block sensitive Unix system directories
+        let sensitive_prefixes = [
+            "/etc",
+            "/var/log",
+            "/var/run",
+            "/proc",
+            "/sys",
+            "/dev",
+            "/boot",
+            "/root",
+            "/private/etc", // macOS
+            "/private/var/log",
+        ];
+
+        for prefix in sensitive_prefixes {
+            if path_str == prefix || path_str.starts_with(&format!("{}/", prefix)) {
+                return true;
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // Block sensitive Windows system directories
+        let sensitive_patterns = [
+            "\\windows\\system32",
+            "\\windows\\syswow64",
+            "\\windows\\winsxs",
+            "\\programdata\\microsoft",
+        ];
+
+        for pattern in sensitive_patterns {
+            if path_str.contains(pattern) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn default_browse_root() -> Result<PathBuf> {
