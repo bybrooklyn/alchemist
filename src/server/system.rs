@@ -41,8 +41,8 @@ pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>)
         let cpu_percent =
             sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len().max(1) as f32;
         let cpu_count = sys.cpus().len();
-        let memory_used_mb = (sys.used_memory() / 1024 / 1024) as u64;
-        let memory_total_mb = (sys.total_memory() / 1024 / 1024) as u64;
+        let memory_used_mb = sys.used_memory() / 1024 / 1024;
+        let memory_total_mb = sys.total_memory() / 1024 / 1024;
         let memory_percent = if memory_total_mb > 0 {
             (memory_used_mb as f32 / memory_total_mb as f32) * 100.0
         } else {
@@ -293,7 +293,7 @@ pub(crate) async fn telemetry_payload_handler(State(state): State<Arc<AppState>>
     let (cpu_count, memory_total_mb) = {
         let mut sys = state.sys.lock().await;
         sys.refresh_memory();
-        (sys.cpus().len(), (sys.total_memory() / 1024 / 1024) as u64)
+        (sys.cpus().len(), sys.total_memory() / 1024 / 1024)
     };
 
     let version = env!("CARGO_PKG_VERSION").to_string();
