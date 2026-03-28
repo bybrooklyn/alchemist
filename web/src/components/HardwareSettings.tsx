@@ -41,7 +41,8 @@ export default function HardwareSettings() {
     const [settings, setSettings] = useState<HardwareSettings | null>(null);
     const [probeLog, setProbeLog] = useState<HardwareProbeLog>({ entries: [] });
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState("");
+    const [loadError, setLoadError] = useState("");
+    const [saveError, setSaveError] = useState("");
     const [saving, setSaving] = useState(false);
     const [draftDevicePath, setDraftDevicePath] = useState("");
     const [devicePathDirty, setDevicePathDirty] = useState(false);
@@ -55,9 +56,13 @@ export default function HardwareSettings() {
         try {
             const data = await apiJson<HardwareInfo>("/api/system/hardware");
             setInfo(data);
-            setError("");
+            setLoadError("");
         } catch (err) {
-            setError(isApiError(err) ? err.message : "Unable to detect hardware acceleration support.");
+            setLoadError(
+                isApiError(err)
+                    ? err.message
+                    : "Unable to detect hardware acceleration support."
+            );
         }
     };
 
@@ -68,10 +73,9 @@ export default function HardwareSettings() {
             if (!devicePathDirty) {
                 setDraftDevicePath(data.device_path ?? "");
             }
+            setLoadError("");
         } catch (err) {
-            if (!error) {
-                setError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
-            }
+            setLoadError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
         }
     };
 
@@ -92,13 +96,14 @@ export default function HardwareSettings() {
     ) => {
         setSaving(true);
         setSettings(nextSettings);
+        setSaveError("");
         try {
             await apiAction("/api/settings/hardware", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(nextSettings),
             });
-            setError("");
+            setSaveError("");
             if (syncDevicePath) {
                 setDraftDevicePath(nextSettings.device_path ?? "");
                 setDevicePathDirty(false);
@@ -108,7 +113,7 @@ export default function HardwareSettings() {
         } catch (err) {
             const errorMessage = isApiError(err) ? err.message : "Failed to update hardware settings";
             setSettings(previousSettings);
-            setError(errorMessage);
+            setSaveError(errorMessage);
             showToast({ kind: "error", title: "Hardware", message: errorMessage });
         } finally {
             setSaving(false);
@@ -159,11 +164,11 @@ export default function HardwareSettings() {
         );
     }
 
-    if (error || !info) {
+    if (loadError || !info) {
         return (
             <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg flex items-center gap-3" aria-live="polite">
                 <AlertCircle size={20} />
-                <span className="font-semibold">{error || "Hardware detection failed."}</span>
+                <span className="font-semibold">{loadError || "Hardware detection failed."}</span>
             </div>
         );
     }
@@ -215,6 +220,12 @@ export default function HardwareSettings() {
 
     return (
         <div className="flex flex-col gap-6" aria-live="polite">
+            {saveError && (
+                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-sm font-semibold">
+                    {saveError}
+                </div>
+            )}
+
             <div className="flex items-center justify-between pb-2 border-b border-helios-line/10">
                 <div>
                     <h3 className="text-base font-bold text-helios-ink tracking-tight">Transcoding Hardware</h3>
