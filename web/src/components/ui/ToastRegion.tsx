@@ -84,13 +84,13 @@ export default function ToastRegion() {
                         <div
                             key={toast.id}
                             role={toast.kind === "error" ? "alert" : "status"}
-                            className={`pointer-events-auto rounded-xl border p-3 shadow-xl ${className}`}
+                            className={`pointer-events-auto rounded-lg border p-3 shadow-xl ${className}`}
                         >
                             <div className="flex items-start gap-2">
                                 <Icon size={16} />
                                 <div className="min-w-0 flex-1">
                                     {toast.title && (
-                                        <p className="text-xs font-bold uppercase tracking-wide">{toast.title}</p>
+                                        <p className="text-xs font-medium">{toast.title}</p>
                                     )}
                                     <p className="text-sm break-words">{toast.message}</p>
                                 </div>
