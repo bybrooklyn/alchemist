@@ -121,7 +121,7 @@ export default function ServerDirectoryPicker({
                     <div className="border-b border-helios-line/20 px-6 py-5 flex items-start justify-between gap-4">
                         <div>
                             <div className="flex items-center gap-3">
-                                <div className="rounded-xl bg-helios-solar/10 p-2 text-helios-solar">
+                                <div className="rounded-lg bg-helios-solar/10 p-2 text-helios-solar">
                                     <FolderOpen size={20} />
                                 </div>
                                 <div>
@@ -129,14 +129,14 @@ export default function ServerDirectoryPicker({
                                     <p className="text-sm text-helios-slate">{description}</p>
                                 </div>
                             </div>
-                            <p className="mt-3 text-[11px] text-helios-slate">
+                            <p className="mt-3 text-xs text-helios-slate">
                                 You are browsing the <span className="font-bold text-helios-ink">server filesystem</span>, not your browser’s local machine.
                             </p>
                         </div>
                         <button
                             type="button"
                             onClick={onClose}
-                            className="rounded-xl border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-slate hover:bg-helios-surface-soft"
+                            className="rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-slate hover:bg-helios-surface-soft"
                         >
                             Close
                         </button>
@@ -145,7 +145,7 @@ export default function ServerDirectoryPicker({
                     <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] min-h-[620px]">
                         <aside className="border-r border-helios-line/20 bg-helios-surface-soft/40 px-5 py-5 space-y-5">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                <label className="text-xs font-medium text-helios-slate">
                                     Jump To Server Path
                                 </label>
                                 <div className="flex gap-2">
@@ -154,12 +154,12 @@ export default function ServerDirectoryPicker({
                                         value={manualPath}
                                         onChange={(e) => setManualPath(e.target.value)}
                                         placeholder="/media/movies"
-                                        className="flex-1 rounded-xl border border-helios-line/20 bg-helios-surface px-3 py-2 font-mono text-sm text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none"
+                                        className="flex-1 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 font-mono text-sm text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none"
                                     />
                                     <button
                                         type="button"
                                         onClick={() => void loadBrowse(manualPath)}
-                                        className="rounded-xl bg-helios-solar px-4 py-2 text-sm font-semibold text-helios-main"
+                                        className="rounded-lg bg-helios-solar px-4 py-2 text-sm font-semibold text-helios-main"
                                     >
                                         Open
                                     </button>
@@ -167,7 +167,7 @@ export default function ServerDirectoryPicker({
                             </div>
 
                             <div className="space-y-3">
-                                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                <div className="flex items-center gap-2 text-xs font-medium text-helios-slate">
                                     <Sparkles size={12} />
                                     Recommended Media Roots
                                 </div>
@@ -182,13 +182,13 @@ export default function ServerDirectoryPicker({
                                             <div className="flex items-start justify-between gap-3">
                                                 <div>
                                                     <div className="text-sm font-semibold text-helios-ink">{recommendation.label}</div>
-                                                    <div className="text-[10px] text-helios-slate mt-1 break-all">{recommendation.path}</div>
+                                                    <div className="text-xs text-helios-slate mt-1 break-all">{recommendation.path}</div>
                                                 </div>
-                                                <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${mediaBadgeTone(recommendation.media_hint)}`}>
+                                                <span className={`rounded-full border px-2 py-1 text-xs font-medium ${mediaBadgeTone(recommendation.media_hint)}`}>
                                                     {recommendation.media_hint}
                                                 </span>
                                             </div>
-                                            <p className="mt-2 text-[11px] text-helios-slate">{recommendation.reason}</p>
+                                            <p className="mt-2 text-xs text-helios-slate">{recommendation.reason}</p>
                                         </button>
                                     ))}
                                 </div>
@@ -220,7 +220,7 @@ export default function ServerDirectoryPicker({
                                     <div className="mb-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-4">
                                         <div className="flex items-start justify-between gap-4">
                                             <div>
-                                                <p className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                                <p className="text-xs font-medium text-helios-slate">
                                                     Current Server Folder
                                                 </p>
                                                 <p className="mt-2 font-mono text-sm text-helios-ink break-all">
@@ -230,7 +230,7 @@ export default function ServerDirectoryPicker({
                                             <button
                                                 type="button"
                                                 onClick={() => onSelect(browse.path)}
-                                                className="shrink-0 rounded-xl bg-helios-solar px-4 py-2 text-sm font-semibold text-helios-main"
+                                                className="shrink-0 rounded-lg bg-helios-solar px-4 py-2 text-sm font-semibold text-helios-main"
                                             >
                                                 Use This Folder
                                             </button>
@@ -240,7 +240,7 @@ export default function ServerDirectoryPicker({
                                                 {browse.warnings.map((warning) => (
                                                     <div
                                                         key={warning}
-                                                        className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-500"
+                                                        className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-500"
                                                     >
                                                         <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                                                         <span>{warning}</span>
@@ -251,7 +251,7 @@ export default function ServerDirectoryPicker({
                                     </div>
 
                                     <div className="flex items-center justify-between mb-3">
-                                        <div className="text-[10px] font-bold uppercase tracking-widest text-helios-slate">
+                                        <div className="text-xs font-medium text-helios-slate">
                                             Child Folders
                                         </div>
                                         {loading && <div className="text-xs text-helios-slate animate-pulse">Loading…</div>}
@@ -275,26 +275,26 @@ export default function ServerDirectoryPicker({
                                                             className="min-w-0 flex-1 text-left"
                                                         >
                                                             <div className="flex items-center gap-3">
-                                                                <div className="rounded-xl bg-helios-solar/10 p-2 text-helios-solar">
+                                                                <div className="rounded-lg bg-helios-solar/10 p-2 text-helios-solar">
                                                                     <Folder size={16} />
                                                                 </div>
                                                                 <div className="min-w-0">
                                                                     <div className="flex items-center gap-2">
                                                                         <span className="truncate text-sm font-semibold text-helios-ink">{entry.name}</span>
-                                                                        <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${mediaBadgeTone(entry.media_hint)}`}>
+                                                                        <span className={`rounded-full border px-2 py-1 text-xs font-medium ${mediaBadgeTone(entry.media_hint)}`}>
                                                                             {entry.media_hint}
                                                                         </span>
                                                                         {entry.hidden && (
-                                                                            <span className="rounded-full border border-helios-line/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-helios-slate">
+                                                                            <span className="rounded-full border border-helios-line/20 px-2 py-1 text-xs font-medium text-helios-slate">
                                                                                 hidden
                                                                             </span>
                                                                         )}
                                                                     </div>
-                                                                    <div className="mt-1 break-all font-mono text-[11px] text-helios-slate">
+                                                                    <div className="mt-1 break-all font-mono text-xs text-helios-slate">
                                                                         {entry.path}
                                                                     </div>
                                                                     {entry.warning && (
-                                                                        <div className="mt-2 text-[11px] text-amber-500">{entry.warning}</div>
+                                                                        <div className="mt-2 text-xs text-amber-500">{entry.warning}</div>
                                                                     )}
                                                                 </div>
                                                             </div>
@@ -302,7 +302,7 @@ export default function ServerDirectoryPicker({
                                                         <button
                                                             type="button"
                                                             onClick={() => onSelect(entry.path)}
-                                                            className="shrink-0 rounded-xl border border-helios-line/20 px-3 py-2 text-xs font-semibold text-helios-ink hover:border-helios-solar/30"
+                                                            className="shrink-0 rounded-lg border border-helios-line/20 px-3 py-2 text-xs font-semibold text-helios-ink hover:border-helios-solar/30"
                                                         >
                                                             Select
                                                         </button>

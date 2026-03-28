@@ -169,7 +169,7 @@ export default function SavingsOverview() {
                                             title={`${entry.label}: ${entry.gb_saved.toFixed(1)} GB saved`}
                                         />
                                     </div>
-                                    <div className="mt-2 truncate text-center text-[10px] text-helios-slate">
+                                    <div className="mt-2 truncate text-center text-xs text-helios-slate">
                                         {entry.label}
                                     </div>
                                 </div>
