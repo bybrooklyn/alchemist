@@ -3,7 +3,7 @@ name: Docs
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - 'docs/**'
       - 'src/css/**'
@@ -70,13 +70,13 @@ jobs:
           retention-days: 7
 
       - name: Upload GitHub Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v3
         with:
           path: build
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs: [build-docs]
     runs-on: ubuntu-latest
     environment:
