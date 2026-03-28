@@ -7,10 +7,13 @@
 node_modules/
 dist/
 .astro/
+.docusaurus/
+build/
 test-results/
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
+!/package-lock.json
+/bun.lock
 
 # Data & Runtime
 .runtime/

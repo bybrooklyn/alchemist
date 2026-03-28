@@ -1,0 +1,44 @@
+---
+title: Quick Start
+description: The essentials for getting Alchemist processing your library.
+---
+
+Assumes you've completed the setup wizard. If not, see
+[First Run](/first-run).
+
+## Start the engine
+
+The engine starts paused after setup. Click **Start** in
+the header bar.
+
+## Watch the queue
+
+Go to **Jobs**. Files move through:
+`Queued → Analyzing → Encoding → Completed`
+
+Skipped files appear in the **Skipped** tab with a
+plain-English reason. A high skip rate is normal — it means
+files are already efficiently compressed. See
+[Skip Decisions](/skip-decisions).
+
+## Check hardware detection
+
+Go to **Settings → Hardware**. Confirm your GPU is the
+active backend. If you see `CPU (Software)` with a supported
+GPU, see [GPU Passthrough](/gpu-passthrough).
+
+## See your savings
+
+Once jobs complete, **Statistics** shows total space
+recovered, compression ratios, and a savings chart.
+
+## Key controls
+
+| Action | Where |
+|--------|-------|
+| Pause encoding | Header → Pause |
+| Drain (finish active, stop new) | Header → Stop |
+| Cancel a job | Jobs → ⋯ → Cancel |
+| Boost priority | Jobs → ⋯ → Boost |
+| Trigger manual scan | Settings → Library → Scan |
+| Change engine mode | Settings → Runtime |
