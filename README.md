@@ -109,7 +109,7 @@ cargo build --release
 ./target/release/alchemist
 ```
 
-`Cargo.toml` does not currently declare a `rust-version`, so the project does not publish a pinned MSRV yet. Use the current stable Rust toolchain, and make sure FFmpeg is installed separately.
+Alchemist requires Rust 1.85 or later (MSRV). Use `rustup update stable` to ensure you are on a recent toolchain, and make sure FFmpeg is installed separately.
 
 ## First Run
 

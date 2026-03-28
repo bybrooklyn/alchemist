@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+Release history for Alchemist.
 
 ## [0.3.0] - 2026-03-28
 

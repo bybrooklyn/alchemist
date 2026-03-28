@@ -1,0 +1,84 @@
+# Troubleshooting
+
+Solutions for common issues and how to diagnose problems with Alchemist.
+
+This page provides answers to the most common problems users face when using Alchemist.
+
+## Common Issues
+
+### "Failed to load settings" / 401 Unauthorized
+
+**Cause**: Your session has expired, or the authentication token is no longer being sent correctly.
+
+**Solution**: Clear your browser's local storage and re-login:
+```javascript
+localStorage.removeItem('alchemist_token');
+window.location.href = '/login';
+```
+
+### "No hardware encoder detected"
+
+**Cause**: The necessary GPU drivers are missing, or the container is not configured to see your graphics card.
+
+**Solution**:
+1.  **Check FFmpeg**: Run `ffmpeg -encoders | grep -E "nvenc|qsv|vaapi"` inside your container to see if hardware support is enabled.
+2.  **Verify Drivers**: For NVIDIA, ensure the **NVIDIA Container Toolkit** is installed on your host.
+3.  **Check Permissions**: On Linux, ensure the user has access to `/dev/dri` (usually by adding them to the `render` or `video` groups).
+
+### Jobs stuck in "queued" state
+
+**Cause**: The engine might be paused, or there are no available slots in the scheduler.
+
+**Solution**:
+1.  **Check Status**: Go to the **Dashboard** and look for a "Resume" button.
+2.  **Check Logs**: Visit the `/logs` page to see if any errors are being reported by the scheduler.
+
+### High CPU usage during encoding
+
+**Cause**: Alchemist is falling back to your CPU (Software Encoding) instead of using your graphics card.
+
+**Solution**:
+1.  **Verify Hardware**: Check the **Hardware Settings** to ensure your GPU is selected.
+2.  **Reduce Jobs**: Lower the `concurrent_jobs` setting (try setting it to `1`).
+3.  **Use Speed Profile**: Switch to the "Speed" quality profile in **Settings**.
+
+### Database locked errors
+
+**Cause**: Multiple processes are trying to write to the SQLite database at the same time.
+
+**Solution**:
+1.  **Single Instance**: Ensure you aren't running more than one Alchemist container at once.
+2.  **Zombie Processes**: If you aren't using Docker, check for any old Alchemist processes running in the background.
+3.  **Check Locks**: If it persists, you may need to manually delete the lock file in your `data/` folder.
+
+### Files being skipped unexpectedly
+
+**Cause**: The Alchemist analysis has determined that a transcode wouldn't actually save any space or would ruin the quality.
+
+**Solution**:
+1.  **Check the Logs**: Look at the "Decision Log" in `/logs` to see the reason for skipping.
+2.  **Adjust Thresholds**: You might have a high `min_file_size_mb` or a strict `size_reduction_threshold`. Adjust these in **Settings**.
+
+### VMAF scores not appearing
+
+**Cause**: The version of FFmpeg you are using might not have `libvmaf` support.
+
+**Solution**:
+1.  **Check FFmpeg Filters**: Run `ffmpeg -filters | grep vmaf`.
+2.  **VMAF is Optional**: Don't worry, transcoding will still work perfectly even without quality scoring.
+
+## Log Locations
+
+If you're still stuck, checking the logs is the best way to find out what's going wrong.
+
+| Environment | Command to View Logs |
+| :--- | :--- |
+| **Docker** | `docker logs -f alchemist` |
+| **Binary** | View standard output (or redirect to a file) |
+| **Systemd** | `journalctl -u alchemist -f` |
+
+## Getting More Help
+
+If your issue isn't listed here, you can:
+- **Check GitHub Issues**: [Browse existing reports or create a new one](https://github.com/bybrooklyn/alchemist/issues).
+- **Review the Live Logs**: Use the `/logs` page in the Alchemist web interface for real-time diagnostics.

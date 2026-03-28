@@ -1,0 +1,96 @@
+# Development Setup
+
+Guide for setting up a local development environment for Alchemist.
+
+This guide is for developers who want to modify Alchemist's code. We explain how to set up your computer to run the back-end (Rust) and the front-end (React) separately for faster development.
+
+## Tech Stack
+
+Alchemist is built using:
+- **Back-end**: [Rust](https://www.rust-lang.org/) with [Axum](https://github.com/tokio-rs/axum).
+- **Front-end**: [React](https://react.dev/) with [Astro](https://astro.build/) (located in the `web/` folder).
+- **Database**: [SQLite](https://www.sqlite.org/index.html).
+- **Transcoding**: [FFmpeg](https://ffmpeg.org/).
+
+## Prerequisites
+
+To work on Alchemist, you'll need:
+1.  **Rust**: Install via [rustup](https://rustup.rs/).
+2.  **Bun**: Used for front-end package management (`npm install -g bun`).
+3.  **FFmpeg**: Installed on your system (for local testing).
+
+## Local Development
+
+### 1. Back-end (Rust)
+The back-end handles the database, scanning files, and running FFmpeg.
+
+```bash
+# Clone the repository
+git clone https://github.com/bybrooklyn/alchemist.git
+cd alchemist
+
+# Build the back-end
+cargo build
+
+# Run the back-end (starts the API on port 3000)
+cargo run
+```
+
+### 2. Front-end (Web UI)
+The web interface is located in the `web/` directory.
+
+```bash
+cd web
+
+# Install dependencies
+bun install
+
+# Start the development server (runs on port 4321)
+bun run dev
+```
+
+The front-end will automatically "talk" to the back-end running on port 3000.
+
+## Running Tests
+
+We value high-quality, tested code. Please ensure your changes don't break existing functionality.
+
+```bash
+# Run the main repo validation gate
+just check
+
+# Run the Rust test suite
+just test
+
+# Run the frontend verification gate
+cd web
+bun run typecheck && bun run build
+
+# Build the docs site
+cd ../docs
+bun install --frozen-lockfile
+bun run build
+
+# Run the reliability Playwright suite on an isolated test port
+cd ../web-e2e
+ALCHEMIST_E2E_PORT=4173 bun install --frozen-lockfile
+ALCHEMIST_E2E_PORT=4173 bun run test:reliability
+```
+
+## Release Workflow
+
+The repo ships a `justfile` for release preparation:
+
+```bash
+# Rewrite version files only
+just bump 0.2.10-rc.5
+
+# Full guarded release flow
+just update v0.2.10-rc.5
+```
+
+`just update` can checkpoint dirty local work, validates the repo before release, blocks behind/diverged remote state, and only creates the release commit/tag/push after the full validation gate passes.
+
+## UI Development
+
+The `web/` folder uses **Tailwind CSS** for styling and **Lucide React** for icons. If you add new components, please follow the existing patterns in `web/src/components/ui/`.
