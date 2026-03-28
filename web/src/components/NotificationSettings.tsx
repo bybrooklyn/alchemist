@@ -246,7 +246,7 @@ export default function NotificationSettings() {
                                 <div>
                                     <h3 className="font-bold text-sm text-helios-ink">{target.name}</h3>
                                     <div className="flex items-center gap-2 mt-0.5">
-                                        <span className="text-[10px] uppercase font-bold tracking-wider text-helios-slate bg-helios-surface-soft px-1.5 rounded">
+                                        <span className="text-xs font-medium text-helios-slate bg-helios-surface-soft px-1.5 rounded">
                                             {target.target_type}
                                         </span>
                                         <span className="text-xs text-helios-slate truncate max-w-[200px]">{target.endpoint_url}</span>

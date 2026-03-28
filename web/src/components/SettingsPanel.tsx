@@ -138,7 +138,7 @@ export default function SettingsPanel() {
                         */}
                         <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
                             <div className="mb-5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-wide text-helios-slate/70">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-helios-slate/70">
                                     Setup & Runtime Controls
                                 </p>
                                 <p className="mt-1 text-sm text-helios-ink">

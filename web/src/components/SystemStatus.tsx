@@ -104,7 +104,7 @@ export default function SystemStatus() {
                         </span>
                         <span className="text-xs font-bold text-helios-slate uppercase tracking-wider group-hover:text-helios-ink transition-colors">Engine Status</span>
                     </div>
-                    <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${isActive ? "bg-status-success/10 text-status-success" : "bg-helios-slate/10 text-helios-slate"}`}>
+                    <div className={`text-xs font-bold px-1.5 py-0.5 rounded-md ${isActive ? "bg-status-success/10 text-status-success" : "bg-helios-slate/10 text-helios-slate"}`}>
                         {isActive ? "ONLINE" : "IDLE"}
                     </div>
                 </div>
@@ -204,7 +204,7 @@ export default function SystemStatus() {
                                                 <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Total Jobs</span>
                                                 <span className="text-3xl font-bold text-helios-ink mt-1">{stats.total}</span>
                                             </div>
-                                            <div className="text-[10px] text-helios-slate mt-1 px-2 py-0.5 bg-helios-line/10 rounded-md">Lifetime</div>
+                                            <div className="text-xs text-helios-slate mt-1 px-2 py-0.5 bg-helios-line/10 rounded-md">Lifetime</div>
                                         </div>
                                     </div>
 
@@ -212,19 +212,19 @@ export default function SystemStatus() {
                                         <div className="p-3 rounded-xl bg-status-success/5 border border-status-success/10 flex flex-col items-center justify-center text-center">
                                             <CheckCircle2 size={16} className="text-status-success mb-1" />
                                             <span className="text-lg font-bold text-helios-ink">{stats.completed}</span>
-                                            <span className="text-[10px] font-bold text-status-success uppercase tracking-wider">Completed</span>
+                                            <span className="text-xs font-bold text-status-success uppercase tracking-wider">Completed</span>
                                         </div>
 
                                         <div className="p-3 rounded-xl bg-status-error/5 border border-status-error/10 flex flex-col items-center justify-center text-center">
                                             <AlertTriangle size={16} className="text-status-error mb-1" />
                                             <span className="text-lg font-bold text-helios-ink">{stats.failed}</span>
-                                            <span className="text-[10px] font-bold text-status-error uppercase tracking-wider">Failed</span>
+                                            <span className="text-xs font-bold text-status-error uppercase tracking-wider">Failed</span>
                                         </div>
 
                                         <div className="p-3 rounded-xl bg-helios-surface-soft border border-helios-line/10 flex flex-col items-center justify-center text-center opacity-60">
                                             <Activity size={16} className="text-helios-slate mb-1" />
                                             <span className="text-lg font-bold text-helios-ink">--</span>
-                                            <span className="text-[10px] font-bold text-helios-slate uppercase tracking-wider">Est. Time</span>
+                                            <span className="text-xs font-bold text-helios-slate uppercase tracking-wider">Est. Time</span>
                                         </div>
                                     </div>
 

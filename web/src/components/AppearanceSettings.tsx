@@ -357,7 +357,7 @@ export default function AppearanceSettings() {
                     <div key={category.id} className="flex flex-col gap-4">
                         <div className="flex items-center gap-2 px-1">
                             {category.icon}
-                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-helios-slate/60">
+                            <h4 className="text-xs font-bold uppercase tracking-widest text-helios-slate/60">
                                 {category.label}
                             </h4>
                         </div>
@@ -411,7 +411,7 @@ export default function AppearanceSettings() {
                                             )}>
                                                 {theme.name}
                                             </span>
-                                            <span className="text-[11px] text-helios-slate font-medium leading-relaxed opacity-70">
+                                            <span className="text-xs text-helios-slate font-medium leading-relaxed opacity-70">
                                                 {theme.description}
                                             </span>
                                         </div>

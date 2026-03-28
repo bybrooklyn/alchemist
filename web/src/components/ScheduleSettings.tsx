@@ -200,16 +200,16 @@ export default function ScheduleSettings() {
                                     {win.start_time} - {win.end_time}
                                 </span>
                                 {win.enabled ? (
-                                    <span className="text-[10px] uppercase font-bold text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">Active</span>
+                                    <span className="text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">Active</span>
                                 ) : (
-                                    <span className="text-[10px] uppercase font-bold text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full">Disabled</span>
+                                    <span className="text-xs font-medium text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full">Disabled</span>
                                 )}
                             </div>
                             <div className="flex gap-1 mt-2">
                                 {DAYS.map((day, idx) => {
                                     const active = parseDays(win.days_of_week).includes(idx);
                                     return (
-                                        <span key={day} className={`text-[10px] font-bold px-1.5 rounded ${active ? "text-helios-solar bg-helios-solar/10" : "text-helios-slate/30"}`}>
+                                        <span key={day} className={`text-xs font-bold px-1.5 rounded ${active ? "text-helios-solar bg-helios-solar/10" : "text-helios-slate/30"}`}>
                                             {day}
                                         </span>
                                     );

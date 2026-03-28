@@ -88,7 +88,7 @@ export default function QualitySettings() {
             <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                 <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Enable VMAF</p>
-                    <p className="text-[10px] text-helios-slate mt-1">Compute a quality score after encoding.</p>
+                    <p className="text-xs text-helios-slate mt-1">Compute a quality score after encoding.</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -135,7 +135,7 @@ export default function QualitySettings() {
             <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                 <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-helios-slate">Revert on Low Quality</p>
-                    <p className="text-[10px] text-helios-slate mt-1">Keep the source if the VMAF score drops below the threshold.</p>
+                    <p className="text-xs text-helios-slate mt-1">Keep the source if the VMAF score drops below the threshold.</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                     <input
