@@ -91,7 +91,7 @@ export default function FileSettings() {
                                 className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
                                 placeholder="-alchemist"
                             />
-                            <p className="text-[10px] text-helios-slate mt-1">
+                            <p className="text-xs text-helios-slate mt-1">
                                 Appended to filename (e.g. video
                                 <span className="text-helios-solar">{settings.output_suffix}</span>.{settings.output_extension})
                             </p>
@@ -118,7 +118,7 @@ export default function FileSettings() {
                             className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
                             placeholder="Optional mirrored output directory"
                         />
-                        <p className="text-[10px] text-helios-slate mt-1">
+                        <p className="text-xs text-helios-slate mt-1">
                             Leave blank to write alongside the source file. When set, Alchemist mirrors the source folder structure under this directory.
                         </p>
                     </div>
@@ -133,7 +133,7 @@ export default function FileSettings() {
                             <option value="keep">Keep existing output</option>
                             <option value="replace">Replace after verified success</option>
                         </select>
-                        <p className="text-[10px] text-helios-slate mt-1">
+                        <p className="text-xs text-helios-slate mt-1">
                             Replace mode now encodes to a temp file first and only promotes it after all verification gates pass.
                         </p>
                     </div>

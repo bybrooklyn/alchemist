@@ -79,10 +79,10 @@ export default function ConfigEditorSettings() {
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <span className="rounded-full border border-helios-line/30 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-helios-slate">
+                        <span className="rounded-full border border-helios-line/30 px-3 py-1 text-xs font-medium text-helios-slate">
                             Source: {sourceOfTruth}
                         </span>
-                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-500">
                             Projection: {projectionStatus}
                         </span>
                     </div>

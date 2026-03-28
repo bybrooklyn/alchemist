@@ -103,7 +103,6 @@ export default function HardwareSettings() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(nextSettings),
             });
-            setSaveError("");
             if (syncDevicePath) {
                 setDraftDevicePath(nextSettings.device_path ?? "");
                 setDevicePathDirty(false);
