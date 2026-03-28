@@ -50,6 +50,51 @@ env:
   IMAGE_NAME: ghcr.io/bybrooklyn/alchemist
 
 jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install docs dependencies
+        run: npm ci
+
+      - name: Read VERSION
+        id: ver
+        shell: bash
+        run: |
+          base=$(tr -d '\n\r' < VERSION)
+          echo "version=${base}${{ inputs.version_suffix }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build docs site
+        run: npm run build
+
+      - name: Package docs site
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="alchemist-website-${{ steps.ver.outputs.version }}.zip"
+          cd build
+          zip -r "../${ARCHIVE}" .
+          cd ..
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alchemist-website
+          path: |
+            alchemist-website-${{ steps.ver.outputs.version }}.zip
+            alchemist-website-${{ steps.ver.outputs.version }}.zip.sha256
+
   build-frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -320,7 +365,7 @@ jobs:
 
   publish-release:
     needs:
-      [build-linux, build-windows, build-macos, build-docker]
+      [build-docs, build-linux, build-windows, build-macos, build-docker]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: inputs.publish_release
