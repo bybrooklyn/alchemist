@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { expectVisibleError, fulfillJson, mockEngineStatus } from "./helpers";
+import {
+  expectVisibleError,
+  fulfillJson,
+  mockEngineStatus,
+  mockJobsTable,
+} from "./helpers";
 
 const jobsTable = [
   {
@@ -20,10 +25,7 @@ test.use({ storageState: undefined });
 
 test.beforeEach(async ({ page }) => {
   await mockEngineStatus(page);
-
-  await page.route("**/api/jobs**", async (route) => {
-    await fulfillJson(route, 200, jobsTable);
-  });
+  await mockJobsTable(page, jobsTable);
 });
 
 test("jobs batch delete failure is surfaced to the user", async ({ page }) => {
@@ -80,7 +82,7 @@ test("single job delete failure is surfaced to the user", async ({ page }) => {
 });
 
 test("active jobs hide delete and disable batch restart/delete", async ({ page }) => {
-  await page.route("**/api/jobs**", async (route) => {
+  await page.route("**/api/jobs/table**", async (route) => {
     await fulfillJson(route, 200, [
       {
         id: 2,

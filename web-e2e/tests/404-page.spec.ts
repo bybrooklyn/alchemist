@@ -72,5 +72,5 @@ test("404 page dashboard link navigates home", async ({ page }) => {
   await page.getByRole("link", { name: /Go to Dashboard/i }).click();
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Activity" })).toBeVisible();
 });

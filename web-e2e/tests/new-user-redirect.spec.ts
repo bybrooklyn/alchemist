@@ -128,7 +128,7 @@ test("redirects to setup when no directories configured", async ({ page }) => {
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/setup$/);
-  await expect(page.getByRole("heading", { name: "Alchemist Setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create Your Admin Account" })).toBeVisible();
 });
 
 test("does not redirect when directories are configured", async ({ page }) => {
@@ -137,7 +137,7 @@ test("does not redirect when directories are configured", async ({ page }) => {
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Activity" })).toBeVisible();
 });
 
 test("does not redirect when setup is already complete", async ({ page }) => {
@@ -146,5 +146,5 @@ test("does not redirect when setup is already complete", async ({ page }) => {
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Activity" })).toBeVisible();
 });

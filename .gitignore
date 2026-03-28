@@ -1,19 +1,41 @@
-/target
+# Alchemist Git Ignore
+
+# Rust
+/target/
+
+# Frontend/Node
+node_modules/
+dist/
+.astro/
+test-results/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Data & Runtime
+.runtime/
+alchemist.db*
 config.toml
-error.txt
-public/pkg/alchemist.css
-build_log_2.txt
-alchemist.db
-web/node_modules
-docs/node_modules
-web/dist
-web/.astro
-docs/dist
-docs/.astro
-web/package-lock.json
 web.zip
+
+# Logs
+error.txt
+build_log_*.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS & Editors
 .DS_Store
-alchemist.db-shm
-alchemist.db-wal
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/workspace.xml
+
+# Project Specifics
+public/pkg/alchemist.css
+
+# Claude
 .claude/worktrees/
 !.claude/settings.local.json

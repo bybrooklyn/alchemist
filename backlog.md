@@ -4,29 +4,23 @@ Future improvements and features to consider for the project.
 
 ## High Priority
 
-### AMD AV1 Support
-- Add AV1 encoding support for AMD GPUs (RDNA3+)
-- Requires hardware for testing
-- Update `src/media/ffmpeg/amd.rs` with AV1 encoder parameters
-- Add detection in `src/system/hardware.rs`
-
 ### E2E Test Coverage
 - Expand Playwright tests for more UI flows
 - Test job queue management scenarios
 - Test error states and recovery flows
-- Add visual regression tests
 
-### Database Migrations
-- Add migration versioning system
-- Consider SQLite WAL mode for better concurrency
-- Add migration rollback support
+### AMD AV1 Validation
+- Validate and tune the existing AMD AV1 paths on real hardware
+- Cover Linux VAAPI and Windows AMF separately
+- Verify encoder selection, fallback behavior, and quality/performance defaults
+- Do not treat this as support-from-scratch: encoder wiring and hardware detection already exist
 
 ## Medium Priority
 
 ### Performance Optimizations
-- Profile and optimize hot paths in scanner/analyzer
-- Consider connection pooling tuning for high-load scenarios
-- Add caching for repeated FFprobe calls on same files
+- Profile scanner/analyzer hot paths before changing behavior
+- Only tune connection pooling after measuring database contention under load
+- Consider caching repeated FFprobe calls on identical files if profiling shows probe churn is material
 
 ### Monitoring & Observability
 - Add Prometheus metrics endpoint
@@ -34,10 +28,8 @@ Future improvements and features to consider for the project.
 - Add structured logging with correlation IDs
 
 ### UI Improvements
-- Add dark/light theme toggle
 - Improve mobile responsiveness
 - Add keyboard shortcuts for common actions
-- Job history filtering and search
 
 ### Notification Improvements
 - Add email notification support
@@ -48,7 +40,6 @@ Future improvements and features to consider for the project.
 
 ### Features from DESIGN_PHILOSOPHY.md
 - Consider WebSocket alternative to SSE for bidirectional communication
-- Add support for subtitle extraction/conversion
 - Add batch job templates
 
 ### Code Quality
@@ -81,3 +72,8 @@ Future improvements and features to consider for the project.
 - [x] Expand documentation site
 - [x] Create OpenAPI spec
 - [x] Pin MSRV in Cargo.toml
+- [x] Add schema versioning for migrations
+- [x] Enable SQLite WAL mode
+- [x] Add theme persistence and selection
+- [x] Add job history filtering and search
+- [x] Add subtitle extraction sidecars
