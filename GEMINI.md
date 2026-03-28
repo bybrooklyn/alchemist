@@ -9,7 +9,7 @@ Alchemist is an automated media library optimization tool written in Rust. It mo
 ### Main Technologies
 - **Backend:** Rust (Edition 2024), [Axum](https://github.com/tokio-rs/axum) (Web Server), [SQLx](https://github.com/launchbadge/sqlx) (SQLite Database), [Tokio](https://github.com/tokio-rs/tokio) (Asynchronous Runtime).
 - **Frontend:** [Astro](https://astro.build/), [React](https://reactjs.org/), [Tailwind CSS](https://tailwindcss.com/), [Lucide React](https://lucide.dev/), [Recharts](https://recharts.org/).
-- **Package Manager:** [Bun](https://bun.sh/) (for frontend and docs).
+- **Package Manager:** [Bun](https://bun.sh/) (for frontend tooling).
 - **Command Runner:** [Just](https://github.com/casey/just).
 - **Media Engine:** FFmpeg (external dependency).
 
@@ -22,11 +22,11 @@ Alchemist is an automated media library optimization tool written in Rust. It mo
     - `executor.rs`: Manages `ffmpeg` process execution.
     - `pipeline.rs`: Orchestrates the full transcode lifecycle.
     - `processor.rs`: The `Agent` that runs the main background loop.
-- **`src/server/`:** Axum web server implementation, including API routes and SSE (Server-Sent Events) for real-time updates.
+- **`src/server/`:** HTTP layer split into focused modules. `mod.rs` owns `AppState` and route registration. Submodules: `auth.rs` (sessions, Argon2), `jobs.rs` (queue API), `scan.rs` (library scan), `settings.rs` (config API), `stats.rs` (aggregate stats and savings), `system.rs` (hardware detection, resource monitor, library health), `sse.rs` (Server-Sent Events), `middleware.rs` (rate limiting, auth), `wizard.rs` (first-run setup API).
 - **`src/db.rs`:** SQLite data access layer using SQLx.
 - **`migrations/`:** SQL schema migrations.
 - **`web/`:** Astro-based frontend dashboard.
-- **`docs/`:** Starlight-based documentation site.
+- **`redoc/`:** Plain Markdown documentation mirror.
 
 ## Building and Running
 
@@ -36,7 +36,6 @@ The project uses `just` to simplify common tasks.
 - `just dev`: Starts both the backend (watch mode) and frontend dev server.
 - `just run`: Runs the Rust backend directly.
 - `just web`: Starts the frontend development server only.
-- `just docs-dev`: Starts the documentation development server.
 
 ### Build
 - `just build`: Performs a full production build (frontend assets + Rust binary).

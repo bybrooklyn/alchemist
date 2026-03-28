@@ -65,26 +65,14 @@ text = re.sub(
 )
 lock.write_text(text)
 
-# Legacy docs footer (optional; current docs site no longer uses this file)
-legacy_docs = root / "docs" / "Documentation.md"
-if legacy_docs.exists():
-    text = legacy_docs.read_text()
-    text = re.sub(
-        r'(?m)^\*Documentation for Alchemist v[^*]+\*',
-        f'*Documentation for Alchemist v{version}*',
-        text,
-        count=1,
-    )
-    legacy_docs.write_text(text)
-
 print(f"Updated version to {version}")
 PY
 
 cat <<EOF
 Next steps:
-  1. Update CHANGELOG.md and docs/src/content/docs/reference/changelog.mdx for v${VERSION}
+  1. Update CHANGELOG.md and redoc/reference/changelog.md for v${VERSION}
   2. Run cargo test --quiet
-  3. Run bun run verify (in web/)
+  3. Run bun run typecheck && bun run build (in web/)
   4. Run bun run test:reliability (in web-e2e/)
   5. Merge the release-prep commit to main so Docker publishes ${VERSION}
   6. Stable versions also publish latest; prereleases must not

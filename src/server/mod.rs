@@ -38,9 +38,9 @@ use std::time::Instant;
 use tokio::net::lookup_host;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio::time::Duration;
-use tracing::{error, info};
 #[cfg(not(feature = "embed-web"))]
 use tracing::warn;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use middleware::RateLimitEntry;

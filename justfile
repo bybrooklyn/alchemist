@@ -267,9 +267,7 @@ update NEW_VERSION:
     echo "── Actionlint ──"; \
     actionlint .github/workflows/*.yml; \
     echo "── Web verify ──"; \
-    (cd web && bun install --frozen-lockfile && bun run verify); \
-    echo "── Docs build ──"; \
-    (cd docs && bun install --frozen-lockfile && bun run build); \
+    (cd web && bun install --frozen-lockfile && bun run typecheck && bun run build); \
     echo "── E2E reliability ──"; \
     E2E_PORT=""; \
     for port in $(seq 4173 4273); do \
@@ -294,7 +292,7 @@ update NEW_VERSION:
     fi; \
     for file in "${CHANGED_TRACKED[@]}"; do \
         case "${file}" in \
-            VERSION|Cargo.toml|Cargo.lock|package.json|*/package.json|docs/Documentation.md) ;; \
+            VERSION|Cargo.toml|Cargo.lock|package.json|*/package.json) ;; \
             *) \
                 echo "error: unexpected tracked change after validation: ${file}" >&2; \
                 exit 1; \
@@ -304,9 +302,6 @@ update NEW_VERSION:
     git add -- VERSION Cargo.toml Cargo.lock; \
     if [ "${#PACKAGE_FILES[@]}" -gt 0 ]; then \
         git add -- "${PACKAGE_FILES[@]}"; \
-    fi; \
-    if git ls-files --error-unmatch docs/Documentation.md >/dev/null 2>&1; then \
-        git add -- docs/Documentation.md; \
     fi; \
     if git diff --cached --quiet; then \
         echo "error: no version files were staged for commit" >&2; \
@@ -347,18 +342,6 @@ release-check:
     @echo "  4. git push && git push --tags"
 
 # ─────────────────────────────────────────
-# DOCS SITE
-# ─────────────────────────────────────────
-
-# Start the docs dev server
-docs-dev:
-    cd docs && bun install --frozen-lockfile && bun run dev
-
-# Build the docs site
-docs-build:
-    cd docs && bun install --frozen-lockfile && bun run build
-
-# ─────────────────────────────────────────
 # UTILITIES
 # ─────────────────────────────────────────
 
@@ -369,7 +352,7 @@ fmt:
 # Clean all build artifacts
 clean:
     cargo clean
-    rm -rf web/dist web/node_modules web-e2e/node_modules docs/node_modules
+    rm -rf web/dist web/node_modules web-e2e/node_modules
 
 # Count lines of source code
 loc:

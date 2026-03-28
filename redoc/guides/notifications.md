@@ -1,0 +1,39 @@
+# Notifications
+
+Stay informed with Alchemist's notification system.
+
+Alchemist can send messages to your phone or computer to let you know when it finishes a job or if it runs into a problem. This page explains how to set up Discord, Gotify, and other alerts.
+
+Alchemist can notify you when important events occur. This ensures you're always up-to-date on your transcoding progress and library health.
+
+## What can Alchemist tell me?
+
+You can choose to get alerts for:
+- **Transcode Finished:** "I just shrunk 'The Matrix' and saved 4GB!"
+- **Transcode Failed:** "Something went wrong with this file, please check the logs."
+- **Library Scan Finished:** "I found 10 new movies in your folders."
+- **Library Doctor Alert:** "I found a broken file that might not play correctly."
+
+## How to Set it Up
+
+Go to **Settings** > **Notifications** in the Alchemist web interface.
+
+### Discord
+If you use Discord, Alchemist can post messages to a specific channel.
+- Create a "Webhook" in your Discord channel settings.
+- Paste that URL into Alchemist.
+- You can even give Alchemist a custom nickname like "The Alchemist Bot."
+
+### Gotify
+Gotify is a great way to get private notifications on your phone without using a big service like Discord.
+- Paste your Gotify server address and "App Token" into Alchemist.
+
+### Webhooks (For Techies)
+If you have your own custom system, Alchemist can send a "JSON" message to any web address you provide.
+
+## Troubleshooting
+
+If you aren't getting messages:
+1.  Check that you pasted the URL or Token correctly (no extra spaces!).
+2.  Make sure your computer has an internet connection.
+3.  Check the **Logs** page in Alchemist; it will usually say exactly why a notification failed.

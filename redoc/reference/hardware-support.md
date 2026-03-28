@@ -1,0 +1,59 @@
+# Hardware Vendors
+
+Detailed support information for all supported hardware vendors.
+
+This page is a technical breakdown of which video formats each brand of graphics card supports. It helps you understand exactly what your NVIDIA, Intel, AMD, or Apple hardware can do.
+
+Alchemist supports hardware-accelerated transcoding across all major GPU vendors. Below is a detailed list of what each vendor can handle.
+
+## NVIDIA (NVENC)
+
+NVIDIA cards are the "gold standard" for home transcoding. They are fast and produce very high-quality files.
+
+| Feature | Supported? | Notes |
+| :--- | :--- | :--- |
+| **H.264** | Yes | Works on almost all NVIDIA cards from the last 10 years. |
+| **HEVC (H.265)** | Yes | Supported on "Maxwell" (900-series) and newer. |
+| **AV1** | Yes | Requires the latest 40-series cards or newer. |
+| **10-bit Color** | Yes | Great for high-quality HDR movies. |
+
+## Intel (QSV)
+
+Intel's "QuickSync" technology is built into most of their processors. It's incredibly power-efficient.
+
+| Feature | Supported? | Notes |
+| :--- | :--- | :--- |
+| **H.264** | Yes | Supported on almost all Intel chips. |
+| **HEVC (H.265)** | Yes | Requires 6th Gen "Skylake" or newer. |
+| **AV1** | Yes | Requires 11th Gen "Tiger Lake" or newer. |
+| **10-bit Color** | Yes | Requires 7th Gen "Kaby Lake" or newer. |
+
+## AMD (VAAPI / AMF)
+
+AMD cards work great on Linux and Windows. They are a solid choice for high-speed transcoding.
+
+| Feature | Supported? | Notes |
+| :--- | :--- | :--- |
+| **H.264** | Yes | Supported on almost all modern AMD cards. |
+| **HEVC (H.265)** | Yes | Requires "Polaris" (RX 400 series) or newer. |
+| **AV1** | Yes | Requires "RDNA 2" (RX 6000 series) or newer. |
+| **10-bit Color** | Yes | Requires "Vega" or newer. |
+
+## Apple (VideoToolbox)
+
+If you are using a Mac, Alchemist can use the specialized "Media Engine" built into Apple Silicon.
+
+| Feature | Supported? | Notes |
+| :--- | :--- | :--- |
+| **H.264** | Yes | Works on all modern Macs. |
+| **HEVC (H.265)** | Yes | Requires a Mac with a T2 chip or Apple Silicon (M1/M2/M3). |
+| **AV1** | Yes | Requires Apple Silicon M3 or newer. |
+| **10-bit Color** | Yes | Works best on Apple Silicon Macs. |
+
+## CPU (Software Encoding)
+
+If you don't have a supported graphics card, Alchemist uses your computer's main processor.
+
+- **Compatibility:** Works on 100% of computers.
+- **Quality:** Often the best quality possible, but very, very slow.
+- **AV1 Support:** Supported on all CPUs via the `libsvtav1` engine.

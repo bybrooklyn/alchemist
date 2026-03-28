@@ -57,7 +57,17 @@ just db-shell       # SQLite shell
 
 The backend is structured around a central `AppState` (holding SQLite pool, config, broadcast channels) passed to Axum handlers:
 
-- **`server.rs`** (~4700 LOC) — All HTTP routes, WebSocket/SSE events, authentication (Argon2 + sessions), rate limiting, and static asset serving. This is the largest file.
+- **`server/`** — HTTP layer split into focused modules:
+  - `mod.rs` — `AppState`, `run_server`, route registration, and static asset serving
+  - `auth.rs` — Login, logout, session management (Argon2)
+  - `jobs.rs` — Job queue API: list, detail, cancel, restart, priority, batch operations
+  - `scan.rs` — Library scan trigger and status endpoints
+  - `settings.rs` — All config read/write endpoints
+  - `stats.rs` — Aggregate stats, savings, and daily history
+  - `system.rs` — Hardware detection, resource monitor, library health
+  - `sse.rs` — Server-Sent Events stream
+  - `middleware.rs` — Rate limiting and auth middleware
+  - `wizard.rs` — First-run setup API endpoints
 - **`db.rs`** (~2400 LOC) — SQLite connection pool, all queries, migration runner. Direct sqlx usage; no ORM.
 - **`config.rs`** (~850 LOC) — TOML config structs for all user-facing settings.
 - **`media/`** — The core pipeline:
