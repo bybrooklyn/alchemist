@@ -18,6 +18,10 @@ jobs:
   ci-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: 2G
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,10 +33,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: nightly-gate
+          prefix-key: rust-linux-shared
 
       - name: Check formatting
         run: cargo fmt --all -- --check
