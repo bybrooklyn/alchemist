@@ -61,15 +61,23 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
+          bun-version: latest
+
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            ~/.bun/install/cache
+          key: bun-docs-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-docs-${{ runner.os }}-
 
       - name: Install docs dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Read VERSION
         id: ver
@@ -79,7 +87,7 @@ jobs:
           echo "version=${base}${{ inputs.version_suffix }}" >> "$GITHUB_OUTPUT"
 
       - name: Build docs site
-        run: npm run build
+        run: bun run build
 
       - name: Package docs site
         shell: bash

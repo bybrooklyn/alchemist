@@ -16,7 +16,7 @@ Alchemist is built using:
 
 To work on Alchemist, you'll need:
 1.  **Rust**: Install via [rustup](https://rustup.rs/).
-2.  **Bun**: Used for front-end package management (`npm install -g bun`).
+2.  **Bun**: Used for front-end package management (install via the official Bun installer).
 3.  **FFmpeg**: Installed on your system (for local testing).
 
 ## Local Development
