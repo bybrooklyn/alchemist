@@ -964,6 +964,9 @@ impl Pipeline {
 
         if input_size == 0 {
             tracing::error!("Job {}: Input file is empty. Finalizing as failed.", job_id);
+            let _ = std::fs::remove_file(context.temp_output_path);
+            cleanup_temp_subtitle_output(job_id, context.plan).await;
+
             self.update_job_state(job_id, crate::db::JobState::Failed)
                 .await?;
             return Ok(());

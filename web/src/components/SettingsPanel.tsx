@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2 } from "lucide-react";
 import WatchFolders from "./WatchFolders";
 import NotificationSettings from "./NotificationSettings";
@@ -32,14 +31,10 @@ export default function SettingsPanel() {
         const requested = params.get("tab");
         return requested && TABS.some((tab) => tab.id === requested) ? requested : "watch";
     });
-    const [[_page, direction], setPage] = useState([0, 0]);
 
     const activeIndex = TABS.findIndex(t => t.id === activeTab);
 
     const paginate = (newTabId: string) => {
-        const newIndex = TABS.findIndex(t => t.id === newTabId);
-        const newDirection = newIndex > activeIndex ? 1 : -1;
-        setPage([newIndex, newDirection]);
         setActiveTab(newTabId);
         if (typeof window !== "undefined") {
             const url = new URL(window.location.href);
@@ -62,23 +57,6 @@ export default function SettingsPanel() {
             target.scrollIntoView({ block: "nearest" });
         }
     }, [activeTab]);
-
-    const variants = {
-        enter: (direction: number) => ({
-            y: direction > 0 ? 20 : -20,
-            opacity: 0
-        }),
-        center: {
-            zIndex: 1,
-            y: 0,
-            opacity: 1
-        },
-        exit: (direction: number) => ({
-            zIndex: 0,
-            y: direction < 0 ? 20 : -20,
-            opacity: 0
-        })
-    };
 
     return (
         <div className="flex flex-col lg:flex-row gap-8">
@@ -111,45 +89,36 @@ export default function SettingsPanel() {
 
             {/* Content Area */}
             <div className="flex-1 min-w-0">
-                <AnimatePresence mode="wait" initial={false} custom={direction}>
-                    <motion.div
-                        key={activeTab}
-                        custom={direction}
-                        variants={variants}
-                        initial="enter"
-                        animate="center"
-                        exit="exit"
-                        transition={{
-                            opacity: { duration: 0.15, ease: "easeInOut" }
-                        }}
-                        className="p-1" // minimal padding for focus rings
-                    >
-                        {/* 
-                           We render the active component. 
-                           Container styling is applied here to wrap the component uniformly.
-                        */}
-                        <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
-                            <div className="mb-6">
-                                <h2 className="text-xl font-bold text-helios-ink flex items-center gap-2">
-                                    {(() => {
-                                        const tab = TABS.find((t) => t.id === activeTab);
-                                        if (!tab) return null;
-                                        return (
-                                            <>
-                                                <tab.icon size={22} className="text-helios-solar" />
-                                                {tab.label}
-                                            </>
-                                        );
-                                    })()}
-                                </h2>
-                            </div>
-                            {(() => {
-                                const TabComponent = TABS.find((t) => t.id === activeTab)?.component;
-                                return TabComponent ? <TabComponent /> : null;
-                            })()}
+                <div key={activeTab} className="p-1">
+                    <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
+                        <div className="mb-6">
+                            <h2 className="text-xl font-bold text-helios-ink flex items-center gap-2">
+                                {(() => {
+                                    const tab = TABS.find(
+                                        (t) => t.id === activeTab
+                                    );
+                                    if (!tab) return null;
+                                    return (
+                                        <>
+                                            <tab.icon size={22}
+                                                className="text-helios-solar"
+                                            />
+                                            {tab.label}
+                                        </>
+                                    );
+                                })()}
+                            </h2>
                         </div>
-                    </motion.div>
-                </AnimatePresence>
+                        {(() => {
+                            const TabComponent = TABS.find(
+                                (t) => t.id === activeTab
+                            )?.component;
+                            return TabComponent
+                                ? <TabComponent />
+                                : null;
+                        })()}
+                    </div>
+                </div>
             </div>
         </div>
     );

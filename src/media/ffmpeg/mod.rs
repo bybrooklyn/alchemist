@@ -511,14 +511,13 @@ impl FFmpegProgress {
 
     fn parse_time(s: &str) -> f64 {
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 3 {
-            return 0.0;
+        let mut total_seconds = 0.0;
+        let mut multiplier = 1.0;
+        for part in parts.into_iter().rev() {
+            total_seconds += part.parse::<f64>().unwrap_or(0.0) * multiplier;
+            multiplier *= 60.0;
         }
-
-        let hours: f64 = parts[0].parse().unwrap_or(0.0);
-        let minutes: f64 = parts[1].parse().unwrap_or(0.0);
-        let seconds: f64 = parts[2].parse().unwrap_or(0.0);
-        hours * 3600.0 + minutes * 60.0 + seconds
+        total_seconds
     }
 
     pub fn percentage(&self, total_duration: f64) -> f64 {

@@ -281,7 +281,7 @@ export default function ResourceMonitor() {
                     <div className="flex items-center gap-2 text-helios-slate text-sm font-medium">
                         <Clock size={16} /> Uptime
                     </div>
-                    <Activity size={14} className="text-green-500 animate-pulse" />
+                    <Activity size={14} className="text-status-success animate-pulse" />
                 </div>
                 <div className="text-2xl font-bold text-helios-ink">{formatUptime(stats.uptime_seconds)}</div>
             </motion.div>

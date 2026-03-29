@@ -2337,16 +2337,13 @@ impl Db {
     }
 
     async fn has_column(&self, table: &str, column: &str) -> Result<bool> {
-        let table = table.replace('\'', "''");
-        let sql = format!("PRAGMA table_info('{}')", table);
-        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
-        for row in rows {
-            let name: String = row.get("name");
-            if name == column {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let sql = "SELECT name FROM pragma_table_info(?) WHERE name = ?";
+        let row = sqlx::query(sql)
+            .bind(table)
+            .bind(column)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
     }
 }
 

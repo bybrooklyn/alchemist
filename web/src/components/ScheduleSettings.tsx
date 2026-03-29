@@ -97,16 +97,7 @@ export default function ScheduleSettings() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-helios-solar/10 rounded-lg">
-                        <Clock className="text-helios-solar" size={20} />
-                    </div>
-                    <div>
-                        <h2 className="text-lg font-semibold text-helios-ink">Active Hours</h2>
-                        <p className="text-xs text-helios-slate">Restrict processing to specific times (e.g. overnight).</p>
-                    </div>
-                </div>
+            <div className="flex justify-end mb-6">
                 <button
                     onClick={() => setShowForm(!showForm)}
                     className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"

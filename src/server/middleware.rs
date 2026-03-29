@@ -204,6 +204,22 @@ pub(crate) fn get_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> O
 }
 
 pub(crate) fn request_ip(req: &Request) -> Option<IpAddr> {
+    if let Some(xff) = req.headers().get("X-Forwarded-For") {
+        if let Ok(xff_str) = xff.to_str() {
+            if let Some(ip_str) = xff_str.split(',').next() {
+                if let Ok(ip) = ip_str.trim().parse() {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    if let Some(xri) = req.headers().get("X-Real-IP") {
+        if let Ok(xri_str) = xri.to_str() {
+            if let Ok(ip) = xri_str.trim().parse() {
+                return Some(ip);
+            }
+        }
+    }
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip())

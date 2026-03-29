@@ -107,6 +107,7 @@ impl FileWatcher {
         // Process filesystem events after the target file has stabilized.
         tokio::spawn(async move {
             let mut pending: HashMap<PendingKey, PendingState> = HashMap::new();
+            let mut interval = tokio::time::interval(poll_interval);
 
             loop {
                 tokio::select! {
@@ -116,7 +117,7 @@ impl FileWatcher {
                             .or_default()
                             .note_hint(event.hint);
                     }
-                    _ = tokio::time::sleep(poll_interval) => {
+                    _ = interval.tick() => {
                         if pending.is_empty() {
                             continue;
                         }

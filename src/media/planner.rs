@@ -290,7 +290,6 @@ fn should_transcode(
     } else {
         None
     };
-    let video_bitrate_available = metadata.video_bitrate_bps.is_some();
     let bitrate = metadata.video_bitrate_bps.or_else(|| {
         if matches!(
             analysis.confidence,
@@ -341,7 +340,7 @@ fn should_transcode(
     if metadata.codec_name.eq_ignore_ascii_case("h264") {
         threshold *= 0.6;
     }
-    if video_bitrate_available && normalized_bpp.is_some_and(|value| value < threshold) {
+    if normalized_bpp.is_some_and(|value| value < threshold) {
         return TranscodeDecision::Skip {
             reason: format!(
                 "bpp_below_threshold|bpp={:.3},threshold={:.3}",

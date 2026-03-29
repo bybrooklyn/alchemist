@@ -718,7 +718,7 @@ export default function JobManager() {
                         <tr>
                             <th className="px-6 py-4 w-10">
                                 <input type="checkbox"
-                                    checked={selected.size === jobs.length && jobs.length > 0}
+                                    checked={jobs.length > 0 && jobs.every(j => selected.has(j.id))}
                                     onChange={toggleSelectAll}
                                     className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
                                 />

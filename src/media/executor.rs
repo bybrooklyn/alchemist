@@ -224,24 +224,20 @@ impl Executor for FfmpegExecutor {
                 .is_some_and(|tag| !encoder_tag_matches(encoder, tag))
         });
 
-        if codec_mismatch {
+        if let (true, Some(codec)) = (codec_mismatch, actual_output_codec) {
             tracing::warn!(
                 "Job {}: Planned codec {} but output probed as {}",
                 job.id,
                 planned_output_codec.as_str(),
-                actual_output_codec
-                    .expect("codec mismatch implies actual output codec")
-                    .as_str()
+                codec.as_str()
             );
         }
 
-        if encoder_mismatch {
+        if let (true, Some(enc)) = (encoder_mismatch, encoder) {
             tracing::warn!(
                 "Job {}: Planned encoder {} but stream tag reported {:?}",
                 job.id,
-                encoder
-                    .expect("encoder mismatch implies requested encoder")
-                    .ffmpeg_encoder_name(),
+                enc.ffmpeg_encoder_name(),
                 actual_probe
                     .as_ref()
                     .and_then(|probe| probe.stream_encoder_tag.as_deref())

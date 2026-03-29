@@ -94,21 +94,18 @@ impl Transcoder {
                 let _ = tx.send(());
                 true
             }
-            None => {
-                drop(channels);
-                match self.pending_cancels.lock() {
-                    Ok(mut pending) => {
-                        pending.insert(job_id);
-                        true
-                    }
-                    Err(e) => {
-                        error!("Pending cancels lock poisoned, recovering: {}", e);
-                        let mut pending = e.into_inner();
-                        pending.insert(job_id);
-                        true
-                    }
+            None => match self.pending_cancels.lock() {
+                Ok(mut pending) => {
+                    pending.insert(job_id);
+                    true
                 }
-            }
+                Err(e) => {
+                    error!("Pending cancels lock poisoned, recovering: {}", e);
+                    let mut pending = e.into_inner();
+                    pending.insert(job_id);
+                    true
+                }
+            },
         }
     }
 

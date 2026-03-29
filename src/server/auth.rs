@@ -31,15 +31,24 @@ pub(crate) async fn login_handler(
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
     }
 
-    let user = match state.db.get_user_by_username(&payload.username).await {
-        Ok(Some(u)) => u,
-        _ => return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
-    };
+    let mut is_valid = true;
+    let user_result = state
+        .db
+        .get_user_by_username(&payload.username)
+        .await
+        .unwrap_or(None);
 
-    let parsed_hash = match PasswordHash::new(&user.password_hash) {
-        Ok(h) => h,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hash format").into_response();
+    // A valid argon2 static hash of a random string used to simulate work and equalize timing
+    const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHN0cmluZzEyMzQ1Ng$1tJ2tA109qj15m3u5+kS/sX5X1UoZ6/H9b/30tX9N/g";
+
+    let parsed_hash = match &user_result {
+        Some(u) => PasswordHash::new(&u.password_hash).unwrap_or_else(|_| {
+            is_valid = false;
+            PasswordHash::new(DUMMY_HASH).unwrap()
+        }),
+        None => {
+            is_valid = false;
+            PasswordHash::new(DUMMY_HASH).unwrap()
         }
     };
 
@@ -47,8 +56,14 @@ pub(crate) async fn login_handler(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        is_valid = false;
+    }
+
+    if !is_valid || user_result.is_none() {
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
     }
+
+    let user = user_result.unwrap();
 
     // Create session
     let token: String = rand::rng()
