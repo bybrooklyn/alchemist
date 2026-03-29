@@ -59,6 +59,7 @@ jobs:
     outputs:
       short_sha: ${{ steps.meta.outputs.short_sha }}
       version_suffix: ${{ steps.meta.outputs.version_suffix }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
       release_name: ${{ steps.meta.outputs.release_name }}
     steps:
       - name: Checkout repository
@@ -72,13 +73,17 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short=7 "${GITHUB_SHA}")
+          TAG_STAMP=$(date -u +%Y%m%d-%H%M%S)
+          DISPLAY_STAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+          RELEASE_TAG="nightly-${TAG_STAMP}-${SHORT_SHA}"
           {
             echo "short_sha=${SHORT_SHA}"
             echo "version_suffix=nightly+${SHORT_SHA}"
-            echo "release_name=Nightly — ${SHORT_SHA} ($(date -u +%Y-%m-%d))"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "release_name=Nightly — ${SHORT_SHA} (${DISPLAY_STAMP})"
           } >> "$GITHUB_OUTPUT"
 
-  force-nightly-tag:
+  publish-nightly-tags:
     needs: [ci-gate, compute-meta]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -88,25 +93,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Force-update nightly tag
+      - name: Publish nightly tags
+        env:
+          RELEASE_TAG: ${{ needs.compute-meta.outputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${RELEASE_TAG}" "${GITHUB_SHA}"
           git tag -f nightly "${GITHUB_SHA}"
+          git push origin "refs/tags/${RELEASE_TAG}"
           git push origin refs/tags/nightly --force
 
   build:
-    needs: [ci-gate, compute-meta]
+    needs: [ci-gate, compute-meta, publish-nightly-tags]
     uses: ./.github/workflows/build.yml
     with:
       version_suffix: ${{ needs.compute-meta.outputs.version_suffix }}
       push_docker: true
       docker_tags: ghcr.io/bybrooklyn/alchemist:nightly
       publish_release: true
-      release_tag: nightly
+      release_tag: ${{ needs.compute-meta.outputs.release_tag }}
       release_name: ${{ needs.compute-meta.outputs.release_name }}
       prerelease: true
       make_latest: false
