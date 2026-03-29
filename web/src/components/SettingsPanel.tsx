@@ -94,20 +94,12 @@ export default function SettingsPanel() {
                                     navItemRefs.current[tab.id] = node;
                                 }}
                                 onClick={() => paginate(tab.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold transition-all duration-200 relative overflow-hidden group ${isActive
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold transition-all duration-200 group ${isActive
                                     ? "text-helios-ink bg-helios-surface-soft shadow-sm border border-helios-line/20"
                                     : "text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft/50"
                                     }`}
                             >
-                                {isActive && (
-                                    <motion.div
-                                        layoutId="active-tab"
-                                        className="absolute inset-0 bg-helios-surface-soft border border-helios-line/20 rounded-md"
-                                        initial={false}
-                                        transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                                    />
-                                )}
-                                <span className="relative z-10 flex items-center gap-3">
+                                <span className="flex items-center gap-3">
                                     <tab.icon size={18} className={isActive ? "text-helios-solar" : "opacity-70 group-hover:opacity-100"} />
                                     {tab.label}
                                 </span>
@@ -137,14 +129,6 @@ export default function SettingsPanel() {
                            Container styling is applied here to wrap the component uniformly.
                         */}
                         <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
-                            <div className="mb-5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-helios-slate/70">
-                                    Setup & Runtime Controls
-                                </p>
-                                <p className="mt-1 text-sm text-helios-ink">
-                                    Tune library behavior, transcoding, hardware, automation, and advanced configuration from one place.
-                                </p>
-                            </div>
                             <div className="mb-6">
                                 <h2 className="text-xl font-bold text-helios-ink flex items-center gap-2">
                                     {(() => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileCode2, RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -65,32 +65,18 @@ export default function ConfigEditorSettings() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex items-start justify-between gap-4">
-                <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-helios-solar/10 rounded-lg text-helios-solar">
-                            <FileCode2 size={20} />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-semibold text-helios-ink">Config Editor</h3>
-                            <p className="text-xs text-helios-slate">
-                                TOML is authoritative. Form saves and raw edits both write the same settings file and synchronized DB projection.
-                            </p>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                        <span className="rounded-full border border-helios-line/30 px-3 py-1 text-xs font-medium text-helios-slate">
-                            Source: {sourceOfTruth}
-                        </span>
-                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-500">
-                            Projection: {projectionStatus}
-                        </span>
-                    </div>
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-helios-line/30 px-3 py-1 text-xs font-medium text-helios-slate">
+                        Source: {sourceOfTruth}
+                    </span>
+                    <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-500">
+                        Projection: {projectionStatus}
+                    </span>
                 </div>
-
                 <button
                     onClick={() => void fetchConfig()}
-                    className="flex items-center gap-2 rounded-xl border border-helios-line/30 bg-helios-surface px-4 py-2 text-sm font-semibold text-helios-ink hover:bg-helios-surface-soft transition-colors"
+                    className="flex items-center gap-2 rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2 text-sm font-semibold text-helios-ink hover:bg-helios-surface-soft transition-colors"
                 >
                     <RefreshCw size={16} />
                     Reload

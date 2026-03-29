@@ -319,7 +319,17 @@ export default function LogViewer() {
                     </div>
                 )}
 
-                {groupedLogs.length === 0 && !loading && !streamError && (
+                {!loading && !streamError && logs.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-helios-slate/60">
+                        <Terminal size={32} className="opacity-30" />
+                        <p className="text-sm font-medium">No log entries yet</p>
+                        <p className="text-xs text-center max-w-xs">
+                            Logs appear here once the engine starts processing jobs. Start the engine from the header to begin.
+                        </p>
+                    </div>
+                )}
+
+                {!loading && !streamError && logs.length > 0 && groupedLogs.length === 0 && (
                     <div className="text-helios-slate/30 text-center py-12 text-xs italic">
                         No logs found.
                     </div>
