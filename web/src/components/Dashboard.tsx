@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
     Activity,
     CheckCircle2,
@@ -6,7 +6,6 @@ import {
     HardDrive,
     Database,
     Zap,
-    Terminal,
     type LucideIcon,
 } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
@@ -34,19 +33,17 @@ interface PreferenceResponse {
     value: string;
 }
 
+interface DailyStat {
+    date: string;
+    jobs_completed: number;
+    bytes_saved: number;
+}
+
 interface StatCardProps {
     label: string;
     value: number;
     icon: LucideIcon;
     colorClass: string;
-}
-
-interface QuickStartItem {
-    title: string;
-    body: ReactNode;
-    icon: LucideIcon;
-    tone: string;
-    bg: string;
 }
 
 const DEFAULT_STATS = {
@@ -56,6 +53,14 @@ const DEFAULT_STATS = {
     failed: 0,
     concurrent_limit: 1,
 };
+
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
 
 function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     return (
@@ -75,6 +80,11 @@ export default function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [jobsLoading, setJobsLoading] = useState(true);
     const [bundle, setBundle] = useState<SettingsBundleResponse | null>(null);
+    const [weekStats, setWeekStats] = useState<{
+        bytesSaved: number;
+        jobsCompleted: number;
+        avgCompression: number;
+    } | null>(null);
     const [engineStatus, setEngineStatus] = useState<"paused" | "running" | "draining">("paused");
     const { stats: sharedStats, error: statsError } = useSharedStats();
     const stats = sharedStats ?? DEFAULT_STATS;
@@ -159,6 +169,21 @@ export default function Dashboard() {
         };
     }, []);
 
+    useEffect(() => {
+        const fetchWeekStats = async () => {
+            try {
+                const data = await apiJson<DailyStat[]>("/api/stats/daily");
+                const last7 = data.slice(-7);
+                const bytesSaved = last7.reduce((sum, d) => sum + d.bytes_saved, 0);
+                const jobsCompleted = last7.reduce((sum, d) => sum + d.jobs_completed, 0);
+                setWeekStats({ bytesSaved, jobsCompleted, avgCompression: 0 });
+            } catch {
+                // not critical — panel just won't show
+            }
+        };
+        void fetchWeekStats();
+    }, []);
+
     const formatRelativeTime = (iso?: string) => {
         if (!iso) return "Just now";
         const then = new Date(iso).getTime();
@@ -173,88 +198,13 @@ export default function Dashboard() {
         return `${days}d ago`;
     };
 
-    const quickStartItems = useMemo<QuickStartItem[]>(() => {
-        const items: QuickStartItem[] = [];
-        const libraryRoots = bundle?.settings.scanner.directories.length ?? 0;
-        const notificationTargets = bundle?.settings.notifications.targets.length ?? 0;
-        const schedules = bundle?.settings.schedule.windows.length ?? 0;
-
-        if (libraryRoots === 0) {
-            items.push({
-                title: "Finish Library Setup",
-                body: (
-                    <>
-                        No canonical server library roots are configured yet. Use{" "}
-                        <a href="/settings" className="underline hover:text-helios-ink transition-colors">
-                            Settings
-                        </a>
-                        {" "}or re-run setup to point Alchemist at the right server folders.
-                    </>
-                ),
-                icon: HardDrive,
-                tone: "text-helios-solar",
-                bg: "bg-helios-solar/10",
-            });
-        }
-
-        if (stats.failed > 0) {
-            items.push({
-                title: "Review Failures",
-                body: (
-                    <>
-                        {stats.failed} jobs failed recently. Check{" "}
-                        <a href="/logs" className="underline hover:text-helios-ink transition-colors">
-                            Logs
-                        </a>{" "}
-                        to diagnose and retry.
-                    </>
-                ),
-                icon: Terminal,
-                tone: "text-red-500",
-                bg: "bg-red-500/10",
-            });
-        }
-
-        if (notificationTargets === 0 || schedules === 0) {
-            items.push({
-                title: "Complete Automation",
-                body: (
-                    <>
-                        {notificationTargets === 0 ? "Notifications" : "Schedule windows"} still need attention if you want a true set-it-and-forget-it workflow.
-                    </>
-                ),
-                icon: Zap,
-                tone: "text-amber-500",
-                bg: "bg-amber-500/10",
-            });
-        }
-
-        if (stats.active === 0 && stats.total > 0) {
-            items.push({
-                title: "Queue Is Idle",
-                body: (
-                    <>
-                        No jobs are active right now. Review the queue in{" "}
-                        <a href="/jobs" className="underline hover:text-helios-ink transition-colors">Jobs</a>{" "}
-                        or verify that your watched server folders are correct.
-                    </>
-                ),
-                icon: Activity,
-                tone: "text-emerald-500",
-                bg: "bg-emerald-500/10",
-            });
-        }
-
-        return items.slice(0, 3);
-    }, [bundle, stats.active, stats.failed, stats.total]);
-
     return (
         <div className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden">
 
             {/* Engine paused banner */}
             {engineStatus === "paused" && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 flex items-center gap-3">
-                    <span className="text-amber-500 shrink-0 text-xs font-semibold">ENGINE PAUSED</span>
+                <div className="rounded-lg border border-helios-solar/20 bg-helios-solar/10 px-4 py-3 flex items-center gap-3">
+                    <span className="text-helios-solar shrink-0 text-xs font-semibold">ENGINE PAUSED</span>
                     <span className="text-sm text-helios-ink">
                         The queue can fill up but Alchemist won't start encoding until you click
                         <span className="font-bold"> Start</span>
@@ -265,7 +215,7 @@ export default function Dashboard() {
 
             {/* Stat row — compact horizontal strip */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-amber-500" />
+                <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-helios-solar" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-emerald-500" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />
                 <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
@@ -313,7 +263,7 @@ export default function Dashboard() {
                                                 : s === "failed"
                                                     ? "bg-status-error"
                                                 : s === "encoding" || s === "analyzing"
-                                                    ? "bg-amber-500 animate-pulse"
+                                                    ? "bg-helios-solar animate-pulse"
                                                 : "bg-helios-slate/40"
                                             }`} />
                                             <div className="flex flex-col min-w-0">
@@ -336,35 +286,38 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* Right column: Quick Start + bundle stats */}
+                {/* Right column: weekly savings + bundle stats */}
                 <div className="flex flex-col gap-4">
-
-                    {/* Quick Start — only when there's something actionable */}
-                    {quickStartItems.length > 0 && (
-                        <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5">
-                            <h3 className="text-sm font-semibold text-helios-ink mb-4 flex items-center gap-2">
-                                <Zap size={15} className="text-helios-solar" />
-                                Quick Start
-                            </h3>
-                            <div className="flex flex-col gap-3">
-                                {quickStartItems.map(({ title, body, icon: Icon, tone, bg }) => (
-                                    <div key={title} className="flex gap-3 items-start">
-                                        <div className={`p-2 rounded-lg ${bg} ${tone} shrink-0`}>
-                                            <Icon size={15} />
-                                        </div>
-                                        <div className="min-w-0">
-                                            <h4 className="text-xs font-semibold text-helios-ink">
-                                                {title}
-                                            </h4>
-                                            <p className="text-xs text-helios-slate mt-0.5 leading-relaxed">
-                                                {body}
-                                            </p>
-                                        </div>
-                                    </div>
-                                ))}
+                    <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5">
+                        <h3 className="text-sm font-semibold text-helios-ink mb-4 flex items-center gap-2">
+                            <HardDrive size={15} className="text-helios-solar" />
+                            Last 7 Days
+                        </h3>
+                        {weekStats ? (
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">
+                                        Space recovered
+                                    </span>
+                                    <span className="font-bold font-mono text-helios-solar">
+                                        {formatBytes(weekStats.bytesSaved)}
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">
+                                        Jobs completed
+                                    </span>
+                                    <span className="font-bold font-mono text-helios-ink">
+                                        {weekStats.jobsCompleted}
+                                    </span>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        ) : (
+                            <p className="text-xs text-helios-slate/60 italic">
+                                No data yet
+                            </p>
+                        )}
+                    </div>
 
                     {/* Config summary */}
                     {bundle && (

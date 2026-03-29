@@ -262,6 +262,13 @@ impl JobWithHealthIssueRow {
     }
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct DuplicateCandidate {
+    pub id: i64,
+    pub input_path: String,
+    pub status: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct WatchDir {
     pub id: i64,
@@ -818,6 +825,24 @@ impl Db {
             .await?;
 
             Ok(jobs)
+        })
+        .await
+    }
+
+    /// Returns all jobs whose filename stem appears more than
+    /// once across the library. Groups by stem, filtered to
+    /// only non-cancelled jobs. Grouping and path parsing is
+    /// done in Rust using std::path::Path.
+    pub async fn get_duplicate_candidates(&self) -> Result<Vec<DuplicateCandidate>> {
+        timed_query("get_duplicate_candidates", || async {
+            let rows: Vec<DuplicateCandidate> = sqlx::query_as(
+                "SELECT id, input_path, status FROM jobs
+                 WHERE status NOT IN ('cancelled')
+                 ORDER BY input_path ASC",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            Ok(rows)
         })
         .await
     }

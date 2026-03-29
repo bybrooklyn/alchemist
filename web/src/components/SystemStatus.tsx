@@ -147,7 +147,10 @@ export default function SystemStatus() {
                                 role="dialog"
                                 aria-modal="true"
                                 aria-labelledby="system-status-title"
-                                layoutId={layoutId}
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                                transition={{ duration: 0.2 }}
                                 className="w-full max-w-lg bg-helios-surface border border-helios-line/30 rounded-xl shadow-2xl overflow-hidden relative outline-none"
                                 onClick={(e) => e.stopPropagation()}
                                 tabIndex={-1}

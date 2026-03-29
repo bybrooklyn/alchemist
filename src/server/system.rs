@@ -26,6 +26,26 @@ struct SystemResources {
     gpu_memory_percent: Option<f32>,
 }
 
+#[derive(Serialize)]
+struct DuplicateGroup {
+    stem: String,
+    count: usize,
+    paths: Vec<DuplicatePath>,
+}
+
+#[derive(Serialize)]
+struct DuplicatePath {
+    id: i64,
+    path: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct LibraryIntelligenceResponse {
+    duplicate_groups: Vec<DuplicateGroup>,
+    total_duplicates: usize,
+}
+
 pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Response {
     let mut cache = state.resources_cache.lock().await;
     if let Some((value, cached_at)) = cache.as_ref() {
@@ -92,6 +112,61 @@ pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>)
 
     *cache = Some((value.clone(), Instant::now()));
     axum::Json(value).into_response()
+}
+
+pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppState>>) -> Response {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    match state.db.get_duplicate_candidates().await {
+        Ok(candidates) => {
+            let mut groups: HashMap<String, Vec<_>> = HashMap::new();
+            for candidate in candidates {
+                let stem = Path::new(&candidate.input_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if stem.is_empty() {
+                    continue;
+                }
+                groups.entry(stem).or_default().push(candidate);
+            }
+
+            let mut duplicate_groups: Vec<DuplicateGroup> = groups
+                .into_iter()
+                .filter(|(_, paths)| paths.len() > 1)
+                .map(|(stem, paths)| {
+                    let count = paths.len();
+                    DuplicateGroup {
+                        stem,
+                        count,
+                        paths: paths
+                            .into_iter()
+                            .map(|candidate| DuplicatePath {
+                                id: candidate.id,
+                                path: candidate.input_path,
+                                status: candidate.status,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect();
+
+            duplicate_groups.sort_by(|a, b| b.count.cmp(&a.count).then(a.stem.cmp(&b.stem)));
+
+            let total_duplicates = duplicate_groups.iter().map(|group| group.count - 1).sum();
+
+            axum::Json(LibraryIntelligenceResponse {
+                duplicate_groups,
+                total_duplicates,
+            })
+            .into_response()
+        }
+        Err(err) => {
+            error!("Failed to fetch duplicate candidates: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools

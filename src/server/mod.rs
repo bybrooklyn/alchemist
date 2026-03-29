@@ -361,6 +361,10 @@ fn app_router(state: Arc<AppState>) -> Router {
             "/api/system/hardware/probe-log",
             get(get_hardware_probe_log_handler),
         )
+        .route(
+            "/api/library/intelligence",
+            get(library_intelligence_handler),
+        )
         .route("/api/library/health", get(library_health_handler))
         .route(
             "/api/library/health/scan",
