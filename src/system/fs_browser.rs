@@ -254,6 +254,15 @@ fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
         .map(|raw| {
             let path = PathBuf::from(raw.trim());
             let canonical = canonical_or_original(&path)?;
+
+            // Block sensitive system directories
+            if is_sensitive_path(&canonical) {
+                return Err(AlchemistError::Watch(format!(
+                    "Access to sensitive path {:?} is restricted",
+                    path
+                )));
+            }
+
             let exists = canonical.exists();
             let readable = exists && canonical.is_dir() && std::fs::read_dir(&canonical).is_ok();
 

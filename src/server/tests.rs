@@ -3,10 +3,9 @@
 #![cfg(test)]
 
 use super::settings::TranscodeSettingsPayload;
-use super::sse::sse_message_stream;
 use super::wizard::normalize_setup_directories;
 use super::*;
-use crate::db::{AlchemistEvent, JobState};
+use crate::db::{JobEvent, JobState};
 use crate::system::hardware::{HardwareProbeLog, HardwareState};
 use axum::{
     Router,
@@ -281,23 +280,28 @@ fn config_save_other_errors_map_to_500() {
 }
 
 #[tokio::test]
-async fn sse_message_stream_emits_lagged_event_and_recovers() {
-    let (tx, rx) = broadcast::channel(1);
-    tx.send(AlchemistEvent::Log {
-        level: "info".to_string(),
-        job_id: None,
-        message: "first".to_string(),
-    })
-    .unwrap();
-    tx.send(AlchemistEvent::Log {
-        level: "info".to_string(),
-        job_id: None,
-        message: "second".to_string(),
-    })
-    .unwrap();
-    drop(tx);
+async fn sse_unified_stream_emits_lagged_event_and_recovers() {
+    let (job_tx, job_rx) = broadcast::channel(1);
+    let (_config_tx, config_rx) = broadcast::channel(1);
+    let (_system_tx, system_rx) = broadcast::channel(1);
 
-    let mut stream = Box::pin(sse_message_stream(rx));
+    job_tx
+        .send(JobEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(1),
+            message: "first".to_string(),
+        })
+        .unwrap();
+    job_tx
+        .send(JobEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(1),
+            message: "second".to_string(),
+        })
+        .unwrap();
+    drop(job_tx);
+
+    let mut stream = Box::pin(super::sse::sse_unified_stream(job_rx, config_rx, system_rx));
     let first = stream.next().await.unwrap().unwrap();
     assert_eq!(first.event_name, "lagged");
     assert!(first.data.contains("\"skipped\":1"));
@@ -984,14 +988,14 @@ async fn sse_route_emits_lagged_event_and_recovers()
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
-    state.tx.send(AlchemistEvent::Log {
+    state.event_channels.jobs.send(JobEvent::Log {
         level: "info".to_string(),
-        job_id: None,
+        job_id: Some(1),
         message: "first".to_string(),
     })?;
-    state.tx.send(AlchemistEvent::Log {
+    state.event_channels.jobs.send(JobEvent::Log {
         level: "info".to_string(),
-        job_id: None,
+        job_id: Some(1),
         message: "second".to_string(),
     })?;
 

@@ -219,17 +219,19 @@ interface EncodeStats {
     vmaf_score?: number;
 }
 
+interface LogEntry {
+    id: number;
+    level: string;
+    message: string;
+    created_at: string;
+}
+
 interface JobDetail {
     job: Job;
-    metadata?: JobMetadata;
-    encode_stats?: EncodeStats;
-    job_logs?: Array<{
-        id: number;
-        level: string;
-        message: string;
-        created_at: string;
-    }>;
-    job_failure_summary?: string;
+    metadata: JobMetadata | null;
+    encode_stats: EncodeStats | null;
+    job_logs: LogEntry[];
+    job_failure_summary: string | null;
 }
 
 interface CountMessageResponse {
@@ -633,10 +635,6 @@ export default function JobManager() {
         ? humanizeSkipReason(focusedJob.job.decision_reason)
         : null;
     const focusedJobLogs = focusedJob?.job_logs ?? [];
-    const focusedFailureDetail = focusedJob?.job.decision_reason ?? focusedJob?.job_failure_summary ?? null;
-    const focusedFailureExplanation = focusedFailureDetail
-        ? explainFailureSummary(focusedFailureDetail)
-        : null;
     const shouldShowFfmpegOutput = focusedJob
         ? ["failed", "completed", "skipped"].includes(focusedJob.job.status) && focusedJobLogs.length > 0
         : false;
@@ -1242,33 +1240,6 @@ export default function JobManager() {
                                         </div>
                                     )}
 
-                                    {focusedJob.job.status === "failed" && focusedFailureDetail && (
-                                        <div className="rounded-lg border border-status-error/20 bg-status-error/5 px-4 py-3 space-y-2">
-                                            <div className="flex items-center gap-2 text-status-error">
-                                                <AlertCircle size={14} />
-                                                <span className="text-sm font-semibold">What went wrong</span>
-                                            </div>
-                                            <p className="text-sm font-semibold text-status-error">
-                                                {focusedFailureExplanation}
-                                            </p>
-                                            <p className="break-all font-mono text-xs leading-relaxed text-helios-slate">
-                                                {focusedFailureDetail}
-                                            </p>
-                                        </div>
-                                    )}
-
-                                    {focusedJob.job.status === "failed" && !focusedFailureDetail && (
-                                        <div className="p-4 rounded-lg bg-status-error/5 border border-status-error/15">
-                                            <div className="flex items-center gap-2 text-status-error mb-2">
-                                                <AlertCircle size={14} />
-                                                <span className="text-sm font-semibold">What went wrong</span>
-                                            </div>
-                                            <p className="text-sm text-helios-slate leading-relaxed">
-                                                No error summary was recorded. Review the FFmpeg output below for the last encoder messages.
-                                            </p>
-                                        </div>
-                                    )}
-
                                     {focusedJob.job.status === "skipped" && focusedJob.job.decision_reason && (
                                         <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/10">
                                             <p className="text-sm text-helios-ink leading-relaxed">
@@ -1300,6 +1271,31 @@ export default function JobManager() {
                                                         </div>
                                                     )}
                                                 </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {focusedJob.job.status === "failed" && (
+                                        <div className="rounded-lg border border-status-error/20 bg-status-error/5 px-4 py-4 space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <AlertCircle size={14} className="text-status-error shrink-0" />
+                                                <span className="text-xs font-semibold text-status-error uppercase tracking-wide">
+                                                    Failure Reason
+                                                </span>
+                                            </div>
+                                            {focusedJob.job_failure_summary ? (
+                                                <>
+                                                    <p className="text-sm font-medium text-helios-ink">
+                                                        {explainFailureSummary(focusedJob.job_failure_summary)}
+                                                    </p>
+                                                    <p className="text-xs font-mono text-helios-slate/70 break-all leading-relaxed">
+                                                        {focusedJob.job_failure_summary}
+                                                    </p>
+                                                </>
+                                            ) : (
+                                                <p className="text-sm text-helios-slate">
+                                                    No error details captured. Check the logs below.
+                                                </p>
                                             )}
                                         </div>
                                     )}

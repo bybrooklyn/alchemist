@@ -469,6 +469,35 @@ async fn run() -> Result<()> {
         // Initialize File Watcher
         let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(db.clone()));
 
+        if !setup_mode {
+            let scan_agent = agent.clone();
+            let startup_scanner = Arc::new(alchemist::system::scanner::LibraryScanner::new(
+                db.clone(),
+                config.clone(),
+            ));
+            tokio::spawn(async move {
+                // Small delay to let the server fully initialize
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                // Trigger a full library scan first
+                if let Err(e) = startup_scanner.start_scan().await {
+                    error!("Startup scan failed: {e}");
+                }
+
+                // Wait for scan to complete (poll until not running)
+                loop {
+                    let status = startup_scanner.get_status().await;
+                    if !status.is_running {
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
+
+                // Now analyze all queued + failed jobs
+                scan_agent.analyze_pending_jobs().await;
+            });
+        }
+
         // Function to reload watcher (Config + DB)
         let reload_watcher = {
             let config = config.clone();

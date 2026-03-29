@@ -10,19 +10,11 @@ use tracing::{error, warn};
 #[derive(Clone)]
 pub struct NotificationManager {
     db: Db,
-    client: Client,
 }
 
 impl NotificationManager {
     pub fn new(db: Db) -> Self {
-        Self {
-            db,
-            client: Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(Policy::none())
-                .build()
-                .unwrap_or_else(|_| Client::new()),
-        }
+        Self { db }
     }
 
     pub fn start_listener(&self, mut rx: broadcast::Receiver<AlchemistEvent>) {
@@ -91,7 +83,17 @@ impl NotificationManager {
             };
 
             if allowed.contains(&status) {
-                self.send(&target, &event, &status).await?;
+                let manager = self.clone();
+                let event_clone = event.clone();
+                let status_clone = status.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = manager.send(&target, &event_clone, &status_clone).await {
+                        error!(
+                            "Failed to send notification to target '{}': {}",
+                            target.name, e
+                        );
+                    }
+                });
             }
         }
         Ok(())
@@ -103,18 +105,51 @@ impl NotificationManager {
         event: &AlchemistEvent,
         status: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        ensure_public_endpoint(&target.endpoint_url).await?;
+        let url = Url::parse(&target.endpoint_url)?;
+        let host = url
+            .host_str()
+            .ok_or("notification endpoint host is missing")?;
+        let port = url.port_or_known_default().ok_or("invalid port")?;
+
+        if host.eq_ignore_ascii_case("localhost") {
+            return Err("localhost is not allowed as a notification endpoint".into());
+        }
+
+        let addr = format!("{}:{}", host, port);
+        let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
+        let target_ip = ips
+            .into_iter()
+            .map(|a| a.ip())
+            .find(|ip| !is_private_ip(*ip))
+            .ok_or("no public IP address found for notification endpoint")?;
+
+        // Pin the request to the validated IP to prevent DNS rebinding
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(Policy::none())
+            .resolve(host, std::net::SocketAddr::new(target_ip, port))
+            .build()?;
 
         match target.target_type.as_str() {
-            "discord" => self.send_discord(target, event, status).await,
-            "gotify" => self.send_gotify(target, event, status).await,
-            "webhook" => self.send_webhook(target, event, status).await,
+            "discord" => {
+                self.send_discord_with_client(&client, target, event, status)
+                    .await
+            }
+            "gotify" => {
+                self.send_gotify_with_client(&client, target, event, status)
+                    .await
+            }
+            "webhook" => {
+                self.send_webhook_with_client(&client, target, event, status)
+                    .await
+            }
             _ => Ok(()),
         }
     }
 
-    async fn send_discord(
+    async fn send_discord_with_client(
         &self,
+        client: &Client,
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
@@ -143,7 +178,7 @@ impl NotificationManager {
             }]
         });
 
-        self.client
+        client
             .post(&target.endpoint_url)
             .json(&body)
             .send()
@@ -152,8 +187,9 @@ impl NotificationManager {
         Ok(())
     }
 
-    async fn send_gotify(
+    async fn send_gotify_with_client(
         &self,
+        client: &Client,
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
@@ -171,7 +207,7 @@ impl NotificationManager {
             _ => 2,
         };
 
-        let mut req = self.client.post(&target.endpoint_url).json(&json!({
+        let mut req = client.post(&target.endpoint_url).json(&json!({
             "title": "Alchemist",
             "message": message,
             "priority": priority
@@ -185,8 +221,9 @@ impl NotificationManager {
         Ok(())
     }
 
-    async fn send_webhook(
+    async fn send_webhook_with_client(
         &self,
+        client: &Client,
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
@@ -206,7 +243,7 @@ impl NotificationManager {
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
 
-        let mut req = self.client.post(&target.endpoint_url).json(&body);
+        let mut req = client.post(&target.endpoint_url).json(&body);
         if let Some(token) = &target.auth_token {
             req = req.bearer_auth(token);
         }
@@ -216,7 +253,7 @@ impl NotificationManager {
     }
 }
 
-async fn ensure_public_endpoint(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn _unused_ensure_public_endpoint(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let url = Url::parse(raw)?;
     let host = match url.host_str() {
         Some(value) => value,
@@ -323,7 +360,7 @@ mod tests {
             status: crate::db::JobState::Failed,
         };
 
-        let result = manager.send_webhook(&target, &event, "failed").await;
+        let result = manager.send(&target, &event, "failed").await;
         assert!(result.is_err());
 
         drop(manager);

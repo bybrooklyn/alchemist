@@ -1,6 +1,6 @@
 //! Server-sent events (SSE) streaming.
 
-use crate::db::{AlchemistEvent, ConfigEvent, JobEvent, SystemEvent};
+use crate::db::{ConfigEvent, JobEvent, SystemEvent};
 use axum::{
     extract::State,
     response::sse::{Event as AxumEvent, Sse},
@@ -24,58 +24,6 @@ impl From<SseMessage> for AxumEvent {
         AxumEvent::default()
             .event(message.event_name)
             .data(message.data)
-    }
-}
-
-pub(crate) fn sse_message_for_event(event: &AlchemistEvent) -> SseMessage {
-    match event {
-        AlchemistEvent::Log {
-            level,
-            job_id,
-            message,
-        } => SseMessage {
-            event_name: "log",
-            data: serde_json::json!({
-                "level": level,
-                "job_id": job_id,
-                "message": message
-            })
-            .to_string(),
-        },
-        AlchemistEvent::Progress {
-            job_id,
-            percentage,
-            time,
-        } => SseMessage {
-            event_name: "progress",
-            data: serde_json::json!({
-                "job_id": job_id,
-                "percentage": percentage,
-                "time": time
-            })
-            .to_string(),
-        },
-        AlchemistEvent::JobStateChanged { job_id, status } => SseMessage {
-            event_name: "status",
-            data: serde_json::json!({
-                "job_id": job_id,
-                "status": status
-            })
-            .to_string(),
-        },
-        AlchemistEvent::Decision {
-            job_id,
-            action,
-            reason,
-        } => SseMessage {
-            event_name: "decision",
-            data: serde_json::json!({
-                "job_id": job_id,
-                "action": action,
-                "reason": reason
-            })
-            .to_string(),
-        },
     }
 }
 
@@ -223,21 +171,6 @@ pub(crate) fn sse_unified_stream(
     ])
 }
 
-pub(crate) fn sse_message_stream(
-    rx: broadcast::Receiver<AlchemistEvent>,
-) -> impl Stream<Item = std::result::Result<SseMessage, Infallible>> {
-    stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Ok(event) => Some((Ok(sse_message_for_event(&event)), rx)),
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                warn!("SSE subscriber lagged; skipped {skipped} events");
-                Some((Ok(sse_lagged_message(skipped)), rx))
-            }
-            Err(broadcast::error::RecvError::Closed) => None,
-        }
-    })
-}
-
 pub(crate) async fn sse_handler(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>> {
@@ -245,20 +178,14 @@ pub(crate) async fn sse_handler(
     let job_rx = state.event_channels.jobs.subscribe();
     let config_rx = state.event_channels.config.subscribe();
     let system_rx = state.event_channels.system.subscribe();
-    let legacy_rx = state.tx.subscribe();
 
     // Create unified stream from new typed channels
     let unified_stream = sse_unified_stream(job_rx, config_rx, system_rx);
 
-    // Create legacy stream for backwards compatibility
-    let legacy_stream = sse_message_stream(legacy_rx);
+    let stream = unified_stream.map(|message| match message {
+        Ok(message) => Ok(message.into()),
+        Err(never) => match never {},
+    });
 
-    // Merge both streams
-    let combined_stream =
-        futures::stream::select(unified_stream, legacy_stream).map(|message| match message {
-            Ok(message) => Ok(message.into()),
-            Err(never) => match never {},
-        });
-
-    Sse::new(combined_stream).keep_alive(axum::response::sse::KeepAlive::default())
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }

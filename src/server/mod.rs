@@ -184,11 +184,50 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         })
         .transpose()?
         .unwrap_or(3000);
-    let addr = format!("0.0.0.0:{port}");
-    info!("listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(AlchemistError::Io)?;
+    let user_specified_port = std::env::var("ALCHEMIST_SERVER_PORT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    let max_attempts: u16 = if user_specified_port { 1 } else { 10 };
+    let mut listener = None;
+    let mut bound_port = port;
+
+    for attempt in 0..max_attempts {
+        let try_port = port.saturating_add(attempt);
+        let addr = format!("0.0.0.0:{try_port}");
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => {
+                bound_port = try_port;
+                listener = Some(l);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                if user_specified_port {
+                    return Err(AlchemistError::Config(format!(
+                        "Port {try_port} is already in use. Set ALCHEMIST_SERVER_PORT to a different port."
+                    )));
+                }
+                tracing::warn!("Port {try_port} is in use, trying {}", try_port.saturating_add(1));
+            }
+            Err(e) => return Err(AlchemistError::Io(e)),
+        }
+    }
+
+    let listener = listener.ok_or_else(|| {
+        AlchemistError::Config(format!(
+            "Could not bind to any port in range {port}–{}. Set ALCHEMIST_SERVER_PORT to use a specific port.",
+            port.saturating_add(max_attempts - 1)
+        ))
+    })?;
+
+    if bound_port != port {
+        tracing::warn!(
+            "Port {} was in use — Alchemist is listening on http://0.0.0.0:{bound_port} instead",
+            port
+        );
+    } else {
+        info!("listening on http://0.0.0.0:{bound_port}");
+    }
 
     // Run server with graceful shutdown on Ctrl+C
     axum::serve(

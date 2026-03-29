@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FolderOpen, Trash2, Plus, Folder, Play, Pencil } from "lucide-react";
+import { FolderOpen, X, Play, Pencil } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -62,18 +62,14 @@ export default function WatchFolders() {
     const [dirs, setDirs] = useState<WatchDir[]>([]);
     const [profiles, setProfiles] = useState<LibraryProfile[]>([]);
     const [presets, setPresets] = useState<LibraryProfile[]>([]);
-    const [libraryDirs, setLibraryDirs] = useState<string[]>([]);
-    const [path, setPath] = useState("");
-    const [libraryPath, setLibraryPath] = useState("");
-    const [isRecursive, setIsRecursive] = useState(true);
+    const [dirInput, setDirInput] = useState("");
     const [loading, setLoading] = useState(true);
     const [scanning, setScanning] = useState(false);
-    const [syncingLibrary, setSyncingLibrary] = useState(false);
     const [assigningDirId, setAssigningDirId] = useState<number | null>(null);
     const [savingProfile, setSavingProfile] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
-    const [pickerOpen, setPickerOpen] = useState<null | "library" | "watch">(null);
+    const [pendingRemovePath, setPendingRemovePath] = useState<string | null>(null);
+    const [pickerOpen, setPickerOpen] = useState<boolean>(false);
     const [customizeDir, setCustomizeDir] = useState<WatchDir | null>(null);
     const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
 
@@ -86,14 +82,40 @@ export default function WatchFolders() {
         [profiles]
     );
 
-    const fetchBundle = async () => {
-        const data = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-        setLibraryDirs(data.settings.scanner.directories);
-    };
-
     const fetchDirs = async () => {
-        const data = await apiJson<WatchDir[]>("/api/settings/watch-dirs");
-        setDirs(data);
+        // Fetch both canonical library dirs and extra watch dirs, merge them for the UI
+        const [bundle, watchDirs] = await Promise.all([
+            apiJson<SettingsBundleResponse>("/api/settings/bundle"),
+            apiJson<WatchDir[]>("/api/settings/watch-dirs")
+        ]);
+
+        const merged: WatchDir[] = [];
+        const seen = new Set<string>();
+
+        // Canonical roots get mapped to WatchDir structure (id is synthetic/negative, profile_id is null)
+        bundle.settings.scanner.directories.forEach((dir, idx) => {
+            if (!seen.has(dir)) {
+                seen.add(dir);
+                merged.push({ id: -(idx + 1), path: dir, is_recursive: true, profile_id: null });
+            }
+        });
+
+        // Extra watch dirs append (usually they would be stored in the DB)
+        watchDirs.forEach(wd => {
+            if (!seen.has(wd.path)) {
+                seen.add(wd.path);
+                merged.push(wd);
+            } else {
+                // If it exists in both, prefer the DB version so we have a real ID for profiles
+                const existing = merged.find(m => m.path === wd.path);
+                if (existing) {
+                    existing.id = wd.id;
+                    existing.profile_id = wd.profile_id;
+                }
+            }
+        });
+
+        setDirs(merged);
     };
 
     const fetchProfiles = async () => {
@@ -108,7 +130,7 @@ export default function WatchFolders() {
 
     const refreshAll = async () => {
         try {
-            await Promise.all([fetchDirs(), fetchBundle(), fetchProfiles(), fetchPresets()]);
+            await Promise.all([fetchDirs(), fetchProfiles(), fetchPresets()]);
             setError(null);
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to load watch folders";
@@ -138,19 +160,45 @@ export default function WatchFolders() {
         }
     };
 
-    const addDir = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!path.trim()) return;
+    const addDirectory = async (targetPath: string) => {
+        const normalized = targetPath.trim();
+        if (!normalized) return;
+        if (dirs.some((d) => d.path === normalized)) {
+            showToast({ kind: "error", title: "Watch Folders", message: "Folder already exists." });
+            return;
+        }
 
         try {
-            await apiAction("/api/settings/watch-dirs", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: path.trim(), is_recursive: isRecursive }),
-            });
+            // Add to BOTH config (canonical) and DB (profiles)
+            const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
+            if (!bundle.settings.scanner.directories.includes(normalized)) {
+                await apiAction("/api/settings/bundle", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        ...bundle.settings,
+                        scanner: {
+                            ...bundle.settings.scanner,
+                            directories: [...bundle.settings.scanner.directories, normalized],
+                        },
+                    }),
+                });
+            }
 
-            setPath("");
-            setIsRecursive(true);
+            try {
+                await apiAction("/api/settings/watch-dirs", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path: normalized, is_recursive: true }),
+                });
+            } catch (innerE) {
+                // If it's just a duplicate DB error we can ignore it since we successfully added to canonical
+                if (!(isApiError(innerE) && innerE.status === 409)) {
+                    throw innerE;
+                }
+            }
+
+            setDirInput("");
             setError(null);
             await fetchDirs();
             showToast({ kind: "success", title: "Watch Folders", message: "Folder added." });
@@ -161,49 +209,36 @@ export default function WatchFolders() {
         }
     };
 
-    const saveLibraryDirs = async (nextDirectories: string[]) => {
-        setSyncingLibrary(true);
+    const removeDirectory = async (dirPath: string) => {
+        const dir = dirs.find((d) => d.path === dirPath);
+        if (!dir) return;
+
         try {
+            // Remove from canonical config if present
             const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-            await apiAction("/api/settings/bundle", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    ...bundle.settings,
-                    scanner: {
-                        ...bundle.settings.scanner,
-                        directories: nextDirectories,
-                    },
-                }),
-            });
-            setLibraryDirs(nextDirectories);
-            setError(null);
-            showToast({ kind: "success", title: "Library", message: "Library directories updated." });
-        } catch (e) {
-            const message = isApiError(e) ? e.message : "Failed to update library directories";
-            setError(message);
-            showToast({ kind: "error", title: "Library", message });
-        } finally {
-            setSyncingLibrary(false);
-        }
-    };
+            const filteredDirs = bundle.settings.scanner.directories.filter(candidate => candidate !== dir.path);
+            
+            if (filteredDirs.length !== bundle.settings.scanner.directories.length) {
+                 await apiAction("/api/settings/bundle", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        ...bundle.settings,
+                        scanner: {
+                            ...bundle.settings.scanner,
+                            directories: filteredDirs,
+                        },
+                    }),
+                });
+            }
 
-    const addLibraryDir = async () => {
-        const nextPath = libraryPath.trim();
-        if (!nextPath || libraryDirs.includes(nextPath)) return;
-        await saveLibraryDirs([...libraryDirs, nextPath]);
-        setLibraryPath("");
-    };
+            // Remove from DB if it has a real ID
+            if (dir.id > 0) {
+                await apiAction(`/api/settings/watch-dirs/${dir.id}`, {
+                    method: "DELETE",
+                });
+            }
 
-    const removeLibraryDir = async (dir: string) => {
-        await saveLibraryDirs(libraryDirs.filter(candidate => candidate !== dir));
-    };
-
-    const removeDir = async (id: number) => {
-        try {
-            await apiAction(`/api/settings/watch-dirs/${id}`, {
-                method: "DELETE",
-            });
             setError(null);
             await fetchDirs();
             showToast({ kind: "success", title: "Watch Folders", message: "Folder removed." });
@@ -215,6 +250,12 @@ export default function WatchFolders() {
     };
 
     const assignProfile = async (dirId: number, profileId: number | null) => {
+        // Can only assign profiles to DB-backed rows
+        if (dirId < 0) {
+            showToast({ kind: "error", title: "Profiles", message: "This directory must be re-added to support profiles." });
+            return;
+        }
+
         setAssigningDirId(dirId);
         try {
             await apiAction(`/api/watch-dirs/${dirId}/profile`, {
@@ -239,6 +280,11 @@ export default function WatchFolders() {
     };
 
     const openCustomizeModal = (dir: WatchDir) => {
+        if (dir.id < 0) {
+             showToast({ kind: "error", title: "Profiles", message: "This directory must be re-added to support custom profiles." });
+             return;
+        }
+
         const selectedProfile = profiles.find((profile) => profile.id === dir.profile_id);
         const fallbackPreset =
             presets.find((preset) => preset.preset === "balanced")
@@ -311,7 +357,16 @@ export default function WatchFolders() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex justify-end mb-6">
+            <div className="flex items-center justify-between gap-4">
+                <div className="space-y-1">
+                    <h2 className="flex items-center gap-2 text-xl font-semibold text-helios-ink">
+                        <FolderOpen size={20} className="text-helios-solar" />
+                        Media Folders
+                    </h2>
+                    <p className="text-sm text-helios-slate">
+                        Folders Alchemist scans and watches for new media.
+                    </p>
+                </div>
                 <button
                     onClick={() => void triggerScan()}
                     disabled={scanning}
@@ -328,189 +383,129 @@ export default function WatchFolders() {
                 </div>
             )}
 
-            <form onSubmit={addDir} className="space-y-3">
-                <div className="space-y-3 rounded-lg border border-helios-line/20 bg-helios-surface-soft/50 p-4">
-                    <div>
-                        <h3 className="text-sm font-bold text-helios-ink">Library Directories</h3>
-                        <p className="text-xs text-helios-slate mt-1">
-                            Canonical library roots from setup/TOML. These are stored in the main config file and synchronized into runtime watchers.
-                        </p>
-                    </div>
-                    <div className="flex gap-2">
-                        <div className="relative flex-1">
-                            <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate/50" size={16} />
-                            <input
-                                type="text"
-                                value={libraryPath}
-                                onChange={(e) => setLibraryPath(e.target.value)}
-                                placeholder="Add library directory..."
-                                className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
-                            />
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => setPickerOpen("library")}
-                            className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
-                        >
-                            Browse
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => void addLibraryDir()}
-                            disabled={!libraryPath.trim() || syncingLibrary}
-                            className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
-                        >
-                            <Plus size={16} /> Add Library
-                        </button>
-                    </div>
-                    <div className="space-y-2">
-                        {libraryDirs.map((dir) => (
-                            <div key={dir} className="flex items-center justify-between rounded-lg border border-helios-line/10 bg-helios-surface px-3 py-2">
-                                <span className="truncate font-mono text-sm text-helios-ink" title={dir}>{dir}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => void removeLibraryDir(dir)}
-                                    disabled={syncingLibrary}
-                                    className="rounded-lg p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                        ))}
-                        {libraryDirs.length === 0 && (
-                            <p className="text-xs text-helios-slate">No canonical library directories configured yet.</p>
-                        )}
-                    </div>
-                </div>
-
-                <div className="flex gap-2">
-                    <div className="relative flex-1">
-                        <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate/50" size={16} />
-                        <input
-                            type="text"
-                            value={path}
-                            onChange={(e) => setPath(e.target.value)}
-                            placeholder="Enter full directory path..."
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-10 pr-4 py-2.5 text-sm text-helios-ink placeholder:text-helios-slate/40 focus:border-helios-solar focus:ring-1 focus:ring-helios-solar/50 outline-none transition-all"
-                        />
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => setPickerOpen("watch")}
-                        className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-ink"
-                    >
-                        Browse
-                    </button>
-                    <button
-                        type="submit"
-                        disabled={!path.trim()}
-                        className="bg-helios-solar hover:bg-helios-solar-dark text-helios-surface px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm shadow-helios-solar/20"
-                    >
-                        <Plus size={16} /> Add
-                    </button>
-                </div>
-                <label className="inline-flex items-center gap-2 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-sm text-helios-ink">
-                    <input
-                        type="checkbox"
-                        checked={isRecursive}
-                        onChange={(e) => setIsRecursive(e.target.checked)}
-                        className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
-                    />
-                    Watch subdirectories recursively
-                </label>
-            </form>
-
-            <div className="space-y-2">
-                {dirs.map((dir) => (
-                    <div key={dir.id} className="flex flex-col gap-3 p-3 bg-helios-surface border border-helios-line/10 rounded-lg group hover:border-helios-line/30 hover:shadow-sm transition-all">
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-3 overflow-hidden">
-                                <div className="p-1.5 bg-helios-slate/5 rounded-lg text-helios-slate">
-                                    <Folder size={16} />
-                                </div>
-                                <span className="text-sm font-mono text-helios-ink truncate max-w-[400px]" title={dir.path}>
-                                    {dir.path}
-                                </span>
-                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
-                                    {dir.is_recursive ? "Recursive" : "Top level"}
-                                </span>
-                            </div>
-                            <button
-                                onClick={() => setPendingRemoveId(dir.id)}
-                                className="p-2 text-helios-slate hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                                title="Stop watching"
-                            >
-                                <Trash2 size={16} />
-                            </button>
-                        </div>
-
-                        <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                            <select
-                                value={dir.profile_id === null ? "" : String(dir.profile_id)}
-                                onChange={(event) => {
-                                    const value = event.target.value;
-                                    void assignProfile(
-                                        dir.id,
-                                        value === "" ? null : Number(value)
-                                    );
-                                }}
-                                disabled={assigningDirId === dir.id}
-                                className="w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-2.5 text-sm text-helios-ink outline-none focus:border-helios-solar disabled:opacity-60"
-                            >
-                                <option value="">No profile (use global settings)</option>
-                                {builtinProfiles.map((profile) => (
-                                    <option key={profile.id} value={profile.id}>
-                                        {profile.name}
-                                    </option>
-                                ))}
-                                {customProfiles.length > 0 ? (
-                                    <option value="divider" disabled>
-                                        ──────────
-                                    </option>
-                                ) : null}
-                                {customProfiles.map((profile) => (
-                                    <option key={profile.id} value={profile.id}>
-                                        {profile.name}
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                onClick={() => openCustomizeModal(dir)}
-                                className="inline-flex items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft"
-                                title="Customize profile"
-                            >
-                                <Pencil size={14} />
-                            </button>
-                        </div>
-                    </div>
-                ))}
-
-                {!loading && dirs.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-10 text-center border-2 border-dashed border-helios-line/10 rounded-lg bg-helios-surface/30">
-                        <FolderOpen className="text-helios-slate/20 mb-2" size={32} />
-                        <p className="text-sm text-helios-slate">No watch folders configured</p>
-                        <p className="text-xs text-helios-slate/60 mt-1">Add a directory to start scanning</p>
-                    </div>
-                )}
-
-                {loading && (
-                    <div className="text-center py-8 text-helios-slate animate-pulse text-sm">
-                        Loading directories...
-                    </div>
-                )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <input
+                    type="text"
+                    value={dirInput}
+                    onChange={(e) => setDirInput(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            void addDirectory(dirInput);
+                        }
+                    }}
+                    placeholder="/path/to/media"
+                    className="flex-1 rounded-lg border border-helios-line/40 bg-helios-surface px-4 py-2.5 font-mono text-sm text-helios-ink outline-none transition-colors focus:border-helios-solar"
+                />
+                <button
+                    type="button"
+                    onClick={() => setPickerOpen(true)}
+                    className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-slate transition-colors hover:border-helios-solar/40 hover:text-helios-ink"
+                >
+                    Browse
+                </button>
+                <button
+                    type="button"
+                    onClick={() => void addDirectory(dirInput)}
+                    disabled={!dirInput.trim()}
+                    className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Add
+                </button>
             </div>
 
+            {loading ? (
+                <div className="text-center py-8 text-helios-slate animate-pulse text-sm">
+                    Loading folders...
+                </div>
+            ) : dirs.length > 0 ? (
+                <div className="overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface">
+                    {dirs.map((dir, index) => (
+                        <div
+                            key={dir.path}
+                            className={`flex flex-col gap-3 px-4 py-3 ${
+                                index < dirs.length - 1 ? "border-b border-helios-line/10" : ""
+                            }`}
+                        >
+                            <div className="flex items-start gap-4">
+                                <p
+                                    className="min-w-0 flex-1 break-all font-mono text-sm text-helios-slate"
+                                    title={dir.path}
+                                >
+                                    {dir.path}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => setPendingRemovePath(dir.path)}
+                                    className="shrink-0 rounded-lg p-1.5 text-helios-slate transition-colors hover:text-status-error"
+                                    aria-label={`Remove ${dir.path}`}
+                                >
+                                    <X size={15} />
+                                </button>
+                            </div>
+                            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                                <select
+                                    value={dir.profile_id === null ? "" : String(dir.profile_id)}
+                                    onChange={(event) => {
+                                        const value = event.target.value;
+                                        void assignProfile(
+                                            dir.id,
+                                            value === "" ? null : Number(value)
+                                        );
+                                    }}
+                                    disabled={assigningDirId === dir.id || dir.id < 0}
+                                    className="w-full rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-2 text-sm text-helios-ink outline-none focus:border-helios-solar disabled:opacity-60"
+                                >
+                                    <option value="">No profile (use global settings)</option>
+                                    {builtinProfiles.map((profile) => (
+                                        <option key={profile.id} value={profile.id}>
+                                            {profile.name}
+                                        </option>
+                                    ))}
+                                    {customProfiles.length > 0 ? (
+                                        <option value="divider" disabled>
+                                            ──────────
+                                        </option>
+                                    ) : null}
+                                    {customProfiles.map((profile) => (
+                                        <option key={profile.id} value={profile.id}>
+                                            {profile.name}
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={() => openCustomizeModal(dir)}
+                                    disabled={dir.id < 0}
+                                    className="inline-flex items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft disabled:opacity-50"
+                                    title="Customize profile"
+                                >
+                                    <Pencil size={14} />
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="py-8 text-center">
+                    <p className="text-sm text-helios-slate/60">No folders added yet</p>
+                    <p className="mt-1 text-sm text-helios-slate/60">
+                        Add a folder above or browse the server filesystem
+                    </p>
+                </div>
+            )}
+
             <ConfirmDialog
-                open={pendingRemoveId !== null}
-                title="Stop watching folder"
-                description="Stop watching this folder for new media?"
-                confirmLabel="Stop Watching"
+                open={pendingRemovePath !== null}
+                title="Remove folder"
+                description={`Stop watching ${pendingRemovePath} for new media?`}
+                confirmLabel="Remove"
                 tone="danger"
-                onClose={() => setPendingRemoveId(null)}
+                onClose={() => setPendingRemovePath(null)}
                 onConfirm={async () => {
-                    if (pendingRemoveId === null) return;
-                    await removeDir(pendingRemoveId);
+                    if (pendingRemovePath === null) return;
+                    await removeDirectory(pendingRemovePath);
+                    setPendingRemovePath(null);
                 }}
             />
 
@@ -661,21 +656,13 @@ export default function WatchFolders() {
             ) : null}
 
             <ServerDirectoryPicker
-                open={pickerOpen !== null}
-                title={pickerOpen === "library" ? "Select Library Root" : "Select Extra Watch Folder"}
-                description={
-                    pickerOpen === "library"
-                        ? "Choose a canonical server folder that represents a media library root."
-                        : "Choose an additional server folder to watch outside the canonical library roots."
-                }
-                onClose={() => setPickerOpen(null)}
+                open={pickerOpen}
+                title="Select Folder"
+                description="Choose a directory for Alchemist to scan and watch for new media."
+                onClose={() => setPickerOpen(false)}
                 onSelect={(selectedPath) => {
-                    if (pickerOpen === "library") {
-                        setLibraryPath(selectedPath);
-                    } else {
-                        setPath(selectedPath);
-                    }
-                    setPickerOpen(null);
+                    setDirInput(selectedPath);
+                    setPickerOpen(false);
                 }}
             />
         </div>
