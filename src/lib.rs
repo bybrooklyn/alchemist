@@ -10,6 +10,7 @@ pub mod server;
 pub mod settings;
 pub mod system;
 pub mod telemetry;
+pub mod version;
 pub mod wizard;
 
 pub use config::QualityProfile;

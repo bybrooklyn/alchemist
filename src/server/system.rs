@@ -165,7 +165,7 @@ pub(crate) async fn get_system_info_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let config = state.config.read().await;
-    let version = env!("CARGO_PKG_VERSION").to_string();
+    let version = crate::version::current().to_string();
     let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let is_docker = std::path::Path::new("/.dockerenv").exists();
 
@@ -210,7 +210,7 @@ pub(crate) async fn health_handler(State(state): State<Arc<AppState>>) -> impl I
 
     axum::Json(serde_json::json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::version::current(),
         "uptime": format!("{}h {}m {}s", hours, minutes, seconds),
         "uptime_seconds": uptime.as_secs()
     }))
@@ -296,7 +296,7 @@ pub(crate) async fn telemetry_payload_handler(State(state): State<Arc<AppState>>
         (sys.cpus().len(), sys.total_memory() / 1024 / 1024)
     };
 
-    let version = env!("CARGO_PKG_VERSION").to_string();
+    let version = crate::version::current().to_string();
     let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let is_docker = std::path::Path::new("/.dockerenv").exists();
     let uptime_seconds = state.start_time.elapsed().as_secs();

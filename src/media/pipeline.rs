@@ -1228,7 +1228,7 @@ impl Pipeline {
         let hw_snapshot = self.hardware_state.snapshot().await;
         let hw = hw_snapshot.as_ref();
         let event = TelemetryEvent {
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            app_version: crate::version::current().to_string(),
             event_type: params.event_type.to_string(),
             status: params.status.map(str::to_string),
             failure_reason: params.failure_reason.map(str::to_string),

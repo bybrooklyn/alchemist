@@ -129,7 +129,7 @@ fn telemetry_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(TELEMETRY_TIMEOUT_SECS))
-            .user_agent(format!("alchemist/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("alchemist/{}", crate::version::current()))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     })
