@@ -1,0 +1,55 @@
+FROM debian:testing-slim AS runtime
+
+ARG TARGETARCH
+
+WORKDIR /app
+
+RUN mkdir -p /app/config /app/data
+
+RUN apt-get update && \
+    sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    xz-utils \
+    libva-drm2 \
+    libva2 \
+    va-driver-all \
+    libsqlite3-0 \
+    ca-certificates \
+    && if [ "${TARGETARCH}" = "amd64" ]; then \
+    apt-get install -y --no-install-recommends \
+    intel-media-va-driver-non-free \
+    i965-va-driver || true; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+      ARCHIVE="ffmpeg-release-amd64-static.tar.xz"; \
+      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
+      SHA256="abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67"; \
+    elif [ "${TARGETARCH}" = "arm64" ]; then \
+      ARCHIVE="ffmpeg-release-arm64-static.tar.xz"; \
+      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
+      SHA256="f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1"; \
+    else \
+      echo "Unsupported architecture: ${TARGETARCH}" >&2; \
+      exit 1; \
+    fi; \
+    wget -O "${ARCHIVE}" "${URL}"; \
+    echo "${SHA256}  ${ARCHIVE}" | sha256sum -c -; \
+    tar xf "${ARCHIVE}"; \
+    mv ffmpeg-*-static/ffmpeg /usr/local/bin/; \
+    mv ffmpeg-*-static/ffprobe /usr/local/bin/; \
+    rm -rf "${ARCHIVE}" ffmpeg-*-static
+
+COPY alchemist /usr/local/bin/alchemist
+
+ENV LIBVA_DRIVER_NAME=iHD
+ENV RUST_LOG=info
+ENV ALCHEMIST_CONFIG_PATH=/app/config/config.toml
+ENV ALCHEMIST_DB_PATH=/app/data/alchemist.db
+
+EXPOSE 3000
+
+ENTRYPOINT ["alchemist"]

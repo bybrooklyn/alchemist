@@ -40,6 +40,7 @@ jobs:
             | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
+        if: github.event_name == 'workflow_dispatch'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -60,8 +61,11 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=docker-amd64
+            type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-amd64
+          cache-to: |
+            type=gha,scope=docker-amd64,mode=max
           provenance: false
 
       - name: Build and push (manual dispatch)
@@ -72,6 +76,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.image.outputs.name }}:dev
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=docker-amd64
+            type=gha,scope=docker-arm64
+            type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-amd64
+            type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-arm64
+          cache-to: |
+            type=gha,scope=docker-amd64,mode=max
+            type=gha,scope=docker-arm64,mode=max
+            type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-amd64,mode=max,image-manifest=true,oci-mediatypes=true
+            type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-arm64,mode=max,image-manifest=true,oci-mediatypes=true
           provenance: false

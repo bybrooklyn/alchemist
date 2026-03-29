@@ -345,7 +345,9 @@ async fn test_audio_stream_handling() -> Result<()> {
     let output = temp_dir.join("output_with_audio.mp4");
 
     let (db, pipeline, db_path) = build_test_pipeline(|config| {
-        config.transcode.output_codec = OutputCodec::H264;
+        // Force a transcode so this test covers audio handling
+        // instead of the planner's same-codec skip path.
+        config.transcode.output_codec = OutputCodec::Hevc;
     })
     .await?;
 
@@ -391,7 +393,9 @@ async fn test_subtitle_extraction() -> Result<()> {
 
     let (db, pipeline, db_path) = build_test_pipeline(|config| {
         config.transcode.subtitle_mode = SubtitleMode::Extract;
-        config.transcode.output_codec = OutputCodec::H264;
+        // Force a transcode so subtitle extraction is exercised
+        // instead of skipping the already-H.264 fixture.
+        config.transcode.output_codec = OutputCodec::Hevc;
     })
     .await?;
 
@@ -459,9 +463,21 @@ async fn test_multiple_input_formats() -> Result<()> {
 
         let temp_dir = temp_output_dir(&format!("multi_format_{}", expected_input_codec))?;
         let output = temp_dir.join("output.mp4");
+        let target_codec = match expected_input_codec {
+            "h264" => OutputCodec::Hevc,
+            "hevc" => OutputCodec::H264,
+            other => anyhow::bail!("Unexpected fixture codec: {}", other),
+        };
+        let expected_output_codec = match target_codec {
+            OutputCodec::Hevc => "hevc",
+            OutputCodec::H264 => "h264",
+            OutputCodec::Av1 => "av1",
+        };
 
         let (db, pipeline, db_path) = build_test_pipeline(|config| {
-            config.transcode.output_codec = OutputCodec::H264;
+            // Pick the opposite codec so both fixtures exercise a
+            // completed transcode rather than a planner skip.
+            config.transcode.output_codec = target_codec;
         })
         .await?;
 
@@ -473,7 +489,7 @@ async fn test_multiple_input_formats() -> Result<()> {
             "Job should complete successfully for {}",
             filename
         );
-        verify_output_codec(&output, "h264")?;
+        verify_output_codec(&output, expected_output_codec)?;
 
         // Cleanup
         let _ = std::fs::remove_file(db_path);
