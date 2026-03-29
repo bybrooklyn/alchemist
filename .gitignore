@@ -12,8 +12,7 @@ build/
 test-results/
 yarn.lock
 pnpm-lock.yaml
-!/package-lock.json
-/bun.lock
+package-lock.json
 
 # Data & Runtime
 .runtime/
@@ -24,7 +23,6 @@ web.zip
 # Logs
 error.txt
 build_log_*.txt
-npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
