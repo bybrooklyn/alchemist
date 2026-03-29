@@ -72,7 +72,7 @@ jobs:
       - name: Build docs site
         env:
           DOCS_URL: https://bybrooklyn.github.io
-          DOCS_BASE_URL: /alchemist/
+          DOCS_BASE_URL: /
         run: bun run build
 
       - name: Upload built site artifact
