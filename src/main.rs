@@ -1,6 +1,7 @@
 use alchemist::db::EventChannels;
 use alchemist::error::Result;
 use alchemist::system::hardware;
+use alchemist::version;
 use alchemist::{Agent, Transcoder, config, db, runtime};
 use clap::Parser;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = version::current(), about, long_about = None)]
 struct Args {
     /// Run in CLI mode (process directories and exit)
     #[arg(long)]
@@ -139,7 +140,7 @@ async fn run() -> Result<()> {
     );
     info!("");
     info!("");
-    let version = env!("CARGO_PKG_VERSION");
+    let version = alchemist::version::current();
     let build_info = option_env!("BUILD_INFO")
         .or(option_env!("GIT_SHA"))
         .or(option_env!("VERGEN_GIT_SHA"))
@@ -666,6 +667,19 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod version_cli_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_command_uses_runtime_version_source() {
+        let command = Args::command();
+        let version = command.get_version().unwrap_or_default();
+        assert_eq!(version, version::current());
+    }
 }
 
 #[cfg(test)]

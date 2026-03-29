@@ -14,6 +14,9 @@ permissions:
   contents: write
   packages: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   ci-gate:
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 2G
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -59,7 +62,7 @@ jobs:
       release_name: ${{ steps.meta.outputs.release_name }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -71,7 +74,7 @@ jobs:
           SHORT_SHA=$(git rev-parse --short=7 "${GITHUB_SHA}")
           {
             echo "short_sha=${SHORT_SHA}"
-            echo "version_suffix=-nightly+${SHORT_SHA}"
+            echo "version_suffix=nightly+${SHORT_SHA}"
             echo "release_name=Nightly — ${SHORT_SHA} ($(date -u +%Y-%m-%d))"
           } >> "$GITHUB_OUTPUT"
 
@@ -81,7 +84,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 

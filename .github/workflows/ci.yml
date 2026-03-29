@@ -22,6 +22,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   rust-check:
     runs-on: ubuntu-latest
@@ -32,7 +35,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 2G
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -67,7 +70,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 2G
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -94,7 +97,7 @@ jobs:
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-test-artifacts
           path: target/debug/
@@ -108,7 +111,7 @@ jobs:
         working-directory: web
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -118,7 +121,7 @@ jobs:
           bun-version: latest
 
       - name: Restore Bun dependency cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             web/node_modules
@@ -152,7 +155,7 @@ jobs:
         working-directory: web-e2e
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -176,7 +179,7 @@ jobs:
           bun-version: latest
 
       - name: Restore Bun dependency cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             web/node_modules
@@ -188,7 +191,7 @@ jobs:
             bun-web-${{ runner.os }}-
 
       - name: Restore Playwright browser cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('web-e2e/package.json', 'web-e2e/bun.lock') }}
@@ -212,7 +215,7 @@ jobs:
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-reliability-artifacts
           path: web-e2e/test-results/
