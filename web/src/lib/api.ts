@@ -93,11 +93,13 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
     const timeoutMs = 15000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+    const abortHandler = () => controller.abort();
+
     if (options.signal) {
         if (options.signal.aborted) {
             controller.abort();
         } else {
-            options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+            options.signal.addEventListener("abort", abortHandler);
         }
     }
 
@@ -114,12 +116,16 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
             const isAuthPage = path.startsWith("/login") || path.startsWith("/setup");
             if (!isAuthPage) {
                 window.location.href = "/login";
+                return new Promise(() => {});
             }
         }
 
         return response;
     } finally {
         clearTimeout(timeoutId);
+        if (options.signal) {
+            options.signal.removeEventListener("abort", abortHandler);
+        }
     }
 }
 

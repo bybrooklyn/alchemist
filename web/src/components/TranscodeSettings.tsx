@@ -53,6 +53,45 @@ function parseCommaSeparatedList(value: string): string[] {
         .filter((entry) => entry.length > 0);
 }
 
+function CommaSeparatedInput({ 
+    value, 
+    onChange, 
+    placeholder,
+    className 
+}: { 
+    value: string[]; 
+    onChange: (val: string[]) => void; 
+    placeholder?: string;
+    className?: string;
+}) {
+    const [draft, setDraft] = useState(value.join(", "));
+    
+    // Sync draft if external value changes completely
+    useEffect(() => {
+        const currentParsed = parseCommaSeparatedList(draft);
+        if (JSON.stringify(currentParsed) !== JSON.stringify(value)) {
+            setDraft(value.join(", "));
+        }
+    }, [value]);
+
+    return (
+        <input
+            type="text"
+            value={draft}
+            onChange={(e) => {
+                const newVal = e.target.value;
+                setDraft(newVal);
+                onChange(parseCommaSeparatedList(newVal));
+            }}
+            placeholder={placeholder}
+            className={cn(
+                "w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all",
+                className
+            )}
+        />
+    );
+}
+
 export default function TranscodeSettings() {
     const [settings, setSettings] = useState<TranscodeSettingsPayload | null>(null);
     const [loading, setLoading] = useState(true);
@@ -332,16 +371,14 @@ export default function TranscodeSettings() {
                         <label className="text-xs font-bold text-helios-slate">
                             Keep Only These Audio Languages
                         </label>
-                        <input
-                            type="text"
-                            value={settings.stream_rules.keep_audio_languages.join(", ")}
-                            onChange={(e) =>
+                        <CommaSeparatedInput
+                            value={settings.stream_rules.keep_audio_languages}
+                            onChange={(val) =>
                                 updateStreamRules({
-                                    keep_audio_languages: parseCommaSeparatedList(e.target.value),
+                                    keep_audio_languages: val,
                                 })
                             }
                             placeholder="eng, jpn"
-                            className="w-full bg-helios-surface border border-helios-line/30 rounded-lg px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none transition-all"
                         />
                         <p className="text-xs text-helios-slate ml-1">
                             Only keep audio tracks matching these language codes. Tracks with no language tag are always kept. Leave blank to keep all languages.

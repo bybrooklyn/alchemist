@@ -287,8 +287,8 @@ export default function Dashboard() {
                 </div>
 
                 {/* Right column: weekly savings + bundle stats */}
-                <div className="flex flex-col gap-4">
-                    <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5">
+                <div className="flex flex-col gap-4 h-full">
+                    <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5 flex-1 flex flex-col">
                         <h3 className="text-sm font-semibold text-helios-ink mb-4 flex items-center gap-2">
                             <HardDrive size={15} className="text-helios-solar" />
                             Last 7 Days

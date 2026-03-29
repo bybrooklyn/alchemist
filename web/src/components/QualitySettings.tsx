@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -67,18 +67,6 @@ export default function QualitySettings() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-helios-solar/10 text-helios-solar">
-                    <Activity size={20} />
-                </div>
-                <div>
-                    <h3 className="text-lg font-semibold text-helios-ink">Quality & Validation</h3>
-                    <p className="text-xs text-helios-slate">
-                        Control VMAF validation and post-encode quality gates.
-                    </p>
-                </div>
-            </div>
-
             {error && (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
                     {error}

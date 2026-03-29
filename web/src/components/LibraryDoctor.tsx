@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
     Activity,
     AlertCircle,
@@ -107,8 +107,13 @@ export default function LibraryDoctor() {
         }
     };
 
+    const isMounted = useRef(true);
+
     useEffect(() => {
         void Promise.all([fetchSummary(), fetchIssues()]);
+        return () => {
+            isMounted.current = false;
+        };
     }, []);
 
     const startScan = async () => {
@@ -133,8 +138,10 @@ export default function LibraryDoctor() {
             let stableReads = 0;
             let observedNewRun = false;
 
-            while (Date.now() < deadline) {
+            while (Date.now() < deadline && isMounted.current) {
                 await new Promise((resolve) => window.setTimeout(resolve, 5000));
+                if (!isMounted.current) break;
+                
                 const next = await fetchSummary(true);
                 if (!next) {
                     continue;

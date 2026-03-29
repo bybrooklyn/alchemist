@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { FileOutput, AlertTriangle, Save } from "lucide-react";
+import { AlertTriangle, Save } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -61,16 +61,6 @@ export default function FileSettings() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-helios-solar/10 rounded-lg">
-                    <FileOutput className="text-helios-solar" size={20} />
-                </div>
-                <div>
-                    <h2 className="text-lg font-semibold text-helios-ink">File Handling</h2>
-                    <p className="text-xs text-helios-slate">Configure output naming and source file policies.</p>
-                </div>
-            </div>
-
             {error && (
                 <div className="p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
                     {error}

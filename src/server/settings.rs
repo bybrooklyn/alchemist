@@ -352,8 +352,12 @@ pub(crate) async fn update_settings_config_handler(
 ) -> impl IntoResponse {
     let config = match crate::settings::parse_raw_config(&payload.raw_toml) {
         Ok(config) => config,
-        Err(err) => return hardware_error_response(&err),
+        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
     };
+
+    if let Err(err) = config.validate() {
+        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+    }
 
     let (hardware_info, probe_log) =
         match crate::system::hardware::detect_hardware_with_log(&config).await {

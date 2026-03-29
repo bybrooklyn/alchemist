@@ -90,7 +90,7 @@ impl HealthChecker {
             .kill_on_drop(true)
             .args(["-v", "error", "-i"])
             .arg(path)
-            .args(["-f", "null", "-"])
+            .args(["-c", "copy", "-f", "null", "-"])
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 

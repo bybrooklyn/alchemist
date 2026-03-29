@@ -267,6 +267,8 @@ pub(crate) async fn delete_job_handler(
         return blocked_jobs_response("delete is blocked while the job is active", &[job]);
     }
 
+    state.transcoder.cancel_job(id);
+
     match state.db.delete_job(id).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),

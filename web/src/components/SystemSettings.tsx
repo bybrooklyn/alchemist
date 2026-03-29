@@ -202,7 +202,7 @@ export default function SystemSettings() {
                             </span>
                         </div>
                         {engineStatus.is_manual_override && (
-                            <p className="text-xs text-amber-500/80 italic">
+                            <p className="text-xs text-helios-solar/80 italic">
                                 Manual override active —{" "}
                                 {engineStatus.concurrent_limit} concurrent job
                                 {engineStatus.concurrent_limit !== 1 ? "s" : ""}.

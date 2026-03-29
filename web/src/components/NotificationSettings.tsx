@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, Plus, Trash2, Zap } from "lucide-react";
+import { Plus, Trash2, Zap } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -135,16 +135,7 @@ export default function NotificationSettings() {
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-helios-solar/10 rounded-lg">
-                        <Bell className="text-helios-solar" size={20} />
-                    </div>
-                    <div>
-                        <h2 className="text-lg font-semibold text-helios-ink">Notifications</h2>
-                        <p className="text-xs text-helios-slate">Alerts for job events via Discord, Gotify, etc.</p>
-                    </div>
-                </div>
+            <div className="flex justify-end mb-6">
                 <button
                     onClick={() => setShowForm(!showForm)}
                     className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
