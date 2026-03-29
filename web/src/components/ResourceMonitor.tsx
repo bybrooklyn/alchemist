@@ -111,15 +111,15 @@ export default function ResourceMonitor() {
     };
 
     const getUsageColor = (percent: number) => {
-        if (percent > 90) return "text-red-500 bg-red-500/10";
-        if (percent > 70) return "text-yellow-500 bg-yellow-500/10";
-        return "text-green-500 bg-green-500/10";
+        if (percent > 90) return "text-status-error bg-status-error/10";
+        if (percent > 70) return "text-helios-solar bg-helios-solar/10";
+        return "text-status-success bg-status-success/10";
     };
 
     const getBarColor = (percent: number) => {
-        if (percent > 90) return "bg-red-500";
-        if (percent > 70) return "bg-yellow-500";
-        return "bg-green-500";
+        if (percent > 90) return "bg-status-error";
+        if (percent > 70) return "bg-helios-solar";
+        return "bg-status-success";
     };
 
     if (!stats) {

@@ -30,32 +30,120 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
     );
 }
 
-export function humanizeSkipReason(reason: string): { human: string; technical: string } {
-    const [rawKey, technical = ""] = reason.split("|", 2);
-    const key = rawKey.trim();
+export interface SkipDetail {
+    summary: string;
+    detail: string;
+    action: string | null;
+    measured: Record<string, string>;
+}
 
-    const human = (() => {
-        switch (key) {
-            case "already_target_codec":
-                return "This file is already in the target format — no conversion needed.";
-            case "already_target_codec_wrong_container":
-                return "This file is already in the right format but in an MP4 container. Alchemist will remux it to MKV — fast and lossless.";
-            case "bpp_below_threshold":
-                return "This file is already efficiently compressed — transcoding it wouldn't save meaningful space.";
-            case "below_min_file_size":
-                return "This file is too small to be worth transcoding.";
-            case "already_10bit":
-                return "This file is already in high-quality 10-bit format — re-encoding it could reduce quality.";
-            case "size_reduction_insufficient":
-                return "Converting this file wouldn't make it meaningfully smaller, so Alchemist skipped it.";
-            case "remux: mp4_to_mkv_stream_copy":
-                return "Alchemist remuxed this file from MP4 to MKV with stream copy, so no re-encode or quality loss was needed.";
-            default:
-                return reason;
+function formatReductionPercent(value?: string): string {
+    if (!value) {
+        return "?";
+    }
+
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(0)}%` : value;
+}
+
+export function humanizeSkipReason(reason: string): SkipDetail {
+    const pipeIdx = reason.indexOf("|");
+    const key = pipeIdx === -1
+        ? reason.trim()
+        : reason.slice(0, pipeIdx).trim();
+    const paramStr = pipeIdx === -1 ? "" : reason.slice(pipeIdx + 1);
+
+    const measured: Record<string, string> = {};
+    for (const pair of paramStr.split(",")) {
+        const [rawKey, ...rawValueParts] = pair.split("=");
+        if (!rawKey || rawValueParts.length === 0) {
+            continue;
         }
-    })();
 
-    return { human, technical };
+        measured[rawKey.trim()] = rawValueParts.join("=").trim();
+    }
+
+    switch (key) {
+        case "already_target_codec":
+            return {
+                summary: "Already in target format",
+                detail: `This file is already encoded as ${measured.codec ?? "the target codec"}${measured.bit_depth ? ` at ${measured.bit_depth}-bit` : ""}. Re-encoding would waste time and could reduce quality.`,
+                action: null,
+                measured,
+            };
+
+        case "already_target_codec_wrong_container":
+            return {
+                summary: "Target codec, wrong container",
+                detail: `The video is already in the right codec but wrapped in a ${measured.container ?? "MP4"} container. Alchemist will remux it to ${measured.target_extension ?? "MKV"} - fast and lossless, no quality loss.`,
+                action: null,
+                measured,
+            };
+
+        case "bpp_below_threshold":
+            return {
+                summary: "Already efficiently compressed",
+                detail: `Bits-per-pixel (${measured.bpp ?? "?"}) is below the minimum threshold (${measured.threshold ?? "?"}). This file is already well-compressed - transcoding it would spend significant time for minimal space savings.`,
+                action: "If you want to force transcoding, lower the BPP threshold in Settings -> Transcoding.",
+                measured,
+            };
+
+        case "below_min_file_size":
+            return {
+                summary: "File too small to process",
+                detail: `File size (${measured.size_mb ?? "?"}MB) is below the minimum threshold (${measured.threshold_mb ?? "?"}MB). Small files aren't worth the transcoding overhead.`,
+                action: "Lower the minimum file size threshold in Settings -> Transcoding if you want small files processed.",
+                measured,
+            };
+
+        case "size_reduction_insufficient":
+            return {
+                summary: "Not enough space would be saved",
+                detail: `The predicted size reduction (${formatReductionPercent(measured.predicted)}) is below the required threshold (${formatReductionPercent(measured.threshold)}). Transcoding this file wouldn't recover meaningful storage.`,
+                action: "Lower the size reduction threshold in Settings -> Transcoding to encode files with smaller savings.",
+                measured,
+            };
+
+        case "no_suitable_encoder":
+            return {
+                summary: "No encoder available",
+                detail: `No encoder was found for ${measured.codec ?? "the target codec"}. Hardware detection may have failed, or CPU fallback is disabled.`,
+                action: "Check Settings -> Hardware. Enable CPU fallback, or verify your GPU is detected correctly.",
+                measured,
+            };
+
+        case "incomplete_metadata":
+            return {
+                summary: "Missing file metadata",
+                detail: `FFprobe could not determine the ${measured.missing ?? "required metadata"} for this file. Without reliable metadata Alchemist cannot make a valid transcoding decision.`,
+                action: "Run a Library Doctor scan to check if this file is corrupt. Try playing it in a media player to confirm it is readable.",
+                measured,
+            };
+
+        case "already_10bit":
+            return {
+                summary: "Already 10-bit",
+                detail: "This file is already encoded in high-quality 10-bit depth. Re-encoding it could reduce quality.",
+                action: null,
+                measured,
+            };
+
+        case "remux: mp4_to_mkv_stream_copy":
+            return {
+                summary: "Remuxed (no re-encode)",
+                detail: "This file was remuxed from MP4 to MKV using stream copy - fast and lossless. No quality was lost.",
+                action: null,
+                measured,
+            };
+
+        default:
+            return {
+                summary: "Skipped",
+                detail: reason,
+                action: null,
+                measured,
+            };
+    }
 }
 
 function explainFailureSummary(summary: string): string {
@@ -545,8 +633,9 @@ export default function JobManager() {
         ? humanizeSkipReason(focusedJob.job.decision_reason)
         : null;
     const focusedJobLogs = focusedJob?.job_logs ?? [];
-    const focusedFailureExplanation = focusedJob?.job_failure_summary
-        ? explainFailureSummary(focusedJob.job_failure_summary)
+    const focusedFailureDetail = focusedJob?.job.decision_reason ?? focusedJob?.job_failure_summary ?? null;
+    const focusedFailureExplanation = focusedFailureDetail
+        ? explainFailureSummary(focusedFailureDetail)
         : null;
     const shouldShowFfmpegOutput = focusedJob
         ? ["failed", "completed", "skipped"].includes(focusedJob.job.status) && focusedJobLogs.length > 0
@@ -1117,50 +1206,66 @@ export default function JobManager() {
                                     )}
 
                                     {/* Decision Info */}
-                                    {focusedJob.job.decision_reason && (
+                                    {focusedJob.job.decision_reason && focusedJob.job.status !== "failed" && focusedJob.job.status !== "skipped" && (
                                         <div className="p-4 rounded-lg bg-helios-solar/5 border border-helios-solar/10">
                                             <div className="flex items-center gap-2 text-helios-solar mb-1">
                                                 <Info size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Decision Context</span>
                                             </div>
-                                            <p className="text-sm text-helios-ink leading-relaxed">
-                                                {focusedDecision?.human ?? focusedJob.job.decision_reason}
-                                            </p>
-                                            {focusedDecision?.technical ? (
-                                                <details className="mt-2">
-                                                    <summary className="text-xs text-helios-slate cursor-pointer hover:text-helios-ink">
-                                                        Technical details
-                                                    </summary>
-                                                    <span className="mt-2 inline-block font-mono text-xs text-helios-slate/70">
-                                                        {focusedDecision.technical}
-                                                    </span>
-                                                </details>
-                                            ) : null}
+                                            {focusedDecision && (
+                                                <div className="space-y-3">
+                                                    <p className="text-sm font-medium text-helios-ink">
+                                                        {focusedDecision.summary}
+                                                    </p>
+                                                    <p className="text-xs leading-relaxed text-helios-slate">
+                                                        {focusedDecision.detail}
+                                                    </p>
+                                                    {Object.keys(focusedDecision.measured).length > 0 && (
+                                                        <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-3 py-2.5">
+                                                            {Object.entries(focusedDecision.measured).map(([k, v]) => (
+                                                                <div key={k} className="flex items-center justify-between text-xs">
+                                                                    <span className="font-mono text-helios-slate">{k}</span>
+                                                                    <span className="font-mono font-bold text-helios-ink">{v}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {focusedDecision.action && (
+                                                        <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
+                                                            <span className="text-xs leading-relaxed text-helios-solar">
+                                                                {focusedDecision.action}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
-                                    {focusedJob.job.status === "failed" && (
+                                    {focusedJob.job.status === "failed" && focusedFailureDetail && (
+                                        <div className="rounded-lg border border-status-error/20 bg-status-error/5 px-4 py-3 space-y-2">
+                                            <div className="flex items-center gap-2 text-status-error">
+                                                <AlertCircle size={14} />
+                                                <span className="text-sm font-semibold">What went wrong</span>
+                                            </div>
+                                            <p className="text-sm font-semibold text-status-error">
+                                                {focusedFailureExplanation}
+                                            </p>
+                                            <p className="break-all font-mono text-xs leading-relaxed text-helios-slate">
+                                                {focusedFailureDetail}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {focusedJob.job.status === "failed" && !focusedFailureDetail && (
                                         <div className="p-4 rounded-lg bg-status-error/5 border border-status-error/15">
                                             <div className="flex items-center gap-2 text-status-error mb-2">
                                                 <AlertCircle size={14} />
                                                 <span className="text-sm font-semibold">What went wrong</span>
                                             </div>
-                                            {focusedJob.job_failure_summary ? (
-                                                <>
-                                                    <p className="text-sm text-helios-ink leading-relaxed">
-                                                        {focusedJob.job_failure_summary}
-                                                    </p>
-                                                    {focusedFailureExplanation && focusedFailureExplanation !== focusedJob.job_failure_summary && (
-                                                        <p className="mt-2 text-sm text-helios-slate leading-relaxed">
-                                                            {focusedFailureExplanation}
-                                                        </p>
-                                                    )}
-                                                </>
-                                            ) : (
-                                                <p className="text-sm text-helios-slate leading-relaxed">
-                                                    No error summary was recorded. Review the FFmpeg output below for the last encoder messages.
-                                                </p>
-                                            )}
+                                            <p className="text-sm text-helios-slate leading-relaxed">
+                                                No error summary was recorded. Review the FFmpeg output below for the last encoder messages.
+                                            </p>
                                         </div>
                                     )}
 
@@ -1169,15 +1274,33 @@ export default function JobManager() {
                                             <p className="text-sm text-helios-ink leading-relaxed">
                                                 Alchemist analysed this file and decided not to transcode it. Here&apos;s why:
                                             </p>
-                                            <p className="mt-2 text-sm text-helios-slate leading-relaxed">
-                                                {focusedDecision?.human ?? focusedJob.job.decision_reason}
-                                            </p>
-                                            <p className="mt-3 text-xs font-semibold text-helios-slate">
-                                                Technical analysis:
-                                            </p>
-                                            <p className="mt-1 font-mono text-xs text-helios-slate/80 break-words leading-relaxed">
-                                                {focusedJob.job.decision_reason}
-                                            </p>
+                                            {focusedDecision && (
+                                                <div className="mt-3 space-y-3">
+                                                    <p className="text-sm font-medium text-helios-ink">
+                                                        {focusedDecision.summary}
+                                                    </p>
+                                                    <p className="text-xs leading-relaxed text-helios-slate">
+                                                        {focusedDecision.detail}
+                                                    </p>
+                                                    {Object.keys(focusedDecision.measured).length > 0 && (
+                                                        <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2.5">
+                                                            {Object.entries(focusedDecision.measured).map(([k, v]) => (
+                                                                <div key={k} className="flex items-center justify-between text-xs">
+                                                                    <span className="font-mono text-helios-slate">{k}</span>
+                                                                    <span className="font-mono font-bold text-helios-ink">{v}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {focusedDecision.action && (
+                                                        <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
+                                                            <span className="text-xs leading-relaxed text-helios-solar">
+                                                                {focusedDecision.action}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
