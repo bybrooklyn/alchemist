@@ -40,3 +40,6 @@ public/pkg/alchemist.css
 # Claude
 .claude/worktrees/
 !.claude/settings.local.json
+
+.gemini/
+gha-creds-*.json

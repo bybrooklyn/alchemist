@@ -117,7 +117,7 @@ export default function ServerDirectoryPicker({
             />
 
             <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
-                <div className="w-full max-w-5xl rounded-xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden">
+                <div className="w-full max-w-5xl rounded-xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden flex flex-col max-h-[min(90vh,800px)]">
                     <div className="border-b border-helios-line/20 px-6 py-5 flex items-start justify-between gap-4">
                         <div>
                             <div className="flex items-center gap-3">
@@ -142,7 +142,7 @@ export default function ServerDirectoryPicker({
                         </button>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] min-h-[620px]">
+                    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] flex-1 min-h-0 overflow-hidden">
                         <aside className="border-r border-helios-line/20 bg-helios-surface-soft/40 px-5 py-5 space-y-5">
                             <div className="space-y-2">
                                 <label className="text-xs font-medium text-helios-slate">
@@ -195,7 +195,7 @@ export default function ServerDirectoryPicker({
                             </div>
                         </aside>
 
-                        <section className="px-6 py-5 flex flex-col">
+                        <section className="px-6 py-5 flex flex-col overflow-y-auto min-h-0">
                             {error && (
                                 <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
                                     {error}
@@ -259,7 +259,7 @@ export default function ServerDirectoryPicker({
 
                                     <div className="flex-1 overflow-y-auto rounded-lg border border-helios-line/20 bg-helios-surface-soft/30">
                                         {browse.entries.length === 0 ? (
-                                            <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-sm text-helios-slate">
+                                            <div className="flex h-full min-h-[120px] items-center justify-center px-6 text-sm text-helios-slate">
                                                 No child directories were found here.
                                             </div>
                                         ) : (

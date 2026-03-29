@@ -206,9 +206,9 @@ export default function Dashboard() {
                 <div className="rounded-lg border border-helios-solar/20 bg-helios-solar/10 px-4 py-3 flex items-center gap-3">
                     <span className="text-helios-solar shrink-0 text-xs font-semibold">ENGINE PAUSED</span>
                     <span className="text-sm text-helios-ink">
-                        The queue can fill up but Alchemist won't start encoding until you click
-                        <span className="font-bold"> Start</span>
-                        {" "}in the header.
+                        Analysis runs automatically. Click{" "}
+                        <span className="font-bold">Start</span>
+                        {" "}in the header to begin encoding.
                     </span>
                 </div>
             )}

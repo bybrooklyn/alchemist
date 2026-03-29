@@ -156,6 +156,47 @@ impl Agent {
         self.draining.store(false, Ordering::SeqCst);
     }
 
+    /// Runs analysis (ffprobe + planning decision) on all queued
+    /// and failed jobs without executing any encodes. Called on
+    /// startup to populate the queue with decisions before the
+    /// user starts the engine.
+    pub async fn analyze_pending_jobs(&self) {
+        info!("Auto-analysis: scanning and analyzing pending jobs...");
+
+        // First trigger a full library scan to pick up new files
+        if let Err(e) = self.db.reset_interrupted_jobs().await {
+            tracing::warn!("Auto-analysis: could not reset stuck jobs: {e}");
+        }
+
+        // Get all queued and failed jobs to analyze
+        let jobs = match self.db.get_jobs_for_analysis().await {
+            Ok(j) => j,
+            Err(e) => {
+                error!("Auto-analysis: failed to fetch jobs: {e}");
+                return;
+            }
+        };
+
+        if jobs.is_empty() {
+            info!("Auto-analysis: no jobs pending analysis.");
+            return;
+        }
+
+        info!("Auto-analysis: analyzing {} jobs...", jobs.len());
+
+        for job in jobs {
+            let pipeline = self.pipeline();
+            match pipeline.analyze_job_only(job).await {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Auto-analysis: job analysis failed: {e:?}");
+                }
+            }
+        }
+
+        info!("Auto-analysis: complete.");
+    }
+
     pub async fn current_mode(&self) -> crate::config::EngineMode {
         *self.engine_mode.read().await
     }
@@ -260,6 +301,13 @@ impl Agent {
 
             if self.is_draining() {
                 drop(permit);
+                if self.orchestrator.active_job_count() == 0 {
+                    info!(
+                        "Engine drain complete — all active jobs finished. Returning to paused state."
+                    );
+                    self.stop_drain();
+                    self.pause();
+                }
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 continue;
             }

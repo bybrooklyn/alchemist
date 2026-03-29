@@ -49,7 +49,7 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
 
             {/* Step content */}
             <div className="flex-1 overflow-y-auto">
-                <div className="max-w-4xl mx-auto px-6 py-8">
+                <div className="max-w-6xl mx-auto px-6 py-8">
                     <AnimatePresence mode="wait">
                         {children}
                     </AnimatePresence>
@@ -60,7 +60,7 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
             {step < 6 && (
                 <div className="shrink-0 border-t border-helios-line/20
                     bg-helios-surface/50 px-6 py-4">
-                    <div className="max-w-4xl mx-auto flex items-center
+                    <div className="max-w-6xl mx-auto flex items-center
                         justify-between gap-4">
                         <button
                             type="button"

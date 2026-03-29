@@ -1133,6 +1133,29 @@ impl Db {
         Ok(job)
     }
 
+    /// Returns all jobs in queued or failed state that need
+    /// analysis. Used by the startup auto-analyzer.
+    pub async fn get_jobs_for_analysis(&self) -> Result<Vec<Job>> {
+        timed_query("get_jobs_for_analysis", || async {
+            let rows: Vec<Job> = sqlx::query_as(
+                "SELECT j.id, j.input_path, j.output_path, j.status, 
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority, 
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE j.status IN ('queued', 'failed') AND j.archived = 0
+                 ORDER BY j.priority DESC, j.created_at ASC",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            Ok(rows)
+        })
+        .await
+    }
+
     pub async fn get_jobs_by_ids(&self, ids: &[i64]) -> Result<Vec<Job>> {
         if ids.is_empty() {
             return Ok(Vec::new());

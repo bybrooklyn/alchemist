@@ -57,10 +57,7 @@ impl Scheduler {
         let enabled_windows: Vec<_> = windows.into_iter().filter(|w| w.enabled).collect();
 
         if enabled_windows.is_empty() {
-            // No schedule active -> Always Run
-            if self.agent.is_scheduler_paused() {
-                self.agent.set_scheduler_paused(false);
-            }
+            // No schedule active -> Do nothing, leave current state alone
             return Ok(());
         }
 

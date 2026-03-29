@@ -273,7 +273,6 @@ pub(crate) async fn setup_complete_handler(
     }
 
     // Update Setup State (Hot Reload)
-    state.setup_required.store(false, Ordering::Relaxed);
     state.agent.set_manual_override(true);
     *state.agent.engine_mode.write().await = runtime_engine_mode;
     state

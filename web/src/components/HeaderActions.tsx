@@ -99,42 +99,10 @@ export default function HeaderActions() {
         }
     };
 
-    const handlePause = async () => {
-        setEngineLoading(true);
-        try {
-            await apiAction("/api/engine/pause", { method: "POST" });
-            await refreshEngineStatus();
-        } catch {
-            showToast({
-                kind: "error",
-                title: "Engine",
-                message: "Failed to update engine state.",
-            });
-        } finally {
-            setEngineLoading(false);
-        }
-    };
-
     const handleStop = async () => {
         setEngineLoading(true);
         try {
             await apiAction("/api/engine/drain", { method: "POST" });
-            await refreshEngineStatus();
-        } catch {
-            showToast({
-                kind: "error",
-                title: "Engine",
-                message: "Failed to update engine state.",
-            });
-        } finally {
-            setEngineLoading(false);
-        }
-    };
-
-    const handleCancelStop = async () => {
-        setEngineLoading(true);
-        try {
-            await apiAction("/api/engine/stop-drain", { method: "POST" });
             await refreshEngineStatus();
         } catch {
             showToast({
@@ -174,8 +142,8 @@ export default function HeaderActions() {
                     </span>
                 </div>
 
-                {/* Start — shown when paused or draining */}
-                {(status === "paused" || status === "draining") && (
+                {/* Single action button — changes based on state */}
+                {status === "paused" && (
                     <button
                         onClick={() => void handleStart()}
                         disabled={engineLoading}
@@ -186,19 +154,6 @@ export default function HeaderActions() {
                     </button>
                 )}
 
-                {/* Pause — shown when running */}
-                {status === "running" && (
-                    <button
-                        onClick={() => void handlePause()}
-                        disabled={engineLoading}
-                        className="flex items-center gap-1.5 rounded-lg border border-helios-line/20 px-3 py-1.5 text-xs font-medium text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors disabled:opacity-50"
-                    >
-                        <Pause size={13} />
-                        Pause
-                    </button>
-                )}
-
-                {/* Stop — shown when running */}
                 {status === "running" && (
                     <button
                         onClick={() => void handleStop()}
@@ -210,15 +165,13 @@ export default function HeaderActions() {
                     </button>
                 )}
 
-                {/* Cancel Stop — shown when draining */}
                 {status === "draining" && (
                     <button
-                        onClick={() => void handleCancelStop()}
-                        disabled={engineLoading}
-                        className="flex items-center gap-1.5 rounded-lg border border-blue-400/30 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-400/10 transition-colors disabled:opacity-50"
+                        disabled
+                        className="flex items-center gap-1.5 rounded-lg border border-helios-line/20 px-3 py-1.5 text-xs font-medium text-helios-slate/50 opacity-60 cursor-not-allowed"
                     >
-                        <X size={13} />
-                        Cancel Stop
+                        <Square size={13} className="animate-pulse" />
+                        Stopping…
                     </button>
                 )}
 

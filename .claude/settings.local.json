@@ -10,7 +10,9 @@
       "Bash(cargo check:*)",
       "Bash(just --shell)",
       "Bash(bash --version)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(bun run:*)"
     ]
   }
 }

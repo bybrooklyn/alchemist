@@ -570,6 +570,90 @@ fn temp_output_path_for(path: &Path) -> PathBuf {
 }
 
 impl Pipeline {
+    /// Runs only the analysis and planning phases for a job.
+    /// Does not execute any encode. Used by the startup
+    /// auto-analyzer to populate skip/transcode decisions.
+    pub async fn analyze_job_only(&self, job: crate::db::Job) -> Result<()> {
+        let job_id = job.id;
+
+        // Update status to analyzing
+        self.db
+            .update_job_status(job_id, crate::db::JobState::Analyzing)
+            .await?;
+
+        // Run ffprobe analysis
+        let analyzer = crate::media::analyzer::FfmpegAnalyzer;
+        let analysis = match analyzer
+            .analyze(std::path::Path::new(&job.input_path))
+            .await
+        {
+            Ok(a) => a,
+            Err(e) => {
+                let reason = format!("analysis_failed|error={e}");
+                self.db.add_decision(job_id, "skip", &reason).await.ok();
+                self.db
+                    .update_job_status(job_id, crate::db::JobState::Failed)
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        // Get the output path for planning
+        let output_path = std::path::PathBuf::from(&job.output_path);
+
+        // Get profile for this job's input path (if any)
+        let profile = self
+            .db
+            .get_profile_for_path(&job.input_path)
+            .await
+            .unwrap_or(None);
+
+        // Run the planner
+        let config_snapshot = Arc::new(self.config.read().await.clone());
+        let hw_info = self.hardware_state.snapshot().await;
+        let planner = crate::media::planner::BasicPlanner::new(config_snapshot, hw_info);
+        let plan = match planner
+            .plan(&analysis, &output_path, profile.as_ref())
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                let reason = format!("planning_failed|error={e}");
+                self.db.add_decision(job_id, "skip", &reason).await.ok();
+                self.db
+                    .update_job_status(job_id, crate::db::JobState::Failed)
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        // Store the decision and return to queued — do NOT encode
+        match &plan.decision {
+            crate::media::pipeline::TranscodeDecision::Skip { reason } => {
+                self.db.add_decision(job_id, "skip", reason).await.ok();
+                self.db
+                    .update_job_status(job_id, crate::db::JobState::Skipped)
+                    .await?;
+            }
+            crate::media::pipeline::TranscodeDecision::Remux { reason } => {
+                self.db.add_decision(job_id, "transcode", reason).await.ok();
+                // Leave as queued — will be picked up for remux when engine starts
+                self.db
+                    .update_job_status(job_id, crate::db::JobState::Queued)
+                    .await?;
+            }
+            crate::media::pipeline::TranscodeDecision::Transcode { reason } => {
+                self.db.add_decision(job_id, "transcode", reason).await.ok();
+                // Leave as queued — will be picked up for encoding when engine starts
+                self.db
+                    .update_job_status(job_id, crate::db::JobState::Queued)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn process_job(&self, job: Job) -> std::result::Result<(), JobFailure> {
         let file_path = PathBuf::from(&job.input_path);
 
