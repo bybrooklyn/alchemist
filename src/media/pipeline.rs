@@ -1116,23 +1116,26 @@ impl Pipeline {
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         if !context.plan.subtitles.sidecar_outputs().is_empty() {
-            let mut promoted_sidecars = Vec::new();
+            let mut promoted_sidecars: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
             for sidecar_output in context.plan.subtitles.sidecar_outputs() {
                 if let Err(err) = self
                     .promote_temp_artifact(&sidecar_output.temp_path, &sidecar_output.final_path)
                 {
-                    for promoted in promoted_sidecars {
-                        let _ = std::fs::remove_file(promoted);
+                    for (temp, final_path) in &promoted_sidecars {
+                        let _ = std::fs::rename(final_path, temp);
                     }
                     return Err(err);
                 }
-                promoted_sidecars.push(sidecar_output.final_path.clone());
+                promoted_sidecars.push((
+                    sidecar_output.temp_path.clone(),
+                    sidecar_output.final_path.clone(),
+                ));
             }
             if let Err(err) =
                 self.promote_temp_artifact(context.temp_output_path, context.output_path)
             {
-                for promoted in promoted_sidecars {
-                    let _ = std::fs::remove_file(promoted);
+                for (temp, final_path) in &promoted_sidecars {
+                    let _ = std::fs::rename(final_path, temp);
                 }
                 return Err(err);
             }
