@@ -33,7 +33,7 @@ Alchemist is an automated media library optimization tool written in Rust. It mo
 The project uses `just` to simplify common tasks.
 
 ### Development
-- `just dev`: Starts both the backend (watch mode) and frontend dev server.
+- `just dev`: Builds the frontend assets, then starts the backend.
 - `just run`: Runs the Rust backend directly.
 - `just web`: Starts the frontend development server only.
 

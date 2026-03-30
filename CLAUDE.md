@@ -14,7 +14,7 @@ All common tasks are in the `justfile` — use `just` as the task runner.
 
 ### Development
 ```bash
-just dev          # Backend (watch) + frontend dev server concurrently
+just dev          # Build frontend assets, then start the backend
 just run          # Backend only
 just web          # Frontend dev server only
 ```

@@ -21,7 +21,20 @@ To work on Alchemist, you'll need:
 
 ## Local Development
 
-### 1. Back-end (Rust)
+### 1. Full stack with `just`
+
+```bash
+# Clone the repository
+git clone https://github.com/bybrooklyn/alchemist.git
+cd alchemist
+
+# Build the frontend and start the backend
+just dev
+```
+
+`just dev` builds the Astro site into `web/dist` and then starts the Rust server.
+
+### 2. Back-end (Rust)
 The back-end handles the database, scanning files, and running FFmpeg.
 
 ```bash
@@ -36,7 +49,7 @@ cargo build
 cargo run
 ```
 
-### 2. Front-end (Web UI)
+### 3. Front-end (Web UI)
 The web interface is located in the `web/` directory.
 
 ```bash
