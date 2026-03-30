@@ -23,15 +23,9 @@ default:
 # DEVELOPMENT
 # ─────────────────────────────────────────
 
-# Start backend (watch mode) + frontend dev server concurrently
-dev:
-    @echo "Starting Alchemist dev servers..."
-    @trap 'kill 0' INT EXIT; \
-        (cd web && bun run dev) & WEB_PID=$!; \
-        cargo watch -x run & RUST_PID=$!; \
-        wait -n 2>/dev/null || true; \
-        kill $WEB_PID $RUST_PID 2>/dev/null; \
-        wait
+# Build frontend assets, then start the backend server
+dev: web-build
+    @just run
 
 # Start the backend only
 run:

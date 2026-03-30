@@ -18,7 +18,7 @@ frontend tooling.
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
-just dev   # backend watch mode + frontend dev server
+just dev   # build frontend assets, then start the backend
 ```
 
 ## Common tasks
