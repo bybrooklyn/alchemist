@@ -5,7 +5,6 @@ import LibraryStep from "./setup/LibraryStep";
 import ProcessingStep from "./setup/ProcessingStep";
 import ReviewStep from "./setup/ReviewStep";
 import RuntimeStep from "./setup/RuntimeStep";
-import ScanStep from "./setup/ScanStep";
 import SetupFrame from "./setup/SetupFrame";
 import {
     DEFAULT_NOTIFICATION_DRAFT,
@@ -41,7 +40,6 @@ export default function SetupWizard() {
     const [notificationDraft, setNotificationDraft] = useState<NotificationTargetConfig>(DEFAULT_NOTIFICATION_DRAFT);
     const [recommendations, setRecommendations] = useState<FsRecommendation[]>([]);
     const [preview, setPreview] = useState<FsPreviewResponse | null>(null);
-    const [scanRunId, setScanRunId] = useState(0);
     const validatorRef = useRef<StepValidator>(async () => null);
 
     const registerValidator = useCallback((validator: StepValidator) => {
@@ -103,8 +101,7 @@ export default function SetupWizard() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "setup_complete", value: "true" }),
             }).catch(() => undefined);
-            setStep(6);
-            setScanRunId((current) => current + 1);
+            window.location.href = "/";
         } catch (err) {
             let message = "Failed to save setup configuration.";
             if (isApiError(err)) {
@@ -207,8 +204,6 @@ export default function SetupWizard() {
                 );
             case 5:
                 return <ReviewStep setupSummary={setupSummary} settings={settings} preview={preview} error={null} />;
-            case 6:
-                return <ScanStep runId={scanRunId} onBackToReview={() => setStep(5)} />;
             default:
                 return null;
         }

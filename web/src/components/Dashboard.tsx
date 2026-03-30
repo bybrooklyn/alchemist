@@ -216,7 +216,7 @@ export default function Dashboard() {
             {/* Stat row — compact horizontal strip */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-helios-solar" />
-                <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-emerald-500" />
+                <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-status-success" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />
                 <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
             </div>
@@ -259,7 +259,7 @@ export default function Dashboard() {
                                         <div className="flex items-center gap-3 min-w-0">
                                             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                                                 s === "completed"
-                                                    ? "bg-emerald-500"
+                                                    ? "bg-status-success"
                                                 : s === "failed"
                                                     ? "bg-status-error"
                                                 : s === "encoding" || s === "analyzing"

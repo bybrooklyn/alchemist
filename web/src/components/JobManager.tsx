@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
     Search, RefreshCw, Trash2, Ban,
     Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp, AlertCircle
@@ -371,6 +372,72 @@ export default function JobManager() {
         return () => {
             window.clearInterval(interval);
             document.removeEventListener("visibilitychange", pollVisible);
+        };
+    }, []);
+
+    useEffect(() => {
+        let eventSource: EventSource | null = null;
+        let cancelled = false;
+        let reconnectTimeout: number | null = null;
+
+        const connect = () => {
+            if (cancelled) return;
+            eventSource?.close();
+            eventSource = new EventSource("/api/events");
+
+            eventSource.addEventListener("status", (e) => {
+                try {
+                    const { job_id, status } = JSON.parse(e.data) as {
+                        job_id: number;
+                        status: string;
+                    };
+                    setJobs((prev) =>
+                        prev.map((job) =>
+                            job.id === job_id ? { ...job, status } : job
+                        )
+                    );
+                } catch {
+                    /* ignore malformed */
+                }
+            });
+
+            eventSource.addEventListener("progress", (e) => {
+                try {
+                    const { job_id, percentage } = JSON.parse(e.data) as {
+                        job_id: number;
+                        percentage: number;
+                    };
+                    setJobs((prev) =>
+                        prev.map((job) =>
+                            job.id === job_id ? { ...job, progress: percentage } : job
+                        )
+                    );
+                } catch {
+                    /* ignore malformed */
+                }
+            });
+
+            eventSource.addEventListener("decision", () => {
+                // Re-fetch full job list when decisions are made
+                void fetchJobsRef.current();
+            });
+
+            eventSource.onerror = () => {
+                eventSource?.close();
+                if (!cancelled) {
+                    reconnectTimeout = window.setTimeout(connect, 3000);
+                }
+            };
+        };
+
+        connect();
+
+        return () => {
+            cancelled = true;
+            eventSource?.close();
+            if (reconnectTimeout !== null) {
+                window.clearTimeout(reconnectTimeout);
+            }
         };
     }, []);
 
@@ -1027,18 +1094,19 @@ export default function JobManager() {
                 </button>
             </div>
 
-            {/* Detail Overlay */}
-            <AnimatePresence>
-                {focusedJob && (
-                    <>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setFocusedJob(null)}
-                            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
-                        />
-                        <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[101]">
+            {/* Detail Overlay - rendered via portal to escape layout constraints */}
+            {typeof document !== "undefined" && createPortal(
+                <AnimatePresence>
+                    {focusedJob && (
+                        <>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setFocusedJob(null)}
+                                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
+                            />
+                            <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[101]">
                             <motion.div
                                 key="modal-content"
                                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -1396,7 +1464,9 @@ export default function JobManager() {
                         </div>
                     </>
                 )}
-            </AnimatePresence>
+            </AnimatePresence>,
+                document.body
+            )}
 
             <ConfirmDialog
                 open={confirmState !== null}
