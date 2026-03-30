@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Info, LogOut, Pause, Play, Square, X } from "lucide-react";
+import { Info, LogOut, Play, Square } from "lucide-react";
 import { motion } from "framer-motion";
 import AboutDialog from "./AboutDialog";
 import { apiAction, apiJson } from "../lib/api";

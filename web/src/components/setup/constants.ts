@@ -6,7 +6,7 @@ import type {
     SetupStatusResponse,
 } from "./types";
 
-export const SETUP_STEP_COUNT = 6;
+export const SETUP_STEP_COUNT = 5;
 
 export const THEME_OPTIONS = [
     { id: "helios-orange", name: "Helios Orange" },
@@ -81,7 +81,7 @@ export const DEFAULT_SETTINGS: SetupSettings = {
     },
 };
 
-export function mergeSetupSettings(status: SetupStatusResponse, bundle: SettingsBundleResponse): SetupSettings {
+export function mergeSetupSettings(_status: SetupStatusResponse, bundle: SettingsBundleResponse): SetupSettings {
     return {
         ...DEFAULT_SETTINGS,
         ...bundle.settings,

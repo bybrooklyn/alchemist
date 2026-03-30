@@ -97,12 +97,8 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
   await expect(page.getByRole("heading", { name: "Final Review" })).toBeVisible();
   await page.getByRole("button", { name: "Complete Setup" }).click();
 
-  await expect(page.getByRole("heading", { name: "Initial Library Scan" })).toBeVisible();
-  await expect(page.getByText("Found: 5")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Enter Dashboard" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Enter Dashboard" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await page.waitForURL((url) => !url.pathname.includes("/setup"));
+  await expect(page.getByRole("button", { name: "Enter Dashboard" })).toHaveCount(0);
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Start" })).toBeVisible();
 });

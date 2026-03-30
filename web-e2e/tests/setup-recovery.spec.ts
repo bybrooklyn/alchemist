@@ -78,8 +78,8 @@ test("setup shows a persistent inline alert and disables telemetry", async ({ pa
   await expect(alert).toContainText("Select at least one server folder before continuing.");
 });
 
-test("setup step 5 shows retry and back recovery on scan failures", async ({ page }) => {
-  let scanStartAttempts = 0;
+test("setup completes directly without an intermediate scan step", async ({ page }) => {
+  let scanStartCalls = 0;
 
   await page.route("**/api/setup/status", async (route) => {
     await fulfillJson(route, 200, {
@@ -173,11 +173,7 @@ test("setup step 5 shows retry and back recovery on scan failures", async ({ pag
   });
 
   await page.route("**/api/scan/start", async (route) => {
-    scanStartAttempts += 1;
-    if (scanStartAttempts < 3) {
-      await fulfillJson(route, 500, { message: "forced scan start failure" });
-      return;
-    }
+    scanStartCalls += 1;
     await route.fulfill({ status: 202, body: "" });
   });
 
@@ -205,18 +201,10 @@ test("setup step 5 shows retry and back recovery on scan failures", async ({ pag
   await expect(page.getByRole("heading", { name: "Final Review" })).toBeVisible();
   await page.getByRole("button", { name: "Complete Setup" }).click();
 
-  await expect(page.getByText("Scan failed or became unavailable.")).toBeVisible();
-  await expect(page.getByText("forced scan start failure")).toBeVisible();
-
-  await page.getByRole("button", { name: "Back to Review" }).click();
-  await expect(page.getByRole("heading", { name: "Final Review" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Complete Setup" }).click();
-  await expect(page.getByText("Scan failed or became unavailable.")).toBeVisible();
-
-  await page.getByRole("button", { name: "Retry Scan" }).click();
-  await expect(page.getByRole("button", { name: "Enter Dashboard" })).toBeVisible();
-  await expect(scanStartAttempts).toBe(3);
+  await page.waitForURL((url) => !url.pathname.includes("/setup"));
+  await expect(page.getByRole("button", { name: "Enter Dashboard" })).toHaveCount(0);
+  await expect(page.getByText("Scan failed or became unavailable.")).toHaveCount(0);
+  expect(scanStartCalls).toBe(0);
 });
 
 test("setup submits h264 as a valid output codec", async ({ page }) => {
@@ -304,6 +292,9 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
     submittedBody = route.request().postDataJSON() as Record<string, unknown>;
     await fulfillJson(route, 200, { status: "ok" });
   });
+  await page.route("**/api/settings/preferences", async (route) => {
+    await fulfillJson(route, 200, { status: "ok" });
+  });
 
   await page.route("**/api/scan/start", async (route) => {
     await route.fulfill({ status: 202, body: "" });
@@ -329,7 +320,7 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Complete Setup" }).click();
-  await expect(page.getByRole("button", { name: "Enter Dashboard" })).toBeVisible();
+  await page.waitForURL((url) => !url.pathname.includes("/setup"));
 
   expect((submittedBody?.settings as { transcode?: { output_codec?: string } })?.transcode?.output_codec).toBe("h264");
 });

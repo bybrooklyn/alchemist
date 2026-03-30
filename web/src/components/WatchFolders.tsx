@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FolderOpen, X, Play, Pencil } from "lucide-react";
+import { X, Play, Pencil } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";

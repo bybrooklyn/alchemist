@@ -301,9 +301,7 @@ pub(crate) async fn setup_complete_handler(
             if !status.is_running {
                 break;
             }
-            tokio::time::sleep(
-                tokio::time::Duration::from_secs(1)
-            ).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
         agent_for_analysis.analyze_pending_jobs().await;
     });
