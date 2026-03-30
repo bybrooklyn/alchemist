@@ -101,6 +101,7 @@ pub struct RunServerArgs {
     pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub notification_manager: Arc<crate::notifications::NotificationManager>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
+    pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
 }
 
 pub async fn run_server(args: RunServerArgs) -> Result<()> {
@@ -119,6 +120,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         hardware_probe_log,
         notification_manager,
         file_watcher,
+        library_scanner,
     } = args;
     #[cfg(not(feature = "embed-web"))]
     {
@@ -139,11 +141,6 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_usage();
     sys.refresh_memory();
-
-    let library_scanner = Arc::new(crate::system::scanner::LibraryScanner::new(
-        db.clone(),
-        config.clone(),
-    ));
 
     let state = Arc::new(AppState {
         db,
@@ -207,7 +204,12 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
                         "Port {try_port} is already in use. Set ALCHEMIST_SERVER_PORT to a different port."
                     )));
                 }
-                tracing::warn!("Port {try_port} is in use, trying {}", try_port.saturating_add(1));
+                let next = try_port.saturating_add(1);
+                if attempt + 1 < max_attempts {
+                    tracing::warn!("Port {try_port} is in use, trying {next}");
+                } else {
+                    tracing::warn!("Port {try_port} is in use, no more ports to try");
+                }
             }
             Err(e) => return Err(AlchemistError::Io(e)),
         }
@@ -225,6 +227,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
             "Port {} was in use — Alchemist is listening on http://0.0.0.0:{bound_port} instead",
             port
         );
+        info!("listening on http://0.0.0.0:{bound_port}");
     } else {
         info!("listening on http://0.0.0.0:{bound_port}");
     }

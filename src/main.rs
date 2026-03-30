@@ -469,12 +469,15 @@ async fn run() -> Result<()> {
         // Initialize File Watcher
         let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(db.clone()));
 
+        // Initialize Library Scanner (shared between boot task and server)
+        let library_scanner = Arc::new(alchemist::system::scanner::LibraryScanner::new(
+            db.clone(),
+            config.clone(),
+        ));
+
         if !setup_mode {
             let scan_agent = agent.clone();
-            let startup_scanner = Arc::new(alchemist::system::scanner::LibraryScanner::new(
-                db.clone(),
-                config.clone(),
-            ));
+            let startup_scanner = library_scanner.clone();
             tokio::spawn(async move {
                 // Small delay to let the server fully initialize
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -645,6 +648,7 @@ async fn run() -> Result<()> {
             hardware_probe_log,
             notification_manager: notification_manager.clone(),
             file_watcher,
+            library_scanner,
         })
         .await?;
     } else {

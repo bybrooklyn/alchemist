@@ -307,6 +307,10 @@ impl Agent {
                     );
                     self.stop_drain();
                     self.pause();
+                    let _ = self
+                        .event_channels
+                        .system
+                        .send(crate::db::SystemEvent::EngineStatusChanged);
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 continue;

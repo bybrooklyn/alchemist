@@ -363,11 +363,13 @@ pub(crate) async fn get_job_detail_handler(
 // Engine control handlers
 
 pub(crate) async fn pause_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.stop_drain();
     state.agent.pause();
     axum::Json(serde_json::json!({ "status": "paused" }))
 }
 
 pub(crate) async fn resume_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.agent.stop_drain();
     state.agent.resume();
     axum::Json(serde_json::json!({ "status": "running" }))
 }

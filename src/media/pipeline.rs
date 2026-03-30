@@ -734,7 +734,9 @@ impl Pipeline {
         let analysis = match analyzer.analyze(&file_path).await {
             Ok(m) => m,
             Err(e) => {
-                tracing::error!("Job {}: Probing failed: {}", job.id, e);
+                let msg = format!("Probing failed: {e}");
+                tracing::error!("Job {}: {}", job.id, msg);
+                let _ = self.db.add_log("error", Some(job.id), &msg).await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
@@ -773,7 +775,9 @@ impl Pipeline {
         let profile = match self.db.get_profile_for_path(&job.input_path).await {
             Ok(profile) => profile,
             Err(err) => {
-                tracing::error!("Job {}: Failed to resolve library profile: {}", job.id, err);
+                let msg = format!("Failed to resolve library profile: {err}");
+                tracing::error!("Job {}: {}", job.id, msg);
+                let _ = self.db.add_log("error", Some(job.id), &msg).await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
@@ -786,7 +790,9 @@ impl Pipeline {
         {
             Ok(plan) => plan,
             Err(e) => {
-                tracing::error!("Job {}: Planner failed: {}", job.id, e);
+                let msg = format!("Planner failed: {e}");
+                tracing::error!("Job {}: {}", job.id, msg);
+                let _ = self.db.add_log("error", Some(job.id), &msg).await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
