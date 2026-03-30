@@ -245,7 +245,7 @@ export default function LibraryStep({
                                                                     : "rounded-lg px-2 py-1 transition-colors hover:bg-helios-surface-soft hover:text-helios-ink"
                                                             }
                                                         >
-                                                            {crumb.name}
+                                                            {crumb.name.replace(/^\//, "")}
                                                         </button>
                                                     </div>
                                                 );
@@ -316,7 +316,7 @@ export default function LibraryStep({
                                                 ..
                                             </span>
                                             <span className="block truncate text-xs text-helios-slate">
-                                                Go up to {parentBreadcrumb.name}
+                                                Go up to {parentBreadcrumb.name.replace(/^\//, "")}
                                             </span>
                                         </div>
                                     </button>
@@ -369,7 +369,7 @@ export default function LibraryStep({
                             disabled={!currentBrowsePath}
                             className="shrink-0 rounded-lg bg-helios-solar px-4 py-2 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Add {currentBrowseName}
+                            Add this folder
                         </button>
                     </div>
                 </div>

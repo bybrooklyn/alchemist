@@ -38,6 +38,8 @@ export default function HeaderActions() {
         },
     } as const;
 
+    const status = engineStatus?.status ?? "paused";
+
     const refreshEngineStatus = async () => {
         const data = await apiJson<EngineStatus>("/api/engine/status");
         setEngineStatus(data);
@@ -83,6 +85,17 @@ export default function HeaderActions() {
         };
     }, []);
 
+    // Fast poll during draining state for responsive UI
+    useEffect(() => {
+        if (status !== "draining") return;
+
+        const id = window.setInterval(() => {
+            void refreshEngineStatus();
+        }, 1000);
+
+        return () => window.clearInterval(id);
+    }, [status]);
+
     const handleStart = async () => {
         setEngineLoading(true);
         try {
@@ -127,8 +140,6 @@ export default function HeaderActions() {
             window.location.href = '/login';
         }
     };
-
-    const status = engineStatus?.status ?? "paused";
 
     return (
         <>

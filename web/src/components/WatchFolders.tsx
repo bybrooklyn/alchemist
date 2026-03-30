@@ -359,10 +359,6 @@ export default function WatchFolders() {
         <div className="space-y-6" aria-live="polite">
             <div className="flex items-center justify-between gap-4">
                 <div className="space-y-1">
-                    <h2 className="flex items-center gap-2 text-xl font-semibold text-helios-ink">
-                        <FolderOpen size={20} className="text-helios-solar" />
-                        Media Folders
-                    </h2>
                     <p className="text-sm text-helios-slate">
                         Folders Alchemist scans and watches for new media.
                     </p>

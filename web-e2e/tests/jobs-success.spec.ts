@@ -151,7 +151,7 @@ test("search requests are debounced and failed job details show summary and logs
   await page.getByTitle("/media/failed.mkv").click();
 
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByText("What went wrong")).toBeVisible();
+  await expect(page.getByText("Failure Reason")).toBeVisible();
   await expect(page.getByText("Unknown encoder 'missing_encoder'").first()).toBeVisible();
   await page.getByText(/Show FFmpeg output \(2 lines\)/).click();
   await expect(page.getByText("frame=5 fps=10")).toBeVisible();
@@ -266,4 +266,142 @@ test("detail modal delete action removes the job and closes the modal", async ({
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByTitle("/media/completed.mkv")).toHaveCount(0);
+});
+
+test("queued job with no metadata shows waiting for analysis placeholder", async ({ page }) => {
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [queuedJob]);
+  });
+  await mockJobDetails(page, {
+    1: {
+      job: queuedJob,
+      job_logs: [],
+    },
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/queued.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("Waiting for analysis")).toBeVisible();
+  await expect(page.getByText("Unknown bit depth")).not.toBeVisible();
+});
+
+test("analyzed queued job shows real metadata in detail modal", async ({ page }) => {
+  const analyzedJob: JobFixture = {
+    ...queuedJob,
+    id: 10,
+    input_path: "/media/analyzed.mkv",
+    output_path: "/output/analyzed-av1.mkv",
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [analyzedJob]);
+  });
+  await mockJobDetails(page, {
+    10: {
+      job: analyzedJob,
+      metadata: {
+        duration_secs: 3600,
+        codec_name: "h264",
+        width: 1920,
+        height: 1080,
+        bit_depth: 8,
+        size_bytes: 4_000_000_000,
+        video_bitrate_bps: 8_000_000,
+        container_bitrate_bps: 8_200_000,
+        fps: 23.976,
+        container: "mkv",
+        audio_codec: "aac",
+        audio_channels: 2,
+        dynamic_range: "sdr",
+      },
+      job_logs: [],
+    },
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/analyzed.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("h264")).toBeVisible();
+  await expect(page.getByText("1920x1080")).toBeVisible();
+  await expect(page.getByText("Waiting for analysis")).not.toBeVisible();
+});
+
+test("skipped job shows humanized skip reason with measured values", async ({ page }) => {
+  const skippedJob: JobFixture = {
+    id: 20,
+    input_path: "/media/already-small.mkv",
+    output_path: "/output/already-small-av1.mkv",
+    status: "skipped",
+    priority: 0,
+    progress: 0,
+    decision_reason: "bpp_below_threshold|bpp=0.043,threshold=0.050",
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-01T00:00:00Z",
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [skippedJob]);
+  });
+  await mockJobDetails(page, {
+    20: {
+      job: skippedJob,
+      metadata: {
+        duration_secs: 1800,
+        codec_name: "hevc",
+        width: 1920,
+        height: 1080,
+        bit_depth: 10,
+        size_bytes: 2_000_000_000,
+        fps: 24,
+        container: "mkv",
+        dynamic_range: "sdr",
+      },
+      job_logs: [],
+    },
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/already-small.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("Already efficiently compressed")).toBeVisible();
+  await expect(page.getByText("0.043", { exact: true })).toBeVisible();
+  await expect(page.getByText("0.050", { exact: true })).toBeVisible();
+  await expect(page.getByText("bpp_below_threshold|")).not.toBeVisible();
+});
+
+test("failed job with no failure summary shows fallback message", async ({ page }) => {
+  const mysteryFailJob: JobFixture = {
+    id: 30,
+    input_path: "/media/mystery.mkv",
+    output_path: "/output/mystery-av1.mkv",
+    status: "failed",
+    priority: 0,
+    progress: 0,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-01T00:00:00Z",
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [mysteryFailJob]);
+  });
+  await mockJobDetails(page, {
+    30: {
+      job: mysteryFailJob,
+      metadata: undefined,
+      encode_stats: undefined,
+      job_logs: [],
+      job_failure_summary: null,
+    } as unknown as JobDetailFixture,
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/mystery.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("Failure Reason")).toBeVisible();
+  await expect(page.getByText(/No error details captured/)).toBeVisible();
 });
