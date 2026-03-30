@@ -113,13 +113,13 @@ export default function ResourceMonitor() {
     const getUsageColor = (percent: number) => {
         if (percent > 90) return "text-status-error bg-status-error/10";
         if (percent > 70) return "text-helios-solar bg-helios-solar/10";
-        return "text-status-success bg-status-success/10";
+        return "text-helios-solar bg-helios-solar/10";
     };
 
     const getBarColor = (percent: number) => {
         if (percent > 90) return "bg-status-error";
         if (percent > 70) return "bg-helios-solar";
-        return "bg-status-success";
+        return "bg-helios-solar";
     };
 
     if (!stats) {

@@ -143,7 +143,7 @@ export default function LibraryStep({
     const breadcrumbs = browse?.breadcrumbs ?? [];
     const parentBreadcrumb =
         breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
-    const visibleEntries = browse?.entries.filter((entry) => entry.readable) ?? [];
+    const visibleEntries = browse?.entries?.filter((entry) => entry.readable) ?? [];
 
     return (
         <motion.div

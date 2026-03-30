@@ -290,10 +290,22 @@ pub(crate) async fn setup_complete_handler(
     // Start Scan (optional, but good for UX)
     // Use library_scanner so the UI can track progress via /api/scan/status
     let scanner = state.library_scanner.clone();
+    let agent_for_analysis = state.agent.clone();
     tokio::spawn(async move {
         if let Err(e) = scanner.start_scan().await {
             error!("Background initial scan failed: {}", e);
+            return;
         }
+        loop {
+            let status = scanner.get_status().await;
+            if !status.is_running {
+                break;
+            }
+            tokio::time::sleep(
+                tokio::time::Duration::from_secs(1)
+            ).await;
+        }
+        agent_for_analysis.analyze_pending_jobs().await;
     });
 
     info!("Configuration saved via web setup. Auth info created.");

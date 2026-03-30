@@ -359,7 +359,19 @@ impl Agent {
                 }
                 Ok(None) => {
                     drop(permit);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    if !self.is_paused() && !self.is_draining() {
+                        info!(
+                            "Queue empty — engine returning to \
+                             paused state automatically."
+                        );
+                        self.pause();
+                        let _ = self.event_channels.system.send(
+                            crate::db::SystemEvent::EngineStatusChanged
+                        );
+                    }
+                    tokio::time::sleep(
+                        tokio::time::Duration::from_secs(5)
+                    ).await;
                 }
                 Err(e) => {
                     drop(permit);
