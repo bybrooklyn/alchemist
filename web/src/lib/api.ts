@@ -90,7 +90,8 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
     }
 
     const controller = new AbortController();
-    const timeoutMs = 15000;
+    // 30s timeout: hardware detection and large scans can take time
+    const timeoutMs = 30000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     const abortHandler = () => controller.abort();

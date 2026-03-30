@@ -282,6 +282,11 @@ pub(crate) async fn setup_complete_handler(
     replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
     refresh_file_watcher(&state).await;
 
+    // Mark setup as complete
+    state
+        .setup_required
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
     // Start Scan (optional, but good for UX)
     // Use library_scanner so the UI can track progress via /api/scan/status
     let scanner = state.library_scanner.clone();

@@ -44,11 +44,11 @@ pub(crate) async fn login_handler(
     let parsed_hash = match &user_result {
         Some(u) => PasswordHash::new(&u.password_hash).unwrap_or_else(|_| {
             is_valid = false;
-            PasswordHash::new(DUMMY_HASH).unwrap()
+            PasswordHash::new(DUMMY_HASH).expect("DUMMY_HASH must be a valid argon2 hash")
         }),
         None => {
             is_valid = false;
-            PasswordHash::new(DUMMY_HASH).unwrap()
+            PasswordHash::new(DUMMY_HASH).expect("DUMMY_HASH must be a valid argon2 hash")
         }
     };
 
@@ -59,11 +59,9 @@ pub(crate) async fn login_handler(
         is_valid = false;
     }
 
-    if !is_valid || user_result.is_none() {
+    let Some(user) = user_result.filter(|_| is_valid) else {
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
-    }
-
-    let user = user_result.unwrap();
+    };
 
     // Create session
     let token: String = rand::rng()

@@ -139,7 +139,7 @@ export function humanizeSkipReason(reason: string): SkipDetail {
 
         default:
             return {
-                summary: "Skipped",
+                summary: "Decision recorded",
                 detail: reason,
                 action: null,
                 measured,
@@ -379,11 +379,27 @@ export default function JobManager() {
         let eventSource: EventSource | null = null;
         let cancelled = false;
         let reconnectTimeout: number | null = null;
+        let reconnectAttempts = 0;
+
+        const getReconnectDelay = () => {
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+            const baseDelay = 1000;
+            const maxDelay = 30000;
+            const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), maxDelay);
+            // Add jitter (±25%) to prevent thundering herd
+            const jitter = delay * 0.25 * (Math.random() * 2 - 1);
+            return Math.round(delay + jitter);
+        };
 
         const connect = () => {
             if (cancelled) return;
             eventSource?.close();
             eventSource = new EventSource("/api/events");
+
+            eventSource.onopen = () => {
+                // Reset reconnect attempts on successful connection
+                reconnectAttempts = 0;
+            };
 
             eventSource.addEventListener("status", (e) => {
                 try {
@@ -425,7 +441,9 @@ export default function JobManager() {
             eventSource.onerror = () => {
                 eventSource?.close();
                 if (!cancelled) {
-                    reconnectTimeout = window.setTimeout(connect, 3000);
+                    reconnectAttempts++;
+                    const delay = getReconnectDelay();
+                    reconnectTimeout = window.setTimeout(connect, delay);
                 }
             };
         };
@@ -1281,7 +1299,9 @@ export default function JobManager() {
                                             {focusedDecision && (
                                                 <div className="space-y-3">
                                                     <p className="text-sm font-medium text-helios-ink">
-                                                        {focusedDecision.summary}
+                                                        {focusedJob.job.status === "completed"
+                                                            ? "Transcoded"
+                                                            : focusedDecision.summary}
                                                     </p>
                                                     <p className="text-xs leading-relaxed text-helios-slate">
                                                         {focusedDecision.detail}

@@ -25,12 +25,17 @@ const TABS = [
 ];
 
 export default function SettingsPanel() {
-    const [activeTab, setActiveTab] = useState(() => {
-        if (typeof window === "undefined") return "watch";
+    // Start with default tab to avoid hydration mismatch, then sync with URL in useEffect
+    const [activeTab, setActiveTab] = useState("watch");
+
+    // Sync tab state from URL after hydration (client-side only)
+    useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const requested = params.get("tab");
-        return requested && TABS.some((tab) => tab.id === requested) ? requested : "watch";
-    });
+        if (requested && TABS.some((tab) => tab.id === requested)) {
+            setActiveTab(requested);
+        }
+    }, []);
 
     const activeIndex = TABS.findIndex(t => t.id === activeTab);
 
