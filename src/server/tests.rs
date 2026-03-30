@@ -61,7 +61,8 @@ where
     let transcoder = Arc::new(Transcoder::new());
 
     // Create event channels before Agent
-    let (jobs_tx, _) = broadcast::channel(1000);
+    // Use tx_capacity for jobs channel to allow testing lag behavior
+    let (jobs_tx, _) = broadcast::channel(tx_capacity);
     let (config_tx, _) = broadcast::channel(50);
     let (system_tx, _) = broadcast::channel(100);
     let event_channels = Arc::new(crate::db::EventChannels {

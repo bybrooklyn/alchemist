@@ -590,6 +590,7 @@ impl Pipeline {
             Ok(a) => a,
             Err(e) => {
                 let reason = format!("analysis_failed|error={e}");
+                let _ = self.db.add_log("error", Some(job_id), &reason).await;
                 self.db.add_decision(job_id, "skip", &reason).await.ok();
                 self.db
                     .update_job_status(job_id, crate::db::JobState::Failed)
@@ -602,11 +603,13 @@ impl Pipeline {
         let output_path = std::path::PathBuf::from(&job.output_path);
 
         // Get profile for this job's input path (if any)
-        let profile = self
-            .db
-            .get_profile_for_path(&job.input_path)
-            .await
-            .unwrap_or(None);
+        let profile = match self.db.get_profile_for_path(&job.input_path).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to fetch profile for {}: {}", job.input_path, e);
+                None
+            }
+        };
 
         // Run the planner
         let config_snapshot = Arc::new(self.config.read().await.clone());
@@ -619,6 +622,7 @@ impl Pipeline {
             Ok(p) => p,
             Err(e) => {
                 let reason = format!("planning_failed|error={e}");
+                let _ = self.db.add_log("error", Some(job_id), &reason).await;
                 self.db.add_decision(job_id, "skip", &reason).await.ok();
                 self.db
                     .update_job_status(job_id, crate::db::JobState::Failed)

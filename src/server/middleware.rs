@@ -29,17 +29,23 @@ pub(crate) async fn security_headers_middleware(request: Request, next: Next) ->
     let headers = response.headers_mut();
 
     // Prevent clickjacking
-    headers.insert(header::X_FRAME_OPTIONS, "DENY".parse().unwrap());
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        "DENY".parse().expect("valid header value"),
+    );
 
     // Prevent MIME type sniffing
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().expect("valid header value"),
+    );
 
     // XSS protection (legacy but still useful)
     headers.insert(
         "X-XSS-Protection"
             .parse::<axum::http::HeaderName>()
-            .unwrap(),
-        "1; mode=block".parse().unwrap(),
+            .expect("valid header name"),
+        "1; mode=block".parse().expect("valid header value"),
     );
 
     // Content Security Policy - allows inline scripts/styles for the SPA
@@ -48,21 +54,25 @@ pub(crate) async fn security_headers_middleware(request: Request, next: Next) ->
         header::CONTENT_SECURITY_POLICY,
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"
             .parse()
-            .unwrap(),
+            .expect("valid CSP header value"),
     );
 
     // Referrer policy
     headers.insert(
         header::REFERRER_POLICY,
-        "strict-origin-when-cross-origin".parse().unwrap(),
+        "strict-origin-when-cross-origin"
+            .parse()
+            .expect("valid header value"),
     );
 
     // Permissions policy (restrict browser features)
     headers.insert(
         "Permissions-Policy"
             .parse::<axum::http::HeaderName>()
-            .unwrap(),
-        "geolocation=(), microphone=(), camera=()".parse().unwrap(),
+            .expect("valid header name"),
+        "geolocation=(), microphone=(), camera=()"
+            .parse()
+            .expect("valid header value"),
     );
 
     response
