@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { expectVisibleError, fulfillJson, mockEngineStatus } from "./helpers";
+import {
+  createSettingsBundle,
+  expectVisibleError,
+  fulfillJson,
+  mockEngineStatus,
+} from "./helpers";
 
 const transcodeSettings = {
   concurrent_jobs: 2,
@@ -175,6 +180,24 @@ test("notification test send failure is visible", async ({ page }) => {
 });
 
 test("watch folder add failure is visible", async ({ page }) => {
+  await page.route("**/api/settings/bundle", async (route) => {
+    if (route.request().method() === "PUT") {
+      await fulfillJson(route, 200, { status: "ok" });
+      return;
+    }
+
+    await fulfillJson(
+      route,
+      200,
+      createSettingsBundle({
+        scanner: {
+          directories: [],
+          watch_enabled: true,
+          extra_watch_dirs: [],
+        },
+      }),
+    );
+  });
   await page.route("**/api/settings/watch-dirs", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, 200, []);
@@ -182,17 +205,41 @@ test("watch folder add failure is visible", async ({ page }) => {
     }
     await fulfillJson(route, 500, { message: "forced watch add failure" });
   });
+  await page.route("**/api/profiles/presets", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
+  await page.route("**/api/profiles", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
 
   await page.goto("/settings?tab=watch");
-  await page.getByPlaceholder("Enter full directory path...").fill("/tmp/test-media");
+  await page.getByPlaceholder("/path/to/media").fill("/tmp/test-media");
   await page.getByRole("button", { name: /^Add$/ }).click();
 
   await expectVisibleError(page, "forced watch add failure");
 });
 
-test("watch folder recursive toggle is submitted", async ({ page }) => {
+test("watch folder add submits recursive mode by default", async ({ page }) => {
   let savedBody: Record<string, unknown> | null = null;
 
+  await page.route("**/api/settings/bundle", async (route) => {
+    if (route.request().method() === "PUT") {
+      await fulfillJson(route, 200, { status: "ok" });
+      return;
+    }
+
+    await fulfillJson(
+      route,
+      200,
+      createSettingsBundle({
+        scanner: {
+          directories: [],
+          watch_enabled: true,
+          extra_watch_dirs: [],
+        },
+      }),
+    );
+  });
   await page.route("**/api/settings/watch-dirs", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, 200, []);
@@ -206,19 +253,44 @@ test("watch folder recursive toggle is submitted", async ({ page }) => {
       is_recursive: savedBody.is_recursive,
     });
   });
+  await page.route("**/api/profiles/presets", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
+  await page.route("**/api/profiles", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
 
   await page.goto("/settings?tab=watch");
-  await page.getByPlaceholder("Enter full directory path...").fill("/tmp/test-media");
-  await page.getByLabel("Watch subdirectories recursively").uncheck();
+  await expect(page.getByText("Watch subdirectories recursively")).toHaveCount(0);
+  await page.getByPlaceholder("/path/to/media").fill("/tmp/test-media");
   await page.getByRole("button", { name: /^Add$/ }).click();
 
+  await expect.poll(() => savedBody).not.toBeNull();
   expect(savedBody).toMatchObject({
     path: "/tmp/test-media",
-    is_recursive: false,
+    is_recursive: true,
   });
 });
 
 test("watch folder remove failure is visible", async ({ page }) => {
+  await page.route("**/api/settings/bundle", async (route) => {
+    if (route.request().method() === "PUT") {
+      await fulfillJson(route, 200, { status: "ok" });
+      return;
+    }
+
+    await fulfillJson(
+      route,
+      200,
+      createSettingsBundle({
+        scanner: {
+          directories: ["/tmp/test-media"],
+          watch_enabled: true,
+          extra_watch_dirs: [],
+        },
+      }),
+    );
+  });
   await page.route("**/api/settings/watch-dirs", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, 200, [
@@ -232,14 +304,19 @@ test("watch folder remove failure is visible", async ({ page }) => {
   await page.route("**/api/settings/watch-dirs/5", async (route) => {
     await fulfillJson(route, 500, { message: "forced watch delete failure" });
   });
+  await page.route("**/api/profiles/presets", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
+  await page.route("**/api/profiles", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
 
   await page.goto("/settings?tab=watch");
-  await page.getByText("/tmp/test-media").hover();
-  await page.getByTitle("Stop watching").click();
+  await page.getByRole("button", { name: "Remove /tmp/test-media" }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Stop Watching" }).click();
+  await dialog.getByRole("button", { name: "Remove" }).click();
 
   await expectVisibleError(page, "forced watch delete failure");
 });

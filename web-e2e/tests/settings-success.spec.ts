@@ -250,16 +250,16 @@ test("watch folders can be added and removed", async ({ page }) => {
   });
 
   await page.goto("/settings?tab=watch");
-  await page.getByPlaceholder("Enter full directory path...").fill("/tmp/test-media");
+  await page.getByPlaceholder("/path/to/media").fill("/tmp/test-media");
   await page.getByRole("button", { name: /^Add$/ }).click();
 
   await expect(page.getByText("/tmp/test-media")).toBeVisible();
   await expect(page.getByText("Folder added.").first()).toBeVisible();
 
-  await page.locator("button[title='Stop watching']").click({ force: true });
+  await page.getByRole("button", { name: "Remove /tmp/test-media" }).click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Stop Watching" })
+    .getByRole("button", { name: "Remove" })
     .click();
 
   await expect(page.getByText("/tmp/test-media")).toHaveCount(0);

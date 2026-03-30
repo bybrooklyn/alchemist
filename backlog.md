@@ -4,6 +4,12 @@ Future improvements and features to consider for the project.
 
 ## High Priority
 
+### Planning / Simulation Mode
+- Add a first-class simulation flow that answers what Alchemist would transcode, remux, or skip without mutating the library
+- Show estimated total bytes recoverable, action counts, top skip reasons, and per-file predicted actions
+- Support comparing current settings against alternative profiles, codec targets, or threshold snapshots
+- Reuse the scanner, analyzer, and planner, but stop before executor and promotion stages
+
 ### E2E Test Coverage
 - Expand Playwright tests for more UI flows
 - Test job queue management scenarios
@@ -16,6 +22,15 @@ Future improvements and features to consider for the project.
 - Do not treat this as support-from-scratch: encoder wiring and hardware detection already exist
 
 ## Medium Priority
+
+### Decision Clarity
+- Replace loose skip/failure reason strings with structured UI/API payloads that include a code, plain-English summary, measured values, and operator guidance
+- Show concise skip/failure summaries before raw logs in the job detail panel
+- Make the jobs list communicate skip/failure class at a glance
+
+### Library Intelligence
+- Expand recommendations beyond duplicate detection into remux-only opportunities, wasteful audio layouts, commentary/descriptive-track cleanup, and duplicate-ish title variants
+- Keep the feature focused on storage and library quality, not general media management
 
 ### Performance Optimizations
 - Profile scanner/analyzer hot paths before changing behavior
