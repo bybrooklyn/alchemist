@@ -22,19 +22,19 @@ export default function HeaderActions() {
 
     const statusConfig = {
         running: {
-            dot: "bg-emerald-500 animate-pulse",
+            dot: "bg-status-success animate-pulse",
             label: "Running",
-            labelColor: "text-emerald-500",
+            labelColor: "text-status-success",
         },
         paused: {
-            dot: "bg-amber-500",
+            dot: "bg-helios-solar",
             label: "Paused",
-            labelColor: "text-amber-500",
+            labelColor: "text-helios-solar",
         },
         draining: {
-            dot: "bg-blue-400",
-            label: "Draining",
-            labelColor: "text-blue-400",
+            dot: "bg-helios-slate animate-pulse",
+            label: "Stopping",
+            labelColor: "text-helios-slate",
         },
     } as const;
 
