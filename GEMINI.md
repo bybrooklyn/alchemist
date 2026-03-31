@@ -7,7 +7,7 @@ Alchemist is a media transcoding tool designed for simplicity and space-saving. 
 - **Purpose:** Automated media transcoding and library management to save storage space.
 - **Backend:** Rust 2024 (Tokio, Axum 0.7, SQLx 0.8 with SQLite).
 - **Frontend:** Astro 5, React 18, Tailwind CSS (embedded in the Rust binary via `rust-embed`).
-- **Documentation:** Docusaurus 3.9 (located in the root `package.json`).
+- **Documentation:** Docusaurus 3.9 (located in `docs/package.json`).
 - **Core Technologies:** FFmpeg (analyzer and executor), SQLite (state management), Argon2 (security).
 
 ## Architecture & Pipeline

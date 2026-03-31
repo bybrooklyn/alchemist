@@ -39,7 +39,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/bybrooklyn/alchemist/edit/main/website/',
+          editUrl: 'https://github.com/bybrooklyn/alchemist/edit/main/docs/',
         },
         pages: false,
         blog: false,
