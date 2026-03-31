@@ -790,6 +790,8 @@ mod tests {
             supported_codecs: vec!["av1".to_string()],
             backends: Vec::new(),
             detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: hardware::ProbeSummary::default(),
         }));
         let hardware_probe_log = Arc::new(RwLock::new(hardware::HardwareProbeLog::default()));
         let transcoder = Arc::new(Transcoder::new());

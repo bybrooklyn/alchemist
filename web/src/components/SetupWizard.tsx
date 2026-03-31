@@ -6,6 +6,7 @@ import ProcessingStep from "./setup/ProcessingStep";
 import ReviewStep from "./setup/ReviewStep";
 import RuntimeStep from "./setup/RuntimeStep";
 import SetupFrame from "./setup/SetupFrame";
+import WelcomeStep from "./setup/WelcomeStep";
 import {
     DEFAULT_NOTIFICATION_DRAFT,
     DEFAULT_SCHEDULE_DRAFT,
@@ -27,7 +28,7 @@ import type {
 } from "./setup/types";
 
 export default function SetupWizard() {
-    const [step, setStep] = useState(1);
+    const [step, setStep] = useState(0);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
@@ -153,6 +154,12 @@ export default function SetupWizard() {
 
     const currentStep = (() => {
         switch (step) {
+            case 0:
+                return (
+                    <WelcomeStep
+                        onGetStarted={() => setStep(1)}
+                    />
+                );
             case 1:
                 return (
                     <AdminAccountStep
