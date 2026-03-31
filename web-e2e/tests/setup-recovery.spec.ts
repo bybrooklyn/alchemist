@@ -63,6 +63,7 @@ test("setup shows a persistent inline alert and disables telemetry", async ({ pa
   });
 
   await page.goto("/setup");
+  await page.getByRole("button", { name: "Get Started" }).click();
 
   await expect(page.getByLabel("Anonymous Usage Telemetry")).toBeDisabled();
   await expect(page.getByText("Temporarily unavailable while Alembic stabilizes. Telemetry stays off for now.")).toBeVisible();
@@ -187,6 +188,7 @@ test("setup completes directly without an intermediate scan step", async ({ page
   });
 
   await page.goto("/setup");
+  await page.getByRole("button", { name: "Get Started" }).click();
   await expect(page.getByPlaceholder("admin")).toBeVisible();
 
   await page.getByPlaceholder("admin").fill("playwright");
@@ -310,6 +312,7 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
   });
 
   await page.goto("/setup");
+  await page.getByRole("button", { name: "Get Started" }).click();
   await page.getByPlaceholder("admin").fill("playwright");
   await page.getByPlaceholder("Choose a strong password").fill("playwright-password");
   await page.getByRole("button", { name: "Next" }).click();
