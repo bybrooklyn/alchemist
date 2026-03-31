@@ -1043,7 +1043,8 @@ fn detect_explicit_device_path_with_runner_and_log<R: CommandRunner + ?Sized>(
     }
 
     let mut detection_notes = Vec::new();
-    let resolved_vendor = preferred_vendor.or_else(|| vendor_from_explicit_device_path(Path::new(device_path)));
+    let resolved_vendor =
+        preferred_vendor.or_else(|| vendor_from_explicit_device_path(Path::new(device_path)));
     let candidates = match resolved_vendor {
         Some(Vendor::Intel) => probe_candidates_for_vendor(
             Vendor::Intel,
