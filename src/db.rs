@@ -550,6 +550,7 @@ pub struct EncodeStatsInput {
 pub struct CodecSavings {
     pub codec: String,
     pub bytes_saved: i64,
+    pub job_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1918,7 +1919,8 @@ impl Db {
             let savings_by_codec = sqlx::query(
                 "SELECT
                     COALESCE(NULLIF(TRIM(e.output_codec), ''), 'unknown') as codec,
-                    COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
+                    COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved,
+                    COUNT(*) as job_count
                  FROM encode_stats e
                  JOIN jobs j ON j.id = e.job_id
                  WHERE e.output_size_bytes IS NOT NULL
@@ -1931,6 +1933,7 @@ impl Db {
             .map(|row| CodecSavings {
                 codec: row.get("codec"),
                 bytes_saved: row.get("bytes_saved"),
+                job_count: row.get("job_count"),
             })
             .collect::<Vec<_>>();
 

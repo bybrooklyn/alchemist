@@ -5,6 +5,7 @@ import { showToast } from "../lib/toast";
 interface CodecSavings {
     codec: string;
     bytes_saved: number;
+    job_count: number;
 }
 
 interface DailySavings {
@@ -127,6 +128,34 @@ export default function SavingsOverview() {
 
     return (
         <div className="space-y-6">
+            {/* Total Library Reduction */}
+            <div className="rounded-lg border border-helios-line/40 bg-helios-surface p-6">
+                <div className="text-sm font-medium text-helios-slate mb-4">Total Library Reduction</div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div>
+                        <div className="text-xs text-helios-slate/70">Original size</div>
+                        <div className="mt-1 font-mono text-2xl font-bold text-helios-ink">
+                            {formatHeroStorage(summary.total_input_bytes)}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-xs text-helios-slate/70">Current size</div>
+                        <div className="mt-1 font-mono text-2xl font-bold text-helios-ink">
+                            {formatHeroStorage(summary.total_output_bytes)}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-xs text-helios-slate/70">Space recovered</div>
+                        <div className="mt-1 font-mono text-2xl font-bold text-helios-solar">
+                            {formatHeroStorage(summary.total_bytes_saved)}
+                            <span className="ml-2 text-base font-semibold text-helios-slate">
+                                ({summary.savings_percent.toFixed(1)}%)
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="rounded-lg border border-helios-line/40 bg-helios-surface p-6">
                     <div className="text-sm font-medium text-helios-slate">Total saved</div>
@@ -190,7 +219,7 @@ export default function SavingsOverview() {
                         {summary.savings_by_codec.map((entry) => (
                             <div
                                 key={entry.codec}
-                                className="grid grid-cols-[120px_minmax(0,1fr)_110px] items-center gap-3"
+                                className="grid grid-cols-[120px_minmax(0,1fr)_160px] items-center gap-3"
                             >
                                 <div className="text-sm font-medium text-helios-ink">
                                     {entry.codec}
@@ -207,7 +236,8 @@ export default function SavingsOverview() {
                                     />
                                 </div>
                                 <div className="text-right text-sm text-helios-slate">
-                                    {formatCompactStorage(entry.bytes_saved)}
+                                    {entry.job_count} {entry.job_count === 1 ? "job" : "jobs"},{" "}
+                                    {formatCompactStorage(entry.bytes_saved)} saved
                                 </div>
                             </div>
                         ))}

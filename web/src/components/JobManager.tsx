@@ -258,9 +258,33 @@ interface Job {
     progress: number;
     created_at: string;
     updated_at: string;
+    attempt_count: number;
     vmaf_score?: number;
     decision_reason?: string;
     encoder?: string;
+}
+
+function retryCountdown(job: Job): string | null {
+    if (job.status !== "failed") return null;
+    if (!job.attempt_count || job.attempt_count === 0) return null;
+
+    const backoffMins =
+        job.attempt_count === 1 ? 5
+        : job.attempt_count === 2 ? 15
+        : job.attempt_count === 3 ? 60
+        : 360;
+
+    const updatedMs = new Date(job.updated_at).getTime();
+    const retryAtMs = updatedMs + backoffMins * 60 * 1000;
+    const remainingMs = retryAtMs - Date.now();
+
+    if (remainingMs <= 0) return "Retrying soon";
+
+    const remainingMins = Math.ceil(remainingMs / 60_000);
+    if (remainingMins < 60) return `Retrying in ${remainingMins}m`;
+    const hrs = Math.floor(remainingMins / 60);
+    const mins = remainingMins % 60;
+    return mins > 0 ? `Retrying in ${hrs}h ${mins}m` : `Retrying in ${hrs}h`;
 }
 
 interface JobMetadata {
@@ -346,6 +370,12 @@ export default function JobManager() {
         confirmTone?: "danger" | "primary";
         onConfirm: () => Promise<void> | void;
     } | null>(null);
+    const [tick, setTick] = useState(0);
+
+    useEffect(() => {
+        const id = window.setInterval(() => setTick(t => t + 1), 30_000);
+        return () => window.clearInterval(id);
+    }, []);
 
     const isJobActive = (job: Job) => ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
 
@@ -1024,7 +1054,7 @@ export default function JobManager() {
                             <th className="px-6 py-4">File</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">Progress</th>
-                            <th className="px-6 py-4">Updated</th>
+                            <th className="hidden md:table-cell px-6 py-4">Updated</th>
                             <th className="px-6 py-4 w-14"></th>
                         </tr>
                     </thead>
@@ -1070,7 +1100,7 @@ export default function JobManager() {
                                                 <span className="text-xs text-helios-slate truncate max-w-[240px]">
                                                     {job.input_path}
                                                 </span>
-                                                <span className="rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
+                                                <span className="hidden md:inline rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
                                                     P{job.priority}
                                                 </span>
                                             </div>
@@ -1080,6 +1110,16 @@ export default function JobManager() {
                                         <motion.div layoutId={`job-status-${job.id}`}>
                                             {getStatusBadge(job.status)}
                                         </motion.div>
+                                        {job.status === "failed" && (() => {
+                                            // Reference tick so React re-renders countdowns on interval
+                                            void tick;
+                                            const countdown = retryCountdown(job);
+                                            return countdown ? (
+                                                <p className="text-[10px] font-mono text-helios-slate mt-0.5">
+                                                    {countdown}
+                                                </p>
+                                            ) : null;
+                                        })()}
                                     </td>
                                     <td className="px-6 py-4">
                                         {["encoding", "analyzing", "remuxing"].includes(job.status) ? (
@@ -1114,7 +1154,7 @@ export default function JobManager() {
                                             )
                                         )}
                                     </td>
-                                    <td className="px-6 py-4 text-xs text-helios-slate font-mono">
+                                    <td className="hidden md:table-cell px-6 py-4 text-xs text-helios-slate font-mono">
                                         {new Date(job.updated_at).toLocaleString()}
                                     </td>
                                     <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>

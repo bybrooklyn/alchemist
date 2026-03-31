@@ -6,6 +6,8 @@ import {
     Video,
     Terminal,
     BarChart3,
+    Menu,
+    X,
 } from "lucide-react";
 import SystemStatus from "./SystemStatus.tsx";
 
@@ -21,19 +23,49 @@ const navItems = [
 ];
 ---
 
+{/* Mobile top bar */}
+<div class="lg:hidden flex items-center justify-between px-4 py-3 bg-helios-surface border-b border-helios-line/60">
+    <a href="/" class="font-bold text-lg tracking-tight text-helios-ink">Alchemist</a>
+    <button
+        id="sidebar-hamburger"
+        aria-label="Open navigation"
+        class="p-2 rounded-md text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
+    >
+        <Menu size={22} />
+    </button>
+</div>
+
+{/* Mobile overlay backdrop */}
+<div
+    id="sidebar-backdrop"
+    class="hidden lg:hidden fixed inset-0 z-40 bg-black/50"
+    aria-hidden="true"
+></div>
+
+{/* Sidebar — hidden on mobile until hamburger opens it */}
 <aside
-    class="w-full lg:w-64 bg-helios-surface border-b lg:border-b-0 lg:border-r border-helios-line/60 flex flex-col lg:flex-col p-3 lg:p-4 gap-3 lg:gap-4"
+    id="sidebar"
+    class="hidden lg:flex w-64 bg-helios-surface border-r border-helios-line/60 flex-col p-4 gap-4
+           fixed lg:static inset-y-0 left-0 z-50 lg:z-auto
+           transition-transform duration-200 lg:transition-none"
 >
     <a
         href="/"
-        class="flex items-center px-3 pb-3 lg:pb-4 border-b border-helios-line/40"
+        class="flex items-center px-3 pb-4 border-b border-helios-line/40"
     >
         <span class="font-bold text-lg tracking-tight text-helios-ink">
             Alchemist
         </span>
+        <button
+            id="sidebar-close"
+            aria-label="Close navigation"
+            class="lg:hidden ml-auto p-1 rounded-md text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
+        >
+            <X size={18} />
+        </button>
     </a>
 
-    <nav class="flex flex-row lg:flex-col gap-2 flex-1 overflow-x-auto lg:overflow-visible pb-1 lg:pb-0">
+    <nav class="flex flex-col gap-2 flex-1">
         {
             navItems.map(({ href, label, Icon }) => {
                 const isActive =
@@ -43,7 +75,7 @@ const navItems = [
                     <a
                         href={href}
                         class:list={[
-                            "flex items-center gap-3 px-3 py-2 rounded-md border-l-2 border-transparent transition-colors whitespace-nowrap shrink-0",
+                            "flex items-center gap-3 px-3 py-2 rounded-md border-l-2 border-transparent transition-colors whitespace-nowrap",
                             isActive
                                 ? "border-helios-solar bg-helios-solar/10 text-helios-ink font-semibold"
                                 : "text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink",
@@ -57,9 +89,40 @@ const navItems = [
         }
     </nav>
 
-    <div class="mt-auto hidden lg:block">
-        <div class="mt-3 border-t border-helios-line/30 pt-3">
+    <div class="mt-auto">
+        <div class="border-t border-helios-line/30 pt-3">
             <SystemStatus client:load />
         </div>
     </div>
 </aside>
+
+<script>
+    function initSidebar() {
+        const hamburger = document.getElementById("sidebar-hamburger");
+        const closeBtn = document.getElementById("sidebar-close");
+        const backdrop = document.getElementById("sidebar-backdrop");
+        const sidebar = document.getElementById("sidebar");
+
+        if (!hamburger || !closeBtn || !backdrop || !sidebar) return;
+
+        function openSidebar() {
+            sidebar!.classList.remove("hidden");
+            backdrop!.classList.remove("hidden");
+            document.body.style.overflow = "hidden";
+        }
+
+        function closeSidebar() {
+            sidebar!.classList.add("hidden");
+            backdrop!.classList.add("hidden");
+            document.body.style.overflow = "";
+        }
+
+        hamburger.addEventListener("click", openSidebar);
+        closeBtn.addEventListener("click", closeSidebar);
+        backdrop.addEventListener("click", closeSidebar);
+    }
+
+    // Run on initial load and after Astro view transitions
+    initSidebar();
+    document.addEventListener("astro:after-swap", initSidebar);
+</script>

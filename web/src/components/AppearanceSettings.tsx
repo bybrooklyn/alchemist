@@ -303,7 +303,10 @@ export default function AppearanceSettings() {
     }, []);
 
     useEffect(() => {
-        applyRootTheme(activeThemeId);
+        const frame = requestAnimationFrame(() => {
+            applyRootTheme(activeThemeId);
+        });
+        return () => cancelAnimationFrame(frame);
     }, [activeThemeId]);
 
     const handleSelect = useCallback(
