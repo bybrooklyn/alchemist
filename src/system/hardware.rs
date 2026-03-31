@@ -403,9 +403,24 @@ fn probe_candidates_for_vendor(
 
     match vendor {
         Vendor::Apple => vec![
-            build(HardwareBackend::Videotoolbox, "av1", "av1_videotoolbox", None),
-            build(HardwareBackend::Videotoolbox, "hevc", "hevc_videotoolbox", None),
-            build(HardwareBackend::Videotoolbox, "h264", "h264_videotoolbox", None),
+            build(
+                HardwareBackend::Videotoolbox,
+                "av1",
+                "av1_videotoolbox",
+                None,
+            ),
+            build(
+                HardwareBackend::Videotoolbox,
+                "hevc",
+                "hevc_videotoolbox",
+                None,
+            ),
+            build(
+                HardwareBackend::Videotoolbox,
+                "h264",
+                "h264_videotoolbox",
+                None,
+            ),
         ],
         Vendor::Nvidia => vec![
             build(HardwareBackend::Nvenc, "av1", "av1_nvenc", None),
@@ -431,12 +446,7 @@ fn probe_candidates_for_vendor(
                 "h264_vaapi",
                 device_path.clone(),
             ),
-            build(
-                HardwareBackend::Qsv,
-                "av1",
-                "av1_qsv",
-                device_path.clone(),
-            ),
+            build(HardwareBackend::Qsv, "av1", "av1_qsv", device_path.clone()),
             build(
                 HardwareBackend::Qsv,
                 "hevc",
@@ -478,7 +488,10 @@ fn pci_vendor_to_vendor(value: &str) -> Option<Vendor> {
     }
 }
 
-fn enumerate_linux_render_nodes_under(sys_class_drm: &Path, dev_dri_root: &Path) -> Vec<LinuxRenderNode> {
+fn enumerate_linux_render_nodes_under(
+    sys_class_drm: &Path,
+    dev_dri_root: &Path,
+) -> Vec<LinuxRenderNode> {
     if !cfg!(target_os = "linux") {
         return Vec::new();
     }
@@ -560,9 +573,7 @@ fn summarize_probe_failure(stderr: &str) -> String {
         || lower.contains("failed to initialize")
     {
         "Hardware device initialization failed".to_string()
-    } else if lower.contains("frame dimension")
-        && lower.contains("minimum supported value")
-    {
+    } else if lower.contains("frame dimension") && lower.contains("minimum supported value") {
         "Probe frame was rejected by the encoder".to_string()
     } else {
         first_line.to_string()
@@ -640,7 +651,10 @@ fn build_successful_candidate_sets(results: &[ProbeResult]) -> Vec<SuccessfulCan
     let mut groups: HashMap<(Vendor, Option<String>), SuccessfulCandidateSet> = HashMap::new();
 
     for result in results.iter().filter(|result| result.success) {
-        let key = (result.candidate.vendor, result.candidate.device_path.clone());
+        let key = (
+            result.candidate.vendor,
+            result.candidate.device_path.clone(),
+        );
         let entry = groups.entry(key).or_insert_with(|| SuccessfulCandidateSet {
             vendor: result.candidate.vendor,
             device_path: result.candidate.device_path.clone(),
@@ -652,7 +666,9 @@ fn build_successful_candidate_sets(results: &[ProbeResult]) -> Vec<SuccessfulCan
             .iter()
             .any(|note| note == &result.candidate.discovery_note)
         {
-            entry.discovery_notes.push(result.candidate.discovery_note.clone());
+            entry
+                .discovery_notes
+                .push(result.candidate.discovery_note.clone());
         }
         entry.backends.push(BackendCapability {
             kind: result.candidate.backend,
@@ -677,7 +693,10 @@ fn codec_weight(codec: &str) -> u32 {
 }
 
 fn codec_coverage_score(backends: &[BackendCapability]) -> u32 {
-    let codecs: BTreeSet<_> = backends.iter().map(|backend| backend.codec.as_str()).collect();
+    let codecs: BTreeSet<_> = backends
+        .iter()
+        .map(|backend| backend.codec.as_str())
+        .collect();
     codecs.into_iter().map(codec_weight).sum()
 }
 
@@ -716,8 +735,9 @@ fn compare_candidate_sets(
     codec_coverage_score(right.backends.as_slice())
         .cmp(&codec_coverage_score(left.backends.as_slice()))
         .then_with(|| {
-            backend_preference_rank(left.vendor, left.backends.as_slice())
-                .cmp(&backend_preference_rank(right.vendor, right.backends.as_slice()))
+            backend_preference_rank(left.vendor, left.backends.as_slice()).cmp(
+                &backend_preference_rank(right.vendor, right.backends.as_slice()),
+            )
         })
         .then_with(|| {
             if include_vendor_rank {
@@ -822,7 +842,11 @@ fn selection_reason_for(
 
 fn probe_summary_for_log(probe_log: &HardwareProbeLog) -> ProbeSummary {
     let attempted = probe_log.entries.len();
-    let succeeded = probe_log.entries.iter().filter(|entry| entry.success).count();
+    let succeeded = probe_log
+        .entries
+        .iter()
+        .filter(|entry| entry.success)
+        .count();
     ProbeSummary {
         attempted,
         succeeded,
@@ -830,11 +854,7 @@ fn probe_summary_for_log(probe_log: &HardwareProbeLog) -> ProbeSummary {
     }
 }
 
-fn append_failed_vendor_note(
-    notes: &mut Vec<String>,
-    vendor: Vendor,
-    results: &[ProbeResult],
-) {
+fn append_failed_vendor_note(notes: &mut Vec<String>, vendor: Vendor, results: &[ProbeResult]) {
     let vendor_results: Vec<_> = results
         .iter()
         .filter(|result| result.candidate.vendor == vendor)
@@ -853,12 +873,7 @@ fn append_failed_vendor_note(
                 .as_deref()
                 .map(|path| format!(" at {}", path))
                 .unwrap_or_default();
-            format!(
-                "{}{} — {}",
-                result.candidate.encoder,
-                path,
-                result.summary
-            )
+            format!("{}{} — {}", result.candidate.encoder, path, result.summary)
         })
         .unwrap_or_else(|| "unknown failure".to_string());
 
@@ -944,7 +959,10 @@ fn discover_probe_candidates_with_runner<R: CommandRunner + ?Sized>(
         ));
     }
 
-    candidates.extend(discover_nvidia_candidates_with_runner(runner, detection_notes));
+    candidates.extend(discover_nvidia_candidates_with_runner(
+        runner,
+        detection_notes,
+    ));
 
     let render_nodes = enumerate_linux_render_nodes();
     if cfg!(target_os = "linux") {
@@ -1038,8 +1056,8 @@ fn detect_explicit_device_path_with_runner_and_log<R: CommandRunner + ?Sized>(
     mark_selected_probe_entries(probe_log, &selected);
     Some(
         HardwareInfo::new(vendor, device_path, backends)
-        .with_detection_notes(detection_notes)
-        .with_probe_details(selection_reason, probe_summary),
+            .with_detection_notes(detection_notes)
+            .with_probe_details(selection_reason, probe_summary),
     )
 }
 
@@ -1069,9 +1087,7 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
 
     let mut detection_notes = Vec::new();
     let mut probe_log = HardwareProbeLog::default();
-    let parsed_preferred_vendor = preferred_vendor
-        .as_deref()
-        .and_then(parse_preferred_vendor);
+    let parsed_preferred_vendor = preferred_vendor.as_deref().and_then(parse_preferred_vendor);
     if let Some(preferred_vendor) = preferred_vendor.as_deref() {
         if parsed_preferred_vendor.is_none() {
             warn!(
@@ -1120,7 +1136,10 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
         return Ok((
             HardwareInfo::new(Vendor::Cpu, None, Vec::new())
                 .with_detection_notes(detection_notes)
-                .with_probe_details(cpu_selection_reason(true), probe_summary_for_log(&probe_log)),
+                .with_probe_details(
+                    cpu_selection_reason(true),
+                    probe_summary_for_log(&probe_log),
+                ),
             probe_log,
         ));
     }
@@ -1141,8 +1160,8 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
         );
         return Ok((
             HardwareInfo::new(vendor, device_path, backends)
-            .with_detection_notes(detection_notes)
-            .with_probe_details(selection_reason, probe_summary),
+                .with_detection_notes(detection_notes)
+                .with_probe_details(selection_reason, probe_summary),
             probe_log,
         ));
     }
@@ -1168,7 +1187,10 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
     Ok((
         HardwareInfo::new(Vendor::Cpu, None, Vec::new())
             .with_detection_notes(detection_notes)
-            .with_probe_details(cpu_selection_reason(false), probe_summary_for_log(&probe_log)),
+            .with_probe_details(
+                cpu_selection_reason(false),
+                probe_summary_for_log(&probe_log),
+            ),
         probe_log,
     ))
 }
@@ -1446,11 +1468,7 @@ mod tests {
 
         assert!(sets.iter().any(|set| set.vendor == Vendor::Nvidia));
         assert!(sets.iter().any(|set| {
-            set.vendor == Vendor::Amd
-                && set
-                    .backends
-                    .iter()
-                    .any(|backend| backend.codec == "hevc")
+            set.vendor == Vendor::Amd && set.backends.iter().any(|backend| backend.codec == "hevc")
         }));
         assert!(sets.iter().any(|set| {
             set.vendor == Vendor::Intel
@@ -1543,14 +1561,28 @@ mod tests {
 
         let results = collect_probe_results_verbose(&runner, candidates, &mut probe_log);
         let successful_sets = build_successful_candidate_sets(&results);
-        let (selected, _) =
-            choose_best_candidate_set(&successful_sets, Some(Vendor::Intel), false)
-                .expect("selected set");
+        let (selected, _) = choose_best_candidate_set(&successful_sets, Some(Vendor::Intel), false)
+            .expect("selected set");
         mark_selected_probe_entries(&mut probe_log, &selected);
 
-        assert!(probe_log.entries.iter().all(|entry| !entry.vendor.is_empty()));
-        assert!(probe_log.entries.iter().all(|entry| !entry.codec.is_empty()));
-        assert!(probe_log.entries.iter().all(|entry| !entry.summary.is_empty()));
+        assert!(
+            probe_log
+                .entries
+                .iter()
+                .all(|entry| !entry.vendor.is_empty())
+        );
+        assert!(
+            probe_log
+                .entries
+                .iter()
+                .all(|entry| !entry.codec.is_empty())
+        );
+        assert!(
+            probe_log
+                .entries
+                .iter()
+                .all(|entry| !entry.summary.is_empty())
+        );
         assert!(probe_log.entries.iter().any(|entry| entry.selected));
     }
 
@@ -1609,10 +1641,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_render_node_enumeration_discovers_multiple_devices() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "alchemist_render_enum_{}",
-            rand::random::<u64>()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("alchemist_render_enum_{}", rand::random::<u64>()));
         let sys_root = temp_root.join("sys/class/drm");
         let dev_root = temp_root.join("dev/dri");
         std::fs::create_dir_all(sys_root.join("renderD128/device")).expect("create intel sys path");
