@@ -467,7 +467,10 @@ async fn run() -> Result<()> {
         info!("Starting web server...");
 
         // Initialize File Watcher
-        let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(db.clone()));
+        let file_watcher = Arc::new(alchemist::system::watcher::FileWatcher::new(
+            db.clone(),
+            Some(agent.clone()),
+        ));
 
         // Initialize Library Scanner (shared between boot task and server)
         let library_scanner = Arc::new(alchemist::system::scanner::LibraryScanner::new(

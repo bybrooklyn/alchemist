@@ -18,5 +18,4 @@ pub use db::AlchemistEvent;
 pub use media::ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators};
 pub use media::processor::Agent;
 pub use orchestrator::Transcoder;
-// pub use system::notifications::NotificationService; // Deprecated user-facing export?
 pub use system::watcher::FileWatcher;

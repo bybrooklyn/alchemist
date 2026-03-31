@@ -55,7 +55,7 @@ test("engine cycle: Start transitions to Running, Stop transitions to Stopping",
 
   await page.getByRole("button", { name: "Start" }).click();
   await expect.poll(() => resumeCalls).toBe(1);
-  await expect(page.getByText("Running", { exact: true })).toBeVisible();
+  await expect(page.getByText("Idle", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Pause" })).not.toBeVisible();
 

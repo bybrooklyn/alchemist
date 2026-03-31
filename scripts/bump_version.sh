@@ -70,7 +70,7 @@ PY
 
 cat <<EOF
 Next steps:
-  1. Update CHANGELOG.md and redoc/reference/changelog.md for v${VERSION}
+  1. Update CHANGELOG.md for v${VERSION}
   2. Run cargo test --quiet
   3. Run bun run typecheck && bun run build (in web/)
   4. Run bun run test:reliability (in web-e2e/)

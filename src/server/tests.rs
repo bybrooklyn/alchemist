@@ -86,7 +86,7 @@ where
         .await,
     );
     let scheduler = crate::scheduler::Scheduler::new(db.clone(), agent.clone());
-    let file_watcher = Arc::new(crate::system::watcher::FileWatcher::new(db.clone()));
+    let file_watcher = Arc::new(crate::system::watcher::FileWatcher::new(db.clone(), None));
 
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_usage();
