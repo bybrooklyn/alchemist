@@ -35,6 +35,10 @@ run:
 web:
     cd web && bun install --frozen-lockfile && bun run dev
 
+# Start documentation dev server only
+docs:
+    cd docs && bun install --frozen-lockfile && bun run start
+
 # ─────────────────────────────────────────
 # BUILD
 # ─────────────────────────────────────────

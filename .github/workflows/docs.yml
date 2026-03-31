@@ -62,7 +62,7 @@ jobs:
           path: |
             node_modules
             ~/.bun/install/cache
-          key: bun-docs-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          key: bun-docs-${{ runner.os }}-${{ hashFiles('docs/bun.lock') }}
           restore-keys: |
             bun-docs-${{ runner.os }}-
 
@@ -99,3 +99,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+s: actions/deploy-pages@v5
