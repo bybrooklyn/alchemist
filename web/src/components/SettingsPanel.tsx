@@ -32,14 +32,17 @@ export default function SettingsPanel() {
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const requested = params.get("tab");
-        if (requested && TABS.some((tab) => tab.id === requested)) {
-            setActiveTab(requested);
+        if (requested) {
+            if (TABS.some((tab) => tab.id === requested)) {
+                setActiveTab(requested);
+            } else {
+                setActiveTab("watch");
+            }
         }
     }, []);
 
-    const activeIndex = TABS.findIndex(t => t.id === activeTab);
-
     const paginate = (newTabId: string) => {
+        if (!TABS.some((tab) => tab.id === newTabId)) return;
         setActiveTab(newTabId);
         if (typeof window !== "undefined") {
             const url = new URL(window.location.href);
@@ -49,12 +52,6 @@ export default function SettingsPanel() {
     };
 
     const navItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-
-    useEffect(() => {
-        if (activeIndex < 0) {
-            setActiveTab("watch");
-        }
-    }, [activeIndex]);
 
     useEffect(() => {
         const target = navItemRefs.current[activeTab];

@@ -80,6 +80,7 @@ check-rust:
 # Frontend checks only
 check-web:
     cd web && bun install --frozen-lockfile && bun run typecheck && bun run build
+    cd web-e2e && bun install --frozen-lockfile && bun run test
 
 # ─────────────────────────────────────────
 # TESTS

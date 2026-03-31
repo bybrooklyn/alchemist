@@ -11,6 +11,7 @@ import {
     Timer,
     type LucideIcon,
 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { apiJson, isApiError } from "../lib/api";
 
 interface AggregatedStats {
@@ -127,9 +128,6 @@ export default function StatsCharts() {
         ? (detailedStats.reduce((sum, s) => sum + s.avg_bitrate_kbps, 0) / detailedStats.length).toFixed(0)
         : "N/A";
 
-    // Find max for bar chart scaling
-    const maxDailyJobs = Math.max(...dailyStats.map(d => d.jobs_completed), 1);
-
     interface StatCardProps {
         icon: LucideIcon;
         label: string;
@@ -217,39 +215,45 @@ export default function StatsCharts() {
                 <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40">
                     <h3 className="text-lg font-bold text-helios-ink mb-4 flex items-center gap-2">
                         <BarChart3 size={20} className="text-blue-500" />
-                        Daily Activity (Last 30 Days)
+                        Jobs per Day (Last 30 Days)
                     </h3>
                     {dailyStats.length > 0 ? (
-                        <div className="h-48 flex items-end gap-1">
-                            {dailyStats.map((day, i) => {
-                                const height = (day.jobs_completed / maxDailyJobs) * 100;
-                                return (
-                                    <div
-                                        key={i}
-                                        className="flex-1 flex flex-col items-center group"
-                                    >
-                                        <div
-                                            className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t transition-all hover:from-blue-600 hover:to-blue-500 cursor-pointer relative"
-                                            style={{ height: `${Math.max(height, 4)}%` }}
-                                            title={`${formatDate(day.date)}: ${day.jobs_completed} jobs, ${formatBytes(day.bytes_saved)} saved`}
-                                        >
-                                            <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-helios-ink text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                                                {day.jobs_completed} jobs
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        <ResponsiveContainer width="100%" height={192}>
+                            <BarChart
+                                data={dailyStats.map(d => ({
+                                    label: formatDate(d.date),
+                                    jobs: d.jobs_completed,
+                                }))}
+                                margin={{ top: 4, right: 4, left: -24, bottom: 4 }}
+                            >
+                                <XAxis
+                                    dataKey="label"
+                                    tick={{ fontSize: 10, fill: "rgb(var(--text-muted, 160 160 160))" }}
+                                    interval="preserveStartEnd"
+                                    tickLine={false}
+                                    axisLine={false}
+                                />
+                                <YAxis
+                                    allowDecimals={false}
+                                    tick={{ fontSize: 10, fill: "rgb(var(--text-muted, 160 160 160))" }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                />
+                                <Tooltip
+                                    formatter={(value: number) => [value, "Jobs"]}
+                                    contentStyle={{
+                                        background: "rgb(var(--bg-panel, 30 30 30))",
+                                        border: "1px solid rgb(var(--border, 60 60 60))",
+                                        borderRadius: "6px",
+                                        fontSize: "12px",
+                                    }}
+                                />
+                                <Bar dataKey="jobs" fill="rgb(59 130 246)" radius={[3, 3, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
                     ) : (
                         <div className="h-48 flex items-center justify-center text-helios-slate">
                             No daily data available
-                        </div>
-                    )}
-                    {dailyStats.length > 0 && (
-                        <div className="flex justify-between text-xs text-helios-slate mt-2">
-                            <span>{formatDate(dailyStats[0]?.date)}</span>
-                            <span>{formatDate(dailyStats[dailyStats.length - 1]?.date)}</span>
                         </div>
                     )}
                 </div>
