@@ -96,13 +96,20 @@ impl PendingState {
 pub struct FileWatcher {
     inner: Arc<std::sync::Mutex<Option<RecommendedWatcher>>>,
     tx: mpsc::UnboundedSender<PendingEvent>,
+    agent: Option<Arc<crate::media::processor::Agent>>,
 }
 
 impl FileWatcher {
-    pub fn new(db: Arc<Db>) -> Self {
+    pub fn new(db: Arc<Db>, agent: Option<Arc<crate::media::processor::Agent>>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<PendingEvent>();
         let poll_interval = Duration::from_secs(1);
         let db_clone = db.clone();
+        let watcher = Self {
+            inner: Arc::new(std::sync::Mutex::new(None)),
+            tx,
+            agent,
+        };
+        let agent_clone = watcher.agent.clone();
 
         // Process filesystem events after the target file has stabilized.
         tokio::spawn(async move {
@@ -150,7 +157,15 @@ impl FileWatcher {
                                     source_root: key.source_root.clone(),
                                 };
                                 match crate::media::pipeline::enqueue_discovered_with_db(&db_clone, discovered).await {
-                                    Ok(true) => info!("Auto-enqueued: {:?}", key.path),
+                                    Ok(true) => {
+                                        info!("Auto-enqueued: {:?}", key.path);
+                                        if let Some(agent) = &agent_clone {
+                                            let agent = agent.clone();
+                                            tokio::spawn(async move {
+                                                agent.analyze_pending_jobs().await;
+                                            });
+                                        }
+                                    }
                                     Ok(false) => debug!("No queue update needed for {:?}", key.path),
                                     Err(e) => error!("Failed to auto-enqueue {:?}: {}", key.path, e),
                                 }
@@ -161,10 +176,7 @@ impl FileWatcher {
             }
         });
 
-        Self {
-            inner: Arc::new(std::sync::Mutex::new(None)),
-            tx,
-        }
+        watcher
     }
 
     /// Update watched directories
@@ -413,7 +425,7 @@ mod tests {
         std::fs::create_dir_all(&watch_dir)?;
 
         let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
-        let watcher = FileWatcher::new(db.clone());
+        let watcher = FileWatcher::new(db.clone(), None);
         watcher.watch(&[WatchPath {
             path: watch_dir.clone(),
             recursive: false,
@@ -453,7 +465,7 @@ mod tests {
         std::fs::create_dir_all(&watch_dir)?;
 
         let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
-        let watcher = FileWatcher::new(db.clone());
+        let watcher = FileWatcher::new(db.clone(), None);
         watcher.watch(&[WatchPath {
             path: watch_dir.clone(),
             recursive: false,
@@ -494,7 +506,7 @@ mod tests {
         std::fs::create_dir_all(&watch_dir)?;
 
         let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
-        let watcher = FileWatcher::new(db.clone());
+        let watcher = FileWatcher::new(db.clone(), None);
         watcher.watch(&[WatchPath {
             path: watch_dir.clone(),
             recursive: false,
@@ -537,7 +549,7 @@ mod tests {
         std::fs::create_dir_all(&staging_root)?;
 
         let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
-        let watcher = FileWatcher::new(db.clone());
+        let watcher = FileWatcher::new(db.clone(), None);
         watcher.watch(&[WatchPath {
             path: watch_dir.clone(),
             recursive: false,

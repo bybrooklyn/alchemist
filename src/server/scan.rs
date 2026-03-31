@@ -30,8 +30,20 @@ pub(crate) async fn scan_handler(State(state): State<Arc<AppState>>) -> impl Int
         }
     }
 
-    let _ = state.agent.scan_and_enqueue(dirs).await;
-    StatusCode::OK
+    if let Err(e) = state.agent.scan_and_enqueue(dirs).await {
+        error!("Scan failed: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    // Trigger analysis after scan completes so jobs
+    // get skip/transcode decisions immediately, matching
+    // boot and setup scan behavior
+    let agent = state.agent.clone();
+    tokio::spawn(async move {
+        agent.analyze_pending_jobs().await;
+    });
+
+    StatusCode::OK.into_response()
 }
 
 pub(crate) async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {

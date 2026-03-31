@@ -29,6 +29,7 @@ pub struct Agent {
     dry_run: bool,
     in_flight_jobs: Arc<AtomicUsize>,
     analyzing_boot: Arc<AtomicBool>,
+    analysis_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Agent {
@@ -65,6 +66,7 @@ impl Agent {
             dry_run,
             in_flight_jobs: Arc::new(AtomicUsize::new(0)),
             analyzing_boot: Arc::new(AtomicBool::new(false)),
+            analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -178,6 +180,19 @@ impl Agent {
     /// startup to populate the queue with decisions before the
     /// user starts the engine.
     pub async fn analyze_pending_jobs(&self) {
+        // Serialize all analysis passes to prevent
+        // concurrent runs from racing on job state
+        let _permit = match self.analysis_semaphore.acquire().await {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!(
+                    "Auto-analysis: semaphore closed, \
+                     skipping."
+                );
+                return;
+            }
+        };
+
         self.set_boot_analyzing(true);
 
         info!("Auto-analysis: scanning and analyzing pending jobs...");

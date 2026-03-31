@@ -1017,7 +1017,7 @@ fn discover_probe_candidates_with_runner<R: CommandRunner + ?Sized>(
     candidates
 }
 
-#[allow(dead_code)]
+#[cfg(all(test, target_os = "linux"))]
 fn detect_explicit_device_path_with_runner<R: CommandRunner + ?Sized>(
     runner: &R,
     device_path: &str,
