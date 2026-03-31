@@ -64,7 +64,36 @@ export function humanizeSkipReason(reason: string): SkipDetail {
         measured[rawKey.trim()] = rawValueParts.join("=").trim();
     }
 
+    const fallbackDisabledMatch = key.match(
+        /^Preferred codec\s+(.+?)\s+unavailable and fallback disabled$/i
+    );
+    if (fallbackDisabledMatch) {
+        measured.codec ??= fallbackDisabledMatch[1];
+        return {
+            summary: "Preferred encoder unavailable",
+            detail: `The preferred codec (${measured.codec ?? "target codec"}) is not available and CPU fallback is disabled in settings.`,
+            action: "Go to Settings -> Hardware and enable CPU fallback, or check that your GPU encoder is working correctly.",
+            measured,
+        };
+    }
+
     switch (key) {
+        case "analysis_failed":
+            return {
+                summary: "File could not be analyzed",
+                detail: `FFprobe failed to read this file. It may be corrupt, incomplete, or in an unsupported format. Error: ${measured.error ?? "unknown"}`,
+                action: "Try playing the file in VLC or another media player. If it plays fine, re-run the scan. If not, the file may be damaged.",
+                measured,
+            };
+
+        case "planning_failed":
+            return {
+                summary: "Transcoding plan could not be created",
+                detail: `An internal error occurred while planning the transcode for this file. This is likely a bug. Error: ${measured.error ?? "unknown"}`,
+                action: "Check the logs below for details. If this happens repeatedly, please report it as a bug.",
+                measured,
+            };
+
         case "already_target_codec":
             return {
                 summary: "Already in target format",
@@ -113,6 +142,22 @@ export function humanizeSkipReason(reason: string): SkipDetail {
                 measured,
             };
 
+        case "Output path matches input path":
+            return {
+                summary: "Output would overwrite source",
+                detail: "The configured output path is the same as the source file. Alchemist refused to proceed to avoid overwriting your original file.",
+                action: "Go to Settings -> Files and configure a different output suffix or output folder.",
+                measured,
+            };
+
+        case "Output already exists":
+            return {
+                summary: "Output file already exists",
+                detail: "A transcoded version of this file already exists at the output path. Alchemist skipped it to avoid duplicating work.",
+                action: "If you want to re-transcode it, delete the existing output file first, then retry the job.",
+                measured,
+            };
+
         case "incomplete_metadata":
             return {
                 summary: "Missing file metadata",
@@ -137,6 +182,14 @@ export function humanizeSkipReason(reason: string): SkipDetail {
                 measured,
             };
 
+        case "Low quality (VMAF)":
+            return {
+                summary: "Quality check failed",
+                detail: "The encoded file scored below the minimum VMAF quality threshold. Alchemist rejected the output to protect quality.",
+                action: "The original file has been preserved. You can lower the VMAF threshold in Settings -> Quality, or disable VMAF checking entirely.",
+                measured,
+            };
+
         default:
             return {
                 summary: "Decision recorded",
@@ -150,6 +203,9 @@ export function humanizeSkipReason(reason: string): SkipDetail {
 function explainFailureSummary(summary: string): string {
     const normalized = summary.toLowerCase();
 
+    if (normalized.includes("cancelled")) {
+        return "This job was cancelled before encoding completed. The original file is untouched.";
+    }
     if (normalized.includes("no such file or directory")) {
         return "The source file could not be found. It may have been moved or deleted.";
     }
@@ -164,6 +220,18 @@ function explainFailureSummary(summary: string): string {
     }
     if (normalized.includes("out of memory") || normalized.includes("cannot allocate memory")) {
         return "The system ran out of memory during encoding. Try reducing concurrent jobs.";
+    }
+    if (normalized.includes("transcode_failed") || normalized.includes("ffmpeg exited")) {
+        return "FFmpeg failed during encoding. This is often caused by a corrupt source file or an encoder configuration issue. Check the logs below for the specific FFmpeg error.";
+    }
+    if (normalized.includes("probing failed")) {
+        return "FFprobe could not read this file. It may be corrupt or in an unsupported format.";
+    }
+    if (normalized.includes("planning_failed") || normalized.includes("planner")) {
+        return "An error occurred while planning the transcode. Check the logs below for details.";
+    }
+    if (normalized.includes("output_size=0") || normalized.includes("output was empty")) {
+        return "Encoding produced an empty output file. This usually means FFmpeg crashed silently. Check the logs below for FFmpeg output.";
     }
 
     return summary;
@@ -192,6 +260,7 @@ interface Job {
     updated_at: string;
     vmaf_score?: number;
     decision_reason?: string;
+    encoder?: string;
 }
 
 interface JobMetadata {
@@ -269,6 +338,7 @@ export default function JobManager() {
     const detailDialogRef = useRef<HTMLDivElement | null>(null);
     const detailLastFocusedRef = useRef<HTMLElement | null>(null);
     const confirmOpenRef = useRef(false);
+    const encodeStartTimes = useRef<Map<number, number>>(new Map());
     const [confirmState, setConfirmState] = useState<{
         title: string;
         body: string;
@@ -407,6 +477,11 @@ export default function JobManager() {
                         job_id: number;
                         status: string;
                     };
+                    if (status === "encoding") {
+                        encodeStartTimes.current.set(job_id, Date.now());
+                    } else {
+                        encodeStartTimes.current.delete(job_id);
+                    }
                     setJobs((prev) =>
                         prev.map((job) =>
                             job.id === job_id ? { ...job, status } : job
@@ -458,6 +533,28 @@ export default function JobManager() {
             }
         };
     }, []);
+
+    useEffect(() => {
+        const encodingJobIds = new Set<number>();
+        const now = Date.now();
+
+        for (const job of jobs) {
+            if (job.status !== "encoding") {
+                continue;
+            }
+
+            encodingJobIds.add(job.id);
+            if (!encodeStartTimes.current.has(job.id)) {
+                encodeStartTimes.current.set(job.id, now);
+            }
+        }
+
+        for (const jobId of Array.from(encodeStartTimes.current.keys())) {
+            if (!encodingJobIds.has(jobId)) {
+                encodeStartTimes.current.delete(jobId);
+            }
+        }
+    }, [jobs]);
 
     useEffect(() => {
         if (!menuJobId) return;
@@ -686,6 +783,32 @@ export default function JobManager() {
         return [h, m, s].map(v => v.toString().padStart(2, "0")).join(":");
     };
 
+    const calcEta = (jobId: number, progress: number): string | null => {
+        if (progress <= 0 || progress >= 100) {
+            return null;
+        }
+
+        const startMs = encodeStartTimes.current.get(jobId);
+        if (!startMs) {
+            return null;
+        }
+
+        const elapsedMs = Date.now() - startMs;
+        const totalMs = elapsedMs / (progress / 100);
+        const remainingMs = totalMs - elapsedMs;
+        const remainingSecs = Math.round(remainingMs / 1000);
+
+        if (remainingSecs < 0) {
+            return null;
+        }
+        if (remainingSecs < 60) {
+            return `~${remainingSecs}s remaining`;
+        }
+
+        const mins = Math.ceil(remainingSecs / 60);
+        return `~${mins} min remaining`;
+    };
+
     const getStatusBadge = (status: string) => {
         const styles: Record<string, string> = {
             queued: "bg-helios-slate/10 text-helios-slate border-helios-slate/20",
@@ -723,6 +846,9 @@ export default function JobManager() {
     const shouldShowFfmpegOutput = focusedJob
         ? ["failed", "completed", "skipped"].includes(focusedJob.job.status) && focusedJobLogs.length > 0
         : false;
+    const completedEncodeStats = focusedJob?.job.status === "completed"
+        ? focusedJob.encode_stats
+        : null;
 
     return (
         <div className="space-y-6 relative">
@@ -964,6 +1090,19 @@ export default function JobManager() {
                                                 <div className="text-xs text-right font-mono text-helios-slate">
                                                     {job.progress.toFixed(1)}%
                                                 </div>
+                                                {job.status === "encoding" && (() => {
+                                                    const eta = calcEta(job.id, job.progress);
+                                                    return eta ? (
+                                                        <p className="text-[10px] text-helios-slate mt-0.5 font-mono">
+                                                            {eta}
+                                                        </p>
+                                                    ) : null;
+                                                })()}
+                                                {job.status === "encoding" && job.encoder && (
+                                                    <span className="text-[10px] font-mono text-helios-solar opacity-70">
+                                                        {job.encoder}
+                                                    </span>
+                                                )}
                                             </div>
                                         ) : (
                                             job.vmaf_score ? (
@@ -1164,114 +1303,160 @@ export default function JobManager() {
                                     {detailLoading && (
                                         <p className="text-xs text-helios-slate" aria-live="polite">Loading job details...</p>
                                     )}
-                                    {focusedJob.metadata ? (
+                                    {focusedJob.metadata || completedEncodeStats ? (
                                         <>
-                                            {/* Stats Grid */}
-                                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                                                <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                    <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                        <Activity size={12} />
-                                                        <span className="text-xs font-medium text-helios-slate">Video Codec</span>
-                                                    </div>
-                                                    <p className="text-sm font-bold text-helios-ink capitalize">
-                                                        {focusedJob.metadata?.codec_name || "Unknown"}
-                                                    </p>
-                                                    <p className="text-xs text-helios-slate">
-                                                        {(focusedJob.metadata?.bit_depth ? `${focusedJob.metadata.bit_depth}-bit` : "Unknown bit depth")} • {focusedJob.metadata?.container.toUpperCase()}
-                                                    </p>
-                                                </div>
-
-                                                <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                    <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                        <Maximize2 size={12} />
-                                                        <span className="text-xs font-medium text-helios-slate">Resolution</span>
-                                                    </div>
-                                                    <p className="text-sm font-bold text-helios-ink">
-                                                        {focusedJob.metadata ? `${focusedJob.metadata.width}x${focusedJob.metadata.height}` : "-"}
-                                                    </p>
-                                                    <p className="text-xs text-helios-slate">
-                                                        {focusedJob.metadata?.fps.toFixed(2)} FPS
-                                                    </p>
-                                                </div>
-
-                                                <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                    <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                        <Clock size={12} />
-                                                        <span className="text-xs font-medium text-helios-slate">Duration</span>
-                                                    </div>
-                                                    <p className="text-sm font-bold text-helios-ink">
-                                                        {focusedJob.metadata ? formatDuration(focusedJob.metadata.duration_secs) : "-"}
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            {/* Media Details */}
-                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                                <div className="space-y-4">
-                                                    <h3 className="text-xs font-medium text-helios-slate/70 flex items-center gap-2">
-                                                        <Database size={12} /> Input Details
-                                                    </h3>
-                                                    <div className="space-y-3">
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">File Size</span>
-                                                            <span className="text-helios-ink font-bold">{focusedJob.metadata ? formatBytes(focusedJob.metadata.size_bytes) : "-"}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Video Bitrate</span>
-                                                            <span className="text-helios-ink font-bold">
-                                                                {focusedJob.metadata && (focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps)
-                                                                    ? `${(((focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps) as number) / 1000).toFixed(0)} kbps`
-                                                                    : "-"}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Audio</span>
-                                                            <span className="text-helios-ink font-bold capitalize">
-                                                                {focusedJob.metadata?.audio_codec || "N/A"} ({focusedJob.metadata?.audio_channels || 0}ch)
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                <div className="space-y-4">
-                                                    <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
-                                                        <Zap size={12} /> Output Details
-                                                    </h3>
-                                                    {focusedJob.encode_stats ? (
-                                                        <div className="space-y-3">
-                                                            <div className="flex justify-between items-center text-xs">
-                                                                <span className="text-helios-slate font-medium">Result Size</span>
-                                                                <span className="text-helios-solar font-bold">{formatBytes(focusedJob.encode_stats.output_size_bytes)}</span>
+                                            {focusedJob.metadata && (
+                                                <>
+                                                    {/* Stats Grid */}
+                                                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
+                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
+                                                                <Activity size={12} />
+                                                                <span className="text-xs font-medium text-helios-slate">Video Codec</span>
                                                             </div>
-                                                            <div className="flex justify-between items-center text-xs">
-                                                                <span className="text-helios-slate font-medium">Reduction</span>
-                                                                <span className="text-green-500 font-bold">
-                                                                    {((1 - focusedJob.encode_stats.compression_ratio) * 100).toFixed(1)}% Saved
-                                                                </span>
+                                                            <p className="text-sm font-bold text-helios-ink capitalize">
+                                                                {focusedJob.metadata.codec_name || "Unknown"}
+                                                            </p>
+                                                            <p className="text-xs text-helios-slate">
+                                                                {(focusedJob.metadata.bit_depth ? `${focusedJob.metadata.bit_depth}-bit` : "Unknown bit depth")} • {focusedJob.metadata.container.toUpperCase()}
+                                                            </p>
+                                                        </div>
+
+                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
+                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
+                                                                <Maximize2 size={12} />
+                                                                <span className="text-xs font-medium text-helios-slate">Resolution</span>
                                                             </div>
-                                                            <div className="flex justify-between items-center text-xs">
-                                                                <span className="text-helios-slate font-medium">VMAF Score</span>
-                                                                <div className="flex items-center gap-1.5">
-                                                                    <div className="h-1.5 w-16 bg-helios-line/10 rounded-full overflow-hidden">
-                                                                        <div className="h-full bg-helios-solar" style={{ width: `${focusedJob.encode_stats.vmaf_score || 0}%` }} />
-                                                                    </div>
+                                                            <p className="text-sm font-bold text-helios-ink">
+                                                                {`${focusedJob.metadata.width}x${focusedJob.metadata.height}`}
+                                                            </p>
+                                                            <p className="text-xs text-helios-slate">
+                                                                {focusedJob.metadata.fps.toFixed(2)} FPS
+                                                            </p>
+                                                        </div>
+
+                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
+                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
+                                                                <Clock size={12} />
+                                                                <span className="text-xs font-medium text-helios-slate">Duration</span>
+                                                            </div>
+                                                            <p className="text-sm font-bold text-helios-ink">
+                                                                {formatDuration(focusedJob.metadata.duration_secs)}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Media Details */}
+                                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                                        <div className="space-y-4">
+                                                            <h3 className="text-xs font-medium text-helios-slate/70 flex items-center gap-2">
+                                                                <Database size={12} /> Input Details
+                                                            </h3>
+                                                            <div className="space-y-3">
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="text-helios-slate font-medium">File Size</span>
+                                                                    <span className="text-helios-ink font-bold">{formatBytes(focusedJob.metadata.size_bytes)}</span>
+                                                                </div>
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="text-helios-slate font-medium">Video Bitrate</span>
                                                                     <span className="text-helios-ink font-bold">
-                                                                        {focusedJob.encode_stats.vmaf_score?.toFixed(1) || "-"}
+                                                                        {(focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps)
+                                                                            ? `${(((focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps) as number) / 1000).toFixed(0)} kbps`
+                                                                            : "-"}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="text-helios-slate font-medium">Audio</span>
+                                                                    <span className="text-helios-ink font-bold capitalize">
+                                                                        {focusedJob.metadata.audio_codec || "N/A"} ({focusedJob.metadata.audio_channels || 0}ch)
                                                                     </span>
                                                                 </div>
                                                             </div>
                                                         </div>
-                                                    ) : (
-                                                        <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-lg text-xs text-helios-slate italic">
-                                                            {focusedJob.job.status === "encoding"
-                                                                ? "Encoding in progress..."
-                                                                : focusedJob.job.status === "remuxing"
-                                                                    ? "Remuxing in progress..."
-                                                                    : "No encode data available"}
+
+                                                        <div className="space-y-4">
+                                                            <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
+                                                                <Zap size={12} /> Output Details
+                                                            </h3>
+                                                            {focusedJob.encode_stats ? (
+                                                                <div className="space-y-3">
+                                                                    <div className="flex justify-between items-center text-xs">
+                                                                        <span className="text-helios-slate font-medium">Result Size</span>
+                                                                        <span className="text-helios-solar font-bold">{formatBytes(focusedJob.encode_stats.output_size_bytes)}</span>
+                                                                    </div>
+                                                                    <div className="flex justify-between items-center text-xs">
+                                                                        <span className="text-helios-slate font-medium">Reduction</span>
+                                                                        <span className="text-green-500 font-bold">
+                                                                            {((1 - focusedJob.encode_stats.compression_ratio) * 100).toFixed(1)}% Saved
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="flex justify-between items-center text-xs">
+                                                                        <span className="text-helios-slate font-medium">VMAF Score</span>
+                                                                        <div className="flex items-center gap-1.5">
+                                                                            <div className="h-1.5 w-16 bg-helios-line/10 rounded-full overflow-hidden">
+                                                                                <div className="h-full bg-helios-solar" style={{ width: `${focusedJob.encode_stats.vmaf_score || 0}%` }} />
+                                                                            </div>
+                                                                            <span className="text-helios-ink font-bold">
+                                                                                {focusedJob.encode_stats.vmaf_score?.toFixed(1) || "-"}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-lg text-xs text-helios-slate italic">
+                                                                    {focusedJob.job.status === "encoding"
+                                                                        ? "Encoding in progress..."
+                                                                        : focusedJob.job.status === "remuxing"
+                                                                            ? "Remuxing in progress..."
+                                                                            : "No encode data available"}
+                                                                </div>
+                                                            )}
                                                         </div>
-                                                    )}
+                                                    </div>
+                                                </>
+                                            )}
+
+                                            {completedEncodeStats && (
+                                                <div className="space-y-4">
+                                                    <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
+                                                        <Zap size={12} /> Encode Results
+                                                    </h3>
+                                                    <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-3">
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Input size</span>
+                                                            <span className="text-helios-ink font-bold">{formatBytes(completedEncodeStats.input_size_bytes)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Output size</span>
+                                                            <span className="text-helios-ink font-bold">{formatBytes(completedEncodeStats.output_size_bytes)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Reduction</span>
+                                                            <span className="text-green-500 font-bold">
+                                                                {completedEncodeStats.input_size_bytes > 0
+                                                                    ? `${((1 - completedEncodeStats.output_size_bytes / completedEncodeStats.input_size_bytes) * 100).toFixed(1)}% saved`
+                                                                    : "—"}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Encode time</span>
+                                                            <span className="text-helios-ink font-bold">{formatDuration(completedEncodeStats.encode_time_seconds)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Speed</span>
+                                                            <span className="text-helios-ink font-bold">{`${completedEncodeStats.encode_speed.toFixed(2)}\u00d7 realtime`}</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">Avg bitrate</span>
+                                                            <span className="text-helios-ink font-bold">{`${completedEncodeStats.avg_bitrate_kbps} kbps`}</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-xs">
+                                                            <span className="text-helios-slate font-medium">VMAF</span>
+                                                            <span className="text-helios-ink font-bold">{completedEncodeStats.vmaf_score?.toFixed(1) ?? "—"}</span>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            )}
                                         </>
                                     ) : (
                                         <div className="flex items-center gap-3 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-5">

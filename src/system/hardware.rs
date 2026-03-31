@@ -488,6 +488,19 @@ fn pci_vendor_to_vendor(value: &str) -> Option<Vendor> {
     }
 }
 
+fn vendor_from_explicit_device_path(device_path: &Path) -> Option<Vendor> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+
+    let render_node = device_path.file_name()?.to_str()?;
+    let vendor_path = Path::new("/sys/class/drm")
+        .join(render_node)
+        .join("device/vendor");
+    let vendor_id = std::fs::read_to_string(vendor_path).ok()?;
+    pci_vendor_to_vendor(&vendor_id)
+}
+
 fn enumerate_linux_render_nodes_under(
     sys_class_drm: &Path,
     dev_dri_root: &Path,
@@ -1030,10 +1043,40 @@ fn detect_explicit_device_path_with_runner_and_log<R: CommandRunner + ?Sized>(
     }
 
     let mut detection_notes = Vec::new();
-    let candidates: Vec<_> = discover_probe_candidates_with_runner(runner, &mut detection_notes)
-        .into_iter()
-        .filter(|candidate| candidate.device_path.as_deref() == Some(device_path))
-        .collect();
+    let resolved_vendor = preferred_vendor.or_else(|| vendor_from_explicit_device_path(Path::new(device_path)));
+    let candidates = match resolved_vendor {
+        Some(Vendor::Intel) => probe_candidates_for_vendor(
+            Vendor::Intel,
+            Some(device_path),
+            &format!("Using configured device path {}", device_path),
+        ),
+        Some(Vendor::Amd) => probe_candidates_for_vendor(
+            Vendor::Amd,
+            Some(device_path),
+            &format!("Using configured device path {}", device_path),
+        ),
+        Some(Vendor::Cpu) | Some(Vendor::Apple) | Some(Vendor::Nvidia) => Vec::new(),
+        None => {
+            append_detection_note(
+                &mut detection_notes,
+                format!(
+                    "Configured device path '{}' could not be mapped to a vendor; probing as both Intel and AMD render node",
+                    device_path
+                ),
+            );
+            let intel = probe_candidates_for_vendor(
+                Vendor::Intel,
+                Some(device_path),
+                &format!("Using configured device path {}", device_path),
+            );
+            let amd = probe_candidates_for_vendor(
+                Vendor::Amd,
+                Some(device_path),
+                &format!("Using configured device path {}", device_path),
+            );
+            [intel, amd].concat()
+        }
+    };
 
     if candidates.is_empty() {
         return None;

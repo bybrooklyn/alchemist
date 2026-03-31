@@ -3,6 +3,7 @@ import { Info, LogOut, Play, Square } from "lucide-react";
 import { motion } from "framer-motion";
 import AboutDialog from "./AboutDialog";
 import { apiAction, apiJson } from "../lib/api";
+import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 
 interface EngineStatus {
@@ -19,12 +20,18 @@ export default function HeaderActions() {
     const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
     const [engineLoading, setEngineLoading] = useState(false);
     const [showAbout, setShowAbout] = useState(false);
+    const { stats } = useSharedStats();
 
     const statusConfig = {
         running: {
             dot: "bg-status-success animate-pulse",
             label: "Running",
             labelColor: "text-status-success",
+        },
+        idle: {
+            dot: "bg-helios-slate",
+            label: "Idle",
+            labelColor: "text-helios-slate",
         },
         paused: {
             dot: "bg-helios-solar",
@@ -39,6 +46,8 @@ export default function HeaderActions() {
     } as const;
 
     const status = engineStatus?.status ?? "paused";
+    const isIdle = status === "running" && (stats?.active ?? 0) === 0;
+    const displayStatus: keyof typeof statusConfig = isIdle ? "idle" : status;
 
     const refreshEngineStatus = async () => {
         const data = await apiJson<EngineStatus>("/api/engine/status");
@@ -147,9 +156,9 @@ export default function HeaderActions() {
 
                 {/* Status pill */}
                 <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/60">
-                    <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusConfig[status].dot}`} />
-                    <span className={`text-xs font-medium ${statusConfig[status].labelColor}`}>
-                        {statusConfig[status].label}
+                    <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusConfig[displayStatus].dot}`} />
+                    <span className={`text-xs font-medium ${statusConfig[displayStatus].labelColor}`}>
+                        {statusConfig[displayStatus].label}
                     </span>
                 </div>
 

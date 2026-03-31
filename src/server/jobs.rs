@@ -315,7 +315,11 @@ pub(crate) async fn get_job_detail_handler(
 
     // Avoid long probes while the job is still active.
     let metadata = match job.status {
-        JobState::Queued | JobState::Analyzing | JobState::Encoding | JobState::Remuxing => None,
+        JobState::Queued
+        | JobState::Analyzing
+        | JobState::Encoding
+        | JobState::Remuxing
+        | JobState::Completed => None,
         _ => {
             let analyzer = crate::media::analyzer::FfmpegAnalyzer;
             use crate::media::pipeline::Analyzer;
