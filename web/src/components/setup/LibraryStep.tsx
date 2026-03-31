@@ -193,7 +193,7 @@ export default function LibraryStep({
             </div>
 
             {pickerOpen ? (
-                <div className="flex h-[min(28rem,calc(100dvh-20rem))] min-h-0 flex-col gap-4 overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface p-4">
+                <div className="flex h-[420px] flex-col gap-4 overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface p-4">
                     <div className="shrink-0 flex items-start justify-between gap-4">
                         <div className="min-w-0 space-y-3">
                             <div className="space-y-1">

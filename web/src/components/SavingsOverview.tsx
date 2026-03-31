@@ -1,4 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+    AreaChart,
+    Area,
+    XAxis,
+    YAxis,
+    Tooltip,
+    ResponsiveContainer,
+    BarChart,
+    Bar,
+    Cell,
+} from "recharts";
 import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
@@ -33,12 +44,6 @@ function formatHeroStorage(bytes: number): string {
     return `${(bytes / GIB).toFixed(1)} GB`;
 }
 
-function formatCompactStorage(bytes: number): string {
-    if (bytes >= GIB) {
-        return `${(bytes / GIB).toFixed(1)} GB`;
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function formatChartDate(date: string): string {
     const parsed = new Date(date);
@@ -120,11 +125,11 @@ export default function SavingsOverview() {
         );
     }
 
-    const maxCodecSavings = Math.max(
-        ...summary.savings_by_codec.map((entry) => entry.bytes_saved),
-        1
-    );
-    const maxChartSavings = Math.max(...chartData.map((entry) => entry.gb_saved), 1);
+    const codecChartData = (summary?.savings_by_codec ?? []).map((entry) => ({
+        codec: entry.codec.toUpperCase(),
+        gb_saved: Number((entry.bytes_saved / GIB).toFixed(2)),
+        job_count: entry.job_count,
+    }));
 
     return (
         <div className="space-y-6">
@@ -183,64 +188,145 @@ export default function SavingsOverview() {
                     <div className="py-10 text-center text-sm text-helios-slate">No data yet</div>
                 ) : (
                     <div className="mt-4">
-                        <div className="flex h-[200px] items-end gap-2 rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 px-3 py-4">
-                            {chartData.map((entry) => (
-                                <div key={entry.date} className="flex h-full flex-1 flex-col justify-end">
-                                    <div className="group relative flex-1 rounded-md bg-helios-surface-soft/50">
-                                        <div
-                                            className="absolute bottom-0 w-full rounded-md bg-helios-solar/70 transition-all"
-                                            style={{
-                                                height: `${Math.max(
-                                                    (entry.gb_saved / maxChartSavings) * 100,
-                                                    4
-                                                )}%`,
-                                            }}
-                                            title={`${entry.label}: ${entry.gb_saved.toFixed(1)} GB saved`}
+                        <ResponsiveContainer width="100%" height={220}>
+                            <AreaChart
+                                data={chartData}
+                                margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                            >
+                                <defs>
+                                    <linearGradient
+                                        id="savingsGradient"
+                                        x1="0" y1="0" x2="0" y2="1"
+                                    >
+                                        <stop
+                                            offset="5%"
+                                            stopColor="rgb(var(--accent-primary))"
+                                            stopOpacity={0.3}
                                         />
-                                    </div>
-                                    <div className="mt-2 truncate text-center text-xs text-helios-slate">
-                                        {entry.label}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                                        <stop
+                                            offset="95%"
+                                            stopColor="rgb(var(--accent-primary))"
+                                            stopOpacity={0}
+                                        />
+                                    </linearGradient>
+                                </defs>
+                                <XAxis
+                                    dataKey="label"
+                                    tick={{ fontSize: 11, fill: "rgb(var(--text-muted))" }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    interval="preserveStartEnd"
+                                />
+                                <YAxis
+                                    tick={{ fontSize: 11, fill: "rgb(var(--text-muted))" }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tickFormatter={(v: number) =>
+                                        v >= 1 ? `${v.toFixed(1)}GB` : `${(v * 1024).toFixed(0)}MB`
+                                    }
+                                    width={52}
+                                />
+                                <Tooltip
+                                    formatter={(value: number) => [
+                                        value >= 1
+                                            ? `${value.toFixed(2)} GB`
+                                            : `${(value * 1024).toFixed(0)} MB`,
+                                        "Saved",
+                                    ]}
+                                    labelStyle={{
+                                        color: "rgb(var(--text-primary))",
+                                        fontSize: 12,
+                                    }}
+                                    contentStyle={{
+                                        background: "rgb(var(--bg-panel))",
+                                        border: "1px solid rgb(var(--border-subtle))",
+                                        borderRadius: 8,
+                                        fontSize: 12,
+                                    }}
+                                />
+                                <Area
+                                    type="monotone"
+                                    dataKey="gb_saved"
+                                    stroke="rgb(var(--accent-primary))"
+                                    strokeWidth={2}
+                                    fill="url(#savingsGradient)"
+                                    dot={false}
+                                    activeDot={{ r: 4 }}
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
                     </div>
                 )}
             </div>
 
             <div className="rounded-lg border border-helios-line/40 bg-helios-surface p-6">
                 <div className="text-sm font-medium text-helios-slate">Savings by codec</div>
-                {summary.savings_by_codec.length === 0 ? (
+                {codecChartData.length === 0 ? (
                     <div className="py-8 text-center text-sm text-helios-slate">
                         No transcoding data yet — savings will appear here once jobs complete.
                     </div>
                 ) : (
-                    <div className="mt-4 flex flex-col gap-2">
-                        {summary.savings_by_codec.map((entry) => (
-                            <div
-                                key={entry.codec}
-                                className="grid grid-cols-[120px_minmax(0,1fr)_160px] items-center gap-3"
+                    <div className="mt-4">
+                        <ResponsiveContainer width="100%" height={180}>
+                            <BarChart
+                                data={codecChartData}
+                                margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
                             >
-                                <div className="text-sm font-medium text-helios-ink">
-                                    {entry.codec}
-                                </div>
-                                <div className="h-3 rounded bg-helios-surface-soft">
-                                    <div
-                                        className="h-full rounded bg-helios-solar/70"
-                                        style={{
-                                            width: `${Math.max(
-                                                (entry.bytes_saved / maxCodecSavings) * 100,
-                                                4
-                                            )}%`,
-                                        }}
-                                    />
-                                </div>
-                                <div className="text-right text-sm text-helios-slate">
-                                    {entry.job_count} {entry.job_count === 1 ? "job" : "jobs"},{" "}
-                                    {formatCompactStorage(entry.bytes_saved)} saved
-                                </div>
-                            </div>
-                        ))}
+                                <XAxis
+                                    dataKey="codec"
+                                    tick={{
+                                        fontSize: 12,
+                                        fill: "rgb(var(--text-primary))",
+                                        fontWeight: 600,
+                                    }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                />
+                                <YAxis
+                                    tick={{
+                                        fontSize: 11,
+                                        fill: "rgb(var(--text-muted))",
+                                    }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tickFormatter={(v: number) =>
+                                        v >= 1
+                                            ? `${v.toFixed(1)}GB`
+                                            : `${(v * 1024).toFixed(0)}MB`
+                                    }
+                                    width={52}
+                                />
+                                <Tooltip
+                                    formatter={(value: number, _: string, props: {
+                                        payload?: { job_count?: number };
+                                    }) => [
+                                        value >= 1
+                                            ? `${value.toFixed(2)} GB`
+                                            : `${(value * 1024).toFixed(0)} MB`,
+                                        `Saved (${props.payload?.job_count ?? 0} jobs)`,
+                                    ]}
+                                    contentStyle={{
+                                        background: "rgb(var(--bg-panel))",
+                                        border: "1px solid rgb(var(--border-subtle))",
+                                        borderRadius: 8,
+                                        fontSize: 12,
+                                    }}
+                                />
+                                <Bar
+                                    dataKey="gb_saved"
+                                    radius={[4, 4, 0, 0]}
+                                    maxBarSize={80}
+                                >
+                                    {codecChartData.map((_, index) => (
+                                        <Cell
+                                            key={index}
+                                            fill="rgb(var(--accent-primary))"
+                                            fillOpacity={0.8}
+                                        />
+                                    ))}
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
                     </div>
                 )}
             </div>
