@@ -6,25 +6,11 @@ on:
       - master
     paths:
       - 'docs/**'
-      - 'src/css/**'
-      - 'static/**'
-      - 'docusaurus.config.ts'
-      - 'sidebars.ts'
-      - 'package.json'
-      - 'bun.lock'
-      - 'tsconfig.json'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build.yml'
   pull_request:
     paths:
       - 'docs/**'
-      - 'src/css/**'
-      - 'static/**'
-      - 'docusaurus.config.ts'
-      - 'sidebars.ts'
-      - 'package.json'
-      - 'bun.lock'
-      - 'tsconfig.json'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build.yml'
   workflow_dispatch:
@@ -60,33 +46,33 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            node_modules
+            docs/node_modules
             ~/.bun/install/cache
           key: bun-docs-${{ runner.os }}-${{ hashFiles('docs/bun.lock') }}
           restore-keys: |
             bun-docs-${{ runner.os }}-
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: cd docs && bun install --frozen-lockfile
 
       - name: Build docs site
         env:
           DOCS_URL: https://bybrooklyn.github.io
           DOCS_BASE_URL: /
-        run: bun run build
+        run: cd docs && bun run build
 
       - name: Upload built site artifact
         uses: actions/upload-artifact@v7
         with:
           name: docs-site-${{ github.run_id }}
-          path: build
+          path: docs/build
           retention-days: 7
 
       - name: Upload GitHub Pages artifact
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v4
         with:
-          path: build
+          path: docs/build
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
