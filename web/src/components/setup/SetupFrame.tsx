@@ -26,16 +26,18 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
         <div className="flex flex-col flex-1 min-h-0">
 
             {/* Progress bar — 2px solar line at top of app-main */}
-            <div className="h-0.5 w-full bg-helios-surface-soft shrink-0">
-                <motion.div
-                    className="bg-helios-solar h-full"
-                    initial={{ width: 0 }}
-                    animate={{
-                        width: `${(step / SETUP_STEP_COUNT) * 100}%`
-                    }}
-                    transition={{ duration: 0.3 }}
-                />
-            </div>
+            {step > 0 && (
+                <div className="h-0.5 w-full bg-helios-surface-soft shrink-0">
+                    <motion.div
+                        className="bg-helios-solar h-full"
+                        initial={{ width: 0 }}
+                        animate={{
+                            width: `${(step / SETUP_STEP_COUNT) * 100}%`
+                        }}
+                        transition={{ duration: 0.3 }}
+                    />
+                </div>
+            )}
 
             {/* Read-only config warning */}
             {!configMutable && (
@@ -57,7 +59,7 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
             </div>
 
             {/* Navigation footer */}
-            {step < 6 && (
+            {step > 0 && step < 6 && (
                 <div className="shrink-0 border-t border-helios-line/20
                     bg-helios-surface/50 px-6 py-4">
                     <div className="max-w-6xl mx-auto flex items-center

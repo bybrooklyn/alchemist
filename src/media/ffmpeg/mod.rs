@@ -851,6 +851,8 @@ mod tests {
                 device_path: Some(path.to_string()),
             }],
             detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
         }
     }
 
@@ -865,14 +867,6 @@ mod tests {
                 stdout: self.stdout.clone(),
                 stderr: Vec::new(),
             })
-        }
-
-        fn status(
-            &self,
-            _program: &str,
-            _args: &[String],
-        ) -> std::io::Result<std::process::ExitStatus> {
-            Ok(exit_status(true))
         }
     }
 

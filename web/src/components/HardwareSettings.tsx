@@ -7,6 +7,12 @@ interface HardwareInfo {
     vendor: string;
     device_path: string | null;
     supported_codecs: string[];
+    selection_reason?: string;
+    probe_summary?: {
+        attempted: number;
+        succeeded: number;
+        failed: number;
+    };
     backends?: Array<{
         kind: string;
         codec: string;
@@ -17,10 +23,14 @@ interface HardwareInfo {
 }
 
 interface HardwareProbeEntry {
+    vendor: string;
+    codec: string;
     encoder: string;
     backend: string;
     device_path: string | null;
     success: boolean;
+    selected: boolean;
+    summary: string;
     stderr?: string | null;
 }
 
@@ -205,8 +215,6 @@ export default function HardwareSettings() {
     const vendor = normalizeVendor(info.vendor);
     const details = getVendorDetails(info.vendor);
     const detectionNotes = info.detection_notes ?? [];
-    const failedProbeEntries = probeLog.entries.filter((entry) => !entry.success);
-    const shouldShowProbeLog = vendor === "cpu" || failedProbeEntries.length > 0;
     const intelVaapiDetected = vendor === "intel" && (info.backends ?? []).some((backend) => backend.kind.toLowerCase() === "vaapi");
 
     const handleHardwareSettingsBlur = (event: React.FocusEvent<HTMLDivElement>) => {
@@ -254,6 +262,14 @@ export default function HardwareSettings() {
                                 {info.device_path || (vendor === "nvidia" ? "NVIDIA Driver (Direct)" : "Auto-detected Interface")}
                             </div>
                         </div>
+                        {info.selection_reason && (
+                            <div>
+                                <span className="text-xs font-medium text-helios-slate block mb-1.5 ml-0.5">Selection Reason</span>
+                                <div className="bg-helios-surface-soft border border-helios-line/30 rounded-lg px-3 py-2 text-xs text-helios-slate shadow-inner">
+                                    {info.selection_reason}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -280,6 +296,23 @@ export default function HardwareSettings() {
                             </div>
                         )}
                     </div>
+
+                    {info.probe_summary && (
+                        <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                            <div className="rounded-lg bg-helios-surface-soft border border-helios-line/20 px-3 py-2">
+                                <div className="text-helios-slate">Attempted</div>
+                                <div className="mt-1 font-bold text-helios-ink">{info.probe_summary.attempted}</div>
+                            </div>
+                            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+                                <div className="text-emerald-500">Succeeded</div>
+                                <div className="mt-1 font-bold text-emerald-500">{info.probe_summary.succeeded}</div>
+                            </div>
+                            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2">
+                                <div className="text-red-500">Failed</div>
+                                <div className="mt-1 font-bold text-red-500">{info.probe_summary.failed}</div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -331,49 +364,52 @@ export default function HardwareSettings() {
                 </details>
             )}
 
-            {shouldShowProbeLog && (
-                <details className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 px-4 py-3">
-                    <summary className="cursor-pointer text-xs font-medium text-helios-slate hover:text-helios-ink">
-                        Show detection log
-                    </summary>
-                    <div className="mt-3 space-y-2">
-                        {probeLog.entries.length > 0 ? probeLog.entries.map((entry, index) => {
-                            const firstLine = entry.stderr?.split("\n")[0]?.trim();
-                            const iconClassName = entry.success ? "text-emerald-500" : "text-red-500";
+            <details className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 px-4 py-3">
+                <summary className="cursor-pointer text-xs font-medium text-helios-slate hover:text-helios-ink">
+                    Show detection log
+                </summary>
+                <div className="mt-3 space-y-2">
+                    {probeLog.entries.length > 0 ? probeLog.entries.map((entry, index) => {
+                        const iconClassName = entry.success ? "text-emerald-500" : "text-red-500";
 
-                            return (
-                                <details
-                                    key={`${entry.encoder}-${entry.backend}-${entry.device_path ?? "auto"}-${index}`}
-                                    className="rounded-md border border-helios-line/15 bg-helios-surface/60 px-3 py-2"
-                                >
-                                    <summary className="cursor-pointer text-xs text-helios-slate">
-                                        <span className="inline-flex items-center gap-2">
-                                            {entry.success ? <CheckCircle2 size={12} className={iconClassName} /> : <XCircle size={12} className={iconClassName} />}
-                                            <span className="font-medium text-helios-ink">{entry.encoder}</span>
-                                            {!entry.success && firstLine && (
-                                                <span className="text-helios-slate">{firstLine}</span>
-                                            )}
+                        return (
+                            <details
+                                key={`${entry.encoder}-${entry.backend}-${entry.device_path ?? "auto"}-${index}`}
+                                className="rounded-md border border-helios-line/15 bg-helios-surface/60 px-3 py-2"
+                            >
+                                <summary className="cursor-pointer text-xs text-helios-slate">
+                                    <span className="inline-flex flex-wrap items-center gap-2">
+                                        {entry.success ? <CheckCircle2 size={12} className={iconClassName} /> : <XCircle size={12} className={iconClassName} />}
+                                        <span className="font-medium text-helios-ink">{entry.encoder}</span>
+                                        <span className="rounded bg-helios-surface-soft px-2 py-0.5 font-mono text-[11px] uppercase text-helios-slate">
+                                            {entry.codec}
                                         </span>
-                                    </summary>
-                                    <div className="mt-2 space-y-2">
-                                        <p className="text-xs text-helios-slate">
-                                            {entry.backend}
-                                            {entry.device_path ? ` • ${entry.device_path}` : ""}
-                                        </p>
-                                        {entry.stderr && (
-                                            <pre className="overflow-x-auto rounded bg-helios-main/70 p-2 text-xs text-helios-slate font-mono whitespace-pre-wrap break-words">
-                                                {entry.stderr}
-                                            </pre>
+                                        {entry.selected && (
+                                            <span className="rounded bg-helios-solar/10 px-2 py-0.5 text-[11px] font-semibold text-helios-solar">
+                                                Selected
+                                            </span>
                                         )}
-                                    </div>
-                                </details>
-                            );
-                        }) : (
-                            <p className="text-xs text-helios-slate">No encoder probes were recorded during detection.</p>
-                        )}
-                    </div>
-                </details>
-            )}
+                                        <span className="text-helios-slate">{entry.summary}</span>
+                                    </span>
+                                </summary>
+                                <div className="mt-2 space-y-2">
+                                    <p className="text-xs text-helios-slate">
+                                        {entry.vendor} • {entry.backend}
+                                        {entry.device_path ? ` • ${entry.device_path}` : ""}
+                                    </p>
+                                    {entry.stderr && (
+                                        <pre className="overflow-x-auto rounded bg-helios-main/70 p-2 text-xs text-helios-slate font-mono whitespace-pre-wrap break-words">
+                                            {entry.stderr}
+                                        </pre>
+                                    )}
+                                </div>
+                            </details>
+                        );
+                    }) : (
+                        <p className="text-xs text-helios-slate">No encoder probes were recorded during detection.</p>
+                    )}
+                </div>
+            </details>
 
             {settings && (
                 <div

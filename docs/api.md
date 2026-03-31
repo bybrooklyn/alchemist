@@ -326,12 +326,14 @@ Request:
 ### `GET /api/system/hardware`
 
 Returns the current detected hardware backend, supported
-codecs, backends, and any detection notes.
+codecs, backends, selection reason, probe summary, and any
+detection notes.
 
 ### `GET /api/system/hardware/probe-log`
 
 Returns the per-encoder probe log with success/failure
-status and stderr excerpts.
+status, selected-flag metadata, summary text, and stderr
+excerpts.
 
 ### `GET /api/system/resources`
 

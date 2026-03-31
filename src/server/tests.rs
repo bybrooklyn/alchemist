@@ -55,6 +55,8 @@ where
         supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
         backends: Vec::new(),
         detection_notes: Vec::new(),
+        selection_reason: String::new(),
+        probe_summary: crate::system::hardware::ProbeSummary::default(),
     }));
     let hardware_probe_log = Arc::new(RwLock::new(HardwareProbeLog::default()));
     let (tx, _rx) = broadcast::channel(tx_capacity);
@@ -468,6 +470,10 @@ async fn hardware_probe_log_route_returns_runtime_log()
             device_path: None,
             success: false,
             stderr: Some("Unknown encoder".to_string()),
+            vendor: "apple".to_string(),
+            codec: "hevc".to_string(),
+            selected: false,
+            summary: "Encoder unavailable in current FFmpeg build".to_string(),
         }],
     };
 

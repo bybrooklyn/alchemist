@@ -3,17 +3,26 @@ title: Hardware Acceleration
 description: GPU detection, vendor selection, and fallback behavior.
 ---
 
-Alchemist detects hardware automatically at startup and
-selects the best available encoder. Override in
+Alchemist detects hardware automatically at startup,
+actively probes every plausible backend/codec candidate,
+and selects a single active device/backend with a
+deterministic scoring policy. Override in
 **Settings → Hardware**.
 
-## Detection order (auto mode)
+## Detection flow (auto mode)
 
-1. Apple VideoToolbox (macOS only)
-2. NVIDIA NVENC (checks `/dev/nvidiactl`)
-3. Intel VAAPI, then QSV fallback (checks `/dev/dri/renderD128`)
-4. AMD VAAPI (Linux) or AMF (Windows)
-5. CPU fallback (SVT-AV1, x265, x264)
+1. Discover plausible candidates
+   - Apple VideoToolbox on macOS
+   - NVIDIA NVENC when NVIDIA is present
+   - Intel / AMD render nodes on Linux via `/sys/class/drm/renderD*`
+   - AMD AMF on Windows
+2. Actively probe every candidate encoder with a short
+   FFmpeg test encode
+3. Group successful probes by device path / vendor
+4. Choose one active device/backend using codec coverage,
+   backend preference, and stable vendor ordering
+5. Fall back to CPU only if no GPU probe succeeds and CPU
+   fallback is enabled
 
 ## Encoder support by vendor
 
@@ -27,9 +36,19 @@ selects the best available encoder. Override in
 
 ## Hardware probe
 
-Alchemist probes each encoder at startup with a test encode.
-See results in **Settings → Hardware → Probe Log**. Probe
-failures include the FFmpeg stderr explaining why.
+Alchemist probes each encoder at startup with a test encode
+using a standardized `256x256` lavfi input.
+
+See results in **Settings → Hardware → Probe Log**. The UI
+shows:
+
+- the selected device/backend reason
+- probe counts (attempted / succeeded / failed)
+- per-probe summaries for success and failure
+- full FFmpeg stderr for failed probes
+
+On Linux, explicit device paths only apply to render-node
+backends such as VAAPI and QSV.
 
 ## Vendor-specific guides
 
