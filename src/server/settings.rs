@@ -433,7 +433,13 @@ pub(crate) async fn add_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url).await {
+    let allow_local = state
+        .config
+        .read()
+        .await
+        .notifications
+        .allow_local_notifications;
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url, allow_local).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
@@ -507,7 +513,13 @@ pub(crate) async fn test_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url).await {
+    let allow_local = state
+        .config
+        .read()
+        .await
+        .notifications
+        .allow_local_notifications;
+    if let Err(msg) = validate_notification_url(&payload.endpoint_url, allow_local).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 

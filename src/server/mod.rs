@@ -347,10 +347,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             "/api/settings/watch-dirs",
             get(get_watch_dirs_handler).post(add_watch_dir_handler),
         )
-        .route(
-            "/api/settings/folders",
-            post(sync_watch_dirs_handler),
-        )
+        .route("/api/settings/folders", post(sync_watch_dirs_handler))
         .route(
             "/api/settings/watch-dirs/:id",
             delete(remove_watch_dir_handler),
