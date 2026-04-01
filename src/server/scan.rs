@@ -298,6 +298,35 @@ pub(crate) async fn add_watch_dir_handler(
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct SyncWatchDirsPayload {
+    dirs: Vec<crate::config::WatchDirConfig>,
+}
+
+pub(crate) async fn sync_watch_dirs_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<SyncWatchDirsPayload>,
+) -> impl IntoResponse {
+    let mut next_config = state.config.read().await.clone();
+    next_config.scanner.extra_watch_dirs = payload.dirs;
+
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
+
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+
+    refresh_file_watcher(&state).await;
+
+    match state.db.get_watch_dirs().await {
+        Ok(dirs) => axum::Json(dirs).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 pub(crate) async fn remove_watch_dir_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,

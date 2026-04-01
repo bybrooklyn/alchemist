@@ -830,16 +830,41 @@ impl Db {
         .await
     }
 
-    /// Returns all jobs whose filename stem appears more than
-    /// once across the library. Groups by stem, filtered to
-    /// only non-cancelled jobs. Grouping and path parsing is
-    /// done in Rust using std::path::Path.
     pub async fn get_duplicate_candidates(&self) -> Result<Vec<DuplicateCandidate>> {
         timed_query("get_duplicate_candidates", || async {
+            // Find stems that appear more than once, then
+            // fetch only those jobs — never load the full
+            // library into memory.
+            //
+            // SQLite doesn't have a built-in stem function,
+            // so we use a subquery: find all input_path
+            // values that share the same basename (last
+            // path segment after the final '/'), keeping
+            // only those that appear in more than one row.
             let rows: Vec<DuplicateCandidate> = sqlx::query_as(
-                "SELECT id, input_path, status FROM jobs
-                 WHERE status NOT IN ('cancelled')
-                 ORDER BY input_path ASC",
+                "SELECT id, input_path, status
+                     FROM jobs
+                     WHERE status NOT IN ('cancelled')
+                       AND (
+                         SELECT COUNT(*)
+                         FROM jobs j2
+                         WHERE j2.status NOT IN ('cancelled')
+                           AND SUBSTR(
+                                 j2.input_path,
+                                 INSTR(
+                                   REPLACE(j2.input_path,
+                                     '\\', '/'), '/'
+                                 ) + 1
+                               ) =
+                             SUBSTR(
+                                 input_path,
+                                 INSTR(
+                                   REPLACE(input_path,
+                                     '\\', '/'), '/'
+                                 ) + 1
+                               )
+                       ) > 1
+                     ORDER BY input_path ASC",
             )
             .fetch_all(&self.pool)
             .await?;
@@ -1150,6 +1175,38 @@ impl Db {
                  WHERE j.status IN ('queued', 'failed') AND j.archived = 0
                  ORDER BY j.priority DESC, j.created_at ASC",
             )
+            .fetch_all(&self.pool)
+            .await?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    pub async fn get_jobs_for_analysis_batch(&self, offset: i64, limit: i64) -> Result<Vec<Job>> {
+        timed_query("get_jobs_for_analysis_batch", || async {
+            let rows: Vec<Job> = sqlx::query_as(
+                "SELECT j.id, j.input_path, j.output_path,
+                        j.status,
+                        (SELECT reason FROM decisions
+                         WHERE job_id = j.id
+                         ORDER BY created_at DESC LIMIT 1)
+                         as decision_reason,
+                        COALESCE(j.priority, 0) as priority,
+                        COALESCE(CAST(j.progress AS REAL),
+                                 0.0) as progress,
+                        COALESCE(j.attempt_count, 0)
+                                 as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats
+                         WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at
+                 FROM jobs j
+                 WHERE j.status IN ('queued', 'failed')
+                   AND j.archived = 0
+                 ORDER BY j.priority DESC, j.created_at ASC
+                 LIMIT ? OFFSET ?",
+            )
+            .bind(limit)
+            .bind(offset)
             .fetch_all(&self.pool)
             .await?;
             Ok(rows)

@@ -117,7 +117,7 @@ export default function ServerDirectoryPicker({
             />
 
             <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
-                <div className="w-full max-w-5xl rounded-xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden flex flex-col max-h-[min(90vh,800px)]">
+                <div className="w-full max-w-7xl rounded-xl border border-helios-line/30 bg-helios-surface shadow-2xl overflow-hidden flex flex-col max-h-[min(95vh,1000px)]">
                     <div className="border-b border-helios-line/20 px-6 py-5 flex items-start justify-between gap-4">
                         <div>
                             <div className="flex items-center gap-3">

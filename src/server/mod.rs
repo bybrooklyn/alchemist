@@ -348,6 +348,10 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(get_watch_dirs_handler).post(add_watch_dir_handler),
         )
         .route(
+            "/api/settings/folders",
+            post(sync_watch_dirs_handler),
+        )
+        .route(
             "/api/settings/watch-dirs/:id",
             delete(remove_watch_dir_handler),
         )
@@ -675,7 +679,10 @@ pub(crate) fn normalize_schedule_time(value: &str) -> Option<String> {
     Some(format!("{:02}:{:02}", hour, minute))
 }
 
-pub(crate) async fn validate_notification_url(raw: &str) -> std::result::Result<(), String> {
+pub(crate) async fn validate_notification_url(
+    raw: &str,
+    allow_local: bool,
+) -> std::result::Result<(), String> {
     let url =
         reqwest::Url::parse(raw).map_err(|_| "endpoint_url must be a valid URL".to_string())?;
     match url.scheme() {
@@ -693,12 +700,12 @@ pub(crate) async fn validate_notification_url(raw: &str) -> std::result::Result<
         .host_str()
         .ok_or_else(|| "endpoint_url must include a host".to_string())?;
 
-    if host.eq_ignore_ascii_case("localhost") {
+    if !allow_local && host.eq_ignore_ascii_case("localhost") {
         return Err("endpoint_url host is not allowed".to_string());
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(ip) {
+        if !allow_local && is_private_ip(ip) {
             return Err("endpoint_url host is not allowed".to_string());
         }
     } else {
@@ -713,7 +720,7 @@ pub(crate) async fn validate_notification_url(raw: &str) -> std::result::Result<
             .map_err(|_| "endpoint_url host could not be resolved".to_string())?;
         for addr in addrs {
             resolved = true;
-            if is_private_ip(addr.ip()) {
+            if !allow_local && is_private_ip(addr.ip()) {
                 return Err("endpoint_url host is not allowed".to_string());
             }
         }

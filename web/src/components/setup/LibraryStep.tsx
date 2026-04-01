@@ -15,7 +15,7 @@ interface LibraryStepProps {
 }
 
 interface FsBreadcrumb {
-    name: string;
+    label: string;
     path: string;
 }
 
@@ -193,7 +193,7 @@ export default function LibraryStep({
             </div>
 
             {pickerOpen ? (
-                <div className="flex h-[420px] flex-col gap-4 overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface p-4">
+                <div className="flex h-[540px] flex-col gap-4 overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface p-4">
                     <div className="shrink-0 flex items-start justify-between gap-4">
                         <div className="min-w-0 space-y-3">
                             <div className="space-y-1">
@@ -245,7 +245,7 @@ export default function LibraryStep({
                                                                     : "rounded-lg px-2 py-1 transition-colors hover:bg-helios-surface-soft hover:text-helios-ink"
                                                             }
                                                         >
-                                                            {crumb.name.replace(/^\//, "")}
+                                                            {crumb.label.replace(/^\//, "")}
                                                         </button>
                                                     </div>
                                                 );
@@ -316,7 +316,7 @@ export default function LibraryStep({
                                                 ..
                                             </span>
                                             <span className="block truncate text-xs text-helios-slate">
-                                                Go up to {parentBreadcrumb.name.replace(/^\//, "")}
+                                                Go up to {parentBreadcrumb.label.replace(/^\//, "")}
                                             </span>
                                         </div>
                                     </button>

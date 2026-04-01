@@ -169,33 +169,26 @@ export default function WatchFolders() {
         }
 
         try {
-            // Add to BOTH config (canonical) and DB (profiles)
             const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-            if (!bundle.settings.scanner.directories.includes(normalized)) {
-                await apiAction("/api/settings/bundle", {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        ...bundle.settings,
-                        scanner: {
-                            ...bundle.settings.scanner,
-                            directories: [...bundle.settings.scanner.directories, normalized],
-                        },
-                    }),
-                });
-            }
-
-            try {
-                await apiAction("/api/settings/watch-dirs", {
+            const currentDirs = bundle.settings.scanner.directories;
+            
+            if (currentDirs.includes(normalized)) {
+                 // Even if it's in config, sync it to ensure it's in DB for profiles
+                 await apiAction("/api/settings/folders", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ path: normalized, is_recursive: true }),
+                    body: JSON.stringify({ 
+                        dirs: currentDirs.map(d => ({ path: d, is_recursive: true }))
+                    }),
                 });
-            } catch (innerE) {
-                // If it's just a duplicate DB error we can ignore it since we successfully added to canonical
-                if (!(isApiError(innerE) && innerE.status === 409)) {
-                    throw innerE;
-                }
+            } else {
+                await apiAction("/api/settings/folders", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        dirs: [...currentDirs, normalized].map(d => ({ path: d, is_recursive: true }))
+                    }),
+                });
             }
 
             setDirInput("");
@@ -214,30 +207,16 @@ export default function WatchFolders() {
         if (!dir) return;
 
         try {
-            // Remove from canonical config if present
             const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-            const filteredDirs = bundle.settings.scanner.directories.filter(candidate => candidate !== dir.path);
+            const filteredDirs = bundle.settings.scanner.directories.filter(candidate => candidate !== dirPath);
             
-            if (filteredDirs.length !== bundle.settings.scanner.directories.length) {
-                 await apiAction("/api/settings/bundle", {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        ...bundle.settings,
-                        scanner: {
-                            ...bundle.settings.scanner,
-                            directories: filteredDirs,
-                        },
-                    }),
-                });
-            }
-
-            // Remove from DB if it has a real ID
-            if (dir.id > 0) {
-                await apiAction(`/api/settings/watch-dirs/${dir.id}`, {
-                    method: "DELETE",
-                });
-            }
+            await apiAction("/api/settings/folders", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    dirs: filteredDirs.map(d => ({ path: d, is_recursive: true }))
+                }),
+            });
 
             setError(null);
             await fetchDirs();

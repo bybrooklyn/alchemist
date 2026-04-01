@@ -432,7 +432,17 @@ export default function JobManager() {
             }
 
             const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
-            setJobs(data);
+            setJobs((prev) =>
+                data.map((serverJob) => {
+                    const local = prev.find((j) => j.id === serverJob.id);
+                    const terminal = ["completed", "skipped", "failed", "cancelled"];
+                    if (local && terminal.includes(local.status)) {
+                        // Keep the terminal state from SSE to prevent flickering back to a stale poll state.
+                        return { ...serverJob, status: local.status };
+                    }
+                    return serverJob;
+                })
+            );
             setActionError(null);
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to fetch jobs";
