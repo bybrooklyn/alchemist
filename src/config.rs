@@ -367,6 +367,8 @@ pub(crate) fn default_tonemap_desat() -> f32 {
 pub struct NotificationsConfig {
     pub enabled: bool,
     #[serde(default)]
+    pub allow_local_notifications: bool,
+    #[serde(default)]
     pub targets: Vec<NotificationTargetConfig>,
     #[serde(default)]
     pub webhook_url: Option<String>,

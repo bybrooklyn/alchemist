@@ -194,42 +194,68 @@ impl Agent {
         };
 
         self.set_boot_analyzing(true);
-
         info!("Auto-analysis: scanning and analyzing pending jobs...");
 
         if let Err(e) = self.db.reset_interrupted_jobs().await {
             tracing::warn!("Auto-analysis: could not reset stuck jobs: {e}");
         }
 
-        let jobs = match self.db.get_jobs_for_analysis().await {
-            Ok(j) => j,
-            Err(e) => {
-                error!("Auto-analysis: failed to fetch jobs: {e}");
-                self.set_boot_analyzing(false);
-                return;
-            }
-        };
+        let batch_size: i64 = 100;
+        let mut offset: i64 = 0;
+        let mut total_analyzed: usize = 0;
 
-        if jobs.is_empty() {
-            info!("Auto-analysis: no jobs pending analysis.");
-            self.set_boot_analyzing(false);
-            return;
-        }
-
-        info!("Auto-analysis: analyzing {} job(s)...", jobs.len());
-
-        for job in jobs {
-            let pipeline = self.pipeline();
-            match pipeline.analyze_job_only(job).await {
-                Ok(_) => {}
+        loop {
+            let batch = match self
+                .db
+                .get_jobs_for_analysis_batch(offset, batch_size)
+                .await
+            {
+                Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!("Auto-analysis: job analysis failed: {e:?}");
+                    error!("Auto-analysis: failed to fetch batch at offset {offset}: {e}");
+                    break;
                 }
+            };
+
+            if batch.is_empty() {
+                break;
+            }
+
+            let batch_len = batch.len();
+            info!(
+                "Auto-analysis: analyzing batch of {} job(s) (offset {})...",
+                batch_len, offset
+            );
+
+            for job in batch {
+                let pipeline = self.pipeline();
+                match pipeline.analyze_job_only(job).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("Auto-analysis: job analysis failed: {e:?}");
+                    }
+                }
+            }
+
+            total_analyzed += batch_len;
+            offset += batch_size;
+
+            // If batch was smaller than batch_size we're done
+            if batch_len < batch_size as usize {
+                break;
             }
         }
 
         self.set_boot_analyzing(false);
-        info!("Auto-analysis: complete.");
+
+        if total_analyzed == 0 {
+            info!("Auto-analysis: no jobs pending analysis.");
+        } else {
+            info!(
+                "Auto-analysis: complete. Analyzed {} job(s) total.",
+                total_analyzed
+            );
+        }
     }
 
     pub async fn current_mode(&self) -> crate::config::EngineMode {
@@ -365,11 +391,19 @@ impl Agent {
                     let agent = self.clone();
                     let counter = self.in_flight_jobs.clone();
                     tokio::spawn(async move {
+                        struct InFlightGuard(Arc<AtomicUsize>);
+                        impl Drop for InFlightGuard {
+                            fn drop(&mut self) {
+                                self.0.fetch_sub(1, Ordering::SeqCst);
+                            }
+                        }
+
+                        let _guard = InFlightGuard(counter);
                         let _permit = permit;
                         if let Err(e) = agent.process_job(job).await {
                             error!("Job processing error: {}", e);
                         }
-                        counter.fetch_sub(1, Ordering::SeqCst);
+                        // _guard drops here automatically, even on panic
                     });
                 }
                 Ok(None) => {

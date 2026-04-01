@@ -74,9 +74,9 @@ export default function SettingsPanel() {
                                     navItemRefs.current[tab.id] = node;
                                 }}
                                 onClick={() => paginate(tab.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold transition-all duration-200 group ${isActive
-                                    ? "text-helios-ink bg-helios-surface-soft shadow-sm border border-helios-line/20"
-                                    : "text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft/50"
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold border transition-all duration-200 group ${isActive
+                                    ? "text-helios-ink bg-helios-surface-soft shadow-sm border-helios-line/20"
+                                    : "text-helios-slate border-transparent hover:text-helios-ink hover:bg-helios-surface-soft/50"
                                     }`}
                             >
                                 <span className="flex items-center gap-3">
