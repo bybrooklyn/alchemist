@@ -568,7 +568,7 @@ async fn run() -> Result<()> {
                 }
 
                 // Now analyze all queued + failed jobs
-                scan_agent.analyze_pending_jobs().await;
+                scan_agent.analyze_pending_jobs_boot().await;
             });
         }
 

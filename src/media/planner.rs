@@ -167,6 +167,7 @@ impl Planner for BasicPlanner {
             analysis.metadata.audio_is_heavy,
             &container,
             audio_mode,
+            &self.encoder_caps,
         );
         let audio_stream_indices = filter_audio_streams(
             &analysis.metadata.audio_streams,
@@ -674,6 +675,7 @@ fn plan_audio(
     audio_is_heavy: bool,
     container: &str,
     audio_mode: Option<AudioMode>,
+    encoder_caps: &crate::media::ffmpeg::EncoderCapabilities,
 ) -> AudioStreamPlan {
     if let Some(audio_mode) = audio_mode {
         return match audio_mode {
@@ -710,10 +712,13 @@ fn plan_audio(
 
     let compatible = audio_copy_supported(container, audio_codec);
     if !compatible || audio_is_heavy {
-        let codec = if container == "mp4" {
-            AudioCodec::Aac
-        } else {
+        // Use Opus for MKV if libopus is available,
+        // otherwise fall back to AAC which is always
+        // present. MP4 always uses AAC.
+        let codec = if container != "mp4" && encoder_caps.has_libopus() {
             AudioCodec::Opus
+        } else {
+            AudioCodec::Aac
         };
         return AudioStreamPlan::Transcode {
             codec,
@@ -1185,11 +1190,26 @@ mod tests {
 
     #[test]
     fn heavy_audio_prefers_transcode() {
-        let plan = plan_audio(Some("flac"), Some(6), true, "mkv", None);
+        let mut encoder_caps = crate::media::ffmpeg::EncoderCapabilities::default();
+        encoder_caps.audio_encoders.insert("libopus".to_string());
+        let plan = plan_audio(Some("flac"), Some(6), true, "mkv", None, &encoder_caps);
         assert!(matches!(
             plan,
             AudioStreamPlan::Transcode {
                 codec: AudioCodec::Opus,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn heavy_audio_falls_back_to_aac_when_libopus_is_unavailable() {
+        let encoder_caps = crate::media::ffmpeg::EncoderCapabilities::default();
+        let plan = plan_audio(Some("flac"), Some(6), true, "mkv", None, &encoder_caps);
+        assert!(matches!(
+            plan,
+            AudioStreamPlan::Transcode {
+                codec: AudioCodec::Aac,
                 ..
             }
         ));

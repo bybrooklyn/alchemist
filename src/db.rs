@@ -1202,6 +1202,10 @@ impl Db {
                  FROM jobs j
                  WHERE j.status IN ('queued', 'failed')
                    AND j.archived = 0
+                   AND NOT EXISTS (
+                       SELECT 1 FROM decisions d
+                       WHERE d.job_id = j.id
+                   )
                  ORDER BY j.priority DESC, j.created_at ASC
                  LIMIT ? OFFSET ?",
             )

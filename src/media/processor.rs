@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub struct Agent {
     db: Arc<Db>,
@@ -175,46 +175,61 @@ impl Agent {
         self.analyzing_boot.load(Ordering::SeqCst)
     }
 
-    /// Runs analysis (ffprobe + planning decision) on all queued
-    /// and failed jobs without executing any encodes. Called on
-    /// startup to populate the queue with decisions before the
-    /// user starts the engine.
-    pub async fn analyze_pending_jobs(&self) {
-        // Serialize all analysis passes to prevent
-        // concurrent runs from racing on job state
+    /// Boot-time analysis pass. Uses blocking acquire so
+    /// it always runs to completion before the engine
+    /// starts processing jobs. Called once from main.rs.
+    pub async fn analyze_pending_jobs_boot(&self) {
         let _permit = match self.analysis_semaphore.acquire().await {
             Ok(p) => p,
             Err(_) => {
-                tracing::warn!(
-                    "Auto-analysis: semaphore closed, \
-                     skipping."
+                tracing::warn!("Auto-analysis: semaphore closed, skipping boot pass.");
+                return;
+            }
+        };
+        self._run_analysis_pass().await;
+    }
+
+    /// Watcher-triggered analysis pass. Uses try_acquire
+    /// so it skips immediately if a pass is already
+    /// running — the running pass will pick up newly
+    /// enqueued jobs on its next loop iteration.
+    /// Called from the file watcher after each enqueue.
+    pub async fn analyze_pending_jobs(&self) {
+        let _permit = match self.analysis_semaphore.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!(
+                    "Auto-analysis: pass already running, \
+                     skipping watcher trigger."
                 );
                 return;
             }
         };
+        self._run_analysis_pass().await;
+    }
 
+    /// Shared analysis loop used by both boot and
+    /// watcher-triggered passes. Caller holds the
+    /// semaphore permit.
+    async fn _run_analysis_pass(&self) {
         self.set_boot_analyzing(true);
-        info!("Auto-analysis: scanning and analyzing pending jobs...");
+        info!("Auto-analysis: starting pass...");
 
-        if let Err(e) = self.db.reset_interrupted_jobs().await {
-            tracing::warn!("Auto-analysis: could not reset stuck jobs: {e}");
-        }
+        // NOTE: reset_interrupted_jobs is intentionally
+        // NOT called here. It is a one-time startup
+        // recovery operation called in main.rs before
+        // this method is ever invoked. Calling it here
+        // would reset jobs that are mid-analysis in a
+        // concurrent pass, causing the infinite loop.
 
         let batch_size: i64 = 100;
         let mut total_analyzed: usize = 0;
 
         loop {
-            // Always fetch from offset 0 — as jobs are
-            // analyzed they leave the eligible set, so the
-            // next fetch naturally returns the next batch
-            // of still-unanalyzed jobs.
             let batch = match self.db.get_jobs_for_analysis_batch(0, batch_size).await {
                 Ok(b) => b,
                 Err(e) => {
-                    error!(
-                        "Auto-analysis: failed to fetch \
-                         batch: {e}"
-                    );
+                    error!("Auto-analysis: fetch failed: {e}");
                     break;
                 }
             };
@@ -224,26 +239,21 @@ impl Agent {
             }
 
             let batch_len = batch.len();
-            info!(
-                "Auto-analysis: analyzing batch of {} \
-                 job(s)...",
-                batch_len
-            );
+            info!("Auto-analysis: analyzing {} job(s)...", batch_len);
 
             for job in batch {
                 let pipeline = self.pipeline();
                 match pipeline.analyze_job_only(job).await {
                     Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            "Auto-analysis: job analysis \
-                             failed: {e:?}"
-                        );
-                    }
+                    Err(e) => tracing::warn!("Auto-analysis: job failed: {e:?}"),
                 }
             }
 
             total_analyzed += batch_len;
+
+            // Yield between batches to avoid CPU spinning
+            // and allow other tokio tasks to run.
+            tokio::task::yield_now().await;
         }
 
         self.set_boot_analyzing(false);
@@ -252,7 +262,7 @@ impl Agent {
             info!("Auto-analysis: no jobs pending analysis.");
         } else {
             info!(
-                "Auto-analysis: complete. Analyzed {} job(s) total.",
+                "Auto-analysis: complete. {} job(s) analyzed.",
                 total_analyzed
             );
         }
