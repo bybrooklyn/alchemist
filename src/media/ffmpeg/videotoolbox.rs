@@ -20,6 +20,8 @@ pub fn append_args(
                 "0".to_string(),
                 "-q:v".to_string(),
                 cq.to_string(),
+                "-allow_sw".to_string(),
+                "1".to_string(),
             ]);
         }
         Encoder::HevcVideotoolbox => {
@@ -32,6 +34,8 @@ pub fn append_args(
                 cq.to_string(),
                 "-tag:v".to_string(),
                 "hvc1".to_string(),
+                "-allow_sw".to_string(),
+                "1".to_string(),
             ]);
         }
         Encoder::H264Videotoolbox => {
@@ -42,6 +46,8 @@ pub fn append_args(
                 "0".to_string(),
                 "-q:v".to_string(),
                 cq.to_string(),
+                "-allow_sw".to_string(),
+                "1".to_string(),
             ]);
         }
         _ => {}

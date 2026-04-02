@@ -234,6 +234,27 @@ function explainFailureSummary(summary: string): string {
         return "Encoding produced an empty output file. This usually means FFmpeg crashed silently. Check the logs below for FFmpeg output.";
     }
 
+    if (
+        normalized.includes("videotoolbox") ||
+        normalized.includes("vt_compression") ||
+        normalized.includes("err=-12902") ||
+        normalized.includes("mediaserverd") ||
+        normalized.includes("no capable devices")
+    ) {
+        return "The VideoToolbox hardware encoder failed. This can happen when the GPU is busy, the file uses an unsupported pixel format, or macOS Media Services are unavailable. Retry the job — if it keeps failing, CPU fallback is available in Settings → Hardware.";
+    }
+
+    if (
+        normalized.includes("encoder fallback") ||
+        normalized.includes("fallback detected")
+    ) {
+        return "The hardware encoder was unavailable and fell back to software encoding, which was not allowed by your settings. Enable CPU fallback in Settings → Hardware, or retry when the GPU is less busy.";
+    }
+
+    if (normalized.includes("ffmpeg failed")) {
+        return "FFmpeg failed during encoding. Check the logs below for the specific error. Common causes: unsupported pixel format, codec not available, or corrupt source file.";
+    }
+
     return summary;
 }
 

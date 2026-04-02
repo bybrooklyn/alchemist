@@ -993,7 +993,9 @@ impl Pipeline {
                         .update_job_state(job.id, crate::db::JobState::Cancelled)
                         .await;
                 } else {
-                    tracing::error!("Job {}: Transcode failed: {}", job.id, e);
+                    let msg = format!("Transcode failed: {e}");
+                    tracing::error!("Job {}: {}", job.id, msg);
+                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await;
