@@ -1048,6 +1048,12 @@ fn plan_filters(
         filters.push(FilterStep::HwUpload);
     }
 
+    if encoder.backend() == crate::media::pipeline::EncoderBackend::Videotoolbox {
+        filters.push(FilterStep::Format {
+            pixel_format: "yuv420p".to_string(),
+        });
+    }
+
     filters
 }
 
