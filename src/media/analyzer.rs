@@ -491,24 +491,21 @@ impl Analyzer {
             return false;
         }
 
-        // Transcode if it's a "heavy" codec or very high bitrate
-        let heavy_codecs = ["truehd", "dts-hd", "flac", "pcm_s24le", "pcm_s16le"];
-        if heavy_codecs.contains(&stream.codec_name.to_lowercase().as_str()) {
-            return true;
-        }
-
-        let bitrate = stream
-            .bit_rate
-            .as_ref()
-            .and_then(|b| b.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        // If bitrate > 640kbps (standard AC3 max), maybe transcode?
-        if bitrate > 640000 {
-            return true;
-        }
-
-        false
+        // Only transcode lossless or exotic heavy codecs.
+        // Standard compressed codecs (eac3, ac3, dts) copy
+        // fine into MKV regardless of bitrate — eac3 Atmos
+        // at 768 kbps is normal and should not be transcoded.
+        let heavy_codecs = [
+            "truehd",
+            "mlp",
+            "dts-hd",
+            "flac",
+            "pcm_s24le",
+            "pcm_s16le",
+            "pcm_s32le",
+            "pcm_f32le",
+        ];
+        heavy_codecs.contains(&stream.codec_name.to_lowercase().as_str())
     }
 }
 
@@ -672,15 +669,15 @@ mod tests {
         };
         assert!(!Analyzer::should_transcode_audio(&standard));
 
-        let high_bitrate_ac3 = Stream {
-            codec_name: "ac3".into(),
+        let atmos_eac3 = Stream {
+            codec_name: "eac3".into(),
             codec_type: "audio".into(),
             pix_fmt: None,
             width: None,
             height: None,
             coded_width: None,
             coded_height: None,
-            bit_rate: Some("1000000".into()),
+            bit_rate: Some("768000".into()),
             bits_per_raw_sample: None,
             channel_layout: None,
             channels: None,
@@ -695,6 +692,31 @@ mod tests {
             color_space: None,
             color_range: None,
         };
-        assert!(Analyzer::should_transcode_audio(&high_bitrate_ac3));
+        assert!(!Analyzer::should_transcode_audio(&atmos_eac3));
+
+        let lossless_pcm = Stream {
+            codec_name: "pcm_s32le".into(),
+            codec_type: "audio".into(),
+            pix_fmt: None,
+            width: None,
+            height: None,
+            coded_width: None,
+            coded_height: None,
+            bit_rate: Some("2000000".into()),
+            bits_per_raw_sample: None,
+            channel_layout: None,
+            channels: None,
+            avg_frame_rate: None,
+            r_frame_rate: None,
+            nb_frames: None,
+            duration: None,
+            disposition: None,
+            tags: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+        };
+        assert!(Analyzer::should_transcode_audio(&lossless_pcm));
     }
 }

@@ -123,6 +123,10 @@ impl EncoderCapabilities {
     pub fn has_libx264(&self) -> bool {
         self.has_video_encoder("libx264")
     }
+
+    pub fn has_libopus(&self) -> bool {
+        self.audio_encoders.contains("libopus")
+    }
 }
 
 pub struct FFmpegCommandBuilder<'a> {
