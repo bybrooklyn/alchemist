@@ -206,8 +206,16 @@ async fn run() -> Result<()> {
                     config_path, e
                 );
                 if is_server_mode {
-                    warn!("Config load failed in server mode. Entering Setup Mode (Web UI).");
-                    (config::Config::default(), true)
+                    warn!(
+                        "Config load failed in server mode. \
+                         Will check for existing users before \
+                         entering Setup Mode."
+                    );
+                    // Do not force setup_mode=true here.
+                    // The user-check below will set it if needed.
+                    // If users exist, we start with defaults but
+                    // do NOT re-enable unauthenticated setup endpoints.
+                    (config::Config::default(), false)
                 } else {
                     (config::Config::default(), false)
                 }
@@ -276,6 +284,66 @@ async fn run() -> Result<()> {
         }
         Ok(_) => {}
         Err(err) => error!("Failed to reset interrupted jobs: {}", err),
+    }
+
+    // Also clean up any temp files left by cancelled jobs
+    // (process was killed before runtime cleanup could run)
+    match db.get_jobs_by_status(db::JobState::Cancelled).await {
+        Ok(cancelled_jobs) => {
+            for job in cancelled_jobs {
+                let temp_path = orphaned_temp_output_path(&job.output_path);
+                if std::fs::metadata(&temp_path).is_ok() {
+                    match std::fs::remove_file(&temp_path) {
+                        Ok(_) => warn!(
+                            "Removed orphaned temp file \
+                             from cancelled job: {}",
+                            temp_path.display()
+                        ),
+                        Err(err) => error!(
+                            "Failed to remove cancelled \
+                             job temp file {}: {}",
+                            temp_path.display(),
+                            err
+                        ),
+                    }
+                }
+                // Also check for subtitle sidecar temps
+                // Pattern: output_path + ".alchemist-part"
+                // and output_path + ".N.alchemist-part"
+                let sidecar_glob = format!("{}*.alchemist-part", job.output_path);
+                // Use glob-style scan: check parent dir
+                // for files matching the pattern
+                if let Some(parent) = std::path::Path::new(&job.output_path).parent() {
+                    if let Ok(entries) = std::fs::read_dir(parent) {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name.ends_with(".alchemist-part") {
+                                let path = entry.path();
+                                match std::fs::remove_file(&path) {
+                                    Ok(_) => warn!(
+                                        "Removed orphaned \
+                                         subtitle sidecar: {}",
+                                        path.display()
+                                    ),
+                                    Err(err) => error!(
+                                        "Failed to remove \
+                                         sidecar {}: {}",
+                                        path.display(),
+                                        err
+                                    ),
+                                }
+                            }
+                        }
+                    }
+                }
+                drop(sidecar_glob);
+            }
+        }
+        Err(err) => error!(
+            "Failed to load cancelled jobs for \
+             cleanup: {}",
+            err
+        ),
     }
 
     let log_retention_days = config.system.log_retention_days.unwrap_or(30);

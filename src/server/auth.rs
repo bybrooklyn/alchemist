@@ -131,11 +131,14 @@ pub(crate) fn build_clear_session_cookie() -> String {
 }
 
 fn secure_cookie_enabled() -> bool {
+    // Default to false — Alchemist serves plain HTTP.
+    // Set ALCHEMIST_COOKIE_SECURE=true only when
+    // running behind a TLS-terminating reverse proxy.
     match std::env::var("ALCHEMIST_COOKIE_SECURE") {
         Ok(value) => matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         ),
-        Err(_) => !cfg!(debug_assertions),
+        Err(_) => false,
     }
 }

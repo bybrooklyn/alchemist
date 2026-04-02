@@ -457,10 +457,18 @@ export default function JobManager() {
                 data.map((serverJob) => {
                     const local = prev.find((j) => j.id === serverJob.id);
                     const terminal = ["completed", "skipped", "failed", "cancelled"];
-                    if (local && terminal.includes(local.status)) {
-                        // Keep the terminal state from SSE to prevent flickering back to a stale poll state.
+                    const serverIsTerminal = terminal.includes(serverJob.status);
+                    if (
+                        local &&
+                        terminal.includes(local.status) &&
+                        serverIsTerminal
+                    ) {
+                        // Both agree this is terminal — keep
+                        // local status to prevent SSE→poll flicker.
                         return { ...serverJob, status: local.status };
                     }
+                    // Server says it changed (e.g. retry queued it)
+                    // — trust the server.
                     return serverJob;
                 })
             );

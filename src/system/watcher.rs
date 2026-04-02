@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -97,6 +98,7 @@ pub struct FileWatcher {
     inner: Arc<std::sync::Mutex<Option<RecommendedWatcher>>>,
     tx: mpsc::UnboundedSender<PendingEvent>,
     agent: Option<Arc<crate::media::processor::Agent>>,
+    analysis_pending: Arc<AtomicBool>,
 }
 
 impl FileWatcher {
@@ -108,8 +110,10 @@ impl FileWatcher {
             inner: Arc::new(std::sync::Mutex::new(None)),
             tx,
             agent,
+            analysis_pending: Arc::new(AtomicBool::new(false)),
         };
         let agent_clone = watcher.agent.clone();
+        let analysis_pending_clone = watcher.analysis_pending.clone();
 
         // Process filesystem events after the target file has stabilized.
         tokio::spawn(async move {
@@ -160,10 +164,22 @@ impl FileWatcher {
                                     Ok(true) => {
                                         info!("Auto-enqueued: {:?}", key.path);
                                         if let Some(agent) = &agent_clone {
-                                            let agent = agent.clone();
-                                            tokio::spawn(async move {
-                                                agent.analyze_pending_jobs().await;
-                                            });
+                                            // Only spawn if no analysis pass is
+                                            // already queued — coalesces bursts
+                                            let already_pending =
+                                                analysis_pending_clone
+                                                    .swap(true, Ordering::SeqCst);
+                                            if !already_pending {
+                                                let agent = agent.clone();
+                                                let flag = analysis_pending_clone.clone();
+                                                tokio::spawn(async move {
+                                                    // Clear the flag before starting so
+                                                    // new arrivals during analysis still
+                                                    // get their own pass
+                                                    flag.store(false, Ordering::SeqCst);
+                                                    agent.analyze_pending_jobs().await;
+                                                });
+                                            }
                                         }
                                     }
                                     Ok(false) => debug!("No queue update needed for {:?}", key.path),

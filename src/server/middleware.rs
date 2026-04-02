@@ -101,7 +101,28 @@ pub(crate) async fn auth_middleware(
             return next.run(req).await;
         }
         if state.setup_required.load(Ordering::Relaxed) && path.starts_with("/api/fs/") {
-            return next.run(req).await;
+            // Only allow filesystem browsing from localhost
+            // during setup — no account exists yet so we
+            // cannot authenticate the caller.
+            let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>();
+            let is_local = connect_info
+                .map(|ci| {
+                    let ip = ci.0.ip();
+                    ip.is_loopback()
+                })
+                .unwrap_or(false);
+
+            if is_local {
+                return next.run(req).await;
+            }
+            // Non-local request during setup -> 403
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(axum::body::Body::from(
+                    "Filesystem browsing is only available \
+                     from localhost during setup",
+                ))
+                .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
         }
         if state.setup_required.load(Ordering::Relaxed) && path == "/api/settings/bundle" {
             return next.run(req).await;

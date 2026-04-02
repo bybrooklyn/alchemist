@@ -201,18 +201,20 @@ impl Agent {
         }
 
         let batch_size: i64 = 100;
-        let mut offset: i64 = 0;
         let mut total_analyzed: usize = 0;
 
         loop {
-            let batch = match self
-                .db
-                .get_jobs_for_analysis_batch(offset, batch_size)
-                .await
-            {
+            // Always fetch from offset 0 — as jobs are
+            // analyzed they leave the eligible set, so the
+            // next fetch naturally returns the next batch
+            // of still-unanalyzed jobs.
+            let batch = match self.db.get_jobs_for_analysis_batch(0, batch_size).await {
                 Ok(b) => b,
                 Err(e) => {
-                    error!("Auto-analysis: failed to fetch batch at offset {offset}: {e}");
+                    error!(
+                        "Auto-analysis: failed to fetch \
+                         batch: {e}"
+                    );
                     break;
                 }
             };
@@ -223,8 +225,9 @@ impl Agent {
 
             let batch_len = batch.len();
             info!(
-                "Auto-analysis: analyzing batch of {} job(s) (offset {})...",
-                batch_len, offset
+                "Auto-analysis: analyzing batch of {} \
+                 job(s)...",
+                batch_len
             );
 
             for job in batch {
@@ -232,18 +235,15 @@ impl Agent {
                 match pipeline.analyze_job_only(job).await {
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::warn!("Auto-analysis: job analysis failed: {e:?}");
+                        tracing::warn!(
+                            "Auto-analysis: job analysis \
+                             failed: {e:?}"
+                        );
                     }
                 }
             }
 
             total_analyzed += batch_len;
-            offset += batch_size;
-
-            // If batch was smaller than batch_size we're done
-            if batch_len < batch_size as usize {
-                break;
-            }
         }
 
         self.set_boot_analyzing(false);
