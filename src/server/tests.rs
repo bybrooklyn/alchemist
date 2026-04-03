@@ -10,6 +10,7 @@ use crate::system::hardware::{HardwareProbeLog, HardwareState};
 use axum::{
     Router,
     body::{Body, to_bytes},
+    extract::ConnectInfo,
     http::{Method, Request, header},
 };
 use chrono::Utc;
@@ -17,6 +18,7 @@ use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -153,6 +155,19 @@ fn auth_json_request(
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+fn localhost_request(method: Method, uri: &str, body: Body) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .unwrap();
+    request.extensions_mut().insert(ConnectInfo(SocketAddr::from((
+        [127, 0, 0, 1],
+        3000,
+    ))));
+    request
 }
 
 async fn body_text(response: axum::response::Response) -> String {
@@ -704,16 +719,11 @@ async fn fs_endpoints_are_available_during_setup()
 
     let browse_response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!(
-                    "/api/fs/browse?path={}",
-                    browse_root.to_string_lossy()
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(localhost_request(
+            Method::GET,
+            &format!("/api/fs/browse?path={}", browse_root.to_string_lossy()),
+            Body::empty(),
+        ))
         .await?;
     assert_eq!(browse_response.status(), StatusCode::OK);
     let browse_body = body_text(browse_response).await;
@@ -721,19 +731,23 @@ async fn fs_endpoints_are_available_during_setup()
 
     let preview_response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/fs/preview")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/fs/preview",
+                Body::from(
                     json!({
                         "directories": [browse_root.to_string_lossy().to_string()]
                     })
                     .to_string(),
-                ))
-                .unwrap(),
-        )
+                ),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                "application/json".parse().unwrap(),
+            );
+            request
+        })
         .await?;
     assert_eq!(preview_response.status(), StatusCode::OK);
     let preview_body = body_text(preview_response).await;

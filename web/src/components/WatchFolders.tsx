@@ -40,6 +40,7 @@ interface SettingsBundleResponse {
     settings: {
         scanner: {
             directories: string[];
+            extra_watch_dirs?: Array<{ path: string; is_recursive: boolean }>;
         };
         [key: string]: unknown;
     };
@@ -82,10 +83,12 @@ export default function WatchFolders() {
         [profiles]
     );
 
+    const fetchBundle = async () => apiJson<SettingsBundleResponse>("/api/settings/bundle");
+
     const fetchDirs = async () => {
         // Fetch both canonical library dirs and extra watch dirs, merge them for the UI
         const [bundle, watchDirs] = await Promise.all([
-            apiJson<SettingsBundleResponse>("/api/settings/bundle"),
+            fetchBundle(),
             apiJson<WatchDir[]>("/api/settings/watch-dirs")
         ]);
 
@@ -110,12 +113,30 @@ export default function WatchFolders() {
                 const existing = merged.find(m => m.path === wd.path);
                 if (existing) {
                     existing.id = wd.id;
+                    existing.is_recursive = wd.is_recursive;
                     existing.profile_id = wd.profile_id;
                 }
             }
         });
 
         setDirs(merged);
+    };
+
+    const saveLibraryDirs = async (
+        bundle: SettingsBundleResponse,
+        nextDirectories: string[]
+    ) => {
+        await apiAction("/api/settings/bundle", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ...bundle.settings,
+                scanner: {
+                    ...bundle.settings.scanner,
+                    directories: nextDirectories,
+                },
+            }),
+        });
     };
 
     const fetchProfiles = async () => {
@@ -169,26 +190,26 @@ export default function WatchFolders() {
         }
 
         try {
-            const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-            const currentDirs = bundle.settings.scanner.directories;
-            
-            if (currentDirs.includes(normalized)) {
-                 // Even if it's in config, sync it to ensure it's in DB for profiles
-                 await apiAction("/api/settings/folders", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ 
-                        dirs: currentDirs.map(d => ({ path: d, is_recursive: true }))
-                    }),
-                });
-            } else {
-                await apiAction("/api/settings/folders", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ 
-                        dirs: [...currentDirs, normalized].map(d => ({ path: d, is_recursive: true }))
-                    }),
-                });
+            const createdDir = await apiJson<WatchDir>("/api/settings/watch-dirs", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    path: normalized,
+                    is_recursive: true,
+                }),
+            });
+
+            try {
+                const bundle = await fetchBundle();
+                const currentDirs = bundle.settings.scanner.directories;
+                if (!currentDirs.includes(createdDir.path)) {
+                    await saveLibraryDirs(bundle, [...currentDirs, createdDir.path]);
+                }
+            } catch (e) {
+                await apiAction(`/api/settings/watch-dirs/${createdDir.id}`, {
+                    method: "DELETE",
+                }).catch(() => undefined);
+                throw e;
             }
 
             setDirInput("");
@@ -207,16 +228,33 @@ export default function WatchFolders() {
         if (!dir) return;
 
         try {
-            const bundle = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
-            const filteredDirs = bundle.settings.scanner.directories.filter(candidate => candidate !== dirPath);
-            
-            await apiAction("/api/settings/folders", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    dirs: filteredDirs.map(d => ({ path: d, is_recursive: true }))
-                }),
-            });
+            if (dir.id > 0) {
+                await apiAction(`/api/settings/watch-dirs/${dir.id}`, {
+                    method: "DELETE",
+                });
+            }
+
+            try {
+                const bundle = await fetchBundle();
+                const filteredDirs = bundle.settings.scanner.directories.filter(
+                    (candidate) => candidate !== dirPath
+                );
+                if (filteredDirs.length !== bundle.settings.scanner.directories.length) {
+                    await saveLibraryDirs(bundle, filteredDirs);
+                }
+            } catch (e) {
+                if (dir.id > 0) {
+                    await apiAction("/api/settings/watch-dirs", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            path: dir.path,
+                            is_recursive: dir.is_recursive,
+                        }),
+                    }).catch(() => undefined);
+                }
+                throw e;
+            }
 
             setError(null);
             await fetchDirs();
