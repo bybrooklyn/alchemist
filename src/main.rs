@@ -704,7 +704,7 @@ async fn run() -> Result<()> {
             "Boot sequence completed in {} ms",
             boot_start.elapsed().as_millis()
         );
-        alchemist::server::run_server(alchemist::server::RunServerArgs {
+        let server_result = alchemist::server::run_server(alchemist::server::RunServerArgs {
             db,
             config,
             agent,
@@ -721,7 +721,23 @@ async fn run() -> Result<()> {
             file_watcher,
             library_scanner,
         })
-        .await?;
+        .await;
+
+        // Background tasks (run_loop, scheduler, watcher,
+        // maintenance) have no shutdown signal and run
+        // forever. After run_server returns, graceful
+        // shutdown is complete — all jobs are drained
+        // and FFmpeg processes are cancelled. Exit cleanly.
+        match server_result {
+            Ok(()) => {
+                info!("Server shutdown complete. Exiting.");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                error!("Server exited with error: {e}");
+                std::process::exit(1);
+            }
+        }
     } else {
         // CLI Mode
         if setup_mode {
