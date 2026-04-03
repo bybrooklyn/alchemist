@@ -163,10 +163,9 @@ fn localhost_request(method: Method, uri: &str, body: Body) -> Request<Body> {
         .uri(uri)
         .body(body)
         .unwrap();
-    request.extensions_mut().insert(ConnectInfo(SocketAddr::from((
-        [127, 0, 0, 1],
-        3000,
-    ))));
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3000))));
     request
 }
 
@@ -742,10 +741,9 @@ async fn fs_endpoints_are_available_during_setup()
                     .to_string(),
                 ),
             );
-            request.headers_mut().insert(
-                header::CONTENT_TYPE,
-                "application/json".parse().unwrap(),
-            );
+            request
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
             request
         })
         .await?;
