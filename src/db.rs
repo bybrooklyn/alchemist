@@ -2728,4 +2728,77 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn reset_interrupted_jobs_requeues_only_interrupted_states()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_reset_interrupted_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let jobs = [
+            ("queued.mkv", "queued-out.mkv", JobState::Queued),
+            ("analyzing.mkv", "analyzing-out.mkv", JobState::Analyzing),
+            ("encoding.mkv", "encoding-out.mkv", JobState::Encoding),
+            ("remuxing.mkv", "remuxing-out.mkv", JobState::Remuxing),
+            ("cancelled.mkv", "cancelled-out.mkv", JobState::Cancelled),
+            ("completed.mkv", "completed-out.mkv", JobState::Completed),
+        ];
+
+        for (input, output, status) in jobs {
+            let _ = db
+                .enqueue_job(Path::new(input), Path::new(output), SystemTime::UNIX_EPOCH)
+                .await?;
+            let job = db
+                .get_job_by_input_path(input)
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing seeded job"))?;
+            db.update_job_status(job.id, status).await?;
+        }
+
+        let reset = db.reset_interrupted_jobs().await?;
+        assert_eq!(reset, 3);
+
+        assert_eq!(
+            db.get_job_by_input_path("analyzing.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing analyzing job"))?
+                .status,
+            JobState::Queued
+        );
+        assert_eq!(
+            db.get_job_by_input_path("encoding.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing encoding job"))?
+                .status,
+            JobState::Queued
+        );
+        assert_eq!(
+            db.get_job_by_input_path("remuxing.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing remuxing job"))?
+                .status,
+            JobState::Queued
+        );
+        assert_eq!(
+            db.get_job_by_input_path("cancelled.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing cancelled job"))?
+                .status,
+            JobState::Cancelled
+        );
+        assert_eq!(
+            db.get_job_by_input_path("completed.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing completed job"))?
+                .status,
+            JobState::Completed
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
 }

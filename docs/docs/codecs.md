@@ -24,7 +24,7 @@ Hardware support:
 
 - NVIDIA: RTX 30/40 class NVENC
 - Intel: 12th gen+ for AV1 encode
-- AMD: RDNA 2+ depending on driver/FFmpeg stack
+- AMD: RDNA 2+ depending on driver/FFmpeg stack; not release-validated for `0.3.0-rc.1`
 - Apple: M3+
 - CPU: always available through SVT-AV1
 
@@ -61,7 +61,7 @@ Hardware support:
 |--------|-----|------|-------|
 | NVIDIA | RTX 30/40 | Maxwell+ | Yes |
 | Intel | 12th gen+ | 6th gen+ | Yes |
-| AMD | RDNA 2+ | Polaris+ | Yes |
+| AMD | RDNA 2+ on compatible driver/FFmpeg stacks | Polaris+ | Yes |
 | Apple | M3+ | M1+/T2 | Yes |
 | CPU | Yes | Yes | Yes |
 

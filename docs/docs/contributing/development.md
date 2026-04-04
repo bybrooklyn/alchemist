@@ -18,12 +18,16 @@ frontend tooling.
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
+just install        # macOS / Linux
+just install-w      # Windows
 just dev   # build frontend assets, then start the backend
 ```
 
 ## Common tasks
 
 ```bash
+just install        # macOS / Linux bootstrap
+just install-w      # Windows bootstrap
 just check          # fmt + clippy + typecheck + build (mirrors CI)
 just test           # cargo test
 just test-e2e       # Playwright reliability suite

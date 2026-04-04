@@ -37,7 +37,7 @@ FFmpeg expert.
 |--------|-----|------|-------|-------|
 | NVIDIA NVENC | RTX 30/40 | Maxwell+ | All | Best for speed |
 | Intel QSV | 12th gen+ | 6th gen+ | All | Best for power efficiency |
-| AMD VAAPI/AMF | RDNA 2+ | Polaris+ | All | Linux VAAPI / Windows AMF |
+| AMD VAAPI/AMF | RDNA 2+ on compatible driver/FFmpeg stacks | Polaris+ | All | Linux VAAPI / Windows AMF; HEVC/H.264 are the release-validated AMD paths for `0.3.0-rc.1` |
 | Apple VideoToolbox | M3+ | M1+ / T2 | All | Binary install recommended |
 | CPU (SVT-AV1/x265/x264) | All | All | All | Always available |
 

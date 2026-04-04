@@ -4,12 +4,17 @@
 # Install: cargo install just  |  brew install just  |  pacman -S just
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # ─────────────────────────────────────────
 # Variables
 # ─────────────────────────────────────────
 
-VERSION := `cat VERSION | tr -d '[:space:]'`
+VERSION := if os_family() == "windows" {
+  `(Get-Content VERSION -Raw).Trim()`
+} else {
+  `tr -d '[:space:]' < VERSION`
+}
 
 # ─────────────────────────────────────────
 # Default — list all recipes
@@ -22,6 +27,31 @@ default:
 # ─────────────────────────────────────────
 # DEVELOPMENT
 # ─────────────────────────────────────────
+
+# Install repo dependencies needed for local development
+install:
+    @just {{ if os_family() == "windows" { "install-w" } else { "install-u" } }}
+
+[private]
+install-u:
+    @command -v cargo >/dev/null || { echo "error: cargo is required"; exit 1; }
+    @command -v bun >/dev/null || { echo "error: bun is required"; exit 1; }
+    @echo "── Rust dependencies ──"
+    cargo fetch --locked
+    @echo "── Web dependencies ──"
+    cd web && bun install --frozen-lockfile
+    @echo "── Docs dependencies ──"
+    cd docs && bun install --frozen-lockfile
+    @echo "── E2E dependencies ──"
+    cd web-e2e && bun install --frozen-lockfile && bunx playwright install chromium
+    @if ! command -v ffmpeg >/dev/null; then \
+        echo "warning: ffmpeg is not installed; media integration tests will not run"; \
+    fi
+    @echo "Repo ready for development."
+    @echo "Next: just dev"
+
+install-w:
+    @powershell.exe -NoLogo -ExecutionPolicy Bypass -File .\\scripts\\install_dev_windows.ps1
 
 # Build frontend assets, then start the backend server
 dev: web-build
@@ -185,6 +215,40 @@ bump NEW_VERSION:
     @echo "Bumping to {{NEW_VERSION}}..."
     bash scripts/bump_version.sh {{NEW_VERSION}}
 
+[private]
+release-verify:
+    @echo "── Rust format ──"
+    cargo fmt --all -- --check
+    @echo "── Rust clippy ──"
+    cargo clippy --locked --all-targets --all-features -- -D warnings
+    @echo "── Rust check ──"
+    cargo check --locked --all-targets --all-features
+    @echo "── Rust tests ──"
+    cargo test --locked --all-targets -- --test-threads=4
+    @echo "── Actionlint ──"
+    actionlint .github/workflows/*.yml
+    @echo "── Web verify ──"
+    cd web && bun install --frozen-lockfile && bun run verify && bun audit
+    @echo "── Docs verify ──"
+    cd docs && bun install --frozen-lockfile && bun run build && bun audit
+    @echo "── E2E backend build ──"
+    rm -rf target/debug/incremental
+    CARGO_INCREMENTAL=0 cargo build --locked --no-default-features
+    @echo "── E2E reliability ──"
+    @E2E_PORT=""; \
+        for port in $(seq 4173 4273); do \
+            if ! lsof -nPiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then \
+                E2E_PORT="$port"; \
+                break; \
+            fi; \
+        done; \
+        if [ -z "$E2E_PORT" ]; then \
+            echo "error: no free web-e2e port found in 4173-4273" >&2; \
+            exit 1; \
+        fi; \
+        echo "Using web-e2e port ${E2E_PORT}"; \
+        cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT="${E2E_PORT}" bun run test:reliability
+
 # Checkpoint dirty local work with confirmation, then bump, validate, commit, tag, and push
 # (blocks behind/diverged remote state; e.g. just update 0.3.0-rc.1 or just update v0.3.0-rc.1)
 update NEW_VERSION:
@@ -255,32 +319,7 @@ update NEW_VERSION:
     fi; \
     echo "── Bump version to ${NEW_VERSION} ──"; \
     bash scripts/bump_version.sh "${NEW_VERSION}"; \
-    echo "── Rust format ──"; \
-    cargo fmt --all -- --check; \
-    echo "── Rust clippy ──"; \
-    cargo clippy --locked --all-targets --all-features -- -D warnings; \
-    echo "── Rust check ──"; \
-    cargo check --locked --all-targets --all-features; \
-    echo "── Rust tests ──"; \
-    cargo test --locked --all-targets -- --test-threads=4; \
-    echo "── Actionlint ──"; \
-    actionlint .github/workflows/*.yml; \
-    echo "── Web verify ──"; \
-    (cd web && bun install --frozen-lockfile && bun run typecheck && bun run build); \
-    echo "── E2E reliability ──"; \
-    E2E_PORT=""; \
-    for port in $(seq 4173 4273); do \
-        if python3 -c "import socket, sys; s = socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1', $port)) != 0 else 1)" >/dev/null 2>&1; then \
-            E2E_PORT="$port"; \
-            break; \
-        fi; \
-    done; \
-    if [ -z "$E2E_PORT" ]; then \
-        echo "error: no free web-e2e port found in 4173-4273" >&2; \
-        exit 1; \
-    fi; \
-    echo "Using web-e2e port ${E2E_PORT}"; \
-    (cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT="${E2E_PORT}" bun run test:reliability); \
+    just release-verify; \
     PACKAGE_FILES=(); \
     while IFS= read -r line; do [ -n "$line" ] && PACKAGE_FILES+=("$line"); done < <(git ls-files -- 'package.json' '*/package.json'); \
     CHANGED_TRACKED=(); \
@@ -291,14 +330,14 @@ update NEW_VERSION:
     fi; \
     for file in "${CHANGED_TRACKED[@]}"; do \
         case "${file}" in \
-            VERSION|Cargo.toml|Cargo.lock|package.json|*/package.json) ;; \
+            VERSION|Cargo.toml|Cargo.lock|CHANGELOG.md|docs/docs/changelog.md|package.json|*/package.json) ;; \
             *) \
                 echo "error: unexpected tracked change after validation: ${file}" >&2; \
                 exit 1; \
                 ;; \
         esac; \
     done; \
-    git add -- VERSION Cargo.toml Cargo.lock; \
+    git add -- VERSION Cargo.toml Cargo.lock CHANGELOG.md docs/docs/changelog.md; \
     if [ "${#PACKAGE_FILES[@]}" -gt 0 ]; then \
         git add -- "${PACKAGE_FILES[@]}"; \
     fi; \
@@ -325,20 +364,19 @@ changelog:
 
 # Print a pre-filled changelog entry header for pasting
 changelog-entry:
-    @printf '\n## [v{{VERSION}}] - %s\n\n### Added\n- \n\n### Changed\n- \n\n### Fixed\n- \n\n' \
+    @printf '\n## [{{VERSION}}] - %s\n\n### Added\n- \n\n### Changed\n- \n\n### Fixed\n- \n\n' \
         "$(date +%Y-%m-%d)"
 
 # Run all checks and tests, then print release steps
 release-check:
     @echo "── Release checklist for v{{VERSION}} ──"
-    @just check
-    @just test
+    @just release-verify
     @echo ""
     @echo "✓ All checks passed. Next steps:"
-    @echo "  1. Update CHANGELOG.md"
-    @echo "  2. git commit -am 'chore: release v{{VERSION}}'"
-    @echo "  3. git tag -a v{{VERSION}} -m 'v{{VERSION}}'"
-    @echo "  4. git push && git push --tags"
+    @echo "  1. Update CHANGELOG.md and docs/docs/changelog.md"
+    @echo "  2. Complete the manual checklist in RELEASING.md"
+    @echo "  3. Commit and merge the release-prep changes"
+    @echo "  4. Tag v{{VERSION}} on the exact merged commit when ready"
 
 # ─────────────────────────────────────────
 # UTILITIES

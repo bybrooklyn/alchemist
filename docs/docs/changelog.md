@@ -3,7 +3,7 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
-## [0.3.0] - 2026-03-28
+## [0.3.0-rc.1] - 2026-04-04
 
 ### Rust & Backend
 - Upgraded from Rust 2021 to 2024, set the MSRV to 1.85, upgraded `sqlx` to `0.8` with `runtime-tokio-rustls`, and upgraded `rand` to `0.9`.

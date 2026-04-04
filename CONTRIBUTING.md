@@ -32,6 +32,21 @@ By opening a pull request, submitting a patch, or otherwise contributing, you ar
 - Large or breaking changes should be discussed in an issue first.
 - All contributions must build and run cleanly.
 
+## Local Setup
+
+For local development bootstrap, use:
+
+```bash
+just install        # macOS / Linux
+just install-w      # Windows
+just dev
+```
+
+Additional setup and workflow docs live in:
+
+- `docs/docs/contributing/development.md`
+- `RELEASING.md`
+
 Low-effort PRs will be closed.
 
 ## Code of Conduct

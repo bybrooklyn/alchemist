@@ -112,33 +112,79 @@ pub(crate) async fn logout_handler(
 }
 
 pub(crate) fn build_session_cookie(token: &str) -> String {
-    let mut cookie = format!(
+    let cookie = format!(
         "alchemist_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
         token
     );
-    if secure_cookie_enabled() {
+    apply_secure_cookie_flag(cookie, secure_cookie_enabled())
+}
+
+pub(crate) fn build_clear_session_cookie() -> String {
+    let cookie = "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string();
+    apply_secure_cookie_flag(cookie, secure_cookie_enabled())
+}
+
+fn apply_secure_cookie_flag(mut cookie: String, secure: bool) -> String {
+    if secure {
         cookie.push_str("; Secure");
     }
     cookie
 }
 
-pub(crate) fn build_clear_session_cookie() -> String {
-    let mut cookie = "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string();
-    if secure_cookie_enabled() {
-        cookie.push_str("; Secure");
-    }
-    cookie
+fn secure_cookie_enabled_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn secure_cookie_enabled() -> bool {
     // Default to false — Alchemist serves plain HTTP.
     // Set ALCHEMIST_COOKIE_SECURE=true only when
     // running behind a TLS-terminating reverse proxy.
-    match std::env::var("ALCHEMIST_COOKIE_SECURE") {
-        Ok(value) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => false,
+    secure_cookie_enabled_from_value(std::env::var("ALCHEMIST_COOKIE_SECURE").ok().as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_cookies_are_not_secure_by_default() {
+        let session_cookie = apply_secure_cookie_flag(
+            "alchemist_session=token; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000".to_string(),
+            secure_cookie_enabled_from_value(None),
+        );
+        let clear_cookie = apply_secure_cookie_flag(
+            "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string(),
+            secure_cookie_enabled_from_value(None),
+        );
+
+        assert!(!session_cookie.contains("; Secure"));
+        assert!(!clear_cookie.contains("; Secure"));
+    }
+
+    #[test]
+    fn session_cookies_include_secure_when_enabled() {
+        let session_cookie = apply_secure_cookie_flag(
+            "alchemist_session=token; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000".to_string(),
+            secure_cookie_enabled_from_value(Some("true")),
+        );
+        let clear_cookie = apply_secure_cookie_flag(
+            "alchemist_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".to_string(),
+            secure_cookie_enabled_from_value(Some("true")),
+        );
+
+        assert_eq!(
+            session_cookie,
+            apply_secure_cookie_flag(
+                "alchemist_session=token; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000"
+                    .to_string(),
+                secure_cookie_enabled_from_value(Some("true")),
+            )
+        );
+        assert!(clear_cookie.contains("; Secure"));
     }
 }

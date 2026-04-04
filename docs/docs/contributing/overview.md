@@ -5,6 +5,12 @@ description: How to report bugs, suggest features, and contribute to Alchemist.
 
 Alchemist is GPLv3 open source. Contributions are welcome.
 
+## Start here
+
+- [Development Setup](/contributing/development) for local bootstrap and common tasks
+- [`CONTRIBUTING.md`](https://github.com/bybrooklyn/alchemist/blob/main/CONTRIBUTING.md) for licensing and contribution terms
+- [`RELEASING.md`](https://github.com/bybrooklyn/alchemist/blob/main/RELEASING.md) for release and RC checklists
+
 ## Reporting bugs
 
 1. Go to [GitHub Issues](https://github.com/bybrooklyn/alchemist/issues)
