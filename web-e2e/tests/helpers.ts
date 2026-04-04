@@ -111,6 +111,7 @@ export interface JobFixture {
   progress: number;
   created_at: string;
   updated_at: string;
+  attempt_count?: number;
   vmaf_score?: number;
   decision_reason?: string;
 }

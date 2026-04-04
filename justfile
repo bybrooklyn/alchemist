@@ -54,8 +54,15 @@ install-w:
     @powershell.exe -NoLogo -ExecutionPolicy Bypass -File .\\scripts\\install_dev_windows.ps1
 
 # Build frontend assets, then start the backend server
-dev: web-build
+dev:
+    @just {{ if os_family() == "windows" { "dev-w" } else { "dev-u" } }}
+
+[private]
+dev-u: web-build
     @just run
+
+dev-w:
+    @powershell.exe -NoLogo -ExecutionPolicy Bypass -File .\\scripts\\dev_windows.ps1
 
 # Start the backend only
 run:
@@ -95,6 +102,10 @@ rust-build:
 
 # Run all checks (fmt + clippy + typecheck + frontend build)
 check:
+    @just {{ if os_family() == "windows" { "check-w" } else { "check-u" } }}
+
+[private]
+check-u:
     @echo "── Rust format ──"
     cargo fmt --all -- --check
     @echo "── Rust clippy ──"
@@ -104,6 +115,9 @@ check:
     @echo "── Frontend typecheck ──"
     cd web && bun install --frozen-lockfile && bun run typecheck && echo "── Frontend build ──" && bun run build
     @echo "All checks passed ✓"
+
+check-w:
+    @powershell.exe -NoLogo -ExecutionPolicy Bypass -File .\\scripts\\check_windows.ps1
 
 # Rust checks only (faster)
 check-rust:

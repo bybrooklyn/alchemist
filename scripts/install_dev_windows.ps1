@@ -1,59 +1,13 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-function Require-Tool {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Hint
-    )
-
-    if (Get-Command $Name -ErrorAction SilentlyContinue) {
-        return
-    }
-
-    Write-Error "Required tool '$Name' was not found on PATH. $Hint"
-}
-
-function Warn-If-Missing {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Hint
-    )
-
-    if (Get-Command $Name -ErrorAction SilentlyContinue) {
-        return
-    }
-
-    Write-Warning "Optional tool '$Name' was not found on PATH. $Hint"
-}
-
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "windows_common.ps1")
 
 Require-Tool cargo "Install Rust via rustup or `winget install --id Rustlang.Rustup -e`."
 Require-Tool bun "Install Bun via `winget install --id Oven-sh.Bun -e` or from https://bun.sh/docs/installation."
 
-Write-Host "── Rust dependencies ──"
-& cargo fetch --locked
-
-Write-Host "── Web dependencies ──"
-Push-Location (Join-Path $RepoRoot "web")
-& bun install --frozen-lockfile
-Pop-Location
-
-Write-Host "── Docs dependencies ──"
-Push-Location (Join-Path $RepoRoot "docs")
-& bun install --frozen-lockfile
-Pop-Location
-
-Write-Host "── E2E dependencies ──"
-Push-Location (Join-Path $RepoRoot "web-e2e")
-& bun install --frozen-lockfile
-& bunx playwright install chromium
-Pop-Location
+Invoke-Native -Command @("cargo", "fetch", "--locked") -Label "Rust dependencies"
+Invoke-Native -Command @("bun", "install", "--frozen-lockfile") -WorkingDirectory (Join-Path $RepoRoot "web") -Label "Web dependencies"
+Invoke-Native -Command @("bun", "install", "--frozen-lockfile") -WorkingDirectory (Join-Path $RepoRoot "docs") -Label "Docs dependencies"
+Invoke-Native -Command @("bun", "install", "--frozen-lockfile") -WorkingDirectory (Join-Path $RepoRoot "web-e2e") -Label "E2E dependencies"
+Invoke-Native -Command @("bunx", "playwright", "install", "chromium") -WorkingDirectory (Join-Path $RepoRoot "web-e2e")
 
 Warn-If-Missing ffmpeg "Install FFmpeg with `winget install Gyan.FFmpeg`."
 

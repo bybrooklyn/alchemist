@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0-rc.2] - 2026-04-04
+
+### Release Engineering
+- Added Windows-specific contributor scripts for the core `just install-w`, `just dev`, and `just check` path, while keeping the broader Unix-oriented utility and release recipes unchanged for now.
+- Updated the release checklist and contributor docs to call out the supported Windows RC.2 workflow and the manual Windows verification follow-up required before promotion.
+
+### Regression Coverage
+- Added a startup regression test for the RC.1 security fix: an invalid config on a configured instance with existing users no longer re-enables unauthenticated setup-only access.
+- Expanded Playwright stabilization coverage for retry countdown rendering, Library & Intake manual scan success/failure surfacing, and completed job detail rendering from persisted encode stats.
+
 ## [0.3.0-rc.1] - 2026-04-04
 
 ### Security

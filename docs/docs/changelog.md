@@ -3,6 +3,16 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
+## [0.3.0-rc.2] - 2026-04-04
+
+### Release Engineering
+- Added Windows-specific contributor scripts for the core `just install-w`, `just dev`, and `just check` path, while leaving broader utility and release recipes Unix-first for now.
+- Updated the release checklist and contributor docs so RC.2 clearly documents the supported Windows workflow and the manual Windows verification follow-up required before stable.
+
+### Regression Coverage
+- Added a startup regression test for the RC.1 security fix so a config parse failure on a configured instance with existing users does not reopen setup-only access.
+- Expanded Playwright stabilization coverage for retry countdown rendering, Library & Intake manual scan success/failure surfacing, and completed job detail rendering from persisted encode stats.
+
 ## [0.3.0-rc.1] - 2026-04-04
 
 ### Rust & Backend
