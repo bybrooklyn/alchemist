@@ -43,6 +43,7 @@ RUN apt-get update && \
     va-driver-all \
     libsqlite3-0 \
     ca-certificates \
+    gosu \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
     apt-get install -y --no-install-recommends \
     intel-media-va-driver-non-free \
@@ -75,10 +76,16 @@ RUN set -e; \
 COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 
 # Set environment variables
-ENV LIBVA_DRIVER_NAME=iHD
+# VA-API driver auto-detection: do NOT hardcode LIBVA_DRIVER_NAME here.
+# Users can override via: docker run -e LIBVA_DRIVER_NAME=iHD ...
+# Common values: iHD (Intel ≥ Broadwell), i965 (older Intel), radeonsi (AMD)
 ENV RUST_LOG=info
 ENV ALCHEMIST_CONFIG_PATH=/app/config/config.toml
 ENV ALCHEMIST_DB_PATH=/app/data/alchemist.db
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 3000
 
-ENTRYPOINT ["alchemist"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["alchemist"]

@@ -450,44 +450,24 @@ impl Agent {
     }
 
     /// Gracefully shutdown the agent.
-    /// Drains active jobs and waits up to `timeout` for them to complete.
-    /// After timeout, forcefully cancels remaining jobs.
-    pub async fn graceful_shutdown(&self, timeout: std::time::Duration) {
-        info!("Initiating graceful shutdown...");
+    /// Cancels active jobs immediately and returns quickly.
+    pub async fn graceful_shutdown(&self) {
+        info!("Initiating rapid shutdown...");
 
         // Stop accepting new jobs
         self.pause();
-        self.drain();
 
-        // Wait for active jobs to complete (with timeout)
-        let start = std::time::Instant::now();
-        let check_interval = std::time::Duration::from_millis(500);
-
-        while start.elapsed() < timeout {
-            let active = self.orchestrator.active_job_count();
-            if active == 0 {
-                info!("All jobs completed gracefully.");
-                return;
-            }
-            info!(
-                "Waiting for {} active job(s) to complete... ({:.0}s remaining)",
-                active,
-                (timeout - start.elapsed()).as_secs_f64()
-            );
-            tokio::time::sleep(check_interval).await;
-        }
-
-        // Timeout reached - force cancel remaining jobs
+        // Immediately force cancel remaining jobs
         let cancelled = self.orchestrator.cancel_all_jobs();
         if cancelled > 0 {
             tracing::warn!(
-                "Shutdown timeout reached. Forcefully cancelled {} job(s).",
+                "Fast shutdown requested. Forcefully cancelled {} job(s).",
                 cancelled
             );
-            // Give FFmpeg processes a moment to terminate
+            // Give FFmpeg processes a moment to terminate and Tokio to flush DB statuses
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
-        info!("Graceful shutdown complete.");
+        info!("Rapid shutdown complete.");
     }
 }

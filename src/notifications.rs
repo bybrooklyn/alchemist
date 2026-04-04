@@ -1,20 +1,23 @@
+use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, NotificationTarget};
 use reqwest::{Client, Url, redirect::Policy};
 use serde_json::json;
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::lookup_host;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 use tracing::{error, warn};
 
 #[derive(Clone)]
 pub struct NotificationManager {
     db: Db,
+    config: Arc<RwLock<Config>>,
 }
 
 impl NotificationManager {
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    pub fn new(db: Db, config: Arc<RwLock<Config>>) -> Self {
+        Self { db, config }
     }
 
     pub fn start_listener(&self, mut rx: broadcast::Receiver<AlchemistEvent>) {
@@ -111,17 +114,28 @@ impl NotificationManager {
             .ok_or("notification endpoint host is missing")?;
         let port = url.port_or_known_default().ok_or("invalid port")?;
 
-        if host.eq_ignore_ascii_case("localhost") {
+        let allow_local = self.config.read().await.notifications.allow_local_notifications;
+
+        if !allow_local && host.eq_ignore_ascii_case("localhost") {
             return Err("localhost is not allowed as a notification endpoint".into());
         }
 
         let addr = format!("{}:{}", host, port);
         let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
-        let target_ip = ips
-            .into_iter()
-            .map(|a| a.ip())
-            .find(|ip| !is_private_ip(*ip))
-            .ok_or("no public IP address found for notification endpoint")?;
+
+        let target_ip = if allow_local {
+            // When local notifications are allowed, accept any resolved IP
+            ips.into_iter()
+                .map(|a| a.ip())
+                .next()
+                .ok_or("no IP address found for notification endpoint")?
+        } else {
+            // When local notifications are blocked, only use public IPs
+            ips.into_iter()
+                .map(|a| a.ip())
+                .find(|ip| !is_private_ip(*ip))
+                .ok_or("no public IP address found for notification endpoint")?
+        };
 
         // Pin the request to the validated IP to prevent DNS rebinding
         let client = Client::builder()
@@ -324,7 +338,10 @@ mod tests {
         db_path.push(format!("alchemist_notifications_test_{}.db", token));
 
         let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
-        let manager = NotificationManager::new(db);
+        let mut test_config = crate::config::Config::default();
+        test_config.notifications.allow_local_notifications = true;
+        let config = Arc::new(RwLock::new(test_config));
+        let manager = NotificationManager::new(db, config);
 
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,

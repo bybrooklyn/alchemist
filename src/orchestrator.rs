@@ -294,32 +294,46 @@ impl Transcoder {
 
         loop {
             tokio::select! {
-                line_res = reader.next_line() => {
-                    match line_res {
-                        Ok(Some(line)) => {
-                            let line = if line.len() > 4096 {
-                                format!("{}...[truncated]", &line[..4096])
-                            } else {
-                                line
-                            };
-                            last_lines.push_back(line.clone());
-                            if last_lines.len() > 20 {
-                                last_lines.pop_front();
-                            }
+                line_res_timeout = tokio::time::timeout(tokio::time::Duration::from_secs(600), reader.next_line()) => {
+                    match line_res_timeout {
+                        Ok(line_res) => match line_res {
+                            Ok(Some(line)) => {
+                                let line = if line.len() > 4096 {
+                                    format!("{}...[truncated]", &line[..4096])
+                                } else {
+                                    line
+                                };
+                                last_lines.push_back(line.clone());
+                                if last_lines.len() > 20 {
+                                    last_lines.pop_front();
+                                }
 
-                            if let Some(observer) = observer.as_ref() {
-                                observer.on_log(line.clone()).await;
+                                if let Some(observer) = observer.as_ref() {
+                                    observer.on_log(line.clone()).await;
 
-                                if let Some(total_duration) = total_duration {
-                                    if let Some(progress) = progress_state.ingest_line(&line) {
-                                        observer.on_progress(progress, total_duration).await;
+                                    if let Some(total_duration) = total_duration {
+                                        if let Some(progress) = progress_state.ingest_line(&line) {
+                                            observer.on_progress(progress, total_duration).await;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            error!("Error reading FFmpeg stderr: {}", e);
+                            Ok(None) => break,
+                            Err(e) => {
+                                error!("Error reading FFmpeg stderr: {}", e);
+                                break;
+                            }
+                        },
+                        Err(_) => {
+                            error!("Job {:?} stalled: No output from FFmpeg for 10 minutes. Killing process...", job_id);
+                            let _ = child.kill().await;
+                            killed = true;
+                            if let Some(id) = job_id {
+                                match self.cancel_channels.lock() {
+                                    Ok(mut channels) => { channels.remove(&id); }
+                                    Err(e) => { e.into_inner().remove(&id); }
+                                }
+                            }
                             break;
                         }
                     }

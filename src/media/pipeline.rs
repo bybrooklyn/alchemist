@@ -1263,8 +1263,27 @@ impl Pipeline {
 
         if let Ok(file_settings) = self.db.get_file_settings().await {
             if file_settings.delete_source {
-                if let Err(e) = std::fs::remove_file(input_path) {
-                    tracing::warn!("Failed to delete source {:?}: {}", input_path, e);
+                // Safety: verify the promoted output is intact before destroying the source.
+                // This prevents data loss if the filesystem silently corrupted the output
+                // during rename (e.g., stale NFS/SMB mount, full disk).
+                match std::fs::metadata(context.output_path) {
+                    Ok(m) if m.len() > 0 => {
+                        if let Err(e) = std::fs::remove_file(input_path) {
+                            tracing::warn!("Failed to delete source {:?}: {}", input_path, e);
+                        }
+                    }
+                    Ok(_) => {
+                        tracing::error!(
+                            "Job {}: Output file {:?} is empty after promotion — source preserved to prevent data loss",
+                            job_id, context.output_path
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Job {}: Cannot verify output {:?} after promotion ({}). Source preserved to prevent data loss",
+                            job_id, context.output_path, e
+                        );
+                    }
                 }
             }
         }

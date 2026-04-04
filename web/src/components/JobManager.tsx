@@ -11,6 +11,7 @@ import ConfirmDialog from "./ui/ConfirmDialog";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { motion, AnimatePresence } from "framer-motion";
+import { withErrorBoundary } from "./ErrorBoundary";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -364,7 +365,7 @@ const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
     { value: "size", label: "File Size" },
 ];
 
-export default function JobManager() {
+function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -1769,3 +1770,5 @@ export default function JobManager() {
         </div>
     );
 }
+
+export default withErrorBoundary(JobManager, "Job Management");

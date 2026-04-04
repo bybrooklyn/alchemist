@@ -463,16 +463,17 @@ async fn run() -> Result<()> {
     // Keep legacy channel for transition compatibility
     let (tx, _rx) = broadcast::channel(100);
 
-    // Initialize Notification Manager
-    let notification_manager = Arc::new(alchemist::notifications::NotificationManager::new(
-        db.as_ref().clone(),
-    ));
-    notification_manager.start_listener(tx.subscribe());
-
     let transcoder = Arc::new(Transcoder::new());
     let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
     let hardware_probe_log = Arc::new(RwLock::new(initial_probe_log));
     let config = Arc::new(RwLock::new(config));
+
+    // Initialize Notification Manager (needs config for allow_local_notifications)
+    let notification_manager = Arc::new(alchemist::notifications::NotificationManager::new(
+        db.as_ref().clone(),
+        config.clone(),
+    ));
+    notification_manager.start_listener(tx.subscribe());
 
     let maintenance_db = db.clone();
     let maintenance_config = config.clone();

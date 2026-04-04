@@ -235,23 +235,45 @@ pub(crate) fn get_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> O
 }
 
 pub(crate) fn request_ip(req: &Request) -> Option<IpAddr> {
-    if let Some(xff) = req.headers().get("X-Forwarded-For") {
-        if let Ok(xff_str) = xff.to_str() {
-            if let Some(ip_str) = xff_str.split(',').next() {
-                if let Ok(ip) = ip_str.trim().parse() {
-                    return Some(ip);
+    let peer_ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+
+    // Only trust proxy headers (X-Forwarded-For, X-Real-IP) when the direct
+    // TCP peer is a loopback or private IP — i.e., a trusted reverse proxy.
+    // This prevents external attackers from spoofing these headers to bypass
+    // rate limiting.
+    if let Some(peer) = peer_ip {
+        if is_trusted_peer(peer) {
+            if let Some(xff) = req.headers().get("X-Forwarded-For") {
+                if let Ok(xff_str) = xff.to_str() {
+                    if let Some(ip_str) = xff_str.split(',').next() {
+                        if let Ok(ip) = ip_str.trim().parse() {
+                            return Some(ip);
+                        }
+                    }
+                }
+            }
+            if let Some(xri) = req.headers().get("X-Real-IP") {
+                if let Ok(xri_str) = xri.to_str() {
+                    if let Ok(ip) = xri_str.trim().parse() {
+                        return Some(ip);
+                    }
                 }
             }
         }
     }
-    if let Some(xri) = req.headers().get("X-Real-IP") {
-        if let Ok(xri_str) = xri.to_str() {
-            if let Ok(ip) = xri_str.trim().parse() {
-                return Some(ip);
-            }
-        }
+
+    peer_ip
+}
+
+/// Returns true if the peer IP is a loopback or private address,
+/// meaning it is likely a local reverse proxy that can be trusted
+/// to set forwarded headers.
+fn is_trusted_peer(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
     }
-    req.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip())
 }

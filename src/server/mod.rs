@@ -84,6 +84,7 @@ pub struct AppState {
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
     pub(crate) login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
+    pub(crate) sse_connections: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub struct RunServerArgs {
@@ -164,6 +165,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
 
     // Clone agent for shutdown handler before moving state into router
@@ -265,9 +267,9 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
             }
         }
 
-        // Give active jobs up to 5 minutes to complete
+        // Forceful immediate shutdown of active jobs
         shutdown_agent
-            .graceful_shutdown(std::time::Duration::from_secs(300))
+            .graceful_shutdown()
             .await;
     })
     .await

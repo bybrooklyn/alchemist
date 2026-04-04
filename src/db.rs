@@ -619,7 +619,9 @@ impl Db {
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
 
-        let pool = SqlitePool::connect_with(options).await?;
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options).await?;
         info!(
             target: "startup",
             "Database connection opened in {} ms",
