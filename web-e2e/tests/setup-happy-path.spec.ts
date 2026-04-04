@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { fulfillJson, mockDashboardData, mockSetupBootstrap } from "./helpers";
+import {
+  fulfillJson,
+  mockDashboardData,
+  mockEngineStatus,
+  mockSetupBootstrap,
+} from "./helpers";
 
 test("setup completes successfully, seeds the first scan, and lands on a paused dashboard", async ({
   page,
@@ -25,6 +30,7 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
       },
     },
   });
+  await mockEngineStatus(page);
 
   await page.route("**/api/settings/preferences", async (route) => {
     await fulfillJson(route, 200, { status: "ok" });
@@ -85,6 +91,7 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
 
   await page.goto("/setup");
 
+  await page.getByRole("button", { name: "Get Started" }).click();
   await page.getByPlaceholder("admin").fill("playwright");
   await page.getByPlaceholder("Choose a strong password").fill("playwright-password");
   await page.getByRole("button", { name: "Next" }).click();

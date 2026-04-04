@@ -262,7 +262,10 @@ test("detail modal delete action removes the job and closes the modal", async ({
   await expect(page.getByRole("dialog")).toBeVisible();
 
   await page.getByRole("button", { name: /^Delete$/ }).last().click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "Delete" }).click();
+  await page
+    .getByRole("dialog", { name: "Delete job" })
+    .getByRole("button", { name: "Delete" })
+    .click();
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByTitle("/media/completed.mkv")).toHaveCount(0);

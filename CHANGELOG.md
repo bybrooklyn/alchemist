@@ -2,39 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-03-28
+## [0.3.0] - 2026-04-02
 
-### Rust & Backend
-- Upgraded from Rust 2021 to 2024, set the MSRV to 1.85, upgraded `sqlx` to `0.8` with `runtime-tokio-rustls`, and upgraded `rand` to `0.9`.
-- Removed `async-trait`, adopted native `async fn` in traits, and added `trait-variant` so `ExecutionObserver` remained object-safe behind `Arc<dyn ...>`.
-- Fixed the Apple VideoToolbox probe by using synthetic `lavfi` frames with `format=yuv420p` and `-allow_sw 1`, allowing HEVC and AV1 detection to succeed on Apple Silicon.
-- Split `server.rs` into `src/server/` submodules for auth, jobs, scan, settings, stats, system, SSE, middleware, wizard, and tests.
-- Moved `ffprobe` execution to `tokio::process::Command` with a 120-second timeout.
-- Added poisoned cancellation lock recovery in the orchestrator and truncated oversized FFmpeg stderr lines before logging.
-- Invalid notification event JSON now warned instead of silently disabling the target, and invalid schedule day JSON now warned instead of being treated as empty.
+### Security
+- Fixed critical bug where a config parse failure on a configured instance would re-enable unauthenticated setup endpoints (filesystem browse, settings bundle) for any network client.
+- Fixed session cookies being marked Secure by default in release builds, breaking login over plain HTTP/LAN. Secure is now opt-in via ALCHEMIST_COOKIE_SECURE=true for reverse-proxy deployments.
+- Restricted /api/fs/* filesystem browsing to loopback connections only during the initial setup flow.
+
+### Backend — Engine & Pipeline
+- Boot auto-analysis: server scans the library and runs ffprobe on all queued jobs at startup before the user clicks Start, so skip/transcode decisions are pre-computed.
+- File watcher triggers automatic analysis after each new file is enqueued, using a coalesced AtomicBool to avoid redundant passes on burst arrivals.
+- Watcher-triggered analysis now uses try_acquire on the analysis semaphore — if a pass is already running, new triggers are dropped rather than queuing up.
+- Boot analysis uses a separate blocking-acquire path (analyze_pending_jobs_boot) to guarantee it runs to completion before the engine starts.
+- Fixed infinite analysis loop: the batch query now excludes jobs that already have a decision row, preventing transcodable jobs from being re-analyzed on every loop iteration.
+- Removed reset_interrupted_jobs from the per-pass analysis loop — it is now only called once at startup as a recovery tool.
+- Engine no longer auto-pauses when the queue empties. It stays Running and picks up new files automatically as the watcher delivers them.
+- Idle state: frontend derives ● Idle from engine_status=running + active_jobs=0, shown with a Stop button still visible.
+- Added Drop guard for in_flight_jobs counter so it decrements correctly even if process_job panics.
+- Completed job detail no longer re-runs ffprobe on the input file; encode_stats table is the source of truth for size, codec, and timing data.
+- Boot analysis batches jobs in groups of 100 from offset 0 rather than paginating with an advancing offset, fixing a bug where transcodable jobs shifted out of later pages after earlier jobs were decided.
+- Startup cleanup now covers cancelled jobs and .alchemist-part subtitle sidecar temp files in addition to interrupted encoding jobs.
+- Ctrl+C / SIGTERM now exits the process cleanly after graceful shutdown completes. Background tasks (run loop, scheduler, watcher, maintenance) no longer prevent process exit.
+
+### Backend — Hardware & Encoding
+- VideoToolbox encode commands now include -allow_sw 1 (software fallback when GPU is busy) and a format=yuv420p filter (required pixel format), fixing all VideoToolbox encodes on macOS.
+- HEVC VideoToolbox output correctly tagged as hvc1 for broad Apple device compatibility.
+- Audio heavy-codec detection no longer uses a 640 kbps bitrate threshold — standard eac3/Atmos at 768+ kbps now copies through without transcoding. Only lossless codecs (TrueHD, MLP, DTS-HD, FLAC, PCM) trigger audio transcoding.
+- Audio transcoding for MKV containers now checks for libopus availability at runtime and falls back to AAC when libopus is not compiled into the FFmpeg binary (common on macOS).
+- FFmpeg encode failures now write the full error message (including last 20 lines of FFmpeg stderr) to the job log table so job_failure_summary surfaces actionable detail in the UI.
+- VideoToolbox-specific error patterns added to the UI failure explainer (vt_compression, mediaserverd, no capable devices, etc.).
+- Analysis semaphore (Semaphore(1)) serializes all analysis passes, preventing concurrent ffprobe runs from racing on job state.
+
+### Backend — Database & API
+- get_jobs_for_analysis_batch excludes jobs with existing decision rows via NOT EXISTS subquery, preventing infinite re-analysis of transcodable jobs.
+- OOM protection: get_jobs_for_analysis_batch uses LIMIT/OFFSET pagination so large libraries do not load all jobs into memory at once.
+- get_duplicate_candidates uses a SQL subquery to filter to stems that actually appear more than once before fetching rows, avoiding full-library fetch.
+- Manual scan (Scan Now button) now propagates errors to the caller instead of always returning 200, and triggers analyze_pending_jobs after completion, matching boot and setup scan behaviour.
+- Index added on decisions(job_id, created_at) covering the NOT EXISTS analysis batch query.
 
 ### UI & Frontend
-- Reworked the app shell by removing page `h1` headers, replacing the old header block with a thin engine control strip, and dropping the sidebar icon container for wordmark-only branding.
-- Flattened engine controls into one horizontal row with the status dot, Start/Pause/Stop actions, a divider, About, and Logout.
-- Moved the Background, Balanced, and Throughput mode pills into Settings -> Runtime and wired them to the engine mode API.
-- Rebuilt the setup wizard inside the main app shell with a grayed sidebar, removed the centered card layout, and replaced progress with a 2px solar line at the top of the content area.
-- Setup wizard errors now surfaced as toast notifications instead of an inline error block below the content.
-- Redesigned library selection around a flat recommendation list with Add buttons, selected-folder chips, and equal Browse/manual path entry; the preview panel was removed.
-- Restructured the dashboard around a compact stat row, a savings summary, and a larger Recent Activity panel.
-- Updated the log viewer to group entries by `job_id` into collapsible job sections while rendering system logs inline.
-- Normalized job status badges to sentence case without letter spacing, aligned table column headers, and standardized the job detail modal radius and section headers.
-- Cleaned banned CSS patterns from `ServerDirectoryPicker`, `ToastRegion`, and `SavingsOverview`, and modernized the login page with wordmark-only branding and tighter field styling.
-- Darkened the global background gradient slightly, reduced scrollbar width to 6px, increased border radius one step across cards and buttons, and gave inputs more contrast against the page.
-
-### CI/CD
-- Added a nightly workflow that runs on every push to `main` after Rust checks pass, builds all platforms, publishes `ghcr.io/bybrooklyn/alchemist:nightly`, and replaces the previous nightly pre-release with `{VERSION}-nightly+{short-sha}`.
-- Extracted a shared reusable `build.yml` workflow so nightly and release builds use the same pipeline.
-- Simplified `docker.yml` to PR preview builds only, removed the `workflow_run` trigger, and removed the `main` branch trigger from `ci.yml`.
-- Frontend validation in CI now runs the e2e reliability suite after the frontend check passes.
-
-### Docs & Tooling
-- Added `CLAUDE.md` and `GEMINI.md` as agent context files, added `CONTRIBUTING.md` with GPL-3.0 CLA terms, and started `CHANGELOG.md`.
-- Hardened the `justfile` with safer process cleanup, a stronger `db-reset`, and `--frozen-lockfile` docs installation.
+- Setup wizard welcome step (step 0): Alchemist logo, tagline, and a single Get Started button before the admin account form.
+- Analyzing job rows now show an indeterminate shimmer animation instead of a static 0.0% label.
+- Retry countdown on failed job rows: "Retrying in 47m" updates every 30 seconds based on attempt count and updated_at timestamp.
+- Poll-based job state updates no longer overwrite terminal states that arrived via SSE. When the server confirms a job is no longer terminal (e.g. after retry), the server state wins.
+- Statistics page uses recharts AreaChart for savings over time and BarChart for codec breakdown, replacing custom CSS bars that failed to render in flex containers.
+- Setup wizard file browser fixed: panel height changed from calc(100dvh-20rem) to a fixed 420px, preventing the panel from collapsing to zero height inside the double-scroll setup shell.
+- Breadcrumb crash in the setup wizard fixed: frontend interface now correctly uses label (not name) to match the backend FsBreadcrumb field name.
+- Jobs toolbar floats directly on the page background — removed the border/card wrapper.
+- Hardware settings merged into the Transcoding tab.
+- Notifications and Automation merged into a single tab.
+- React errors #418 and #423 fixed: activeIndex effect removed from SettingsPanel; applyRootTheme deferred into requestAnimationFrame in AppearanceSettings.
+- Mobile layout: hamburger sidebar overlay, jobs table hides date/priority columns below md breakpoint, stat cards use 2×2 grid on small screens.
+- Sidebar hidden on mobile with hamburger menu; overlay sidebar with backdrop and close button.
+- e2e reliability tests added to just check-web so UI regressions are caught in CI before merge.
 
 ## [v0.2.10-rc.5] - 2026-03-22
 
