@@ -511,11 +511,14 @@ mod tests {
         let addr = listener.local_addr()?;
 
         let body_task = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (mut socket, _) = match listener.accept().await {
+                Ok(socket) => socket,
+                Err(err) => return Err::<String, std::io::Error>(err),
+            };
             let mut buf = Vec::new();
             let mut chunk = [0u8; 4096];
             loop {
-                let read = socket.read(&mut chunk).await.expect("read");
+                let read = socket.read(&mut chunk).await?;
                 if read == 0 {
                     break;
                 }
@@ -525,8 +528,8 @@ mod tests {
                 }
             }
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-            socket.write_all(response.as_bytes()).await.expect("write");
-            String::from_utf8_lossy(&buf).to_string()
+            socket.write_all(response.as_bytes()).await?;
+            Ok(String::from_utf8_lossy(&buf).to_string())
         });
 
         let target = NotificationTarget {
@@ -545,7 +548,7 @@ mod tests {
         };
 
         manager.send(&target, &event, "failed").await?;
-        let request = body_task.await?;
+        let request = body_task.await??;
         let body = request
             .split("\r\n\r\n")
             .nth(1)

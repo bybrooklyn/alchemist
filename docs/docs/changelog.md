@@ -3,7 +3,7 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
-## [0.3.0-rc.2] - 2026-04-04
+## [0.3.0-rc.3] - 2026-04-04
 
 ### Release Engineering
 - Added Windows-specific contributor scripts for the core `just install-w`, `just dev`, and `just check` path, while leaving broader utility and release recipes Unix-first for now.

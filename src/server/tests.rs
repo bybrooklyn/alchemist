@@ -136,12 +136,15 @@ async fn create_session(
 }
 
 fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
-    Request::builder()
+    match Request::builder()
         .method(method)
         .uri(uri)
         .header(header::COOKIE, format!("alchemist_session={token}"))
         .body(body)
-        .unwrap()
+    {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build auth request: {err}"),
+    }
 }
 
 fn auth_json_request(
@@ -150,21 +153,23 @@ fn auth_json_request(
     token: &str,
     body: serde_json::Value,
 ) -> Request<Body> {
-    Request::builder()
+    match Request::builder()
         .method(method)
         .uri(uri)
         .header(header::COOKIE, format!("alchemist_session={token}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
-        .unwrap()
+    {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build auth json request: {err}"),
+    }
 }
 
 fn localhost_request(method: Method, uri: &str, body: Body) -> Request<Body> {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .body(body)
-        .unwrap();
+    let mut request = match Request::builder().method(method).uri(uri).body(body) {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build localhost request: {err}"),
+    };
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3000))));
@@ -172,11 +177,10 @@ fn localhost_request(method: Method, uri: &str, body: Body) -> Request<Body> {
 }
 
 fn remote_request(method: Method, uri: &str, body: Body) -> Request<Body> {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .body(body)
-        .unwrap();
+    let mut request = match Request::builder().method(method).uri(uri).body(body) {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build remote request: {err}"),
+    };
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 3000))));
@@ -184,8 +188,14 @@ fn remote_request(method: Method, uri: &str, body: Body) -> Request<Body> {
 }
 
 async fn body_text(response: axum::response::Response) -> String {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
+    let bytes = match to_bytes(response.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(err) => panic!("failed to read response body: {err}"),
+    };
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(body) => body,
+        Err(err) => panic!("response body was not utf-8: {err}"),
+    }
 }
 
 async fn seed_job(
@@ -198,15 +208,19 @@ async fn seed_job(
 
     db.enqueue_job(&input, &output, std::time::SystemTime::UNIX_EPOCH)
         .await?;
-    let job = db
+    let Some(job) = db
         .get_job_by_input_path(input.to_string_lossy().as_ref())
         .await?
-        .expect("job");
+    else {
+        panic!("expected seeded job");
+    };
     if job.status != status {
         db.update_job_status(job.id, status).await?;
     }
 
-    let job = db.get_job_by_id(job.id).await?.expect("job by id");
+    let Some(job) = db.get_job_by_id(job.id).await? else {
+        panic!("expected seeded job by id");
+    };
     Ok((job, input, output))
 }
 
@@ -259,8 +273,8 @@ fn validate_transcode_payload_rejects_invalid_values() {
 fn normalize_setup_directories_trims_and_filters() {
     let movies_dir = temp_path("alchemist_setup_movies", "dir");
     let tv_dir = temp_path("alchemist_setup_tv", "dir");
-    std::fs::create_dir_all(&movies_dir).unwrap();
-    std::fs::create_dir_all(&tv_dir).unwrap();
+    assert!(std::fs::create_dir_all(&movies_dir).is_ok());
+    assert!(std::fs::create_dir_all(&tv_dir).is_ok());
 
     let input = vec![
         format!(" {} ", movies_dir.to_string_lossy()),
@@ -269,16 +283,19 @@ fn normalize_setup_directories_trims_and_filters() {
         tv_dir.to_string_lossy().to_string(),
     ];
 
-    let normalized = normalize_setup_directories(&input).expect("normalize");
+    let normalized = match normalize_setup_directories(&input) {
+        Ok(normalized) => normalized,
+        Err(err) => panic!("failed to normalize setup directories: {err}"),
+    };
     assert_eq!(
         normalized,
         vec![
             std::fs::canonicalize(&movies_dir)
-                .unwrap()
+                .unwrap_or_else(|err| panic!("failed to canonicalize movies dir: {err}"))
                 .to_string_lossy()
                 .to_string(),
             std::fs::canonicalize(&tv_dir)
-                .unwrap()
+                .unwrap_or_else(|err| panic!("failed to canonicalize tv dir: {err}"))
                 .to_string_lossy()
                 .to_string()
         ]
@@ -322,22 +339,28 @@ async fn sse_unified_stream_emits_lagged_event_and_recovers() {
             job_id: Some(1),
             message: "first".to_string(),
         })
-        .unwrap();
+        .unwrap_or_else(|err| panic!("failed to send first log event: {err}"));
     job_tx
         .send(JobEvent::Log {
             level: "info".to_string(),
             job_id: Some(1),
             message: "second".to_string(),
         })
-        .unwrap();
+        .unwrap_or_else(|err| panic!("failed to send second log event: {err}"));
     drop(job_tx);
 
     let mut stream = Box::pin(super::sse::sse_unified_stream(job_rx, config_rx, system_rx));
-    let first = stream.next().await.unwrap().unwrap();
+    let Some(first) = stream.next().await else {
+        panic!("expected first SSE event");
+    };
+    let first = first.unwrap_or_else(|_| panic!("expected first SSE event payload"));
     assert_eq!(first.event_name, "lagged");
     assert!(first.data.contains("\"skipped\":1"));
 
-    let second = stream.next().await.unwrap().unwrap();
+    let Some(second) = stream.next().await else {
+        panic!("expected second SSE event");
+    };
+    let second = second.unwrap_or_else(|_| panic!("expected second SSE event payload"));
     assert_eq!(second.event_name, "log");
     assert!(second.data.contains("\"second\""));
 }
@@ -365,8 +388,14 @@ async fn hardware_settings_route_updates_runtime_state()
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
-    let hardware = state.hardware_state.snapshot().await.unwrap();
-    assert_eq!(hardware.vendor, crate::system::hardware::Vendor::Cpu);
+    assert_eq!(
+        state
+            .hardware_state
+            .snapshot()
+            .await
+            .map(|info| info.vendor),
+        Some(crate::system::hardware::Vendor::Cpu)
+    );
 
     let response = app
         .clone()
@@ -558,7 +587,7 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
                     })
                     .to_string(),
                 ))
-                .unwrap(),
+                .unwrap_or_else(|err| panic!("failed to build setup completion request: {err}")),
         )
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -567,11 +596,9 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
         .headers()
         .get(header::SET_COOKIE)
         .and_then(|value| value.to_str().ok())
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string();
+        .map(|value| value.split(';').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+    assert!(!set_cookie.is_empty());
 
     assert!(
         !state
@@ -579,8 +606,12 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
             .load(std::sync::atomic::Ordering::Relaxed)
     );
     assert_eq!(
-        state.hardware_state.snapshot().await.unwrap().vendor,
-        crate::system::hardware::Vendor::Cpu
+        state
+            .hardware_state
+            .snapshot()
+            .await
+            .map(|info| info.vendor),
+        Some(crate::system::hardware::Vendor::Cpu)
     );
 
     let watch_dirs = state.db.get_watch_dirs().await?;
@@ -605,7 +636,7 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
                 .uri("/api/system/hardware")
                 .header(header::COOKIE, set_cookie)
                 .body(Body::empty())
-                .unwrap(),
+                .unwrap_or_else(|err| panic!("failed to build hardware request: {err}")),
         )
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -661,7 +692,9 @@ async fn setup_complete_accepts_nested_settings_payload()
                     })
                     .to_string(),
                 ))
-                .unwrap(),
+                .unwrap_or_else(|err| {
+                    panic!("failed to build nested setup completion request: {err}")
+                }),
         )
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -708,7 +741,9 @@ async fn setup_complete_rejects_nested_settings_without_library_directories()
                     })
                     .to_string(),
                 ))
-                .unwrap(),
+                .unwrap_or_else(|err| {
+                    panic!("failed to build nested setup rejection request: {err}")
+                }),
         )
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -755,9 +790,10 @@ async fn fs_endpoints_are_available_during_setup()
                     .to_string(),
                 ),
             );
-            request
-                .headers_mut()
-                .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
             request
         })
         .await?;
@@ -799,9 +835,10 @@ async fn fs_endpoints_require_loopback_during_setup()
             .to_string(),
         ),
     );
-    preview_request
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    preview_request.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
 
     let preview_response = app.clone().oneshot(preview_request).await?;
     assert_eq!(preview_response.status(), StatusCode::FORBIDDEN);
@@ -824,7 +861,7 @@ async fn settings_bundle_requires_auth_after_setup()
                 .method(Method::GET)
                 .uri("/api/settings/bundle")
                 .body(Body::empty())
-                .unwrap(),
+                .unwrap_or_else(|err| panic!("failed to build settings bundle GET request: {err}")),
         )
         .await?;
     assert_eq!(get_response.status(), StatusCode::UNAUTHORIZED);
@@ -837,7 +874,7 @@ async fn settings_bundle_requires_auth_after_setup()
                 .uri("/api/settings/bundle")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("{}"))
-                .unwrap(),
+                .unwrap_or_else(|err| panic!("failed to build settings bundle PUT request: {err}")),
         )
         .await?;
     assert_eq!(put_response.status(), StatusCode::UNAUTHORIZED);
@@ -1216,7 +1253,7 @@ async fn jobs_table_includes_structured_decision_explanation()
     let first = payload
         .as_array()
         .and_then(|items| items.first())
-        .expect("job row");
+        .unwrap_or_else(|| panic!("missing job row"));
     assert_eq!(
         first["decision_explanation"]["code"].as_str(),
         Some("bpp_below_threshold")
@@ -1395,7 +1432,9 @@ async fn cancel_queued_job_updates_status() -> std::result::Result<(), Box<dyn s
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
-    let updated = state.db.get_job_by_id(job.id).await?.expect("updated job");
+    let Some(updated) = state.db.get_job_by_id(job.id).await? else {
+        panic!("missing updated job after cancel");
+    };
     assert_eq!(updated.status, JobState::Cancelled);
 
     cleanup_paths(&[input_path, output_path, config_path, db_path]);
@@ -1422,7 +1461,9 @@ async fn priority_endpoint_updates_job_priority()
     let body = body_text(response).await;
     assert!(body.contains("\"priority\":10"));
 
-    let updated = state.db.get_job_by_id(job.id).await?.expect("updated job");
+    let Some(updated) = state.db.get_job_by_id(job.id).await? else {
+        panic!("missing updated job after priority update");
+    };
     assert_eq!(updated.priority, 10);
 
     cleanup_paths(&[input_path, output_path, config_path, db_path]);

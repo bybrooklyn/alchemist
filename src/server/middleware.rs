@@ -3,7 +3,7 @@
 use super::AppState;
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{StatusCode, header},
+    http::{HeaderName, HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -29,50 +29,39 @@ pub(crate) async fn security_headers_middleware(request: Request, next: Next) ->
     let headers = response.headers_mut();
 
     // Prevent clickjacking
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        "DENY".parse().expect("valid header value"),
-    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
 
     // Prevent MIME type sniffing
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
-        "nosniff".parse().expect("valid header value"),
+        HeaderValue::from_static("nosniff"),
     );
 
     // XSS protection (legacy but still useful)
     headers.insert(
-        "X-XSS-Protection"
-            .parse::<axum::http::HeaderName>()
-            .expect("valid header name"),
-        "1; mode=block".parse().expect("valid header value"),
+        HeaderName::from_static("x-xss-protection"),
+        HeaderValue::from_static("1; mode=block"),
     );
 
     // Content Security Policy - allows inline scripts/styles for the SPA
     // This is permissive enough for the app while still providing protection
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"
-            .parse()
-            .expect("valid CSP header value"),
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
+        ),
     );
 
     // Referrer policy
     headers.insert(
         header::REFERRER_POLICY,
-        "strict-origin-when-cross-origin"
-            .parse()
-            .expect("valid header value"),
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
 
     // Permissions policy (restrict browser features)
     headers.insert(
-        "Permissions-Policy"
-            .parse::<axum::http::HeaderName>()
-            .expect("valid header name"),
-        "geolocation=(), microphone=(), camera=()"
-            .parse()
-            .expect("valid header value"),
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
     );
 
     response

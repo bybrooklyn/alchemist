@@ -1,3 +1,5 @@
+#![deny(clippy::expect_used, clippy::unwrap_used)]
+
 use alchemist::db::EventChannels;
 use alchemist::error::Result;
 use alchemist::system::hardware;
@@ -979,8 +981,8 @@ mod tests {
 
         assert_eq!(detected.vendor, hardware::Vendor::Cpu);
         assert_eq!(
-            hardware_state.snapshot().await.unwrap().vendor,
-            hardware::Vendor::Cpu
+            hardware_state.snapshot().await.map(|info| info.vendor),
+            Some(hardware::Vendor::Cpu)
         );
 
         let config_guard = config_state.read().await;

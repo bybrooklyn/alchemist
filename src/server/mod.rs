@@ -242,17 +242,23 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     .with_graceful_shutdown(async move {
         // Wait for shutdown signal
         let ctrl_c = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                error!("Failed to install Ctrl+C handler: {}", err);
+                std::future::pending::<()>().await;
+            }
         };
 
         #[cfg(unix)]
         let terminate = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install signal handler")
-                .recv()
-                .await;
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(err) => {
+                    error!("Failed to install signal handler: {}", err);
+                    std::future::pending::<()>().await;
+                }
+            }
         };
 
         #[cfg(not(unix))]

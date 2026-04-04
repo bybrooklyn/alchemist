@@ -369,7 +369,9 @@ mod tests {
                 SystemTime::UNIX_EPOCH,
             )
             .await?;
-        let job = db.get_job_by_input_path("input.mkv").await?.expect("job");
+        let Some(job) = db.get_job_by_input_path("input.mkv").await? else {
+            panic!("expected seeded job");
+        };
         let (tx, mut rx) = broadcast::channel(8);
         let (jobs_tx, _) = broadcast::channel(100);
         let (config_tx, _) = broadcast::channel(10);
@@ -396,7 +398,9 @@ mod tests {
         let logs = db.get_logs(10, 0).await?;
         assert_eq!(logs[0].message, "ffmpeg line");
 
-        let updated = db.get_job(job.id).await?.expect("updated");
+        let Some(updated) = db.get_job(job.id).await? else {
+            panic!("expected updated job");
+        };
         assert!((updated.progress - 20.0).abs() < 0.01);
 
         let first = rx.recv().await?;

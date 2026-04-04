@@ -110,8 +110,7 @@ mod tests {
     #[test]
     fn resolve_source_root_prefers_longest_matching_root() {
         let roots = vec![PathBuf::from("/media"), PathBuf::from("/media/movies")];
-        let resolved =
-            resolve_source_root(Path::new("/media/movies/action/example.mkv"), &roots).unwrap();
-        assert_eq!(resolved, PathBuf::from("/media/movies"));
+        let resolved = resolve_source_root(Path::new("/media/movies/action/example.mkv"), &roots);
+        assert_eq!(resolved, Some(PathBuf::from("/media/movies")));
     }
 }

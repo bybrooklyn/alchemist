@@ -109,7 +109,7 @@ check-u:
     @echo "── Rust format ──"
     cargo fmt --all -- --check
     @echo "── Rust clippy ──"
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
     @echo "── Rust check ──"
     cargo check --all-targets
     @echo "── Frontend typecheck ──"
@@ -122,7 +122,7 @@ check-w:
 # Rust checks only (faster)
 check-rust:
     cargo fmt --all -- --check
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
     cargo check --all-targets
 
 # Frontend checks only
@@ -234,7 +234,7 @@ release-verify:
     @echo "── Rust format ──"
     cargo fmt --all -- --check
     @echo "── Rust clippy ──"
-    cargo clippy --locked --all-targets --all-features -- -D warnings
+    cargo clippy --locked --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
     @echo "── Rust check ──"
     cargo check --locked --all-targets --all-features
     @echo "── Rust tests ──"

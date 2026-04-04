@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0-rc.2] - 2026-04-04
+## [0.3.0-rc.3] - 2026-04-04
 
 ### Release Engineering
 - Added Windows-specific contributor scripts for the core `just install-w`, `just dev`, and `just check` path, while keeping the broader Unix-oriented utility and release recipes unchanged for now.
