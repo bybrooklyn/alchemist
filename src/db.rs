@@ -621,7 +621,8 @@ impl Db {
 
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
-            .connect_with(options).await?;
+            .connect_with(options)
+            .await?;
         info!(
             target: "startup",
             "Database connection opened in {} ms",

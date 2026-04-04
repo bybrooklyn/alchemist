@@ -1275,13 +1275,16 @@ impl Pipeline {
                     Ok(_) => {
                         tracing::error!(
                             "Job {}: Output file {:?} is empty after promotion — source preserved to prevent data loss",
-                            job_id, context.output_path
+                            job_id,
+                            context.output_path
                         );
                     }
                     Err(e) => {
                         tracing::error!(
                             "Job {}: Cannot verify output {:?} after promotion ({}). Source preserved to prevent data loss",
-                            job_id, context.output_path, e
+                            job_id,
+                            context.output_path,
+                            e
                         );
                     }
                 }

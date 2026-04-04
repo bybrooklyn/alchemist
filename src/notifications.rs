@@ -114,7 +114,12 @@ impl NotificationManager {
             .ok_or("notification endpoint host is missing")?;
         let port = url.port_or_known_default().ok_or("invalid port")?;
 
-        let allow_local = self.config.read().await.notifications.allow_local_notifications;
+        let allow_local = self
+            .config
+            .read()
+            .await
+            .notifications
+            .allow_local_notifications;
 
         if !allow_local && host.eq_ignore_ascii_case("localhost") {
             return Err("localhost is not allowed as a notification endpoint".into());

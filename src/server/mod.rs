@@ -268,9 +268,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         }
 
         // Forceful immediate shutdown of active jobs
-        shutdown_agent
-            .graceful_shutdown()
-            .await;
+        shutdown_agent.graceful_shutdown().await;
     })
     .await
     .map_err(|e| AlchemistError::Unknown(format!("Server error: {}", e)))?;
