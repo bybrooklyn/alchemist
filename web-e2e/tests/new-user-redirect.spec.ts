@@ -128,6 +128,8 @@ test("redirects to setup when no directories configured", async ({ page }) => {
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/setup$/);
+  await expect(page.getByRole("button", { name: "Get Started" })).toBeVisible();
+  await page.getByRole("button", { name: "Get Started" }).click();
   await expect(page.getByRole("heading", { name: "Create Your Admin Account" })).toBeVisible();
 });
 
