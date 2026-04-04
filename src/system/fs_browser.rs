@@ -641,7 +641,10 @@ mod tests {
     fn breadcrumbs_include_root_and_children() {
         let crumbs = breadcrumbs(Path::new("/media/movies"));
         assert!(!crumbs.is_empty());
-        assert_eq!(crumbs.last().unwrap().path, "/media/movies");
+        assert_eq!(
+            crumbs.last().map(|crumb| crumb.path.as_str()),
+            Some("/media/movies")
+        );
     }
 
     #[test]
@@ -662,14 +665,15 @@ mod tests {
     fn preview_detects_media_files_and_samples() {
         let root =
             std::env::temp_dir().join(format!("alchemist_fs_preview_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&root).expect("root");
+        assert!(std::fs::create_dir_all(&root).is_ok());
         let media_file = root.join("movie.mkv");
-        std::fs::write(&media_file, b"video").expect("media");
+        assert!(std::fs::write(&media_file, b"video").is_ok());
 
         let response = preview_blocking(FsPreviewRequest {
             directories: vec![root.to_string_lossy().to_string()],
-        })
-        .expect("preview");
+        });
+        assert!(response.is_ok());
+        let response = response.unwrap_or_else(|err| panic!("preview failed: {err}"));
 
         assert_eq!(response.total_media_files, 1);
         assert_eq!(response.directories.len(), 1);

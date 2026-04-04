@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn mp4_subtitle_copy_fails_fast() {
-        let reason = plan_subtitles(
+        let reason = match plan_subtitles(
             &[SubtitleStreamMetadata {
                 stream_index: 0,
                 codec_name: "subrip".to_string(),
@@ -1192,8 +1192,10 @@ mod tests {
             "mp4",
             Path::new("/tmp/out.mp4"),
             SubtitleMode::Copy,
-        )
-        .unwrap_err();
+        ) {
+            Ok(_) => panic!("expected mp4 subtitle copy planning to fail"),
+            Err(reason) => reason,
+        };
         assert!(reason.contains("cannot safely copy"));
     }
 
@@ -1279,13 +1281,13 @@ mod tests {
             Path::new("/tmp/out.mkv"),
             SubtitleMode::Burn,
         )
-        .expect("burn plan");
+        .unwrap_or_else(|err| panic!("failed to build burn plan: {err}"));
         assert!(matches!(plan, SubtitleStreamPlan::Burn { stream_index: 2 }));
     }
 
     #[test]
     fn burn_fails_without_burnable_text_stream() {
-        let reason = plan_subtitles(
+        let reason = match plan_subtitles(
             &[SubtitleStreamMetadata {
                 stream_index: 0,
                 codec_name: "hdmv_pgs_subtitle".to_string(),
@@ -1298,8 +1300,10 @@ mod tests {
             "mkv",
             Path::new("/tmp/out.mkv"),
             SubtitleMode::Burn,
-        )
-        .unwrap_err();
+        ) {
+            Ok(_) => panic!("expected burn planning to fail without a burnable stream"),
+            Err(reason) => reason,
+        };
         assert!(reason.contains("No burnable"));
     }
 
@@ -1319,7 +1323,7 @@ mod tests {
             Path::new("/tmp/library/movie-alchemist.mkv"),
             SubtitleMode::Extract,
         )
-        .expect("extract plan");
+        .unwrap_or_else(|err| panic!("failed to build extract plan: {err}"));
 
         match plan {
             SubtitleStreamPlan::Extract { outputs } => {
@@ -1366,7 +1370,7 @@ mod tests {
             Path::new("/tmp/library/movie-alchemist.mkv"),
             SubtitleMode::Extract,
         )
-        .expect("extract plan");
+        .unwrap_or_else(|err| panic!("failed to build extract plan: {err}"));
 
         match plan {
             SubtitleStreamPlan::Extract { outputs } => {
@@ -1492,7 +1496,7 @@ mod tests {
         let plan = planner
             .plan(&analysis(), Path::new("/tmp/out.mkv"), None)
             .await
-            .expect("plan");
+            .unwrap_or_else(|err| panic!("failed to build no-encoder plan: {err}"));
 
         let TranscodeDecision::Skip { reason } = plan.decision else {
             panic!("expected skip decision");
@@ -1528,7 +1532,7 @@ mod tests {
         let plan = planner
             .plan(&analysis(), Path::new("/tmp/out.mkv"), None)
             .await
-            .expect("plan");
+            .unwrap_or_else(|err| panic!("failed to build preferred-codec plan: {err}"));
 
         let TranscodeDecision::Skip { reason } = plan.decision else {
             panic!("expected skip decision");
@@ -1547,10 +1551,13 @@ mod tests {
             cpu: vec![Encoder::Av1Svt],
         };
 
-        let (encoder, fallback) =
-            select_encoder(OutputCodec::Av1, &inventory, true).expect("selected encoder");
+        let (encoder, fallback) = select_encoder(OutputCodec::Av1, &inventory, true)
+            .unwrap_or_else(|| panic!("expected selected encoder"));
         assert_eq!(encoder, Encoder::HevcQsv);
-        assert_eq!(fallback.expect("fallback").kind, FallbackKind::Codec);
+        assert_eq!(
+            fallback.unwrap_or_else(|| panic!("expected fallback")).kind,
+            FallbackKind::Codec
+        );
     }
 
     #[test]
@@ -1560,8 +1567,8 @@ mod tests {
             cpu: Vec::new(),
         };
 
-        let (encoder, fallback) =
-            select_encoder(OutputCodec::Av1, &inventory, false).expect("selected encoder");
+        let (encoder, fallback) = select_encoder(OutputCodec::Av1, &inventory, false)
+            .unwrap_or_else(|| panic!("expected selected encoder"));
         assert_eq!(encoder, Encoder::Av1Vaapi);
         assert!(fallback.is_none());
     }
@@ -1583,8 +1590,8 @@ mod tests {
             cpu: vec![Encoder::Av1Svt],
         };
 
-        let (encoder, fallback) =
-            select_encoder(OutputCodec::Av1, &inventory, false).expect("selected encoder");
+        let (encoder, fallback) = select_encoder(OutputCodec::Av1, &inventory, false)
+            .unwrap_or_else(|| panic!("expected selected encoder"));
         assert_eq!(encoder, Encoder::Av1Svt);
         assert!(fallback.is_none());
     }

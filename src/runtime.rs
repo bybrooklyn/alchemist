@@ -124,9 +124,9 @@ mod tests {
     fn default_dir_falls_back_to_home_config() {
         // SAFETY: single-threaded test.
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        // HOME is always set in a test environment
-        let home = std::env::var("HOME").unwrap();
-        let expected = PathBuf::from(&home).join(".config").join("alchemist");
-        assert_eq!(default_data_dir(), expected);
+        let expected = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".config").join("alchemist"));
+        assert_eq!(Some(default_data_dir()), expected);
     }
 }

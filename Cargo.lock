@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "alchemist"
-version = "0.3.0-rc.2"
+version = "0.3.0-rc.3"
 dependencies = [
  "anyhow",
  "argon2",

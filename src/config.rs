@@ -830,7 +830,10 @@ mod tests {
             notify_on_failure = true
         "#;
 
-        let mut config: Config = toml::from_str(raw).expect("config");
+        let mut config: Config = match toml::from_str(raw) {
+            Ok(config) => config,
+            Err(err) => panic!("failed to parse config fixture: {err}"),
+        };
         config.migrate_legacy_notifications();
 
         assert_eq!(config.notifications.targets.len(), 1);

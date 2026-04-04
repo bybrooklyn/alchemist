@@ -1449,13 +1449,19 @@ mod tests {
                 device_path: None,
             }],
         )));
-        assert_eq!(state.snapshot().await.unwrap().vendor, Vendor::Nvidia);
+        assert_eq!(
+            state.snapshot().await.map(|info| info.vendor),
+            Some(Vendor::Nvidia)
+        );
 
         state
             .replace(Some(HardwareInfo::new(Vendor::Cpu, None, Vec::new())))
             .await;
 
-        assert_eq!(state.snapshot().await.unwrap().vendor, Vendor::Cpu);
+        assert_eq!(
+            state.snapshot().await.map(|info| info.vendor),
+            Some(Vendor::Cpu)
+        );
     }
 
     #[test]
@@ -1527,7 +1533,8 @@ mod tests {
     #[test]
     fn detect_hardware_with_runner_can_fall_back_to_cpu() {
         let runner = FakeRunner::default();
-        let info = detect_hardware_with_runner(&runner, true).expect("cpu fallback");
+        let info = detect_hardware_with_runner(&runner, true)
+            .unwrap_or_else(|err| panic!("expected cpu fallback info: {err}"));
         assert_eq!(info.vendor, Vendor::Cpu);
         assert_eq!(info.probe_summary.succeeded, 0);
         assert!(!info.selection_reason.is_empty());
@@ -1569,7 +1576,7 @@ mod tests {
 
         let (selected, mode) =
             choose_best_candidate_set(&[nvidia.clone(), amd], Some(Vendor::Intel), false)
-                .expect("selected set");
+                .unwrap_or_else(|| panic!("expected selected candidate set"));
         assert_eq!(mode, SelectionMode::Auto);
         assert_eq!(selected.vendor, Vendor::Nvidia);
     }
@@ -1587,8 +1594,8 @@ mod tests {
             &[(HardwareBackend::Qsv, "hevc", "hevc_qsv")],
         );
 
-        let (selected, mode) =
-            choose_best_candidate_set(&[qsv, vaapi.clone()], None, false).expect("selected set");
+        let (selected, mode) = choose_best_candidate_set(&[qsv, vaapi.clone()], None, false)
+            .unwrap_or_else(|| panic!("expected selected candidate set"));
         assert_eq!(mode, SelectionMode::Auto);
         assert_eq!(selected.device_path, vaapi.device_path);
     }
@@ -1606,7 +1613,7 @@ mod tests {
         let results = collect_probe_results_verbose(&runner, candidates, &mut probe_log);
         let successful_sets = build_successful_candidate_sets(&results);
         let (selected, _) = choose_best_candidate_set(&successful_sets, Some(Vendor::Intel), false)
-            .expect("selected set");
+            .unwrap_or_else(|| panic!("expected selected candidate set"));
         mark_selected_probe_entries(&mut probe_log, &selected);
 
         assert!(
@@ -1636,8 +1643,10 @@ mod tests {
         let temp_root = std::env::temp_dir();
         let qsv_path = temp_root.join(format!("alchemist_qsv_{}", rand::random::<u64>()));
         let vaapi_path = temp_root.join(format!("alchemist_vaapi_{}", rand::random::<u64>()));
-        std::fs::write(&qsv_path, b"render").expect("create qsv path");
-        std::fs::write(&vaapi_path, b"render").expect("create vaapi path");
+        std::fs::write(&qsv_path, b"render")
+            .unwrap_or_else(|err| panic!("failed to create qsv path: {err}"));
+        std::fs::write(&vaapi_path, b"render")
+            .unwrap_or_else(|err| panic!("failed to create vaapi path: {err}"));
 
         let qsv_runner = FakeRunner::with_successful_encoders(&["av1_qsv"]);
         let qsv_info = detect_explicit_device_path_with_runner(
@@ -1645,7 +1654,7 @@ mod tests {
             qsv_path.to_string_lossy().as_ref(),
             Some(Vendor::Intel),
         )
-        .expect("qsv info");
+        .unwrap_or_else(|| panic!("expected qsv info"));
         assert_eq!(qsv_info.vendor, Vendor::Intel);
 
         let vaapi_runner = FakeRunner::with_successful_encoders(&["hevc_vaapi"]);
@@ -1654,7 +1663,7 @@ mod tests {
             vaapi_path.to_string_lossy().as_ref(),
             Some(Vendor::Amd),
         )
-        .expect("vaapi info");
+        .unwrap_or_else(|| panic!("expected vaapi info"));
         assert_eq!(vaapi_info.vendor, Vendor::Amd);
 
         let _ = std::fs::remove_file(qsv_path);
@@ -1669,7 +1678,8 @@ mod tests {
             "alchemist_explicit_failure_{}",
             rand::random::<u64>()
         ));
-        std::fs::write(&missing_path, b"render").expect("create explicit device path");
+        std::fs::write(&missing_path, b"render")
+            .unwrap_or_else(|err| panic!("failed to create explicit device path: {err}"));
 
         let runner = FakeRunner::default();
         let info = detect_explicit_device_path_with_runner(
@@ -1689,15 +1699,20 @@ mod tests {
             std::env::temp_dir().join(format!("alchemist_render_enum_{}", rand::random::<u64>()));
         let sys_root = temp_root.join("sys/class/drm");
         let dev_root = temp_root.join("dev/dri");
-        std::fs::create_dir_all(sys_root.join("renderD128/device")).expect("create intel sys path");
-        std::fs::create_dir_all(sys_root.join("renderD129/device")).expect("create amd sys path");
-        std::fs::create_dir_all(&dev_root).expect("create dev root");
+        std::fs::create_dir_all(sys_root.join("renderD128/device"))
+            .unwrap_or_else(|err| panic!("failed to create intel sys path: {err}"));
+        std::fs::create_dir_all(sys_root.join("renderD129/device"))
+            .unwrap_or_else(|err| panic!("failed to create amd sys path: {err}"));
+        std::fs::create_dir_all(&dev_root)
+            .unwrap_or_else(|err| panic!("failed to create dev root: {err}"));
         std::fs::write(sys_root.join("renderD128/device/vendor"), "0x8086")
-            .expect("write intel vendor");
+            .unwrap_or_else(|err| panic!("failed to write intel vendor: {err}"));
         std::fs::write(sys_root.join("renderD129/device/vendor"), "0x1002")
-            .expect("write amd vendor");
-        std::fs::write(dev_root.join("renderD128"), b"render").expect("write intel render node");
-        std::fs::write(dev_root.join("renderD129"), b"render").expect("write amd render node");
+            .unwrap_or_else(|err| panic!("failed to write amd vendor: {err}"));
+        std::fs::write(dev_root.join("renderD128"), b"render")
+            .unwrap_or_else(|err| panic!("failed to write intel render node: {err}"));
+        std::fs::write(dev_root.join("renderD129"), b"render")
+            .unwrap_or_else(|err| panic!("failed to write amd render node: {err}"));
 
         let nodes = enumerate_linux_render_nodes_under(&sys_root, &dev_root);
         assert_eq!(nodes.len(), 2);

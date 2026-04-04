@@ -40,15 +40,25 @@ pub(crate) async fn login_handler(
 
     // A valid argon2 static hash of a random string used to simulate work and equalize timing
     const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHN0cmluZzEyMzQ1Ng$1tJ2tA109qj15m3u5+kS/sX5X1UoZ6/H9b/30tX9N/g";
+    let dummy_hash = match PasswordHash::new(DUMMY_HASH) {
+        Ok(hash) => hash,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Authentication fallback hash is invalid",
+            )
+                .into_response();
+        }
+    };
 
     let parsed_hash = match &user_result {
         Some(u) => PasswordHash::new(&u.password_hash).unwrap_or_else(|_| {
             is_valid = false;
-            PasswordHash::new(DUMMY_HASH).expect("DUMMY_HASH must be a valid argon2 hash")
+            dummy_hash.clone()
         }),
         None => {
             is_valid = false;
-            PasswordHash::new(DUMMY_HASH).expect("DUMMY_HASH must be a valid argon2 hash")
+            dummy_hash
         }
     };
 

@@ -891,7 +891,8 @@ mod tests {
     fn test_progress_parsing() {
         let line =
             "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x";
-        let progress = FFmpegProgress::parse_line(line).expect("expected progress parse");
+        let progress =
+            FFmpegProgress::parse_line(line).unwrap_or_else(|| panic!("expected progress parse"));
 
         assert_eq!(progress.frame, 100);
         assert_eq!(progress.fps, 25.0);
@@ -906,7 +907,7 @@ mod tests {
         assert!(state.ingest_line("out_time=00:00:01.50").is_none());
         let progress = state
             .ingest_line("progress=continue")
-            .expect("expected structured progress");
+            .unwrap_or_else(|| panic!("expected structured progress"));
         assert_eq!(progress.frame, 42);
         assert!((progress.time_seconds - 1.5).abs() < 0.01);
     }
@@ -921,7 +922,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build cpu args: {err}"));
         assert!(args.contains(&"libx264".to_string()));
         assert!(args.contains(&"-progress".to_string()));
     }
@@ -936,7 +939,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build nvenc args: {err}"));
         assert!(args.contains(&"hevc_nvenc".to_string()));
         assert!(args.contains(&"p4".to_string()));
     }
@@ -953,7 +958,9 @@ mod tests {
             &plan,
         )
         .with_hardware(Some(&hw_info));
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build qsv args: {err}"));
         assert!(args.contains(&"av1_qsv".to_string()));
         assert!(args.contains(&"-init_hw_device".to_string()));
     }
@@ -977,7 +984,9 @@ mod tests {
             &plan,
         )
         .with_hardware(Some(&info));
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build vaapi args: {err}"));
         assert!(args.contains(&"hevc_vaapi".to_string()));
         assert!(args.iter().any(|arg| arg.contains("format=nv12,hwupload")));
     }
@@ -992,7 +1001,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build videotoolbox args: {err}"));
         assert!(args.contains(&"hevc_videotoolbox".to_string()));
     }
 
@@ -1006,7 +1017,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build amf args: {err}"));
         assert!(args.contains(&"hevc_amf".to_string()));
     }
 
@@ -1027,7 +1040,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build mp4 args: {err}"));
         assert!(args.contains(&"aac".to_string()));
         assert!(args.contains(&"aac_low".to_string()));
         assert!(args.contains(&"+faststart".to_string()));
@@ -1081,8 +1096,8 @@ mod tests {
         );
         let args = builder
             .build_subtitle_extract_args()
-            .expect("args")
-            .expect("subtitle extract args");
+            .unwrap_or_else(|err| panic!("failed to build subtitle extract args: {err}"))
+            .unwrap_or_else(|| panic!("expected subtitle extract args"));
         assert!(args.contains(&"0:s:0".to_string()));
         assert!(args.contains(&"0:s:1".to_string()));
         assert!(args.contains(&"srt".to_string()));
@@ -1106,7 +1121,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build remux args: {err}"));
         assert_eq!(
             args,
             vec![
@@ -1135,7 +1152,9 @@ mod tests {
             &metadata,
             &plan,
         );
-        let args = builder.build_args().expect("args");
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build selected audio args: {err}"));
         assert!(args.contains(&"0:a:0".to_string()));
         assert!(args.contains(&"0:a:2".to_string()));
         assert!(!args.contains(&"0:a?".to_string()));
@@ -1147,7 +1166,8 @@ mod tests {
             stdout: b"Encoders:\n V..... libx264 H.264\n A..... aac AAC\n V..... av1_qsv AV1\n"
                 .to_vec(),
         };
-        let capabilities = EncoderCapabilities::detect_with_runner(&runner).expect("capabilities");
+        let capabilities = EncoderCapabilities::detect_with_runner(&runner)
+            .unwrap_or_else(|err| panic!("failed to detect capabilities: {err}"));
         assert!(capabilities.has_video_encoder("libx264"));
         assert!(capabilities.has_video_encoder("av1_qsv"));
         assert!(capabilities.audio_encoders.contains("aac"));
@@ -1158,7 +1178,8 @@ mod tests {
         let runner = FakeRunner {
             stdout: b"Hardware acceleration methods:\nvaapi\nqsv\n".to_vec(),
         };
-        let accelerators = HardwareAccelerators::detect_with_runner(&runner).expect("hwaccels");
+        let accelerators = HardwareAccelerators::detect_with_runner(&runner)
+            .unwrap_or_else(|err| panic!("failed to detect accelerators: {err}"));
         assert!(accelerators.available.contains("vaapi"));
         assert!(accelerators.available.contains("qsv"));
     }
@@ -1166,7 +1187,8 @@ mod tests {
     #[test]
     fn test_vmaf_score_text_parse() {
         let stderr = "Some log\nVMAF score: 93.2\nMore log";
-        let vmaf = QualityScore::extract_vmaf_score_text(stderr).expect("expected vmaf");
+        let vmaf = QualityScore::extract_vmaf_score_text(stderr)
+            .unwrap_or_else(|| panic!("expected vmaf score from text output"));
         assert!((vmaf - 93.2).abs() < 0.01);
     }
 
@@ -1180,7 +1202,8 @@ mod tests {
                 }
             }
         }"#;
-        let vmaf = QualityScore::extract_vmaf_score_json(json).expect("expected vmaf");
+        let vmaf = QualityScore::extract_vmaf_score_json(json)
+            .unwrap_or_else(|| panic!("expected vmaf score from json output"));
         assert!((vmaf - 87.65).abs() < 0.01);
     }
 }
