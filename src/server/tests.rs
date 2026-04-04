@@ -171,6 +171,18 @@ fn localhost_request(method: Method, uri: &str, body: Body) -> Request<Body> {
     request
 }
 
+fn remote_request(method: Method, uri: &str, body: Body) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 3000))));
+    request
+}
+
 async fn body_text(response: axum::response::Response) -> String {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -754,6 +766,83 @@ async fn fs_endpoints_are_available_during_setup()
     assert!(preview_body.contains("\"total_media_files\":1"));
 
     cleanup_paths(&[browse_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fs_endpoints_require_loopback_during_setup()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let browse_root = temp_path("alchemist_fs_remote", "dir");
+    std::fs::create_dir_all(&browse_root)?;
+
+    let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+    let browse_response = app
+        .clone()
+        .oneshot(remote_request(
+            Method::GET,
+            &format!("/api/fs/browse?path={}", browse_root.to_string_lossy()),
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(browse_response.status(), StatusCode::FORBIDDEN);
+    let browse_body = body_text(browse_response).await;
+    assert!(browse_body.contains("Filesystem browsing is only available"));
+
+    let mut preview_request = remote_request(
+        Method::POST,
+        "/api/fs/preview",
+        Body::from(
+            json!({
+                "directories": [browse_root.to_string_lossy().to_string()]
+            })
+            .to_string(),
+        ),
+    );
+    preview_request
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+
+    let preview_response = app.clone().oneshot(preview_request).await?;
+    assert_eq!(preview_response.status(), StatusCode::FORBIDDEN);
+    let preview_body = body_text(preview_response).await;
+    assert!(preview_body.contains("Filesystem browsing is only available"));
+
+    cleanup_paths(&[browse_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn settings_bundle_requires_auth_after_setup()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/settings/bundle")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await?;
+    assert_eq!(get_response.status(), StatusCode::UNAUTHORIZED);
+
+    let put_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/api/settings/bundle")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await?;
+    assert_eq!(put_response.status(), StatusCode::UNAUTHORIZED);
+
+    cleanup_paths(&[config_path, db_path]);
     Ok(())
 }
 

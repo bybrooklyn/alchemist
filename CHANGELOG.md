@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-04-02
+## [0.3.0-rc.1] - 2026-04-04
 
 ### Security
 - Fixed critical bug where a config parse failure on a configured instance would re-enable unauthenticated setup endpoints (filesystem browse, settings bundle) for any network client.

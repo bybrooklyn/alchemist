@@ -105,11 +105,21 @@ On Windows, run `alchemist.exe` instead.
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
-cargo build --release
+just install        # macOS / Linux
+just install-w      # Windows
+just build
 ./target/release/alchemist
 ```
 
 Alchemist requires Rust 1.85 or later (MSRV). Use `rustup update stable` to ensure you are on a recent toolchain, and make sure FFmpeg is installed separately.
+
+For local development instead of a release build:
+
+```bash
+just install        # macOS / Linux
+just install-w      # Windows
+just dev
+```
 
 ## First Run
 
@@ -134,3 +144,9 @@ Alchemist requires Rust 1.85 or later (MSRV). Use `rustup update stable` to ensu
 ## License
 
 Licensed under GPLv3. See [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms,
+[docs/docs/contributing/development.md](docs/docs/contributing/development.md)
+for local setup, and [RELEASING.md](RELEASING.md) for the release process.

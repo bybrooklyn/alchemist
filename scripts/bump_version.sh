@@ -9,74 +9,45 @@ fi
 VERSION="$1"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-python3 - <<PY
-from pathlib import Path
-import re
+printf '%s\n' "$VERSION" > "$ROOT_DIR/VERSION"
 
-root = Path("$ROOT_DIR")
-version = "$VERSION"
+perl -0pi -e '
+  BEGIN { $version = shift @ARGV }
+  s/^version\s*=\s*"[^"]+"/version = "$version"/m
+    or die "Failed to update Cargo.toml version\n";
+' "$VERSION" "$ROOT_DIR/Cargo.toml"
 
-# VERSION file
-(root / "VERSION").write_text(version)
-
-# Cargo.toml
-cargo = root / "Cargo.toml"
-text = cargo.read_text()
-text = re.sub(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{version}"', text, count=1)
-cargo.write_text(text)
-
-def update_package_json(pkg: Path) -> None:
-    text = pkg.read_text()
-    # Strip unexpected control characters that can break JSON parsing.
-    text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ch == "\r" or ord(ch) >= 32)
-    new_text, count = re.subn(
-        r'(?m)^(\s*"version"\s*:\s*)"[^"]+"',
-        rf'\1"{version}"',
-        text,
-        count=1,
-    )
-    if count == 0:
-        new_text, count = re.subn(
-            r'(?m)^(\s*"name"\s*:\s*"[^"]+",\s*)$',
-            r'\1  "version": "' + version + r'",\n',
-            text,
-            count=1,
-        )
-        if count == 0:
-            raise SystemExit(f"Failed to update {pkg.relative_to(root)} version field.")
-    pkg.write_text(new_text)
-
-
-# package.json files across the repo
-for pkg in sorted(root.rglob("package.json")):
-    relative = pkg.relative_to(root)
-    if any(part in {"node_modules", "dist", ".astro"} for part in relative.parts):
-        continue
-    update_package_json(pkg)
-
-# Cargo.lock (root package entry)
-lock = root / "Cargo.lock"
-text = lock.read_text()
-text = re.sub(
-    r'(?ms)(\[\[package\]\]\nname = "alchemist"\nversion = )"[^"]+"',
-    rf'\1"{version}"',
-    text,
-    count=1,
+while IFS= read -r package_json; do
+  perl -0pi -e '
+    BEGIN { $version = shift @ARGV }
+    s/[\x00-\x08\x0B\x0C\x0E-\x1F]//g;
+    if (!s/^(\s*"version"\s*:\s*)"[^"]+"/${1}"$version"/m) {
+      s/^(\s*"name"\s*:\s*"[^"]+",\n)/${1}  "version": "$version",\n/m
+        or die "Failed to update version field\n";
+    }
+  ' "$VERSION" "$package_json"
+done < <(
+  find "$ROOT_DIR" \
+    \( -path '*/node_modules/*' -o -path '*/dist/*' -o -path '*/.astro/*' \) -prune \
+    -o -type f -name 'package.json' -print | sort
 )
-lock.write_text(text)
 
-print(f"Updated version to {version}")
-PY
+perl -0pi -e '
+  BEGIN { $version = shift @ARGV }
+  s/(\[\[package\]\]\nname = "alchemist"\nversion = )"[^"]+"/${1}"$version"/
+    or die "Failed to update Cargo.lock version\n";
+' "$VERSION" "$ROOT_DIR/Cargo.lock"
+
+echo "Updated version to $VERSION"
 
 cat <<EOF
 Next steps:
-  1. Update CHANGELOG.md for v${VERSION}
-  2. Run cargo test --quiet
-  3. Run bun run typecheck && bun run build (in web/)
-  4. Run bun run test:reliability (in web-e2e/)
-  5. Merge the release-prep commit to main so Docker publishes ${VERSION}
-  6. Stable versions also publish latest; prereleases must not
-  7. Create annotated tag v${VERSION} on that exact merged commit for binary releases
+  1. Update CHANGELOG.md and docs/docs/changelog.md for ${VERSION}
+  2. Run just release-check
+  3. Complete the manual RC/stable smoke checklist in RELEASING.md
+  4. Merge the release-prep commit to main so Docker publishes ${VERSION}
+  5. Stable versions also publish latest; prereleases must not
+  6. Create annotated tag v${VERSION} on the exact merged commit for binary releases
 
 Note: this script no longer creates git tags. Tags must be created separately after merge.
 EOF

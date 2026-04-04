@@ -36,7 +36,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "sh -c 'mkdir -p .runtime/media && cd .. && (cd web && bun install --frozen-lockfile && bun run build) && cargo run --no-default-features -- --reset-auth'",
+    command:
+      "sh -c 'mkdir -p .runtime/media && cd .. && (cd web && bun install --frozen-lockfile && bun run build) && if [ -x ./target/debug/alchemist ]; then ./target/debug/alchemist --reset-auth; else cargo run --locked --no-default-features -- --reset-auth; fi'",
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
@@ -45,6 +46,7 @@ export default defineConfig({
       ALCHEMIST_DB_PATH: DB_PATH,
       ALCHEMIST_CONFIG_MUTABLE: "true",
       ALCHEMIST_SERVER_PORT: String(PORT),
+      CARGO_INCREMENTAL: "0",
       RUST_LOG: "warn",
     },
   },

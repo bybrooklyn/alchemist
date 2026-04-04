@@ -78,12 +78,19 @@ alchemist.exe      # Windows
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
-cd web && bun install --frozen-lockfile && bun run build && cd ..
-cargo build --release
+just install
+just build
 ./target/release/alchemist
 ```
 
 Requires Rust 1.85+. Run `rustup update stable` first.
+
+For day-to-day local development instead of a release build:
+
+```bash
+just install
+just dev
+```
 
 ## Nightly builds
 
