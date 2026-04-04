@@ -716,12 +716,23 @@ impl Config {
         Ok(())
     }
 
-    /// Save config to file
+    /// Save config to file atomically (write to temp, then rename).
+    /// This prevents corruption if the process crashes mid-write.
     pub fn save(&self, path: &Path) -> Result<()> {
         let mut config = self.clone();
         config.canonicalize_for_save();
         let content = toml::to_string_pretty(&config)?;
-        std::fs::write(path, content)?;
+
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, &content)?;
+
+        // Atomic rename: if this fails, the original config is still intact.
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            // Clean up the temp file on rename failure
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+
         Ok(())
     }
 

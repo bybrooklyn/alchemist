@@ -266,25 +266,20 @@ fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
             let exists = canonical.exists();
             let readable = exists && canonical.is_dir() && std::fs::read_dir(&canonical).is_ok();
 
-            let media_files = if readable {
-                scanner
-                    .scan_with_recursion(vec![(canonical.clone(), true)])
-                    .len()
-            } else {
-                0
-            };
-            total_media_files += media_files;
-
-            let sample_files = if readable {
-                scanner
-                    .scan_with_recursion(vec![(canonical.clone(), true)])
-                    .into_iter()
-                    .take(5)
-                    .map(|media| media.path.to_string_lossy().to_string())
-                    .collect::<Vec<_>>()
+            // Scan once and reuse results for both count and samples
+            let scan_results = if readable {
+                scanner.scan_with_recursion(vec![(canonical.clone(), true)])
             } else {
                 Vec::new()
             };
+            let media_files = scan_results.len();
+            total_media_files += media_files;
+
+            let sample_files = scan_results
+                .into_iter()
+                .take(5)
+                .map(|media| media.path.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
 
             let mut dir_warnings = directory_warnings(&canonical, readable);
             if readable && media_files == 0 {

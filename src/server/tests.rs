@@ -107,6 +107,7 @@ where
         telemetry_runtime_id: "test-runtime".to_string(),
         notification_manager: Arc::new(crate::notifications::NotificationManager::new(
             db.as_ref().clone(),
+            config.clone(),
         )),
         sys: Mutex::new(sys),
         file_watcher,
@@ -118,6 +119,7 @@ where
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
 
     Ok((state.clone(), app_router(state), config_path, db_path))

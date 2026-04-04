@@ -12,6 +12,7 @@ import { apiJson, isApiError } from "../lib/api";
 import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 import ResourceMonitor from "./ResourceMonitor";
+import { withErrorBoundary } from "./ErrorBoundary";
 
 interface Job {
     id: number;
@@ -76,7 +77,7 @@ function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     );
 }
 
-export default function Dashboard() {
+function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [jobsLoading, setJobsLoading] = useState(true);
     const [bundle, setBundle] = useState<SettingsBundleResponse | null>(null);
@@ -366,3 +367,5 @@ export default function Dashboard() {
         </div>
     );
 }
+
+export default withErrorBoundary(Dashboard, "Dashboard");

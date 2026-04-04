@@ -171,9 +171,40 @@ pub(crate) fn sse_unified_stream(
     ])
 }
 
+/// Maximum concurrent SSE connections to prevent resource exhaustion.
+const MAX_SSE_CONNECTIONS: usize = 50;
+
+/// RAII guard that decrements the SSE connection counter on drop.
+struct SseConnectionGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for SseConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub(crate) async fn sse_handler(
     State(state): State<Arc<AppState>>,
-) -> Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>> {
+) -> std::result::Result<
+    Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>>,
+    axum::http::StatusCode,
+> {
+    use std::sync::atomic::Ordering;
+
+    // Enforce connection limit
+    let current = state.sse_connections.fetch_add(1, Ordering::SeqCst);
+    if current >= MAX_SSE_CONNECTIONS {
+        state.sse_connections.fetch_sub(1, Ordering::SeqCst);
+        warn!(
+            "SSE connection limit reached ({}/{}). Rejecting new connection.",
+            current, MAX_SSE_CONNECTIONS
+        );
+        return Err(axum::http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // RAII guard to decrement the counter when the stream is dropped
+    let guard = Arc::new(SseConnectionGuard(state.sse_connections.clone()));
+
     // Subscribe to all channels
     let job_rx = state.event_channels.jobs.subscribe();
     let config_rx = state.event_channels.config.subscribe();
@@ -182,10 +213,13 @@ pub(crate) async fn sse_handler(
     // Create unified stream from new typed channels
     let unified_stream = sse_unified_stream(job_rx, config_rx, system_rx);
 
-    let stream = unified_stream.map(|message| match message {
-        Ok(message) => Ok(message.into()),
-        Err(never) => match never {},
+    let stream = unified_stream.map(move |message| {
+        let _guard = guard.clone(); // keep the guard alive as long as the stream lives
+        match message {
+            Ok(message) => Ok(message.into()),
+            Err(never) => match never {},
+        }
     });
 
-    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
