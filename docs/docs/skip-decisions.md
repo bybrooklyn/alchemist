@@ -3,9 +3,20 @@ title: Skip Decisions
 description: Why Alchemist skipped a file and what each reason means.
 ---
 
-Every skipped file has a machine-readable reason string
-recorded in the database and shown as plain English in the
-job detail panel.
+Every skipped file now has a structured explanation object
+as the primary source of truth. The legacy machine-readable
+reason string is still retained for compatibility and
+debugging during rollout.
+
+Structured explanation fields:
+
+- `category`
+- `code`
+- `summary`
+- `detail`
+- `operator_guidance`
+- `measured`
+- `legacy_reason`
 
 ## Skip reasons
 

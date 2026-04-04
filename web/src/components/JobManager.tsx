@@ -32,11 +32,24 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
     );
 }
 
-export interface SkipDetail {
+export interface ExplanationView {
+    category: "decision" | "failure";
+    code: string;
     summary: string;
     detail: string;
-    action: string | null;
-    measured: Record<string, string>;
+    operator_guidance: string | null;
+    measured: Record<string, string | number | boolean | null>;
+    legacy_reason: string;
+}
+
+interface ExplanationPayload {
+    category: "decision" | "failure";
+    code: string;
+    summary: string;
+    detail: string;
+    operator_guidance: string | null;
+    measured: Record<string, string | number | boolean | null>;
+    legacy_reason: string;
 }
 
 function formatReductionPercent(value?: string): string {
@@ -48,14 +61,14 @@ function formatReductionPercent(value?: string): string {
     return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(0)}%` : value;
 }
 
-export function humanizeSkipReason(reason: string): SkipDetail {
+export function humanizeSkipReason(reason: string): ExplanationView {
     const pipeIdx = reason.indexOf("|");
     const key = pipeIdx === -1
         ? reason.trim()
         : reason.slice(0, pipeIdx).trim();
     const paramStr = pipeIdx === -1 ? "" : reason.slice(pipeIdx + 1);
 
-    const measured: Record<string, string> = {};
+    const measured: Record<string, string | number | boolean | null> = {};
     for (const pair of paramStr.split(",")) {
         const [rawKey, ...rawValueParts] = pair.split("=");
         if (!rawKey || rawValueParts.length === 0) {
@@ -65,176 +78,249 @@ export function humanizeSkipReason(reason: string): SkipDetail {
         measured[rawKey.trim()] = rawValueParts.join("=").trim();
     }
 
-    const fallbackDisabledMatch = key.match(
-        /^Preferred codec\s+(.+?)\s+unavailable and fallback disabled$/i
-    );
-    if (fallbackDisabledMatch) {
-        measured.codec ??= fallbackDisabledMatch[1];
-        return {
-            summary: "Preferred encoder unavailable",
-            detail: `The preferred codec (${measured.codec ?? "target codec"}) is not available and CPU fallback is disabled in settings.`,
-            action: "Go to Settings -> Hardware and enable CPU fallback, or check that your GPU encoder is working correctly.",
-            measured,
-        };
-    }
+    const makeDecision = (
+        code: string,
+        summary: string,
+        detail: string,
+        operator_guidance: string | null,
+    ): ExplanationView => ({
+        category: "decision",
+        code,
+        summary,
+        detail,
+        operator_guidance,
+        measured,
+        legacy_reason: reason,
+    });
 
     switch (key) {
         case "analysis_failed":
-            return {
-                summary: "File could not be analyzed",
-                detail: `FFprobe failed to read this file. It may be corrupt, incomplete, or in an unsupported format. Error: ${measured.error ?? "unknown"}`,
-                action: "Try playing the file in VLC or another media player. If it plays fine, re-run the scan. If not, the file may be damaged.",
-                measured,
-            };
-
+            return makeDecision(
+                "analysis_failed",
+                "File could not be analyzed",
+                `FFprobe failed to read this file. It may be corrupt, incomplete, or in an unsupported format. Error: ${measured.error ?? "unknown"}`,
+                "Try playing the file in VLC or another media player. If it plays fine, re-run the scan. If not, the file may be damaged.",
+            );
         case "planning_failed":
-            return {
-                summary: "Transcoding plan could not be created",
-                detail: `An internal error occurred while planning the transcode for this file. This is likely a bug. Error: ${measured.error ?? "unknown"}`,
-                action: "Check the logs below for details. If this happens repeatedly, please report it as a bug.",
-                measured,
-            };
-
+            return makeDecision(
+                "planning_failed",
+                "Transcoding plan could not be created",
+                `An internal error occurred while planning the transcode for this file. This is likely a bug. Error: ${measured.error ?? "unknown"}`,
+                "Check the logs below for details. If this happens repeatedly, please report it as a bug.",
+            );
         case "already_target_codec":
-            return {
-                summary: "Already in target format",
-                detail: `This file is already encoded as ${measured.codec ?? "the target codec"}${measured.bit_depth ? ` at ${measured.bit_depth}-bit` : ""}. Re-encoding would waste time and could reduce quality.`,
-                action: null,
-                measured,
-            };
-
+            return makeDecision(
+                "already_target_codec",
+                "Already in target format",
+                `This file is already encoded as ${measured.codec ?? "the target codec"}${measured.bit_depth ? ` at ${measured.bit_depth}-bit` : ""}. Re-encoding would waste time and could reduce quality.`,
+                null,
+            );
         case "already_target_codec_wrong_container":
-            return {
-                summary: "Target codec, wrong container",
-                detail: `The video is already in the right codec but wrapped in a ${measured.container ?? "MP4"} container. Alchemist will remux it to ${measured.target_extension ?? "MKV"} - fast and lossless, no quality loss.`,
-                action: null,
-                measured,
-            };
-
+            return makeDecision(
+                "already_target_codec_wrong_container",
+                "Target codec, wrong container",
+                `The video is already in the right codec but wrapped in a ${measured.container ?? "MP4"} container. Alchemist will remux it to ${measured.target_extension ?? "MKV"} - fast and lossless, no quality loss.`,
+                null,
+            );
         case "bpp_below_threshold":
-            return {
-                summary: "Already efficiently compressed",
-                detail: `Bits-per-pixel (${measured.bpp ?? "?"}) is below the minimum threshold (${measured.threshold ?? "?"}). This file is already well-compressed - transcoding it would spend significant time for minimal space savings.`,
-                action: "If you want to force transcoding, lower the BPP threshold in Settings -> Transcoding.",
-                measured,
-            };
-
+            return makeDecision(
+                "bpp_below_threshold",
+                "Already efficiently compressed",
+                `Bits-per-pixel (${measured.bpp ?? "?"}) is below the minimum threshold (${measured.threshold ?? "?"}). This file is already well-compressed - transcoding it would spend significant time for minimal space savings.`,
+                "If you want to force transcoding, lower the BPP threshold in Settings -> Transcoding.",
+            );
         case "below_min_file_size":
-            return {
-                summary: "File too small to process",
-                detail: `File size (${measured.size_mb ?? "?"}MB) is below the minimum threshold (${measured.threshold_mb ?? "?"}MB). Small files aren't worth the transcoding overhead.`,
-                action: "Lower the minimum file size threshold in Settings -> Transcoding if you want small files processed.",
-                measured,
-            };
-
+            return makeDecision(
+                "below_min_file_size",
+                "File too small to process",
+                `File size (${measured.size_mb ?? "?"}MB) is below the minimum threshold (${measured.threshold_mb ?? "?"}MB). Small files aren't worth the transcoding overhead.`,
+                "Lower the minimum file size threshold in Settings -> Transcoding if you want small files processed.",
+            );
         case "size_reduction_insufficient":
-            return {
-                summary: "Not enough space would be saved",
-                detail: `The predicted size reduction (${formatReductionPercent(measured.predicted)}) is below the required threshold (${formatReductionPercent(measured.threshold)}). Transcoding this file wouldn't recover meaningful storage.`,
-                action: "Lower the size reduction threshold in Settings -> Transcoding to encode files with smaller savings.",
-                measured,
-            };
-
+            return makeDecision(
+                "size_reduction_insufficient",
+                "Not enough space would be saved",
+                `The predicted size reduction (${formatReductionPercent(String(measured.reduction ?? measured.predicted ?? ""))}) is below the required threshold (${formatReductionPercent(String(measured.threshold ?? ""))}). Transcoding this file wouldn't recover meaningful storage.`,
+                "Lower the size reduction threshold in Settings -> Transcoding to encode files with smaller savings.",
+            );
         case "no_suitable_encoder":
-            return {
-                summary: "No encoder available",
-                detail: `No encoder was found for ${measured.codec ?? "the target codec"}. Hardware detection may have failed, or CPU fallback is disabled.`,
-                action: "Check Settings -> Hardware. Enable CPU fallback, or verify your GPU is detected correctly.",
-                measured,
-            };
-
+        case "no_available_encoders":
+            return makeDecision(
+                key,
+                "No encoder available",
+                `No encoder was found for ${measured.codec ?? measured.requested_codec ?? "the target codec"}. Hardware detection may have failed, or CPU fallback is disabled.`,
+                "Check Settings -> Hardware. Enable CPU fallback, or verify your GPU is detected correctly.",
+            );
+        case "preferred_codec_unavailable_fallback_disabled":
+            return makeDecision(
+                "preferred_codec_unavailable_fallback_disabled",
+                "Preferred encoder unavailable",
+                `The preferred codec (${measured.codec ?? "target codec"}) is not available and CPU fallback is disabled in settings.`,
+                "Go to Settings -> Hardware and enable CPU fallback, or check that your GPU encoder is working correctly.",
+            );
         case "Output path matches input path":
-            return {
-                summary: "Output would overwrite source",
-                detail: "The configured output path is the same as the source file. Alchemist refused to proceed to avoid overwriting your original file.",
-                action: "Go to Settings -> Files and configure a different output suffix or output folder.",
-                measured,
-            };
-
+        case "output_path_matches_input":
+            return makeDecision(
+                "output_path_matches_input",
+                "Output would overwrite source",
+                "The configured output path is the same as the source file. Alchemist refused to proceed to avoid overwriting your original file.",
+                "Go to Settings -> Files and configure a different output suffix or output folder.",
+            );
         case "Output already exists":
-            return {
-                summary: "Output file already exists",
-                detail: "A transcoded version of this file already exists at the output path. Alchemist skipped it to avoid duplicating work.",
-                action: "If you want to re-transcode it, delete the existing output file first, then retry the job.",
-                measured,
-            };
-
+        case "output_already_exists":
+            return makeDecision(
+                "output_already_exists",
+                "Output file already exists",
+                "A transcoded version of this file already exists at the output path. Alchemist skipped it to avoid duplicating work.",
+                "If you want to re-transcode it, delete the existing output file first, then retry the job.",
+            );
         case "incomplete_metadata":
-            return {
-                summary: "Missing file metadata",
-                detail: `FFprobe could not determine the ${measured.missing ?? "required metadata"} for this file. Without reliable metadata Alchemist cannot make a valid transcoding decision.`,
-                action: "Run a Library Doctor scan to check if this file is corrupt. Try playing it in a media player to confirm it is readable.",
-                measured,
-            };
-
+            return makeDecision(
+                "incomplete_metadata",
+                "Missing file metadata",
+                `FFprobe could not determine the ${measured.missing ?? "required metadata"} for this file. Without reliable metadata Alchemist cannot make a valid transcoding decision.`,
+                "Run a Library Doctor scan to check if this file is corrupt. Try playing it in a media player to confirm it is readable.",
+            );
         case "already_10bit":
-            return {
-                summary: "Already 10-bit",
-                detail: "This file is already encoded in high-quality 10-bit depth. Re-encoding it could reduce quality.",
-                action: null,
-                measured,
-            };
-
+            return makeDecision(
+                "already_10bit",
+                "Already 10-bit",
+                "This file is already encoded in high-quality 10-bit depth. Re-encoding it could reduce quality.",
+                null,
+            );
         case "remux: mp4_to_mkv_stream_copy":
-            return {
-                summary: "Remuxed (no re-encode)",
-                detail: "This file was remuxed from MP4 to MKV using stream copy - fast and lossless. No quality was lost.",
-                action: null,
-                measured,
-            };
-
+        case "remux_mp4_to_mkv_stream_copy":
+            return makeDecision(
+                "remux_mp4_to_mkv_stream_copy",
+                "Remuxed (no re-encode)",
+                "This file was remuxed from MP4 to MKV using stream copy - fast and lossless. No quality was lost.",
+                null,
+            );
         case "Low quality (VMAF)":
-            return {
-                summary: "Quality check failed",
-                detail: "The encoded file scored below the minimum VMAF quality threshold. Alchemist rejected the output to protect quality.",
-                action: "The original file has been preserved. You can lower the VMAF threshold in Settings -> Quality, or disable VMAF checking entirely.",
-                measured,
-            };
-
+        case "quality_below_threshold":
+            return makeDecision(
+                "quality_below_threshold",
+                "Quality check failed",
+                "The encoded file scored below the minimum VMAF quality threshold. Alchemist rejected the output to protect quality.",
+                "The original file has been preserved. You can lower the VMAF threshold in Settings -> Quality, or disable VMAF checking entirely.",
+            );
+        case "transcode_h264_source":
+            return makeDecision(
+                "transcode_h264_source",
+                "H.264 source prioritized",
+                "This file is H.264, which is typically a strong candidate for reclaiming space, so Alchemist prioritized it for transcoding.",
+                null,
+            );
+        case "transcode_recommended":
+            return makeDecision(
+                "transcode_recommended",
+                "Transcode recommended",
+                "Alchemist determined this file is a strong candidate for transcoding based on the current codec and measured efficiency.",
+                null,
+            );
         default:
-            return {
-                summary: "Decision recorded",
-                detail: reason,
-                action: null,
-                measured,
-            };
+            return makeDecision("legacy_decision", "Decision recorded", reason, null);
     }
 }
 
-function explainFailureSummary(summary: string): string {
+function explainFailureSummary(summary: string): ExplanationView {
     const normalized = summary.toLowerCase();
 
+    const makeFailure = (
+        code: string,
+        title: string,
+        detail: string,
+        operator_guidance: string | null,
+    ): ExplanationView => ({
+        category: "failure",
+        code,
+        summary: title,
+        detail,
+        operator_guidance,
+        measured: {},
+        legacy_reason: summary,
+    });
+
     if (normalized.includes("cancelled")) {
-        return "This job was cancelled before encoding completed. The original file is untouched.";
+        return makeFailure(
+            "cancelled",
+            "Job was cancelled",
+            "This job was cancelled before encoding completed. The original file is untouched.",
+            null,
+        );
     }
     if (normalized.includes("no such file or directory")) {
-        return "The source file could not be found. It may have been moved or deleted.";
+        return makeFailure(
+            "source_missing",
+            "Source file missing",
+            "The source file could not be found. It may have been moved or deleted.",
+            "Check that the source file still exists and is readable by Alchemist.",
+        );
     }
     if (normalized.includes("invalid data found") || normalized.includes("moov atom not found")) {
-        return "This file appears to be corrupt or incomplete. Try running a Library Doctor scan.";
+        return makeFailure(
+            "corrupt_or_unreadable_media",
+            "Media could not be read",
+            "This file appears to be corrupt or incomplete. Try running a Library Doctor scan.",
+            "Verify the source file manually or run Library Doctor to confirm whether it is readable.",
+        );
     }
     if (normalized.includes("permission denied")) {
-        return "Alchemist doesn't have permission to read this file. Check the file permissions.";
+        return makeFailure(
+            "permission_denied",
+            "Permission denied",
+            "Alchemist doesn't have permission to read this file. Check the file permissions.",
+            "Check the file and output path permissions for the Alchemist process user.",
+        );
     }
     if (normalized.includes("encoder not found") || normalized.includes("unknown encoder")) {
-        return "The required encoder is not available in your FFmpeg installation.";
+        return makeFailure(
+            "encoder_unavailable",
+            "Required encoder unavailable",
+            "The required encoder is not available in your FFmpeg installation.",
+            "Check FFmpeg encoder availability and hardware settings.",
+        );
     }
     if (normalized.includes("out of memory") || normalized.includes("cannot allocate memory")) {
-        return "The system ran out of memory during encoding. Try reducing concurrent jobs.";
+        return makeFailure(
+            "resource_exhausted",
+            "System ran out of memory",
+            "The system ran out of memory during encoding. Try reducing concurrent jobs.",
+            "Reduce concurrent jobs or rerun under lower system load.",
+        );
     }
     if (normalized.includes("transcode_failed") || normalized.includes("ffmpeg exited")) {
-        return "FFmpeg failed during encoding. This is often caused by a corrupt source file or an encoder configuration issue. Check the logs below for the specific FFmpeg error.";
+        return makeFailure(
+            "unknown_ffmpeg_failure",
+            "FFmpeg failed",
+            "FFmpeg failed during encoding. This is often caused by a corrupt source file or an encoder configuration issue. Check the logs below for the specific FFmpeg error.",
+            "Inspect the FFmpeg output in the job logs for the exact failure.",
+        );
     }
     if (normalized.includes("probing failed")) {
-        return "FFprobe could not read this file. It may be corrupt or in an unsupported format.";
+        return makeFailure(
+            "analysis_failed",
+            "Analysis failed",
+            "FFprobe could not read this file. It may be corrupt or in an unsupported format.",
+            "Inspect the source file manually or run Library Doctor to confirm whether it is readable.",
+        );
     }
     if (normalized.includes("planning_failed") || normalized.includes("planner")) {
-        return "An error occurred while planning the transcode. Check the logs below for details.";
+        return makeFailure(
+            "planning_failed",
+            "Planner failed",
+            "An error occurred while planning the transcode. Check the logs below for details.",
+            "Treat repeated planner failures as a bug and inspect the logs for the triggering input.",
+        );
     }
     if (normalized.includes("output_size=0") || normalized.includes("output was empty")) {
-        return "Encoding produced an empty output file. This usually means FFmpeg crashed silently. Check the logs below for FFmpeg output.";
+        return makeFailure(
+            "unknown_ffmpeg_failure",
+            "Empty output produced",
+            "Encoding produced an empty output file. This usually means FFmpeg crashed silently. Check the logs below for FFmpeg output.",
+            "Inspect the FFmpeg logs before retrying the job.",
+        );
     }
-
     if (
         normalized.includes("videotoolbox") ||
         normalized.includes("vt_compression") ||
@@ -242,21 +328,62 @@ function explainFailureSummary(summary: string): string {
         normalized.includes("mediaserverd") ||
         normalized.includes("no capable devices")
     ) {
-        return "The VideoToolbox hardware encoder failed. This can happen when the GPU is busy, the file uses an unsupported pixel format, or macOS Media Services are unavailable. Retry the job — if it keeps failing, CPU fallback is available in Settings → Hardware.";
+        return makeFailure(
+            "hardware_backend_failure",
+            "Hardware backend failed",
+            "The VideoToolbox hardware encoder failed. This can happen when the GPU is busy, the file uses an unsupported pixel format, or macOS Media Services are unavailable.",
+            "Retry the job. If it keeps failing, check the hardware probe log or enable CPU fallback in Settings -> Hardware.",
+        );
     }
-
-    if (
-        normalized.includes("encoder fallback") ||
-        normalized.includes("fallback detected")
-    ) {
-        return "The hardware encoder was unavailable and fell back to software encoding, which was not allowed by your settings. Enable CPU fallback in Settings → Hardware, or retry when the GPU is less busy.";
+    if (normalized.includes("encoder fallback") || normalized.includes("fallback detected")) {
+        return makeFailure(
+            "fallback_blocked",
+            "Fallback blocked by policy",
+            "The hardware encoder was unavailable and fell back to software encoding, which was not allowed by your settings.",
+            "Enable CPU fallback in Settings -> Hardware, or retry when the GPU is less busy.",
+        );
     }
-
     if (normalized.includes("ffmpeg failed")) {
-        return "FFmpeg failed during encoding. Check the logs below for the specific error. Common causes: unsupported pixel format, codec not available, or corrupt source file.";
+        return makeFailure(
+            "unknown_ffmpeg_failure",
+            "FFmpeg failed",
+            "FFmpeg failed during encoding. Check the logs below for the specific error. Common causes: unsupported pixel format, codec not available, or corrupt source file.",
+            "Inspect the FFmpeg output in the job logs for the exact failure.",
+        );
     }
 
-    return summary;
+    return makeFailure(
+        "legacy_failure",
+        "Failure recorded",
+        summary,
+        "Inspect the job logs for additional context.",
+    );
+}
+
+function normalizeDecisionExplanation(
+    explanation: ExplanationPayload | null | undefined,
+    legacyReason?: string | null,
+): ExplanationView | null {
+    if (explanation) {
+        return explanation;
+    }
+    if (legacyReason) {
+        return humanizeSkipReason(legacyReason);
+    }
+    return null;
+}
+
+function normalizeFailureExplanation(
+    explanation: ExplanationPayload | null | undefined,
+    legacySummary?: string | null,
+): ExplanationView | null {
+    if (explanation) {
+        return explanation;
+    }
+    if (legacySummary) {
+        return explainFailureSummary(legacySummary);
+    }
+    return null;
 }
 
 function logLevelClass(level: string): string {
@@ -283,6 +410,7 @@ interface Job {
     attempt_count: number;
     vmaf_score?: number;
     decision_reason?: string;
+    decision_explanation?: ExplanationPayload | null;
     encoder?: string;
 }
 
@@ -348,6 +476,8 @@ interface JobDetail {
     encode_stats: EncodeStats | null;
     job_logs: LogEntry[];
     job_failure_summary: string | null;
+    decision_explanation: ExplanationPayload | null;
+    failure_explanation: ExplanationPayload | null;
 }
 
 interface CountMessageResponse {
@@ -909,8 +1039,17 @@ function JobManager() {
         setConfirmState(config);
     };
 
-    const focusedDecision = focusedJob?.job.decision_reason
-        ? humanizeSkipReason(focusedJob.job.decision_reason)
+    const focusedDecision = focusedJob
+        ? normalizeDecisionExplanation(
+            focusedJob.decision_explanation ?? focusedJob.job.decision_explanation,
+            focusedJob.job.decision_reason,
+        )
+        : null;
+    const focusedFailure = focusedJob
+        ? normalizeFailureExplanation(
+            focusedJob.failure_explanation,
+            focusedJob.job_failure_summary,
+        )
         : null;
     const focusedJobLogs = focusedJob?.job_logs ?? [];
     const shouldShowFfmpegOutput = focusedJob
@@ -1555,76 +1694,72 @@ function JobManager() {
                                     )}
 
                                     {/* Decision Info */}
-                                    {focusedJob.job.decision_reason && focusedJob.job.status !== "failed" && focusedJob.job.status !== "skipped" && (
+                                    {focusedDecision && focusedJob.job.status !== "failed" && focusedJob.job.status !== "skipped" && (
                                         <div className="p-4 rounded-lg bg-helios-solar/5 border border-helios-solar/10">
                                             <div className="flex items-center gap-2 text-helios-solar mb-1">
                                                 <Info size={12} />
                                                 <span className="text-xs font-medium text-helios-slate">Decision Context</span>
                                             </div>
-                                            {focusedDecision && (
-                                                <div className="space-y-3">
-                                                    <p className="text-sm font-medium text-helios-ink">
-                                                        {focusedJob.job.status === "completed"
-                                                            ? "Transcoded"
-                                                            : focusedDecision.summary}
-                                                    </p>
-                                                    <p className="text-xs leading-relaxed text-helios-slate">
-                                                        {focusedDecision.detail}
-                                                    </p>
-                                                    {Object.keys(focusedDecision.measured).length > 0 && (
-                                                        <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-3 py-2.5">
-                                                            {Object.entries(focusedDecision.measured).map(([k, v]) => (
-                                                                <div key={k} className="flex items-center justify-between text-xs">
-                                                                    <span className="font-mono text-helios-slate">{k}</span>
-                                                                    <span className="font-mono font-bold text-helios-ink">{v}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                    {focusedDecision.action && (
-                                                        <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
-                                                            <span className="text-xs leading-relaxed text-helios-solar">
-                                                                {focusedDecision.action}
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
+                                            <div className="space-y-3">
+                                                <p className="text-sm font-medium text-helios-ink">
+                                                    {focusedJob.job.status === "completed"
+                                                        ? "Transcoded"
+                                                        : focusedDecision.summary}
+                                                </p>
+                                                <p className="text-xs leading-relaxed text-helios-slate">
+                                                    {focusedDecision.detail}
+                                                </p>
+                                                {Object.keys(focusedDecision.measured).length > 0 && (
+                                                    <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-3 py-2.5">
+                                                        {Object.entries(focusedDecision.measured).map(([k, v]) => (
+                                                            <div key={k} className="flex items-center justify-between text-xs">
+                                                                <span className="font-mono text-helios-slate">{k}</span>
+                                                                <span className="font-mono font-bold text-helios-ink">{String(v)}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {focusedDecision.operator_guidance && (
+                                                    <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
+                                                        <span className="text-xs leading-relaxed text-helios-solar">
+                                                            {focusedDecision.operator_guidance}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     )}
 
-                                    {focusedJob.job.status === "skipped" && focusedJob.job.decision_reason && (
+                                    {focusedJob.job.status === "skipped" && focusedDecision && (
                                         <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/10">
                                             <p className="text-sm text-helios-ink leading-relaxed">
                                                 Alchemist analysed this file and decided not to transcode it. Here&apos;s why:
                                             </p>
-                                            {focusedDecision && (
-                                                <div className="mt-3 space-y-3">
-                                                    <p className="text-sm font-medium text-helios-ink">
-                                                        {focusedDecision.summary}
-                                                    </p>
-                                                    <p className="text-xs leading-relaxed text-helios-slate">
-                                                        {focusedDecision.detail}
-                                                    </p>
-                                                    {Object.keys(focusedDecision.measured).length > 0 && (
-                                                        <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2.5">
-                                                            {Object.entries(focusedDecision.measured).map(([k, v]) => (
-                                                                <div key={k} className="flex items-center justify-between text-xs">
-                                                                    <span className="font-mono text-helios-slate">{k}</span>
-                                                                    <span className="font-mono font-bold text-helios-ink">{v}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                    {focusedDecision.action && (
-                                                        <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
-                                                            <span className="text-xs leading-relaxed text-helios-solar">
-                                                                {focusedDecision.action}
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
+                                            <div className="mt-3 space-y-3">
+                                                <p className="text-sm font-medium text-helios-ink">
+                                                    {focusedDecision.summary}
+                                                </p>
+                                                <p className="text-xs leading-relaxed text-helios-slate">
+                                                    {focusedDecision.detail}
+                                                </p>
+                                                {Object.keys(focusedDecision.measured).length > 0 && (
+                                                    <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2.5">
+                                                        {Object.entries(focusedDecision.measured).map(([k, v]) => (
+                                                            <div key={k} className="flex items-center justify-between text-xs">
+                                                                <span className="font-mono text-helios-slate">{k}</span>
+                                                                <span className="font-mono font-bold text-helios-ink">{String(v)}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {focusedDecision.operator_guidance && (
+                                                    <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
+                                                        <span className="text-xs leading-relaxed text-helios-solar">
+                                                            {focusedDecision.operator_guidance}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     )}
 
@@ -1636,14 +1771,24 @@ function JobManager() {
                                                     Failure Reason
                                                 </span>
                                             </div>
-                                            {focusedJob.job_failure_summary ? (
+                                            {focusedFailure ? (
                                                 <>
                                                     <p className="text-sm font-medium text-helios-ink">
-                                                        {explainFailureSummary(focusedJob.job_failure_summary)}
+                                                        {focusedFailure.summary}
                                                     </p>
-                                                    <p className="text-xs font-mono text-helios-slate/70 break-all leading-relaxed">
-                                                        {focusedJob.job_failure_summary}
+                                                    <p className="text-xs leading-relaxed text-helios-slate">
+                                                        {focusedFailure.detail}
                                                     </p>
+                                                    {focusedFailure.operator_guidance && (
+                                                        <p className="text-xs leading-relaxed text-status-error">
+                                                            {focusedFailure.operator_guidance}
+                                                        </p>
+                                                    )}
+                                                    {focusedFailure.legacy_reason !== focusedFailure.detail && (
+                                                        <p className="text-xs font-mono text-helios-slate/70 break-all leading-relaxed">
+                                                            {focusedFailure.legacy_reason}
+                                                        </p>
+                                                    )}
                                                 </>
                                             ) : (
                                                 <p className="text-sm text-helios-slate">

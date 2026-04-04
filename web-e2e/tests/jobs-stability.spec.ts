@@ -103,3 +103,83 @@ test("completed job detail renders persisted encode stats", async ({ page }) => 
   await expect(page.getByText("7000 kbps")).toBeVisible();
   await expect(page.getByText("95.4").first()).toBeVisible();
 });
+
+test("skipped job detail prefers structured decision explanation", async ({ page }) => {
+  const skippedJob: JobFixture = {
+    id: 42,
+    input_path: "/media/skipped-structured.mkv",
+    output_path: "/output/skipped-structured-av1.mkv",
+    status: "skipped",
+    priority: 0,
+    progress: 0,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-02T00:00:00Z",
+    decision_reason: "bpp_below_threshold|bpp=0.043,threshold=0.050",
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [skippedJob]);
+  });
+  await mockJobDetails(page, {
+    42: {
+      job: skippedJob,
+      job_logs: [],
+      decision_explanation: {
+        category: "decision",
+        code: "bpp_below_threshold",
+        summary: "Structured skip summary",
+        detail: "Structured skip detail from the backend.",
+        operator_guidance: "Structured skip guidance from the backend.",
+        measured: { bpp: 0.043, threshold: 0.05 },
+        legacy_reason: skippedJob.decision_reason!,
+      },
+    },
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/skipped-structured.mkv").click();
+
+  await expect(page.getByText("Structured skip summary")).toBeVisible();
+  await expect(page.getByText("Structured skip detail from the backend.")).toBeVisible();
+  await expect(page.getByText("Structured skip guidance from the backend.")).toBeVisible();
+});
+
+test("failed job detail prefers structured failure explanation", async ({ page }) => {
+  const failedJob: JobFixture = {
+    id: 43,
+    input_path: "/media/failed-structured.mkv",
+    output_path: "/output/failed-structured-av1.mkv",
+    status: "failed",
+    priority: 0,
+    progress: 100,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-02T00:00:00Z",
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [failedJob]);
+  });
+  await mockJobDetails(page, {
+    43: {
+      job: failedJob,
+      job_logs: [],
+      job_failure_summary: "Unknown encoder 'missing_encoder'",
+      failure_explanation: {
+        category: "failure",
+        code: "encoder_unavailable",
+        summary: "Structured failure summary",
+        detail: "Structured failure detail from the backend.",
+        operator_guidance: "Structured failure guidance from the backend.",
+        measured: {},
+        legacy_reason: "Unknown encoder 'missing_encoder'",
+      },
+    },
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/failed-structured.mkv").click();
+
+  await expect(page.getByText("Structured failure summary")).toBeVisible();
+  await expect(page.getByText("Structured failure detail from the backend.")).toBeVisible();
+  await expect(page.getByText("Structured failure guidance from the backend.")).toBeVisible();
+});

@@ -61,6 +61,18 @@ Canonical job listing endpoint. Supports query params such
 as `limit`, `page`, `status`, `search`, `sort_by`,
 `sort_desc`, and `archived`.
 
+Each returned job row still includes the legacy
+`decision_reason` string when present, and now also includes
+an optional `decision_explanation` object:
+
+- `category`
+- `code`
+- `summary`
+- `detail`
+- `operator_guidance`
+- `measured`
+- `legacy_reason`
+
 Example:
 
 ```bash
@@ -72,7 +84,12 @@ curl -b cookie.txt \
 
 Returns the job row, any available analyzed metadata,
 encode stats for completed jobs, recent job logs, and a
-failure summary for failed jobs.
+failure summary for failed jobs. Structured explanation
+fields are included when available:
+
+- `decision_explanation`
+- `failure_explanation`
+- `job_failure_summary` is retained as a compatibility field
 
 Example response shape:
 
@@ -96,7 +113,21 @@ Example response shape:
     "vmaf_score": 93.1
   },
   "job_logs": [],
-  "job_failure_summary": null
+  "job_failure_summary": null,
+  "decision_explanation": {
+    "category": "decision",
+    "code": "transcode_recommended",
+    "summary": "Transcode recommended",
+    "detail": "Alchemist determined the file should be transcoded based on the current codec and measured efficiency.",
+    "operator_guidance": null,
+    "measured": {
+      "target_codec": "av1",
+      "current_codec": "h264",
+      "bpp": "0.1200"
+    },
+    "legacy_reason": "transcode_recommended|target_codec=av1,current_codec=h264,bpp=0.1200"
+  },
+  "failure_explanation": null
 }
 ```
 
@@ -373,3 +404,7 @@ Example:
 event: progress
 data: {"job_id":42,"percentage":61.4,"time":"00:11:32"}
 ```
+
+`decision` events include the legacy `reason` plus an
+optional structured `explanation` object with the same shape
+used by the jobs API.

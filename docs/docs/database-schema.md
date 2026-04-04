@@ -51,8 +51,21 @@ Database location:
 | `id` | INTEGER | Primary key |
 | `job_id` | INTEGER | Foreign key to `jobs.id` |
 | `action` | TEXT | Planner or post-encode action |
-| `reason` | TEXT | Machine-readable reason string |
+| `reason` | TEXT | Legacy machine-readable reason string retained for compatibility |
+| `reason_code` | TEXT | Stable structured explanation code |
+| `reason_payload_json` | TEXT | Serialized structured explanation payload |
 | `created_at` | DATETIME | Insert timestamp |
+
+## `job_failure_explanations`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `job_id` | INTEGER | Primary key and foreign key to `jobs.id` |
+| `legacy_summary` | TEXT | Legacy failure summary retained for compatibility |
+| `code` | TEXT | Stable structured failure code |
+| `payload_json` | TEXT | Serialized structured failure explanation payload |
+| `created_at` | TEXT | Insert timestamp |
+| `updated_at` | TEXT | Last update timestamp |
 
 ## `users`
 

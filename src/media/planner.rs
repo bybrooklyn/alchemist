@@ -106,7 +106,12 @@ impl Planner for BasicPlanner {
 
         if available_encoders.is_empty() {
             return Ok(skip_plan(
-                "No available encoders for current hardware policy".to_string(),
+                format!(
+                    "no_available_encoders|requested_codec={},allow_cpu_fallback={},allow_cpu_encoding={}",
+                    requested_codec.as_str(),
+                    self.config.hardware.allow_cpu_fallback,
+                    self.config.hardware.allow_cpu_encoding
+                ),
                 container,
                 requested_codec,
                 self.config.transcode.allow_fallback,
@@ -119,7 +124,7 @@ impl Planner for BasicPlanner {
         {
             return Ok(skip_plan(
                 format!(
-                    "Preferred codec {} unavailable and fallback disabled",
+                    "preferred_codec_unavailable_fallback_disabled|codec={}",
                     requested_codec.as_str()
                 ),
                 container,
@@ -135,7 +140,10 @@ impl Planner for BasicPlanner {
             self.config.transcode.allow_fallback,
         ) else {
             return Ok(skip_plan(
-                "No suitable encoder available".to_string(),
+                format!(
+                    "no_suitable_encoder|requested_codec={}",
+                    requested_codec.as_str()
+                ),
                 container,
                 requested_codec,
                 self.config.transcode.allow_fallback,
@@ -364,16 +372,16 @@ fn should_transcode(
 
     if metadata.codec_name.eq_ignore_ascii_case("h264") {
         return TranscodeDecision::Transcode {
-            reason: "H.264 source prioritized for transcode".to_string(),
+            reason: "transcode_h264_source|current_codec=h264".to_string(),
         };
     }
 
     TranscodeDecision::Transcode {
         reason: format!(
-            "Ready for {} transcode (Current codec: {}, BPP: {})",
+            "transcode_recommended|target_codec={},current_codec={},bpp={}",
             target_codec_str,
             metadata.codec_name,
-            bpp.map(|value| format!("{:.4}", value))
+            bpp.map(|value| format!("{value:.4}"))
                 .unwrap_or_else(|| "unknown".to_string())
         ),
     }
@@ -1117,6 +1125,7 @@ mod tests {
         AnalysisConfidence, AudioStreamMetadata, DynamicRange, MediaMetadata,
         SubtitleStreamMetadata,
     };
+    use crate::system::hardware::{BackendCapability, ProbeSummary};
 
     fn config() -> Config {
         let mut config = Config::default();
@@ -1398,6 +1407,137 @@ mod tests {
         source.metadata.container = "matroska".to_string();
         let decision = should_transcode(&source, &config(), OutputCodec::Av1, "mkv");
         assert!(matches!(decision, TranscodeDecision::Skip { .. }));
+    }
+
+    #[test]
+    fn already_target_codec_reason_is_stable() {
+        let decision = should_transcode(&analysis(), &config(), OutputCodec::Hevc, "mkv");
+        let TranscodeDecision::Skip { reason } = decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(explanation.code, "already_target_codec");
+        assert_eq!(
+            explanation.measured.get("codec"),
+            Some(&serde_json::json!("hevc"))
+        );
+    }
+
+    #[test]
+    fn remux_reason_is_stable() {
+        let mut source = analysis();
+        source.metadata.container = "mp4".to_string();
+        let decision = should_transcode(&source, &config(), OutputCodec::Hevc, "mkv");
+        let TranscodeDecision::Remux { reason } = decision else {
+            panic!("expected remux decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("remux", &reason);
+        assert_eq!(explanation.code, "already_target_codec_wrong_container");
+        assert_eq!(
+            explanation.measured.get("target_extension"),
+            Some(&serde_json::json!("mkv"))
+        );
+    }
+
+    #[test]
+    fn bpp_threshold_reason_is_stable() {
+        let mut source = analysis();
+        source.metadata.codec_name = "mpeg4".to_string();
+        source.metadata.bit_depth = Some(8);
+        source.metadata.video_bitrate_bps = Some(1_000_000);
+        let decision = should_transcode(&source, &config(), OutputCodec::Av1, "mkv");
+        let TranscodeDecision::Skip { reason } = decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(explanation.code, "bpp_below_threshold");
+    }
+
+    #[test]
+    fn min_file_size_reason_is_stable() {
+        let mut source = analysis();
+        source.metadata.codec_name = "mpeg4".to_string();
+        source.metadata.bit_depth = Some(8);
+        source.metadata.size_bytes = 20 * 1024 * 1024;
+        let decision = should_transcode(&source, &config(), OutputCodec::Av1, "mkv");
+        let TranscodeDecision::Skip { reason } = decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(explanation.code, "below_min_file_size");
+    }
+
+    #[test]
+    fn incomplete_metadata_reason_is_stable() {
+        let mut source = analysis();
+        source.metadata.codec_name = "mpeg4".to_string();
+        source.metadata.bit_depth = Some(8);
+        source.metadata.width = 0;
+        let decision = should_transcode(&source, &config(), OutputCodec::Av1, "mkv");
+        let TranscodeDecision::Skip { reason } = decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(explanation.code, "incomplete_metadata");
+    }
+
+    #[tokio::test]
+    async fn no_available_encoders_reason_is_stable() {
+        let mut cfg = config();
+        cfg.hardware.allow_cpu_encoding = false;
+        cfg.hardware.allow_cpu_fallback = false;
+        cfg.transcode.allow_fallback = false;
+        let planner = BasicPlanner::new(Arc::new(cfg), None);
+
+        let plan = planner
+            .plan(&analysis(), Path::new("/tmp/out.mkv"), None)
+            .await
+            .expect("plan");
+
+        let TranscodeDecision::Skip { reason } = plan.decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(explanation.code, "no_available_encoders");
+    }
+
+    #[tokio::test]
+    async fn preferred_codec_unavailable_reason_is_stable() {
+        let hw_info = HardwareInfo {
+            vendor: Vendor::Intel,
+            device_path: Some("/dev/dri/renderD128".to_string()),
+            supported_codecs: vec!["hevc".to_string()],
+            backends: vec![BackendCapability {
+                kind: HardwareBackend::Qsv,
+                codec: "hevc".to_string(),
+                encoder: "hevc_qsv".to_string(),
+                device_path: Some("/dev/dri/renderD128".to_string()),
+            }],
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: ProbeSummary::default(),
+        };
+
+        let mut cfg = config();
+        cfg.hardware.allow_cpu_encoding = false;
+        cfg.hardware.allow_cpu_fallback = false;
+        cfg.transcode.output_codec = OutputCodec::Av1;
+        cfg.transcode.allow_fallback = false;
+
+        let planner = BasicPlanner::new(Arc::new(cfg), Some(hw_info));
+        let plan = planner
+            .plan(&analysis(), Path::new("/tmp/out.mkv"), None)
+            .await
+            .expect("plan");
+
+        let TranscodeDecision::Skip { reason } = plan.decision else {
+            panic!("expected skip decision");
+        };
+        let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+        assert_eq!(
+            explanation.code,
+            "preferred_codec_unavailable_fallback_disabled"
+        );
     }
 
     #[test]

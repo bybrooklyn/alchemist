@@ -114,6 +114,17 @@ export interface JobFixture {
   attempt_count?: number;
   vmaf_score?: number;
   decision_reason?: string;
+  decision_explanation?: ExplanationFixture | null;
+}
+
+export interface ExplanationFixture {
+  category: "decision" | "failure";
+  code: string;
+  summary: string;
+  detail: string;
+  operator_guidance: string | null;
+  measured: Record<string, string | number | boolean | null>;
+  legacy_reason: string;
 }
 
 export interface JobDetailFixture {
@@ -149,6 +160,8 @@ export interface JobDetailFixture {
     created_at: string;
   }>;
   job_failure_summary?: string;
+  decision_explanation?: ExplanationFixture | null;
+  failure_explanation?: ExplanationFixture | null;
 }
 
 interface SettingsBundle {
