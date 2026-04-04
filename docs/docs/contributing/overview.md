@@ -11,6 +11,9 @@ Alchemist is GPLv3 open source. Contributions are welcome.
 - [`CONTRIBUTING.md`](https://github.com/bybrooklyn/alchemist/blob/main/CONTRIBUTING.md) for licensing and contribution terms
 - [`RELEASING.md`](https://github.com/bybrooklyn/alchemist/blob/main/RELEASING.md) for release and RC checklists
 
+RC.2 adds a supported Windows contributor path for `just install-w`,
+`just dev`, and `just check`. Other `just` recipes are still Unix-first.
+
 ## Reporting bugs
 
 1. Go to [GitHub Issues](https://github.com/bybrooklyn/alchemist/issues)

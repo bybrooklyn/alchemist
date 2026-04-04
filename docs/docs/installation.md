@@ -75,6 +75,8 @@ alchemist.exe      # Windows
 
 ## From source
 
+For macOS and Linux:
+
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
@@ -85,12 +87,15 @@ just build
 
 Requires Rust 1.85+. Run `rustup update stable` first.
 
-For day-to-day local development instead of a release build:
+For Windows local development in RC.2:
 
 ```bash
-just install
+just install-w
 just dev
 ```
+
+Windows contributor support in RC.2 is limited to the core `install/dev/check`
+path. Broader `just` release and utility recipes remain Unix-first.
 
 ## Nightly builds
 

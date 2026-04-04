@@ -42,6 +42,9 @@ just install-w      # Windows
 just dev
 ```
 
+Windows contributor support in RC.2 is limited to the core `install/dev/check`
+path. Broader utility and release recipes remain Unix-first for now.
+
 Additional setup and workflow docs live in:
 
 - `docs/docs/contributing/development.md`

@@ -18,9 +18,9 @@ frontend tooling.
 ```bash
 git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
-just install        # macOS / Linux
-just install-w      # Windows
-just dev   # build frontend assets, then start the backend
+just install        # macOS / Linux bootstrap
+just install-w      # Windows bootstrap
+just dev            # supported on both paths in RC.2
 ```
 
 ## Common tasks
@@ -28,14 +28,28 @@ just dev   # build frontend assets, then start the backend
 ```bash
 just install        # macOS / Linux bootstrap
 just install-w      # Windows bootstrap
-just check          # fmt + clippy + typecheck + build (mirrors CI)
+just check          # supported on both paths in RC.2
 just test           # cargo test
 just test-e2e       # Playwright reliability suite
 just db-reset       # wipe dev DB, keep config
 just db-reset-all   # wipe DB and config (re-triggers wizard)
-just bump 0.3.0     # bump version in all files
-just update 0.3.0   # full guarded release flow
+just bump 0.3.0-rc.2 # bump version in all files
+just update 0.3.0-rc.2 # full guarded release flow
 ```
+
+## Windows support in RC.2
+
+Windows contributor support in RC.2 covers the core path:
+
+- `just install-w`
+- `just dev`
+- `just check`
+
+The following remain Unix-first for now and are deferred to RC.3 or later:
+
+- broader `just` utility recipes such as database and Docker helpers
+- release-oriented guarded flows such as `just update`
+- full Playwright contributor parity outside the documented manual verification path
 
 ## Frontend only
 

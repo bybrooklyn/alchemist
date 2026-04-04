@@ -111,6 +111,52 @@ fn orphaned_temp_output_path(output_path: &str) -> PathBuf {
     PathBuf::from(format!("{output_path}.alchemist.tmp"))
 }
 
+fn load_startup_config(config_path: &Path, is_server_mode: bool) -> (config::Config, bool, bool) {
+    let config_exists = config_path.exists();
+    let (config, setup_mode) = if !config_exists {
+        let cwd = std::env::current_dir().ok();
+        info!(
+            target: "startup",
+            "Config file not found at {:?} (cwd={:?})",
+            config_path,
+            cwd
+        );
+        if is_server_mode {
+            info!("No configuration file found. Entering Setup Mode (Web UI).");
+            (config::Config::default(), true)
+        } else {
+            warn!("No configuration file found. Using defaults.");
+            (config::Config::default(), false)
+        }
+    } else {
+        match config::Config::load(config_path) {
+            Ok(c) => (c, false),
+            Err(e) => {
+                warn!(
+                    "Failed to load config file at {:?}: {}. Using defaults.",
+                    config_path, e
+                );
+                if is_server_mode {
+                    warn!(
+                        "Config load failed in server mode. \
+                         Will check for existing users before \
+                         entering Setup Mode."
+                    );
+                    (config::Config::default(), false)
+                } else {
+                    (config::Config::default(), false)
+                }
+            }
+        }
+    };
+
+    (config, setup_mode, config_exists)
+}
+
+fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bool) -> bool {
+    is_server_mode && !has_users
+}
+
 async fn run() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -180,48 +226,8 @@ async fn run() -> Result<()> {
     let config_path = runtime::config_path();
     let db_path = runtime::db_path();
     let config_mutable = runtime::config_mutable();
-    let config_exists = config_path.exists();
-    let (config, mut setup_mode) = if !config_exists {
-        let cwd = std::env::current_dir().ok();
-        info!(
-            target: "startup",
-            "Config file not found at {:?} (cwd={:?})",
-            config_path,
-            cwd
-        );
-        if is_server_mode {
-            info!("No configuration file found. Entering Setup Mode (Web UI).");
-            (config::Config::default(), true)
-        } else {
-            // CLI mode requires config or explicit args
-            warn!("No configuration file found. Using defaults.");
-            (config::Config::default(), false)
-        }
-    } else {
-        match config::Config::load(config_path.as_path()) {
-            Ok(c) => (c, false),
-            Err(e) => {
-                warn!(
-                    "Failed to load config file at {:?}: {}. Using defaults.",
-                    config_path, e
-                );
-                if is_server_mode {
-                    warn!(
-                        "Config load failed in server mode. \
-                         Will check for existing users before \
-                         entering Setup Mode."
-                    );
-                    // Do not force setup_mode=true here.
-                    // The user-check below will set it if needed.
-                    // If users exist, we start with defaults but
-                    // do NOT re-enable unauthenticated setup endpoints.
-                    (config::Config::default(), false)
-                } else {
-                    (config::Config::default(), false)
-                }
-            }
-        }
-    };
+    let (config, mut setup_mode, config_exists) =
+        load_startup_config(config_path.as_path(), is_server_mode);
     info!(
         target: "startup",
         "Config loaded (path={:?}, exists={}, mutable={}, setup_mode={}) in {} ms",
@@ -372,7 +378,7 @@ async fn run() -> Result<()> {
             has_users,
             users_start.elapsed().as_millis()
         );
-        if !has_users {
+        if should_enter_setup_mode_for_missing_users(is_server_mode, has_users) {
             if !setup_mode {
                 info!("No users found. Entering Setup Mode (Web UI).");
             }
@@ -860,6 +866,55 @@ mod tests {
             config_watch_target(config_path.as_path()),
             Path::new("/tmp")
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_config_with_existing_users_does_not_reenter_setup_mode()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_invalid_config_users");
+        let config_path = temp_config_path("alchemist_invalid_config_users");
+        std::fs::write(&config_path, "not-valid = [")?;
+
+        let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
+        db.create_user("admin", "hash").await?;
+
+        let (_config, setup_mode, config_exists) = load_startup_config(config_path.as_path(), true);
+        let has_users = db.has_users().await?;
+        let final_setup_mode =
+            setup_mode || should_enter_setup_mode_for_missing_users(true, has_users);
+
+        assert!(config_exists);
+        assert!(has_users);
+        assert!(!setup_mode);
+        assert!(!final_setup_mode);
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_config_without_users_still_enters_setup_mode()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db_path = temp_db_path("alchemist_invalid_config_setup");
+        let config_path = temp_config_path("alchemist_invalid_config_setup");
+        std::fs::write(&config_path, "not-valid = [")?;
+
+        let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let (_config, setup_mode, config_exists) = load_startup_config(config_path.as_path(), true);
+        let has_users = db.has_users().await?;
+        let final_setup_mode =
+            setup_mode || should_enter_setup_mode_for_missing_users(true, has_users);
+
+        assert!(config_exists);
+        assert!(!has_users);
+        assert!(!setup_mode);
+        assert!(final_setup_mode);
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 
     #[tokio::test]
