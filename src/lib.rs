@@ -1,6 +1,7 @@
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod explanations;
 pub mod media;
 pub mod notifications;
 pub mod orchestrator;

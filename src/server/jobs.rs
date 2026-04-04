@@ -3,6 +3,7 @@
 use super::{AppState, is_row_not_found};
 use crate::db::{Job, JobState};
 use crate::error::Result;
+use crate::explanations::Explanation;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -121,7 +122,25 @@ pub(crate) async fn jobs_table_handler(
         })
         .await
     {
-        Ok(jobs) => axum::Json(jobs).into_response(),
+        Ok(jobs) => {
+            let job_ids = jobs.iter().map(|job| job.id).collect::<Vec<_>>();
+            let explanations = match state.db.get_job_decision_explanations(&job_ids).await {
+                Ok(explanations) => explanations,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            };
+
+            let payload = jobs
+                .into_iter()
+                .map(|job| JobResponse {
+                    decision_explanation: explanations.get(&job.id).cloned(),
+                    job,
+                })
+                .collect::<Vec<_>>();
+
+            axum::Json(payload).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -295,12 +314,21 @@ pub(crate) async fn update_job_priority_handler(
 }
 
 #[derive(Serialize)]
+pub(crate) struct JobResponse {
+    #[serde(flatten)]
+    job: Job,
+    decision_explanation: Option<Explanation>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct JobDetailResponse {
     job: Job,
     metadata: Option<crate::media::pipeline::MediaMetadata>,
     encode_stats: Option<crate::db::DetailedEncodeStats>,
     job_logs: Vec<crate::db::LogEntry>,
     job_failure_summary: Option<String>,
+    decision_explanation: Option<Explanation>,
+    failure_explanation: Option<Explanation>,
 }
 
 pub(crate) async fn get_job_detail_handler(
@@ -344,14 +372,35 @@ pub(crate) async fn get_job_detail_handler(
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     };
 
-    let job_failure_summary = if job.status == JobState::Failed {
-        job_logs
+    let decision_explanation = match state.db.get_job_decision_explanation(id).await {
+        Ok(explanation) => explanation,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    let (job_failure_summary, failure_explanation) = if job.status == JobState::Failed {
+        let legacy_summary = job_logs
             .iter()
             .rev()
             .find(|entry| entry.level.eq_ignore_ascii_case("error"))
-            .map(|entry| entry.message.clone())
+            .map(|entry| entry.message.clone());
+        let stored_failure = match state.db.get_job_failure_explanation(id).await {
+            Ok(explanation) => explanation,
+            Err(err) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            }
+        };
+        let summary = stored_failure
+            .as_ref()
+            .map(|explanation| explanation.legacy_reason.clone())
+            .or(legacy_summary.clone());
+        let explanation = stored_failure.or_else(|| {
+            legacy_summary
+                .as_deref()
+                .map(crate::explanations::failure_from_summary)
+        });
+        (summary, explanation)
     } else {
-        None
+        (None, None)
     };
 
     axum::Json(JobDetailResponse {
@@ -360,6 +409,8 @@ pub(crate) async fn get_job_detail_handler(
         encode_stats,
         job_logs,
         job_failure_summary,
+        decision_explanation,
+        failure_explanation,
     })
     .into_response()
 }

@@ -1,4 +1,8 @@
 use crate::error::{AlchemistError, Result};
+use crate::explanations::{
+    Explanation, decision_from_legacy, explanation_from_json, explanation_to_json,
+    failure_from_summary,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +65,7 @@ pub enum AlchemistEvent {
         job_id: i64,
         action: String,
         reason: String,
+        explanation: Option<Explanation>,
     },
     Log {
         level: String,
@@ -86,6 +91,7 @@ pub enum JobEvent {
         job_id: i64,
         action: String,
         reason: String,
+        explanation: Option<Explanation>,
     },
     Log {
         level: String,
@@ -137,10 +143,12 @@ impl From<JobEvent> for AlchemistEvent {
                 job_id,
                 action,
                 reason,
+                explanation,
             } => AlchemistEvent::Decision {
                 job_id,
                 action,
                 reason,
+                explanation,
             },
             JobEvent::Log {
                 level,
@@ -175,10 +183,12 @@ impl From<AlchemistEvent> for JobEvent {
                 job_id,
                 action,
                 reason,
+                explanation,
             } => JobEvent::Decision {
                 job_id,
                 action,
                 reason,
+                explanation,
             },
             AlchemistEvent::Log {
                 level,
@@ -583,7 +593,24 @@ pub struct Decision {
     pub job_id: i64,
     pub action: String, // "encode", "skip", "reject"
     pub reason: String,
+    pub reason_code: Option<String>,
+    pub reason_payload_json: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct DecisionRecord {
+    job_id: i64,
+    action: String,
+    reason: String,
+    reason_payload_json: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct FailureExplanationRecord {
+    legacy_summary: Option<String>,
+    code: String,
+    payload_json: String,
 }
 
 /// Default timeout for potentially slow database queries
@@ -799,15 +826,31 @@ impl Db {
         Ok(())
     }
 
-    pub async fn add_decision(&self, job_id: i64, action: &str, reason: &str) -> Result<()> {
-        sqlx::query("INSERT INTO decisions (job_id, action, reason) VALUES (?, ?, ?)")
-            .bind(job_id)
-            .bind(action)
-            .bind(reason)
-            .execute(&self.pool)
-            .await?;
+    pub async fn add_decision_with_explanation(
+        &self,
+        job_id: i64,
+        action: &str,
+        explanation: &Explanation,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO decisions (job_id, action, reason, reason_code, reason_payload_json)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(job_id)
+        .bind(action)
+        .bind(&explanation.legacy_reason)
+        .bind(&explanation.code)
+        .bind(explanation_to_json(explanation))
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
+    }
+
+    pub async fn add_decision(&self, job_id: i64, action: &str, reason: &str) -> Result<()> {
+        let explanation = decision_from_legacy(action, reason);
+        self.add_decision_with_explanation(job_id, action, &explanation)
+            .await
     }
 
     pub async fn get_all_jobs(&self) -> Result<Vec<Job>> {
@@ -878,13 +921,115 @@ impl Db {
 
     pub async fn get_job_decision(&self, job_id: i64) -> Result<Option<Decision>> {
         let decision = sqlx::query_as::<_, Decision>(
-            "SELECT id, job_id, action, reason, created_at FROM decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, job_id, action, reason, reason_code, reason_payload_json, created_at
+             FROM decisions
+             WHERE job_id = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(decision)
+    }
+
+    pub async fn get_job_decision_explanation(&self, job_id: i64) -> Result<Option<Explanation>> {
+        let row = sqlx::query_as::<_, DecisionRecord>(
+            "SELECT job_id, action, reason, reason_payload_json
+             FROM decisions
+             WHERE job_id = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| {
+            row.reason_payload_json
+                .as_deref()
+                .and_then(explanation_from_json)
+                .unwrap_or_else(|| decision_from_legacy(&row.action, &row.reason))
+        }))
+    }
+
+    pub async fn get_job_decision_explanations(
+        &self,
+        job_ids: &[i64],
+    ) -> Result<HashMap<i64, Explanation>> {
+        if job_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT d.job_id, d.action, d.reason, d.reason_payload_json
+             FROM decisions d
+             INNER JOIN (SELECT job_id, MAX(id) AS max_id FROM decisions WHERE job_id IN (",
+        );
+        let mut separated = qb.separated(", ");
+        for job_id in job_ids {
+            separated.push_bind(job_id);
+        }
+        separated.push_unseparated(") GROUP BY job_id) latest ON latest.max_id = d.id");
+
+        let rows = qb
+            .build_query_as::<DecisionRecord>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let explanation = row
+                    .reason_payload_json
+                    .as_deref()
+                    .and_then(explanation_from_json)
+                    .unwrap_or_else(|| decision_from_legacy(&row.action, &row.reason));
+                (row.job_id, explanation)
+            })
+            .collect())
+    }
+
+    pub async fn upsert_job_failure_explanation(
+        &self,
+        job_id: i64,
+        explanation: &Explanation,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO job_failure_explanations (job_id, legacy_summary, code, payload_json, updated_at)
+             VALUES (?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(job_id) DO UPDATE SET
+                 legacy_summary = excluded.legacy_summary,
+                 code = excluded.code,
+                 payload_json = excluded.payload_json,
+                 updated_at = datetime('now')",
+        )
+        .bind(job_id)
+        .bind(&explanation.legacy_reason)
+        .bind(&explanation.code)
+        .bind(explanation_to_json(explanation))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_job_failure_explanation(&self, job_id: i64) -> Result<Option<Explanation>> {
+        let row = sqlx::query_as::<_, FailureExplanationRecord>(
+            "SELECT legacy_summary, code, payload_json
+             FROM job_failure_explanations
+             WHERE job_id = ?",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| {
+            explanation_from_json(&row.payload_json).unwrap_or_else(|| {
+                failure_from_summary(row.legacy_summary.as_deref().unwrap_or(row.code.as_str()))
+            })
+        }))
     }
 
     pub async fn get_stats(&self) -> Result<serde_json::Value> {
@@ -2795,6 +2940,49 @@ mod tests {
                 .ok_or_else(|| std::io::Error::other("missing completed job"))?
                 .status,
             JobState::Completed
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_decision_rows_still_parse_into_structured_explanations()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_legacy_decision_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let _ = db
+            .enqueue_job(
+                Path::new("legacy-input.mkv"),
+                Path::new("legacy-output.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let job = db
+            .get_job_by_input_path("legacy-input.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing job"))?;
+
+        sqlx::query(
+            "INSERT INTO decisions (job_id, action, reason, reason_code, reason_payload_json)
+             VALUES (?, 'skip', 'bpp_below_threshold|bpp=0.043,threshold=0.050', NULL, NULL)",
+        )
+        .bind(job.id)
+        .execute(&db.pool)
+        .await?;
+
+        let explanation = db
+            .get_job_decision_explanation(job.id)
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing explanation"))?;
+        assert_eq!(explanation.code, "bpp_below_threshold");
+        assert_eq!(
+            explanation.measured.get("bpp"),
+            Some(&serde_json::json!(0.043))
         );
 
         drop(db);

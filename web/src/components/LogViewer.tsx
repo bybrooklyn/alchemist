@@ -113,8 +113,14 @@ export default function LogViewer() {
 
             eventSource.addEventListener("decision", (event) => {
                 try {
-                    const data = JSON.parse(event.data) as { action: string; reason: string; job_id?: number };
-                    appendLog(`Decision: ${data.action.toUpperCase()} - ${data.reason}`, "info", data.job_id);
+                    const data = JSON.parse(event.data) as {
+                        action: string;
+                        reason: string;
+                        job_id?: number;
+                        explanation?: { summary?: string };
+                    };
+                    const detail = data.explanation?.summary ?? data.reason;
+                    appendLog(`Decision: ${data.action.toUpperCase()} - ${detail}`, "info", data.job_id);
                 } catch {
                     // Ignore malformed SSE payload.
                 }

@@ -590,8 +590,13 @@ impl Pipeline {
             Ok(a) => a,
             Err(e) => {
                 let reason = format!("analysis_failed|error={e}");
+                let failure_explanation = crate::explanations::failure_from_summary(&reason);
                 let _ = self.db.add_log("error", Some(job_id), &reason).await;
                 self.db.add_decision(job_id, "skip", &reason).await.ok();
+                self.db
+                    .upsert_job_failure_explanation(job_id, &failure_explanation)
+                    .await
+                    .ok();
                 self.db
                     .update_job_status(job_id, crate::db::JobState::Failed)
                     .await?;
@@ -622,8 +627,13 @@ impl Pipeline {
             Ok(p) => p,
             Err(e) => {
                 let reason = format!("planning_failed|error={e}");
+                let failure_explanation = crate::explanations::failure_from_summary(&reason);
                 let _ = self.db.add_log("error", Some(job_id), &reason).await;
                 self.db.add_decision(job_id, "skip", &reason).await.ok();
+                self.db
+                    .upsert_job_failure_explanation(job_id, &failure_explanation)
+                    .await
+                    .ok();
                 self.db
                     .update_job_status(job_id, crate::db::JobState::Failed)
                     .await?;
@@ -741,6 +751,11 @@ impl Pipeline {
                 let msg = format!("Probing failed: {e}");
                 tracing::error!("Job {}: {}", job.id, msg);
                 let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                let explanation = crate::explanations::failure_from_summary(&msg);
+                let _ = self
+                    .db
+                    .upsert_job_failure_explanation(job.id, &explanation)
+                    .await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
@@ -782,6 +797,11 @@ impl Pipeline {
                 let msg = format!("Failed to resolve library profile: {err}");
                 tracing::error!("Job {}: {}", job.id, msg);
                 let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                let explanation = crate::explanations::failure_from_summary(&msg);
+                let _ = self
+                    .db
+                    .upsert_job_failure_explanation(job.id, &explanation)
+                    .await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
@@ -797,6 +817,11 @@ impl Pipeline {
                 let msg = format!("Planner failed: {e}");
                 tracing::error!("Job {}: {}", job.id, msg);
                 let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                let explanation = crate::explanations::failure_from_summary(&msg);
+                let _ = self
+                    .db
+                    .upsert_job_failure_explanation(job.id, &explanation)
+                    .await;
                 let _ = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await;
@@ -828,17 +853,12 @@ impl Pipeline {
                 reason.clone(),
                 crate::db::JobState::Encoding,
             ),
-            TranscodeDecision::Remux { .. } => {
+            TranscodeDecision::Remux { reason } => {
                 tracing::info!(
                     "Job {}: Remuxing MP4→MKV (stream copy, no re-encode)",
                     job.id
                 );
-                (
-                    true,
-                    "remux",
-                    "remux: mp4_to_mkv_stream_copy".to_string(),
-                    crate::db::JobState::Remuxing,
-                )
+                (true, "remux", reason.clone(), crate::db::JobState::Remuxing)
             }
             TranscodeDecision::Skip { reason } => {
                 (false, "skip", reason.clone(), crate::db::JobState::Skipped)
@@ -860,11 +880,25 @@ impl Pipeline {
             job.id,
             &reason
         );
-        let _ = self.db.add_decision(job.id, action, &reason).await;
+        let explanation = crate::explanations::decision_from_legacy(action, &reason);
+        let _ = self
+            .db
+            .add_decision_with_explanation(job.id, action, &explanation)
+            .await;
+        let _ = self
+            .event_channels
+            .jobs
+            .send(crate::db::JobEvent::Decision {
+                job_id: job.id,
+                action: action.to_string(),
+                reason: explanation.legacy_reason.clone(),
+                explanation: Some(explanation.clone()),
+            });
         let _ = self.tx.send(crate::db::AlchemistEvent::Decision {
             job_id: job.id,
             action: action.to_string(),
-            reason: reason.clone(),
+            reason: explanation.legacy_reason.clone(),
+            explanation: Some(explanation),
         });
 
         if self.update_job_state(job.id, next_status).await.is_err() {
@@ -910,6 +944,13 @@ impl Pipeline {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
                     tracing::error!("Job {}: Encoder fallback detected and not allowed.", job.id);
+                    let summary = "Encoder fallback detected and not allowed.";
+                    let explanation = crate::explanations::failure_from_summary(summary);
+                    let _ = self.db.add_log("error", Some(job.id), summary).await;
+                    let _ = self
+                        .db
+                        .upsert_job_failure_explanation(job.id, &explanation)
+                        .await;
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await;
@@ -996,6 +1037,11 @@ impl Pipeline {
                     let msg = format!("Transcode failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
                     let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    let explanation = crate::explanations::failure_from_summary(&msg);
+                    let _ = self
+                        .db
+                        .upsert_job_failure_explanation(job.id, &explanation)
+                        .await;
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await;
@@ -1010,6 +1056,10 @@ impl Pipeline {
             tracing::error!("Failed to update job {} status {:?}: {}", job_id, status, e);
             return Err(e);
         }
+        let _ = self
+            .event_channels
+            .jobs
+            .send(crate::db::JobEvent::StateChanged { job_id, status });
         let _ = self
             .tx
             .send(crate::db::AlchemistEvent::JobStateChanged { job_id, status });
@@ -1140,7 +1190,14 @@ impl Pipeline {
                             cleanup_temp_subtitle_output(job_id, context.plan).await;
                             let _ = self
                                 .db
-                                .add_decision(job_id, "skip", "Low quality (VMAF)")
+                                .add_decision(
+                                    job_id,
+                                    "skip",
+                                    &format!(
+                                        "quality_below_threshold|metric=vmaf,score={:.1},threshold={:.1}",
+                                        s, config.quality.min_vmaf_score
+                                    ),
+                                )
                                 .await;
                             self.update_job_state(job_id, crate::db::JobState::Skipped)
                                 .await?;
@@ -1304,6 +1361,11 @@ impl Pipeline {
 
         let message = format!("Finalization failed: {err}");
         let _ = self.db.add_log("error", Some(job_id), &message).await;
+        let failure_explanation = crate::explanations::failure_from_summary(&message);
+        let _ = self
+            .db
+            .upsert_job_failure_explanation(job_id, &failure_explanation)
+            .await;
         if let crate::error::AlchemistError::QualityCheckFailed(reason) = err {
             let _ = self.db.add_decision(job_id, "reject", reason).await;
         }

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::db::{AlchemistEvent, Db, NotificationTarget};
+use crate::explanations::Explanation;
 use reqwest::{Client, Url, redirect::Policy};
 use serde_json::json;
 use std::net::IpAddr;
@@ -149,21 +150,86 @@ impl NotificationManager {
             .resolve(host, std::net::SocketAddr::new(target_ip, port))
             .build()?;
 
+        let (decision_explanation, failure_explanation) = match event {
+            AlchemistEvent::JobStateChanged { job_id, status } => {
+                let decision_explanation = self
+                    .db
+                    .get_job_decision_explanation(*job_id)
+                    .await
+                    .ok()
+                    .flatten();
+                let failure_explanation = if *status == crate::db::JobState::Failed {
+                    self.db
+                        .get_job_failure_explanation(*job_id)
+                        .await
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                (decision_explanation, failure_explanation)
+            }
+            _ => (None, None),
+        };
+
         match target.target_type.as_str() {
             "discord" => {
-                self.send_discord_with_client(&client, target, event, status)
-                    .await
+                self.send_discord_with_client(
+                    &client,
+                    target,
+                    event,
+                    status,
+                    decision_explanation.as_ref(),
+                    failure_explanation.as_ref(),
+                )
+                .await
             }
             "gotify" => {
-                self.send_gotify_with_client(&client, target, event, status)
-                    .await
+                self.send_gotify_with_client(
+                    &client,
+                    target,
+                    event,
+                    status,
+                    decision_explanation.as_ref(),
+                    failure_explanation.as_ref(),
+                )
+                .await
             }
             "webhook" => {
-                self.send_webhook_with_client(&client, target, event, status)
-                    .await
+                self.send_webhook_with_client(
+                    &client,
+                    target,
+                    event,
+                    status,
+                    decision_explanation.as_ref(),
+                    failure_explanation.as_ref(),
+                )
+                .await
             }
             _ => Ok(()),
         }
+    }
+
+    fn notification_message(
+        &self,
+        job_id: i64,
+        status: &str,
+        decision_explanation: Option<&Explanation>,
+        failure_explanation: Option<&Explanation>,
+    ) -> String {
+        let explanation = failure_explanation.or(decision_explanation);
+        if let Some(explanation) = explanation {
+            let mut message = format!("Job #{} {} — {}", job_id, status, explanation.summary);
+            if !explanation.detail.is_empty() {
+                message.push_str(&format!("\n{}", explanation.detail));
+            }
+            if let Some(guidance) = &explanation.operator_guidance {
+                message.push_str(&format!("\nNext step: {}", guidance));
+            }
+            return message;
+        }
+
+        format!("Job #{} is now {}", job_id, status)
     }
 
     async fn send_discord_with_client(
@@ -172,6 +238,8 @@ impl NotificationManager {
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
+        decision_explanation: Option<&Explanation>,
+        failure_explanation: Option<&Explanation>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let color = match status {
             "completed" => 0x00FF00,             // Green
@@ -182,9 +250,12 @@ impl NotificationManager {
         };
 
         let message = match event {
-            AlchemistEvent::JobStateChanged { job_id, status } => {
-                format!("Job #{} is now {}", job_id, status)
-            }
+            AlchemistEvent::JobStateChanged { job_id, status } => self.notification_message(
+                *job_id,
+                &status.to_string(),
+                decision_explanation,
+                failure_explanation,
+            ),
             _ => "Event occurred".to_string(),
         };
 
@@ -212,11 +283,16 @@ impl NotificationManager {
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
+        decision_explanation: Option<&Explanation>,
+        failure_explanation: Option<&Explanation>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let message = match event {
-            AlchemistEvent::JobStateChanged { job_id, status } => {
-                format!("Job #{} is now {}", job_id, status)
-            }
+            AlchemistEvent::JobStateChanged { job_id, status } => self.notification_message(
+                *job_id,
+                &status.to_string(),
+                decision_explanation,
+                failure_explanation,
+            ),
             _ => "Event occurred".to_string(),
         };
 
@@ -246,11 +322,16 @@ impl NotificationManager {
         target: &NotificationTarget,
         event: &AlchemistEvent,
         status: &str,
+        decision_explanation: Option<&Explanation>,
+        failure_explanation: Option<&Explanation>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let message = match event {
-            AlchemistEvent::JobStateChanged { job_id, status } => {
-                format!("Job #{} is now {}", job_id, status)
-            }
+            AlchemistEvent::JobStateChanged { job_id, status } => self.notification_message(
+                *job_id,
+                &status.to_string(),
+                decision_explanation,
+                failure_explanation,
+            ),
             _ => "Event occurred".to_string(),
         };
 
@@ -259,6 +340,8 @@ impl NotificationManager {
             "status": status,
             "message": message,
             "data": event,
+            "decision_explanation": decision_explanation,
+            "failure_explanation": failure_explanation,
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
 
@@ -332,6 +415,7 @@ fn is_private_ip(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::JobState;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -384,6 +468,97 @@ mod tests {
 
         let result = manager.send(&target, &event, "failed").await;
         assert!(result.is_err());
+
+        drop(manager);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn webhook_payload_includes_structured_explanations()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_notifications_payload_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let _ = db
+            .enqueue_job(
+                std::path::Path::new("notify-input.mkv"),
+                std::path::Path::new("notify-output.mkv"),
+                std::time::SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let job = db
+            .get_job_by_input_path("notify-input.mkv")
+            .await?
+            .ok_or("missing job")?;
+        db.update_job_status(job.id, JobState::Failed).await?;
+        db.add_decision(job.id, "skip", "planning_failed|error=boom")
+            .await?;
+        db.upsert_job_failure_explanation(
+            job.id,
+            &crate::explanations::failure_from_summary("Unknown encoder 'missing_encoder'"),
+        )
+        .await?;
+
+        let mut test_config = crate::config::Config::default();
+        test_config.notifications.allow_local_notifications = true;
+        let config = Arc::new(RwLock::new(test_config));
+        let manager = NotificationManager::new(db, config);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let body_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = socket.read(&mut chunk).await.expect("read");
+                if read == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..read]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+            socket.write_all(response.as_bytes()).await.expect("write");
+            String::from_utf8_lossy(&buf).to_string()
+        });
+
+        let target = NotificationTarget {
+            id: 0,
+            name: "test".to_string(),
+            target_type: "webhook".to_string(),
+            endpoint_url: format!("http://{}", addr),
+            auth_token: None,
+            events: "[\"failed\"]".to_string(),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+        };
+        let event = AlchemistEvent::JobStateChanged {
+            job_id: job.id,
+            status: JobState::Failed,
+        };
+
+        manager.send(&target, &event, "failed").await?;
+        let request = body_task.await?;
+        let body = request
+            .split("\r\n\r\n")
+            .nth(1)
+            .ok_or("missing request body")?;
+        let payload: serde_json::Value = serde_json::from_str(body)?;
+        assert_eq!(
+            payload["failure_explanation"]["code"].as_str(),
+            Some("encoder_unavailable")
+        );
+        assert_eq!(
+            payload["decision_explanation"]["code"].as_str(),
+            Some("planning_failed")
+        );
 
         drop(manager);
         let _ = std::fs::remove_file(db_path);

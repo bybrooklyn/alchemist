@@ -22,6 +22,16 @@ Enter your Gotify server URL and app token.
 Alchemist sends a JSON POST to any URL you configure.
 Works with Home Assistant, ntfy, Apprise, and custom scripts.
 
+Webhook payloads now include structured explanation data
+when relevant:
+
+- `decision_explanation`
+- `failure_explanation`
+
+Discord and Gotify targets use the same structured
+summary/detail/guidance internally, but render them as
+human-readable message text instead of raw JSON.
+
 ## Troubleshooting
 
 If notifications aren't arriving:

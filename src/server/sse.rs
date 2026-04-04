@@ -67,12 +67,14 @@ pub(crate) fn sse_message_for_job_event(event: &JobEvent) -> SseMessage {
             job_id,
             action,
             reason,
+            explanation,
         } => SseMessage {
             event_name: "decision",
             data: serde_json::json!({
                 "job_id": job_id,
                 "action": action,
-                "reason": reason
+                "reason": reason,
+                "explanation": explanation
             })
             .to_string(),
         },

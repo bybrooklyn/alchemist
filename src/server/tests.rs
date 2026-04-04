@@ -1147,6 +1147,13 @@ async fn job_detail_route_includes_logs_and_failure_summary()
         .db
         .add_log("error", Some(job.id), "No such file or directory")
         .await?;
+    state
+        .db
+        .upsert_job_failure_explanation(
+            job.id,
+            &crate::explanations::failure_from_summary("No such file or directory"),
+        )
+        .await?;
 
     let response = app
         .clone()
@@ -1164,9 +1171,95 @@ async fn job_detail_route_includes_logs_and_failure_summary()
         payload["job_failure_summary"].as_str(),
         Some("No such file or directory")
     );
+    assert_eq!(
+        payload["failure_explanation"]["code"].as_str(),
+        Some("source_missing")
+    );
     assert_eq!(payload["job_logs"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         payload["job_logs"][1]["message"].as_str(),
+        Some("No such file or directory")
+    );
+
+    cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn jobs_table_includes_structured_decision_explanation()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Skipped).await?;
+
+    state
+        .db
+        .add_decision(
+            job.id,
+            "skip",
+            "bpp_below_threshold|bpp=0.043,threshold=0.050",
+        )
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/jobs",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    let first = payload
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("job row");
+    assert_eq!(
+        first["decision_explanation"]["code"].as_str(),
+        Some("bpp_below_threshold")
+    );
+    assert_eq!(
+        first["decision_reason"].as_str(),
+        Some("bpp_below_threshold|bpp=0.043,threshold=0.050")
+    );
+
+    cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn job_detail_route_falls_back_to_legacy_failure_summary()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Failed).await?;
+
+    state
+        .db
+        .add_log("error", Some(job.id), "No such file or directory")
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/jobs/{}/details", job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(
+        payload["failure_explanation"]["code"].as_str(),
+        Some("source_missing")
+    );
+    assert_eq!(
+        payload["job_failure_summary"].as_str(),
         Some("No such file or directory")
     );
 
