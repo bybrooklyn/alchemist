@@ -34,7 +34,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex flex-col items-center justify-center p-8 bg-helios-background border border-helios-red/50 rounded-lg shadow-sm text-center w-full min-h-[300px]">
           <AlertCircle className="w-12 h-12 text-helios-red mb-4" />
-          <h2 className="text-xl font-bold text-white mb-2">Something went wrong</h2>
+          <h2 className="text-xl font-bold text-helios-ink mb-2">Something went wrong</h2>
           <p className="text-helios-text/70 mb-4 max-w-md">
             The {this.props.moduleName || "component"} encountered an unexpected error and could not be displayed.
           </p>
@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <button
             onClick={() => window.location.reload()}
-            className="px-6 py-2 bg-helios-orange hover:bg-helios-orange/80 text-white font-medium rounded transition"
+            className="px-6 py-2 bg-helios-orange hover:bg-helios-orange/80 text-helios-main font-medium rounded transition"
           >
             Reload Page
           </button>

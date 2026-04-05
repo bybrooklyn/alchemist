@@ -73,7 +73,7 @@ export default function FileSettings() {
                 <div className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Output Suffix</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">Output Suffix</label>
                             <input
                                 type="text"
                                 value={settings.output_suffix}
@@ -87,7 +87,7 @@ export default function FileSettings() {
                             </p>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Extension</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">Extension</label>
                             <select
                                 value={settings.output_extension}
                                 onChange={e => setSettings({ ...settings, output_extension: e.target.value })}
@@ -100,7 +100,7 @@ export default function FileSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Output Root</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-1">Output Root</label>
                         <input
                             type="text"
                             value={settings.output_root ?? ""}
@@ -114,7 +114,7 @@ export default function FileSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Existing Output Policy</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-1">Existing Output Policy</label>
                         <select
                             value={settings.replace_strategy}
                             onChange={e => setSettings({ ...settings, replace_strategy: e.target.value })}

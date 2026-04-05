@@ -138,7 +138,7 @@ export default function NotificationSettings() {
             <div className="flex justify-end mb-6">
                 <button
                     onClick={() => setShowForm(!showForm)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-medium transition-colors"
                 >
                     <Plus size={14} />
                     {showForm ? "Cancel" : "Add Target"}
@@ -155,7 +155,7 @@ export default function NotificationSettings() {
                 <form onSubmit={handleAdd} className="bg-helios-surface-soft p-4 rounded-xl space-y-4 border border-helios-line/20 mb-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Name</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">Name</label>
                             <input
                                 value={newName}
                                 onChange={e => setNewName(e.target.value)}
@@ -165,7 +165,7 @@ export default function NotificationSettings() {
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Type</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">Type</label>
                             <select
                                 value={newType}
                                 onChange={e => setNewType(e.target.value as NotificationTarget["target_type"])}
@@ -181,7 +181,7 @@ export default function NotificationSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Endpoint URL</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-1">Endpoint URL</label>
                         <input
                             value={newUrl}
                             onChange={e => setNewUrl(e.target.value)}
@@ -192,7 +192,7 @@ export default function NotificationSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Auth Token (Optional)</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-1">Auth Token (Optional)</label>
                         <input
                             value={newToken}
                             onChange={e => setNewToken(e.target.value)}
@@ -202,7 +202,7 @@ export default function NotificationSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-2">Events</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-2">Events</label>
                         <div className="flex gap-4 flex-wrap">
                             {["completed", "failed", "queued"].map(evt => (
                                 <label key={evt} className="flex items-center gap-2 text-sm text-helios-ink cursor-pointer">

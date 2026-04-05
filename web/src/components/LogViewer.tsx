@@ -356,7 +356,7 @@ export default function LogViewer() {
                                                 ? "text-status-error"
                                             : log.level.toLowerCase().includes("warn")
                                                 ? "text-amber-400"
-                                            : "text-white/90"
+                                            : "text-helios-ink"
                                         )}>
                                             {log.message}
                                         </span>
@@ -411,7 +411,7 @@ export default function LogViewer() {
                                                     ? "text-status-error"
                                                 : log.level.toLowerCase().includes("warn")
                                                     ? "text-amber-400"
-                                                : "text-white/90"
+                                                : "text-helios-ink"
                                             )}>
                                                 {log.message}
                                             </span>

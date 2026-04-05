@@ -3,118 +3,100 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
-## [0.3.0-rc.3] - 2026-04-04
+## [0.3.0] - 2026-04-05
 
-### Release Engineering
-- Added Windows-specific contributor scripts for the core `just install-w`, `just dev`, and `just check` path, while leaving broader utility and release recipes Unix-first for now.
-- Updated the release checklist and contributor docs so RC.2 clearly documents the supported Windows workflow and the manual Windows verification follow-up required before stable.
-
-### Regression Coverage
-- Added a startup regression test for the RC.1 security fix so a config parse failure on a configured instance with existing users does not reopen setup-only access.
-- Expanded Playwright stabilization coverage for retry countdown rendering, Library & Intake manual scan success/failure surfacing, and completed job detail rendering from persisted encode stats.
-
-## [0.3.0-rc.1] - 2026-04-04
-
-### Rust & Backend
-- Upgraded from Rust 2021 to 2024, set the MSRV to 1.85, upgraded `sqlx` to `0.8` with `runtime-tokio-rustls`, and upgraded `rand` to `0.9`.
-- Removed `async-trait`, adopted native `async fn` in traits, and added `trait-variant` so `ExecutionObserver` remained object-safe behind `Arc<dyn ...>`.
-- Fixed the Apple VideoToolbox probe by using synthetic `lavfi` frames with `format=yuv420p` and `-allow_sw 1`, allowing HEVC and AV1 detection to succeed on Apple Silicon.
-- Split `server.rs` into `src/server/` submodules for auth, jobs, scan, settings, stats, system, SSE, middleware, wizard, and tests.
-- Moved `ffprobe` execution to `tokio::process::Command` with a 120-second timeout.
-- Added poisoned cancellation lock recovery in the orchestrator and truncated oversized FFmpeg stderr lines before logging.
-- Invalid notification event JSON now warned instead of silently disabling the target, and invalid schedule day JSON now warned instead of being treated as empty.
-
-### UI & Frontend
-- Reworked the app shell by removing page `h1` headers, replacing the old header block with a thin engine control strip, and dropping the sidebar icon container for wordmark-only branding.
-- Flattened engine controls into one horizontal row with the status dot, Start/Pause/Stop actions, a divider, About, and Logout.
-- Moved the Background, Balanced, and Throughput mode pills into Settings -> Runtime and wired them to the engine mode API.
-- Rebuilt the setup wizard inside the main app shell with a grayed sidebar, removed the centered card layout, and replaced progress with a 2px solar line at the top of the content area.
-- Setup wizard errors now surfaced as toast notifications instead of an inline error block below the content.
-- Redesigned library selection around a flat recommendation list with Add buttons, selected-folder chips, and equal Browse/manual path entry; the preview panel was removed.
-- Restructured the dashboard around a compact stat row, a savings summary, and a larger Recent Activity panel.
-- Updated the log viewer to group entries by `job_id` into collapsible job sections while rendering system logs inline.
-- Normalized job status badges to sentence case without letter spacing, aligned table column headers, and standardized the job detail modal radius and section headers.
-- Cleaned banned CSS patterns from `ServerDirectoryPicker`, `ToastRegion`, and `SavingsOverview`, and modernized the login page with wordmark-only branding and tighter field styling.
-- Darkened the global background gradient slightly, reduced scrollbar width to 6px, increased border radius one step across cards and buttons, and gave inputs more contrast against the page.
-
-### CI/CD
-- Added a nightly workflow that runs on every push to `main` after Rust checks pass, builds all platforms, publishes `ghcr.io/bybrooklyn/alchemist:nightly`, and replaces the previous nightly pre-release with `{VERSION}-nightly+{short-sha}`.
-- Extracted a shared reusable `build.yml` workflow so nightly and release builds use the same pipeline.
-- Simplified `docker.yml` to PR preview builds only, removed the `workflow_run` trigger, and removed the `main` branch trigger from `ci.yml`.
-- Frontend validation in CI now runs the e2e reliability suite after the frontend check passes.
-
-### Docs & Tooling
-- Added `CLAUDE.md` and `GEMINI.md` as agent context files, added `CONTRIBUTING.md` with GPL-3.0 CLA terms, and started `CHANGELOG.md`.
-- Hardened the `justfile` with safer process cleanup, a stronger `db-reset`, and `--frozen-lockfile` docs installation.
-
-## [v0.2.10-rc.5] - 2026-03-22
-
-### Runtime & Queue Control
-- Engine runtime modes now support `background`, `balanced`, and `throughput`, with manual concurrency overrides and drain/resume controls exposed through the API and dashboard header.
-- Engine status reporting now includes pause source, drain state, concurrent-limit metadata, and mode visibility for troubleshooting.
-- Queue management continued to harden with safer active-job controls, clearer failure surfacing, and better per-job operational feedback.
-
-### Media Processing & Library Health
-- VAAPI-first Intel handling, remux planning, subtitle sidecars, and library health issue reporting were expanded across the planner, FFmpeg integration, and dashboard.
-- Hardware detection and probe logging were improved to make CPU/GPU backend selection and diagnostics easier to understand.
-- Stream rules landed for commentary stripping, audio-language filtering, and keeping only the default audio track when needed.
-
-### Paths, Setup & Docs
-- Default config and database paths were normalized around the `alchemist` runtime home, and the repo now ships a `justfile` for common dev, release, Docker, and database workflows.
-- The docs site moved onto Starlight and now builds locally with a proper content config, localized collection wiring, and a corrected splash-page schema.
-- Release automation now bumps repo-wide version manifests, supports checkpoint commits before release validation, and isolates web-e2e onto a separate port so a local server on `3000` does not block release verification.
-
-### CI/CD & Release Tooling
-- Docker publishing is now gated behind successful validation, and local release verification covers Rust checks/tests, frontend verification, docs build, `actionlint`, and the reliability Playwright suite.
-- `just update` does not create the release commit, git tag, or push until the full validation gate passes.
-
-## [v0.2.10-rc.2] - 2026-03-21
-
-### Stability & Reliability
-- VMAF quality gating: encodes falling below a configurable minimum score are now rejected rather than silently promoted.
-- Exponential retry backoff for failed jobs: 5 / 15 / 60 / 360 minute delays based on attempt count prevent tight failure loops.
-- Orphaned temp file cleanup on startup: interrupted encodes no longer leave `.alchemist.tmp` files on disk indefinitely.
-- Log table pruning: configurable retention period (default 30 days) prevents unbounded log growth on busy servers.
-- Auth session cleanup: expired sessions are pruned on startup and every 24 hours.
-- Resource endpoint caching: `/api/system/resources` is cached for 500ms to prevent redundant OS probes from multiple open browser tabs.
+### Security
+- Fixed a critical bug where a config parse failure on a configured instance would re-enable unauthenticated setup endpoints (filesystem browse, settings bundle) for any network client.
+- Session cookies are no longer marked `Secure` by default, which was breaking login over plain HTTP/LAN. Opt in with `ALCHEMIST_COOKIE_SECURE=true` for reverse-proxy deployments.
+- `/api/fs/*` filesystem browsing is now restricted to loopback connections only during the initial setup flow.
+- Proxy header handling hardened with explicit trust configuration for reverse-proxy deployments.
 
 ### New Features
-- Per-library profiles: each watch folder can have its own transcoding profile, with four built-in presets (Space Saver, Quality First, Balanced, Streaming) usable as starting points.
-- Storage savings dashboard: the Stats page now shows total space recovered, average reduction percentage, a savings-over-time chart, and per-codec breakdowns.
-- Library Doctor: scan your library for corrupt or broken files directly from System Settings.
-- `/api/jobs` added as a canonical alias for `/api/jobs/table`.
 
-### Beginner Experience
-- Plain-English skip reasons: skipped jobs now show a human-readable explanation with technical detail available in an expandable section.
-- Auto-redirect to the setup wizard for first-time users with no watch directories configured.
-- Setup wizard field descriptions: CRF, BPP, concurrent jobs, and CPU preset now include plain-English explanations inline.
-- Telemetry is now opt-in by default, with a detailed explanation of exactly what is collected.
+#### Library & Encoding
+- **Per-library profiles** — each watch folder gets its own transcoding profile. Four built-in presets (Space Saver, Quality First, Balanced, Streaming) are ready to use or customize.
+- **Container remuxing** — files already in the target codec but wrapped in MP4/MOV are remuxed to MKV losslessly, skipping a full re-encode.
+- **Subtitle sidecar extraction** — text-based subtitle tracks (SRT, ASS, VTT) can be extracted as separate files alongside the output rather than muxed in.
+- **Stream rules** — strip audio tracks by title keyword (e.g. commentary tracks), filter by language code, or keep only the default audio track.
+- **VMAF quality gating** — encodes scoring below a configurable threshold are rejected and the source is preserved.
+- **Library Intelligence** — duplicate detection surfaces files with matching stems across the library.
+- **Library Doctor** — health scanning detects corrupt or broken files directly from System Settings.
+- **Mirrored output root** — write transcoded files to a separate directory tree that mirrors the source structure, rather than alongside the source.
 
-### Job Management
-- Skipped tab: dedicated tab in the Job Manager for skipped jobs.
-- Archived tab: cleared completed jobs are now visible in an Archived tab rather than disappearing permanently.
-- Sort controls: the job list can now be sorted by last updated, date added, file name, or file size.
+#### Job Management
+- **Skipped tab** — dedicated tab for skipped jobs with structured skip reasons.
+- **Archived tab** — cleared completed jobs are preserved in an Archived tab rather than disappearing permanently.
+- **Sort controls** — sort the job list by last updated, date added, file name, or file size.
+- **Per-job priority** — promote individual jobs up the queue from the job detail panel.
+- **Retry countdown** — failed jobs waiting to retry show "Retrying in 47m", updated live every 30 seconds.
+- **Structured skip and failure explanations** — skip reasons and failure summaries are stored as structured payloads with a code, plain-English summary, measured values, and operator guidance; surfaced in the job detail panel before the raw FFmpeg log.
 
-### UI & Design
-- Font updated from Space Grotesk to DM Sans.
-- Sidebar active state redesigned: a left accent bar replaces the filled background.
-- Border radius tightened throughout with a more consistent scale across cards, buttons, and badges.
-- Setup wizard refactored into composable step components.
+#### Engine Control
+- **Engine runtime modes** — Background (1 job), Balanced (half CPU count, capped at 4), and Throughput (half CPU count, uncapped). Manual concurrency and thread overrides available in the Advanced panel.
+- **Drain mode** — stop accepting new jobs while letting active encodes finish cleanly.
+- **Boot auto-analysis** — ffprobe runs on all queued jobs at startup so skip/transcode decisions are pre-computed before the engine starts.
 
-### Infrastructure
-- CI/CD workflows fully rewritten: Rust caching, TypeScript typechecking, and a frontend build shared across all platforms.
-- Multi-arch Docker images are now published for `linux/amd64` and `linux/arm64`.
-- Release binaries now ship as `.tar.gz` archives with SHA256 checksums; AppImage and `.app` bundles were removed.
-- Dockerfile now uses the stable Rust image with pinned FFmpeg checksums.
-- E2E test coverage added for all new features.
+### UI Redesign
+- Removed page `h1` headers; replaced the old header block with a thin engine control strip showing the status dot, Start/Pause/Stop, mode pills, About, and Logout in one row.
+- Dashboard restructured around a compact stat row, savings summary card, and a larger Recent Activity panel.
+- Log viewer groups entries by job into collapsible sections; system-level log lines render inline between groups.
+- Setup wizard rebuilt inside the main app shell with a grayed sidebar, 2px solar progress line, and a welcome step (logo + tagline + Get Started) before the admin account form.
+- Library selection redesigned around a flat recommendation list with Add buttons, selected-folder chips, and a Browse/manual path option; the old preview panel was removed.
+- Statistics page uses recharts `AreaChart` for savings over time and `BarChart` for codec breakdown, replacing custom CSS bars.
+- Hardware settings merged into the Transcoding tab. Notifications and Automation merged into one tab.
+- Mobile layout: hamburger sidebar overlay, jobs table collapses date/priority columns below `md` breakpoint, stat cards use a 2×2 grid on small screens.
+- Font updated from Space Grotesk to DM Sans; sidebar active state uses a left accent bar; border radius scale tightened throughout.
+- Design system token compliance pass across all settings components: toggle switches, form labels, and text-on-color elements now use helios tokens exclusively.
+- Analyzing job rows show an indeterminate shimmer instead of a static 0.0% label.
+- Poll-based job state updates no longer overwrite terminal states that arrived via SSE.
 
-## [v0.2.10-rc.1] - 2026-03-07
-- Job lifecycle safety hardening: queued vs active cancel handling, active-job delete/restart blocking, batch-action conflict reporting, and stricter status/stat persistence.
-- Output handling now supports mirrored `output_root` destinations plus temp-file promotion so replace mode preserves the last good artifact until encode, size, and quality gates pass.
-- Scheduler, setup, and watch-folder parity updates shipped together: immediate schedule reevaluation, Intel Arc H.264 detection fix, H.264 setup option, canonicalized watch folders, and recursive watch configuration in the UI.
-- Jobs and settings UX now expose per-job priority controls, output-root file settings, active-job-safe actions, and the Astro router deprecation cleanup.
-- CI/CD rewrite for `0.2.10-rc.1`: cached Rust checks, frontend typecheck/build validation, multi-arch Docker publishing, and unified prerelease metadata handling across workflows.
-- Release packaging cleanup: Linux and macOS now ship plain `.tar.gz` binaries, Windows ships `.exe`, and every release asset includes a SHA256 checksum file.
+### Reliability & Stability
+- Exponential retry backoff for failed jobs: 5 / 15 / 60 / 360 minute delays by attempt count.
+- Orphaned temp file cleanup on startup: interrupted encodes and subtitle sidecar temp files no longer accumulate on disk.
+- Fixed infinite analysis loop: jobs with an existing decision row are excluded from analysis batches, preventing transcodable jobs from being re-analyzed on every pass.
+- Boot analysis processes jobs in batches of 100 from offset 0, fixing a pagination bug where transcodable jobs shifted out of later pages after earlier jobs were decided.
+- Engine no longer auto-pauses when the queue empties; it stays Running and picks up new files as the watcher delivers them.
+- Analysis semaphore serializes all analysis passes; watcher-triggered passes are dropped (not queued) when a pass is already running.
+- Job stall detection added to surface encodes that stop making progress.
+- Ctrl+C / SIGTERM exits cleanly after graceful shutdown. Background tasks no longer prevent process exit.
+- Log table pruning: configurable retention period (default 30 days) prevents unbounded log growth.
+- Auth session cleanup: expired sessions pruned on startup and every 24 hours.
+- Resource endpoint caching: `/api/system/resources` cached 500ms to prevent redundant OS probes from multiple open tabs.
+- `Drop` guard added to `in_flight_jobs` counter so it decrements correctly even on panic.
+- Completed job detail no longer re-runs ffprobe on the source file; `encode_stats` is the authoritative source for post-encode metadata.
+
+### Hardware & Encoding
+- **Apple VideoToolbox** — encode commands now include `-allow_sw 1` (software fallback) and `format=yuv420p` (required pixel format), fixing all VideoToolbox encodes on macOS. HEVC output tagged as `hvc1` for Apple device compatibility.
+- **Intel Arc** — VAAPI-first detection with `i915`/`xe` driver; QSV retained as last-resort fallback only.
+- **Audio planning** — lossless codecs (TrueHD, MLP, DTS-HD, FLAC, PCM) trigger transcoding; standard Atmos/EAC3 at any bitrate now copies through without re-encoding.
+- **libopus fallback** — audio transcoding for MKV now checks for `libopus` availability at runtime and falls back to AAC when it is absent (common on macOS FFmpeg builds).
+- FFmpeg encode failures write the full error (last 20 lines of stderr) to the job log; failure explanations in the UI include VideoToolbox-specific patterns (`vt_compression`, `mediaserverd`, `no capable devices`).
+
+### Backend Architecture
+- Upgraded from Rust 2021 to **Rust 2024 edition**, MSRV set to 1.85.
+- `sqlx` upgraded to 0.8 with `runtime-tokio-rustls`; `rand` upgraded to 0.9.
+- Removed `async-trait`; all traits use native `async fn`. `trait-variant` added for object-safe `Arc<dyn ExecutionObserver>`.
+- `server.rs` split into focused submodules: `auth`, `jobs`, `scan`, `settings`, `stats`, `system`, `sse`, `middleware`, `wizard`.
+- `ffprobe` execution moved to `tokio::process::Command` with a 120-second timeout.
+- Typed broadcast channels separate high-volume events (progress, logs) from low-volume system events (config, status).
+- Poisoned cancellation lock recovery added to the orchestrator; oversized FFmpeg stderr lines truncated before logging.
+- Invalid notification event JSON and invalid schedule day JSON now log a warning rather than silently disabling the target or treating it as empty.
+- Database connection pool capped; OOM protection added to analysis batch queries via `LIMIT`/`OFFSET` pagination.
+
+### Database
+- `decisions` table extended with `reason_code` and `reason_payload_json` for structured skip reason storage.
+- `job_failure_explanations` table added for structured failure explanations, with `legacy_summary` fallback for pre-0.3 rows.
+- Index on `decisions(reason_code)` and `job_failure_explanations(code)` for fast filtering.
+- All databases from v0.2.5 onwards upgrade automatically; no manual migration required.
+
+### CI/CD & Tooling
+- Nightly workflow: runs on every push to `main` after checks pass, builds all platforms, publishes `ghcr.io/brooklynloveszelda/alchemist:nightly` with `{VERSION}-nightly+{short-sha}` versioning.
+- Shared reusable `build.yml` workflow so nightly and release builds use identical pipelines.
+- `actionlint` added to `just release-check`.
+- E2E reliability suite (`just test-e2e`) runs in CI after the frontend check passes.
+- Windows contributor workflow documented and validated: `just install-w`, `just dev`, `just check`.
+- `just release-check` covers fmt, clippy (`-D warnings -D clippy::unwrap_used -D clippy::expect_used`), tests, actionlint, web verify, docs build, E2E, and backend build in sequence.
+- Release binaries ship as `.tar.gz` (Linux/macOS) and `.exe` (Windows), each with a SHA256 checksum. Multi-arch Docker images published for `linux/amd64` and `linux/arm64`.
 
 ## [v0.2.9] - 2026-03-06
 - Runtime reliability pass: watcher/scanner hardening, resilient event consumers, config reload improvements, and live hardware refresh.

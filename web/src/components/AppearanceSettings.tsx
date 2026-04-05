@@ -360,7 +360,7 @@ export default function AppearanceSettings() {
                     <div key={category.id} className="flex flex-col gap-4">
                         <div className="flex items-center gap-2 px-1">
                             {category.icon}
-                            <h4 className="text-xs font-bold uppercase tracking-widest text-helios-slate/60">
+                            <h4 className="text-xs font-medium text-helios-slate/60">
                                 {category.label}
                             </h4>
                         </div>
@@ -428,7 +428,7 @@ export default function AppearanceSettings() {
                                         {isActive && (
                                             <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-helios-solar text-helios-mist px-2.5 py-1 rounded-full shadow">
                                                 <CheckCircle2 size={12} />
-                                                <span className="text-[9px] font-bold uppercase tracking-widest">Active</span>
+                                                <span className="text-xs font-medium">Active</span>
                                             </div>
                                         )}
                                     </button>

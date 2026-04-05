@@ -438,7 +438,7 @@ export default function HardwareSettings() {
                                 disabled={saving}
                                 className="sr-only peer"
                             />
-                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-white after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
+                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-helios-ink after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
                         </label>
                     </div>
 
@@ -492,7 +492,7 @@ export default function HardwareSettings() {
                                 disabled={saving}
                                 className="sr-only peer"
                             />
-                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-white after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
+                            <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:bg-helios-ink after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:bg-helios-solar peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>
                         </label>
                     </div>
 

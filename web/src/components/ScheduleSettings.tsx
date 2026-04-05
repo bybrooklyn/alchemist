@@ -100,7 +100,7 @@ export default function ScheduleSettings() {
             <div className="flex justify-end mb-6">
                 <button
                     onClick={() => setShowForm(!showForm)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-medium transition-colors"
                 >
                     <Plus size={14} />
                     {showForm ? "Cancel" : "Add Schedule"}
@@ -135,7 +135,7 @@ export default function ScheduleSettings() {
                 <form onSubmit={handleAdd} className="bg-helios-surface-soft p-4 rounded-xl space-y-4 border border-helios-line/20 mb-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">Start Time</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">Start Time</label>
                             <input
                                 type="time"
                                 value={newStart}
@@ -145,7 +145,7 @@ export default function ScheduleSettings() {
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold uppercase text-helios-slate mb-1">End Time</label>
+                            <label className="block text-xs font-medium text-helios-slate mb-1">End Time</label>
                             <input
                                 type="time"
                                 value={newEnd}
@@ -157,7 +157,7 @@ export default function ScheduleSettings() {
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold uppercase text-helios-slate mb-2">Days</label>
+                        <label className="block text-xs font-medium text-helios-slate mb-2">Days</label>
                         <div className="flex gap-2 flex-wrap">
                             {DAYS.map((day, idx) => (
                                 <button
