@@ -269,7 +269,7 @@ export default function StatsCharts() {
                             className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-1000"
                             style={{ width: `${100 - parseFloat(savingsPercent)}%` }}
                         />
-                        <div className="absolute inset-0 flex items-center justify-center text-sm font-bold text-white drop-shadow">
+                        <div className="absolute inset-0 flex items-center justify-center text-sm font-bold text-helios-main drop-shadow">
                             {formatBytes(stats.total_output_bytes)} / {formatBytes(stats.total_input_bytes)}
                         </div>
                     </div>

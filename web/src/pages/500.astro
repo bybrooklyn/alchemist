@@ -16,20 +16,20 @@ const { error } = Astro.props;
                 <AlertTriangle className="w-8 h-8 text-helios-red" />
             </div>
             
-            <h1 class="text-3xl font-bold text-white mb-3">500 Server Error</h1>
+            <h1 class="text-3xl font-bold text-helios-ink mb-3">500 Server Error</h1>
             <p class="text-helios-text mb-8">
                 Alchemist encountered an internal error. Please check the backend logs.
             </p>
             
             {error instanceof Error ? (
-              <div class="bg-black/50 border border-white/5 rounded-lg p-4 mb-8 w-full overflow-auto text-left">
+              <div class="bg-black/50 border border-helios-line/10 rounded-lg p-4 mb-8 w-full overflow-auto text-left">
                   <p class="text-helios-red/90 font-mono text-sm break-words">{error.message}</p>
               </div>
             ) : null}
 
             <a
                 href="/"
-                class="px-6 py-2.5 bg-helios-orange hover:bg-helios-orange/90 text-white font-medium rounded-md transition-colors"
+                class="px-6 py-2.5 bg-helios-orange hover:bg-helios-orange/90 text-helios-main font-medium rounded-md transition-colors"
             >
                 Return to Dashboard
             </a>

@@ -8,7 +8,6 @@ const baseUrl = process.env.DOCS_BASE_URL ?? '/';
 const config: Config = {
   title: 'Alchemist',
   tagline: 'Self-hosted video transcoding automation. Point it at your library. Walk away.',
-  favicon: 'img/favicon.ico',
 
   future: {
     v4: true,
