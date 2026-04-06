@@ -114,14 +114,15 @@ just build
 
 Alchemist requires Rust 1.85 or later (MSRV). Use `rustup update stable` to ensure you are on a recent toolchain, and make sure FFmpeg is installed separately.
 
-For Windows local development in RC.2:
+For Windows local development:
 
 ```bash
 just install-w
 just dev
+just check
 ```
 
-The broader `just` release and utility recipes are still Unix-first in RC.2.
+The core contributor path is supported on Windows. Broader release and utility recipes remain Unix-first.
 
 ## First Run
 

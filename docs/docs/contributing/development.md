@@ -20,7 +20,7 @@ git clone https://github.com/bybrooklyn/alchemist.git
 cd alchemist
 just install        # macOS / Linux bootstrap
 just install-w      # Windows bootstrap
-just dev            # supported on both paths in RC.2
+just dev            # supported on macOS, Linux, and Windows
 ```
 
 ## Common tasks
@@ -28,24 +28,24 @@ just dev            # supported on both paths in RC.2
 ```bash
 just install        # macOS / Linux bootstrap
 just install-w      # Windows bootstrap
-just check          # supported on both paths in RC.2
+just check          # supported on macOS, Linux, and Windows
 just test           # cargo test
 just test-e2e       # Playwright reliability suite
 just db-reset       # wipe dev DB, keep config
 just db-reset-all   # wipe DB and config (re-triggers wizard)
-just bump 0.3.0-rc.2 # bump version in all files
-just update 0.3.0-rc.2 # full guarded release flow
+just bump <version> # bump version in all repo version files
+just update <version> # full guarded release flow (Unix-first)
 ```
 
-## Windows support in RC.2
+## Windows contributor support
 
-Windows contributor support in RC.2 covers the core path:
+Windows contributor support covers the core path:
 
 - `just install-w`
 - `just dev`
 - `just check`
 
-The following remain Unix-first for now and are deferred to RC.3 or later:
+The following remain Unix-first for now:
 
 - broader `just` utility recipes such as database and Docker helpers
 - release-oriented guarded flows such as `just update`

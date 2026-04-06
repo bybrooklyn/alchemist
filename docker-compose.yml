@@ -1,6 +1,6 @@
 services:
   alchemist:
-    image: ghcr.io/brooklynloveszelda/alchemist:latest
+    image: ghcr.io/bybrooklyn/alchemist:latest
     container_name: alchemist
     restart: unless-stopped
     ports:
