@@ -7,9 +7,9 @@ AMD uses VAAPI on Linux and AMF on Windows. Set
 **Settings → Hardware → Preferred Vendor** to `amd` if you
 want to pin it instead of using auto detection.
 
-For `0.3.0-rc.1`, treat AMD AV1 as driver and FFmpeg-stack
-dependent rather than release-validated. HEVC and H.264 are
-the recommended AMD paths for this release candidate.
+AMD AV1 remains driver- and FFmpeg-stack-dependent and is
+not part of the validated `0.3.0` support matrix. HEVC and
+H.264 are the recommended AMD paths for `0.3.0`.
 
 ## Supported hardware
 
@@ -17,7 +17,7 @@ the recommended AMD paths for this release candidate.
 |------|---------|
 | H.264 | Polaris+ |
 | HEVC | Polaris+ |
-| AV1 | RDNA 2+ on compatible driver/FFmpeg stacks; not release-validated in `0.3.0-rc.1` |
+| AV1 | RDNA 2+ on compatible driver/FFmpeg stacks; available but not part of the validated `0.3.0` support matrix |
 
 ## Linux
 

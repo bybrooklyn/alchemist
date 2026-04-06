@@ -87,15 +87,15 @@ just build
 
 Requires Rust 1.85+. Run `rustup update stable` first.
 
-For Windows local development in RC.2:
+For Windows local development:
 
 ```bash
 just install-w
 just dev
 ```
 
-Windows contributor support in RC.2 is limited to the core `install/dev/check`
-path. Broader `just` release and utility recipes remain Unix-first.
+Windows contributor support covers the core `install/dev/check` path.
+Broader `just` release and utility recipes remain Unix-first.
 
 ## Nightly builds
 

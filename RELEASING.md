@@ -5,14 +5,14 @@
 Use the repo bump script for version changes:
 
 ```bash
-just bump 0.3.0-rc.2
+just bump <next-rc-version>
 ```
 
 Then complete the release-candidate preflight:
 
 1. Update `CHANGELOG.md` and `docs/docs/changelog.md`.
 2. Run `just release-check`.
-3. Verify the repo version surfaces all read `0.3.0-rc.2`.
+3. Verify the repo version surfaces all read `<next-rc-version>`.
 4. Complete the manual smoke checklist:
    - Docker fresh install over plain HTTP, including login and first dashboard load
    - One packaged binary install and first-run setup
@@ -22,9 +22,9 @@ Then complete the release-candidate preflight:
    - `just install-w`
    - `just dev`
    - `just check`
-   - Note that broader utility and release recipes remain Unix-first for RC.2.
+   - Note that broader utility and release recipes remain Unix-first unless documented otherwise.
 6. Commit the release-prep changes and merge them to `main`.
-7. Create the annotated tag `v0.3.0-rc.2` on the exact merged commit.
+7. Create the annotated tag `v<next-rc-version>` on the exact merged commit.
 
 ## Stable promotion
 
@@ -38,7 +38,7 @@ Promote to stable only after the RC burn-in is complete and the same automated p
    - Packaged binary first-run
    - Upgrade from the most recent `0.2.x` or `0.3.0-rc.x`
    - Encode, skip, failure, and notification verification
-5. Re-run the Windows contributor verification checklist if Windows parity changed after RC.2.
+5. Re-run the Windows contributor verification checklist if Windows parity changed after the last RC.
 6. Confirm release notes, docs, and hardware-support wording match the tested release state.
 7. Merge the stable release commit to `main`.
 8. Create the annotated tag `v0.3.0` on the exact merged commit.
