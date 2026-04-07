@@ -35,7 +35,7 @@ The project uses `just` as the primary task runner.
   - `just build`: Performs a full production build (Frontend then Rust).
   - `just docker-build`: Builds the local Docker image.
 - **Verification:**
-  - `just check`: Runs all checks (Rust fmt, clippy, check; Frontend typecheck, build).
+  - `just release-check`: Runs all checks (Rust fmt, clippy, check; Frontend typecheck, build).
   - `just check-rust`: Rust-only verification.
 - **Testing:**
   - `just test`: Runs all Rust tests.
