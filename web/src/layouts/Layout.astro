@@ -9,7 +9,6 @@ interface Props {
 }
 
 const { title } = Astro.props;
-const basePath = "__ALCHEMIST_BASE_URL__";
 ---
 
 <!doctype html>
@@ -18,12 +17,9 @@ const basePath = "__ALCHEMIST_BASE_URL__";
         <meta charset="UTF-8" />
         <meta name="description" content="Alchemist Media Transcoder" />
         <meta name="viewport" content="width=device-width" />
-        <link rel="icon" type="image/svg+xml" href={`${basePath}/favicon.svg`} />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <meta name="generator" content={Astro.generator} />
         <title>{title}</title>
-        <script is:inline define:vars={{ basePath }}>
-            window.__ALCHEMIST_BASE_URL__ = basePath;
-        </script>
         <ClientRouter />
     </head>
     <body>

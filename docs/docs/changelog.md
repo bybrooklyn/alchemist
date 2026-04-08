@@ -3,6 +3,32 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
+## [0.3.1-rc.1] - 2026-04-08
+
+### New Features
+
+#### Conversion & Library Workflows
+- **Experimental Conversion / Remux page** — upload a single file, inspect streams, preview the generated FFmpeg command, run a remux/transcode job through Alchemist, and download the result when complete.
+- **Expanded Library Intelligence** — duplicate detection now sits alongside storage-focused recommendation sections for remux-only opportunities, wasteful audio layouts, and commentary/descriptive-track cleanup candidates.
+
+#### Authentication & Automation
+- **Named API tokens** — create bearer tokens from Settings with `read_only` or `full_access` access classes. Tokens are only shown once at creation time and stored server-side as hashes.
+- **OpenAPI contract** — hand-maintained OpenAPI spec added alongside expanded human API docs for auth, token management, and update-check behavior.
+
+#### Notifications
+- **Provider-specific notification targets** — notification settings now use provider-specific configuration payloads instead of the old shared endpoint/token shape.
+- **Provider expansion** — Discord webhook, Discord bot, Gotify, generic webhook, Telegram, and SMTP email targets are supported.
+- **Richer event model** — notification events now distinguish queue/start/completion/failure plus scan completion, engine idle, and daily summary delivery.
+- **Daily summary scheduling** — notifications include a global `daily_summary_time_local` setting and per-target opt-in for digest delivery.
+
+#### Deployment & Distribution
+- **Windows update check** — the About dialog now checks GitHub Releases for the latest stable version and links directly to the release download page when an update is available.
+- **Distribution metadata generation** — in-repo Homebrew and AUR packaging templates plus workflow rendering were added as the foundation for package-manager distribution.
+
+### Documentation
+- **Config path clarity** — docs now consistently describe `~/.config/alchemist/config.toml` as the default host-side config location on Linux/macOS, while Docker examples still use `/app/config/config.toml` inside the container.
+- **Backlog realignment** — the backlog was rewritten around current repo reality, marking large newly implemented surfaces as “Implemented / In Progress” and keeping the roadmap automation-first.
+
 ## [0.3.0] - 2026-04-06
 
 ### Security

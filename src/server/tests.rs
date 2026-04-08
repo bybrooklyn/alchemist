@@ -114,7 +114,6 @@ where
         library_scanner: Arc::new(crate::system::scanner::LibraryScanner::new(db, config)),
         config_path: config_path.clone(),
         config_mutable: true,
-        base_url: String::new(),
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
@@ -208,6 +207,17 @@ fn remote_request(method: Method, uri: &str, body: Body) -> Request<Body> {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 3000))));
+    request
+}
+
+fn lan_request(method: Method, uri: &str, body: Body) -> Request<Body> {
+    let mut request = match Request::builder().method(method).uri(uri).body(body) {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build LAN request: {err}"),
+    };
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([192, 168, 1, 25], 3000))));
     request
 }
 
@@ -741,32 +751,6 @@ async fn read_only_api_token_cannot_access_settings_config()
 }
 
 #[tokio::test]
-async fn nested_base_url_routes_engine_status_through_auth_middleware()
--> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (state, _app, config_path, db_path) = build_test_app(false, 8, |config| {
-        config.system.base_url = "/alchemist".to_string();
-    })
-    .await?;
-    let token = create_session(state.db.as_ref()).await?;
-    let app = Router::new().nest("/alchemist", app_router(state.clone()));
-
-    let response = app
-        .oneshot(auth_request(
-            Method::GET,
-            "/alchemist/api/engine/status",
-            &token,
-            Body::empty(),
-        ))
-        .await?;
-    assert_eq!(response.status(), StatusCode::OK);
-
-    drop(state);
-    let _ = std::fs::remove_file(config_path);
-    let _ = std::fs::remove_file(db_path);
-    Ok(())
-}
-
-#[tokio::test]
 async fn hardware_probe_log_route_returns_runtime_log()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -818,12 +802,11 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/setup/complete")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/setup/complete",
+                Body::from(
                     json!({
                         "username": "admin",
                         "password": "password123",
@@ -838,9 +821,14 @@ async fn setup_complete_updates_runtime_hardware_without_mirroring_watch_dirs()
                         "quality_profile": "balanced"
                     })
                     .to_string(),
-                ))
-                .unwrap_or_else(|err| panic!("failed to build setup completion request: {err}")),
-        )
+                ),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            request
+        })
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -932,23 +920,25 @@ async fn setup_complete_accepts_nested_settings_payload()
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/setup/complete")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/setup/complete",
+                Body::from(
                     json!({
                         "username": "admin",
                         "password": "password123",
                         "settings": settings,
                     })
                     .to_string(),
-                ))
-                .unwrap_or_else(|err| {
-                    panic!("failed to build nested setup completion request: {err}")
-                }),
-        )
+                ),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            request
+        })
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
@@ -981,23 +971,25 @@ async fn setup_complete_rejects_nested_settings_without_library_directories()
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/setup/complete")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/setup/complete",
+                Body::from(
                     json!({
                         "username": "admin",
                         "password": "password123",
                         "settings": settings,
                     })
                     .to_string(),
-                ))
-                .unwrap_or_else(|err| {
-                    panic!("failed to build nested setup rejection request: {err}")
-                }),
-        )
+                ),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            request
+        })
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = body_text(response).await;
@@ -1076,7 +1068,7 @@ async fn fs_endpoints_require_loopback_during_setup()
         .await?;
     assert_eq!(browse_response.status(), StatusCode::FORBIDDEN);
     let browse_body = body_text(browse_response).await;
-    assert!(browse_body.contains("Filesystem browsing is only available"));
+    assert!(browse_body.contains("local network"));
 
     let mut preview_request = remote_request(
         Method::POST,
@@ -1096,9 +1088,75 @@ async fn fs_endpoints_require_loopback_during_setup()
     let preview_response = app.clone().oneshot(preview_request).await?;
     assert_eq!(preview_response.status(), StatusCode::FORBIDDEN);
     let preview_body = body_text(preview_response).await;
-    assert!(preview_body.contains("Filesystem browsing is only available"));
+    assert!(preview_body.contains("local network"));
 
     cleanup_paths(&[browse_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn setup_html_routes_allow_lan_clients() -> std::result::Result<(), Box<dyn std::error::Error>>
+{
+    let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+    let response = app
+        .clone()
+        .oneshot(lan_request(Method::GET, "/setup", Body::empty()))
+        .await?;
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn setup_html_routes_reject_public_clients()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+    let response = app
+        .clone()
+        .oneshot(remote_request(Method::GET, "/setup", Body::empty()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_text(response).await;
+    assert!(body.contains("only available from the local network"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn setup_status_rejects_public_clients_during_setup()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+    let response = app
+        .clone()
+        .oneshot(remote_request(
+            Method::GET,
+            "/api/setup/status",
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_clients_can_reach_login_after_setup()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+
+    let response = app
+        .clone()
+        .oneshot(remote_request(Method::GET, "/login", Body::empty()))
+        .await?;
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_paths(&[config_path, db_path]);
     Ok(())
 }
 

@@ -25,7 +25,7 @@ use axum::{
     extract::State,
     http::{StatusCode, Uri, header},
     middleware as axum_middleware,
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 #[cfg(feature = "embed-web")]
@@ -81,7 +81,6 @@ pub struct AppState {
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
     pub config_path: PathBuf,
     pub config_mutable: bool,
-    pub base_url: String,
     pub hardware_state: HardwareState,
     pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
@@ -146,11 +145,6 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
-    let base_url = {
-        let config = config.read().await;
-        config.system.base_url.clone()
-    };
-
     let state = Arc::new(AppState {
         db,
         config,
@@ -168,7 +162,6 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         library_scanner,
         config_path,
         config_mutable,
-        base_url: base_url.clone(),
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
@@ -180,18 +173,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     // Clone agent for shutdown handler before moving state into router
     let shutdown_agent = state.agent.clone();
 
-    let inner_app = app_router(state.clone());
-    let app = if base_url.is_empty() {
-        inner_app
-    } else {
-        let redirect_target = format!("{base_url}/");
-        Router::new()
-            .route(
-                "/",
-                get(move || async move { Redirect::permanent(&redirect_target) }),
-            )
-            .nest(&base_url, inner_app)
-    };
+    let app = app_router(state.clone());
 
     let port = std::env::var("ALCHEMIST_SERVER_PORT")
         .ok()
@@ -828,7 +810,7 @@ async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     static_handler(State(state), Uri::from_static("/index.html")).await
 }
 
-async fn static_handler(State(state): State<Arc<AppState>>, uri: Uri) -> impl IntoResponse {
+async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl IntoResponse {
     let raw_path = uri.path().trim_start_matches('/');
     let path = match sanitize_asset_path(raw_path) {
         Some(path) => path,
@@ -837,11 +819,7 @@ async fn static_handler(State(state): State<Arc<AppState>>, uri: Uri) -> impl In
 
     if let Some(content) = load_static_asset(&path) {
         let mime = mime_guess::from_path(&path).first_or_octet_stream();
-        return (
-            [(header::CONTENT_TYPE, mime.as_ref())],
-            maybe_inject_base_url(content, mime.as_ref(), &state.base_url),
-        )
-            .into_response();
+        return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
     }
 
     // Attempt to serve index.html for directory paths (e.g. /jobs -> jobs/index.html)
@@ -849,11 +827,7 @@ async fn static_handler(State(state): State<Arc<AppState>>, uri: Uri) -> impl In
         let index_path = format!("{}/index.html", path);
         if let Some(content) = load_static_asset(&index_path) {
             let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-            return (
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                maybe_inject_base_url(content, mime.as_ref(), &state.base_url),
-            )
-                .into_response();
+            return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
         }
     }
 
@@ -889,15 +863,4 @@ async fn static_handler(State(state): State<Arc<AppState>>, uri: Uri) -> impl In
 
     // Default fallback to 404 for missing files.
     StatusCode::NOT_FOUND.into_response()
-}
-
-fn maybe_inject_base_url(content: Vec<u8>, mime: &str, base_url: &str) -> Vec<u8> {
-    if !mime.starts_with("text/html") {
-        return content;
-    }
-    let Ok(text) = String::from_utf8(content.clone()) else {
-        return content;
-    };
-    text.replace("__ALCHEMIST_BASE_URL__", base_url)
-        .into_bytes()
 }

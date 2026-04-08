@@ -514,7 +514,7 @@ pub async fn enqueue_discovered_with_db(
         .await
 }
 
-fn default_file_settings() -> crate::db::FileSettings {
+pub fn default_file_settings() -> crate::db::FileSettings {
     crate::db::FileSettings {
         id: 1,
         delete_source: false,
@@ -525,7 +525,10 @@ fn default_file_settings() -> crate::db::FileSettings {
     }
 }
 
-fn matches_generated_output_pattern(path: &Path, settings: &crate::db::FileSettings) -> bool {
+pub(crate) fn matches_generated_output_pattern(
+    path: &Path,
+    settings: &crate::db::FileSettings,
+) -> bool {
     let expected_extension = settings.output_extension.trim_start_matches('.');
     if !expected_extension.is_empty() {
         let actual_extension = match path.extension().and_then(|extension| extension.to_str()) {
@@ -548,7 +551,7 @@ fn matches_generated_output_pattern(path: &Path, settings: &crate::db::FileSetti
         .is_some_and(|stem| stem.ends_with(suffix))
 }
 
-async fn skip_reason_for_discovered_path(
+pub async fn skip_reason_for_discovered_path(
     db: &crate::db::Db,
     path: &Path,
     settings: &crate::db::FileSettings,

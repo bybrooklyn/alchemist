@@ -45,11 +45,6 @@ documentation, or iteration.
 - Token management endpoints and Settings UI
 - Hand-maintained OpenAPI contract plus human API docs
 
-### Base URL / Subpath Support
-- `ALCHEMIST_BASE_URL` and matching config support
-- Router nesting under a configured path prefix
-- Frontend fetches, redirects, navigation, and SSE path generation updated for subpaths
-
 ### Distribution Foundation
 - In-repo distribution metadata sources for:
   - Homebrew

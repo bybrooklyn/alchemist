@@ -182,6 +182,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
         }
 
         let rate_control = self.plan.rate_control.clone();
+        let tag_hevc_as_hvc1 = uses_quicktime_container(&self.plan.container);
         let mut args = vec![
             "-hide_banner".to_string(),
             "-y".to_string(),
@@ -249,12 +250,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
                 Encoder::Av1Videotoolbox
                 | Encoder::HevcVideotoolbox
                 | Encoder::H264Videotoolbox => {
-                    videotoolbox::append_args(
-                        &mut args,
-                        encoder,
-                        rate_control.clone(),
-                        default_quality(&self.plan.rate_control, 65),
-                    );
+                    videotoolbox::append_args(&mut args, encoder, tag_hevc_as_hvc1);
                 }
                 Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
                     cpu::append_args(
@@ -262,6 +258,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
                         encoder,
                         rate_control.clone(),
                         self.plan.encoder_preset.as_deref(),
+                        tag_hevc_as_hvc1,
                     );
                 }
             }
@@ -285,7 +282,7 @@ impl<'a> FFmpegCommandBuilder<'a> {
         apply_subtitle_plan(&mut args, &self.plan.subtitles);
         apply_color_metadata(&mut args, self.metadata, &self.plan.filters);
 
-        if matches!(self.plan.container.as_str(), "mp4" | "m4v" | "mov") {
+        if uses_quicktime_container(&self.plan.container) {
             args.push("-movflags".to_string());
             args.push("+faststart".to_string());
         }
@@ -481,6 +478,10 @@ fn output_format_name(container: &str) -> &str {
         "m4v" => "mp4",
         other => other,
     }
+}
+
+fn uses_quicktime_container(container: &str) -> bool {
+    matches!(container, "mp4" | "m4v" | "mov")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1041,6 +1042,83 @@ mod tests {
             .build_args()
             .unwrap_or_else(|err| panic!("failed to build videotoolbox args: {err}"));
         assert!(args.contains(&"hevc_videotoolbox".to_string()));
+        assert!(!args.contains(&"hvc1".to_string()));
+        assert!(!args.contains(&"-q:v".to_string()));
+        assert!(!args.contains(&"-b:v".to_string()));
+    }
+
+    #[test]
+    fn hevc_videotoolbox_mp4_adds_hvc1_tag() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::HevcVideotoolbox);
+        plan.container = "mp4".to_string();
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mp4"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build mp4 videotoolbox args: {err}"));
+        assert!(args.contains(&"hevc_videotoolbox".to_string()));
+        assert!(args.contains(&"hvc1".to_string()));
+        assert!(!args.contains(&"-q:v".to_string()));
+    }
+
+    #[test]
+    fn hevc_videotoolbox_bitrate_mode_uses_generic_bitrate_flag() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::HevcVideotoolbox);
+        plan.rate_control = Some(RateControl::Bitrate { kbps: 2500 });
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build bitrate videotoolbox args: {err}"));
+        assert!(args.contains(&"hevc_videotoolbox".to_string()));
+        assert!(args.contains(&"-b:v".to_string()));
+        assert!(args.contains(&"2500k".to_string()));
+        assert!(!args.contains(&"-q:v".to_string()));
+    }
+
+    #[test]
+    fn hevc_x265_mkv_does_not_add_hvc1_tag() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::HevcX265);
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build mkv x265 args: {err}"));
+        assert!(args.contains(&"libx265".to_string()));
+        assert!(!args.contains(&"hvc1".to_string()));
+    }
+
+    #[test]
+    fn hevc_x265_mp4_adds_hvc1_tag() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::HevcX265);
+        plan.container = "mp4".to_string();
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mp4"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build mp4 x265 args: {err}"));
+        assert!(args.contains(&"libx265".to_string()));
+        assert!(args.contains(&"hvc1".to_string()));
     }
 
     #[test]

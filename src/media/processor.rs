@@ -170,9 +170,9 @@ impl Agent {
     pub fn set_boot_analyzing(&self, value: bool) {
         self.analyzing_boot.store(value, Ordering::SeqCst);
         if value {
-            info!("Boot analysis started — engine claim loop paused.");
+            debug!("Boot analysis started — engine claim loop paused.");
         } else {
-            info!("Boot analysis complete — engine claim loop resumed.");
+            debug!("Boot analysis complete — engine claim loop resumed.");
         }
     }
 
@@ -218,7 +218,7 @@ impl Agent {
     /// semaphore permit.
     async fn _run_analysis_pass(&self) {
         self.set_boot_analyzing(true);
-        info!("Auto-analysis: starting pass...");
+        debug!("Auto-analysis: starting pass...");
 
         // NOTE: reset_interrupted_jobs is intentionally
         // NOT called here. It is a one-time startup
@@ -244,7 +244,7 @@ impl Agent {
             }
 
             let batch_len = batch.len();
-            info!("Auto-analysis: analyzing {} job(s)...", batch_len);
+            debug!("Auto-analysis: analyzing {} job(s)...", batch_len);
 
             for job in batch {
                 let pipeline = self.pipeline();
@@ -264,9 +264,9 @@ impl Agent {
         self.set_boot_analyzing(false);
 
         if total_analyzed == 0 {
-            info!("Auto-analysis: no jobs pending analysis.");
+            debug!("Auto-analysis: no jobs pending analysis.");
         } else {
-            info!(
+            debug!(
                 "Auto-analysis: complete. {} job(s) analyzed.",
                 total_analyzed
             );
@@ -359,7 +359,7 @@ impl Agent {
     }
 
     pub async fn run_loop(self: Arc<Self>) {
-        info!("Agent loop started.");
+        debug!("Agent loop started.");
         loop {
             // Block while paused OR while boot analysis runs
             if self.is_paused() || self.is_boot_analyzing() {

@@ -682,8 +682,6 @@ pub struct SystemConfig {
     /// Enable HSTS header (only enable if running behind HTTPS)
     #[serde(default)]
     pub https_only: bool,
-    #[serde(default)]
-    pub base_url: String,
 }
 
 fn default_true() -> bool {
@@ -710,7 +708,6 @@ impl Default for SystemConfig {
             log_retention_days: default_log_retention_days(),
             engine_mode: EngineMode::default(),
             https_only: false,
-            base_url: String::new(),
         }
     }
 }
@@ -826,7 +823,6 @@ impl Default for Config {
                 log_retention_days: default_log_retention_days(),
                 engine_mode: EngineMode::default(),
                 https_only: false,
-                base_url: String::new(),
             },
         }
     }
@@ -923,7 +919,6 @@ impl Config {
         }
 
         validate_schedule_time(&self.notifications.daily_summary_time_local)?;
-        normalize_base_url(&self.system.base_url)?;
         for target in &self.notifications.targets {
             target.validate()?;
         }
@@ -1026,7 +1021,6 @@ impl Config {
     }
 
     pub(crate) fn canonicalize_for_save(&mut self) {
-        self.system.base_url = normalize_base_url(&self.system.base_url).unwrap_or_default();
         if !self.notifications.targets.is_empty() {
             self.notifications.webhook_url = None;
             self.notifications.discord_webhook = None;
@@ -1046,33 +1040,7 @@ impl Config {
         }
     }
 
-    pub(crate) fn apply_env_overrides(&mut self) {
-        if let Ok(base_url) = std::env::var("ALCHEMIST_BASE_URL") {
-            self.system.base_url = base_url;
-        }
-        self.system.base_url = normalize_base_url(&self.system.base_url).unwrap_or_default();
-    }
-}
-
-pub fn normalize_base_url(value: &str) -> Result<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        return Ok(String::new());
-    }
-    if trimmed.contains("://") {
-        anyhow::bail!("system.base_url must be a path prefix, not a full URL");
-    }
-    if !trimmed.starts_with('/') {
-        anyhow::bail!("system.base_url must start with '/'");
-    }
-    if trimmed.contains('?') || trimmed.contains('#') {
-        anyhow::bail!("system.base_url must not contain query or fragment components");
-    }
-    let normalized = trimmed.trim_end_matches('/');
-    if normalized.contains("//") {
-        anyhow::bail!("system.base_url must not contain repeated slashes");
-    }
-    Ok(normalized.to_string())
+    pub(crate) fn apply_env_overrides(&mut self) {}
 }
 
 fn validate_schedule_time(value: &str) -> Result<()> {
@@ -1157,66 +1125,5 @@ mod tests {
     fn engine_mode_defaults_to_balanced() {
         assert_eq!(EngineMode::default(), EngineMode::Balanced);
         assert_eq!(EngineMode::Balanced.concurrent_jobs_for_cpu_count(8), 4);
-    }
-
-    #[test]
-    fn normalize_base_url_accepts_root_or_empty() {
-        assert_eq!(
-            normalize_base_url("").unwrap_or_else(|err| panic!("empty base url: {err}")),
-            ""
-        );
-        assert_eq!(
-            normalize_base_url("/").unwrap_or_else(|err| panic!("root base url: {err}")),
-            ""
-        );
-        assert_eq!(
-            normalize_base_url("/alchemist/")
-                .unwrap_or_else(|err| panic!("trimmed base url: {err}")),
-            "/alchemist"
-        );
-    }
-
-    #[test]
-    fn normalize_base_url_rejects_invalid_values() {
-        assert!(normalize_base_url("alchemist").is_err());
-        assert!(normalize_base_url("https://example.com/alchemist").is_err());
-        assert!(normalize_base_url("/a//b").is_err());
-    }
-
-    #[test]
-    fn env_base_url_override_takes_priority_on_load() {
-        let config_path = std::env::temp_dir().join(format!(
-            "alchemist_base_url_override_{}.toml",
-            rand::random::<u64>()
-        ));
-        std::fs::write(
-            &config_path,
-            r#"
-[transcode]
-size_reduction_threshold = 0.3
-min_bpp_threshold = 0.1
-min_file_size_mb = 50
-concurrent_jobs = 1
-
-[hardware]
-preferred_vendor = "cpu"
-allow_cpu_fallback = true
-
-[scanner]
-directories = []
-
-[system]
-base_url = "/from-config"
-"#,
-        )
-        .unwrap_or_else(|err| panic!("failed to write temp config: {err}"));
-
-        // SAFETY: test-only environment mutation.
-        unsafe { std::env::set_var("ALCHEMIST_BASE_URL", "/from-env") };
-        let config =
-            Config::load(&config_path).unwrap_or_else(|err| panic!("failed to load config: {err}"));
-        assert_eq!(config.system.base_url, "/from-env");
-        unsafe { std::env::remove_var("ALCHEMIST_BASE_URL") };
-        let _ = std::fs::remove_file(config_path);
     }
 }

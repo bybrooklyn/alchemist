@@ -9,8 +9,9 @@ except:
 - `/api/auth/*`
 - `/api/health`
 - `/api/ready`
-- setup-mode exceptions: `/api/setup/*`, `/api/fs/*`,
-  `/api/settings/bundle`, `/api/system/hardware`
+- during first-time setup, the setup UI and setup-related
+  unauthenticated routes are only reachable from the local
+  network
 
 Authentication is established by `POST /api/auth/login`.
 The backend also accepts `Authorization: Bearer <token>`.

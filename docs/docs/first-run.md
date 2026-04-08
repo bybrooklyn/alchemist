@@ -5,7 +5,8 @@ description: Getting through the setup wizard and starting your first scan.
 
 When you first open Alchemist at `http://localhost:3000`
 the setup wizard runs automatically. It takes about two
-minutes.
+minutes. Until the first account is created, setup is
+reachable only from the local network.
 
 ## Wizard steps
 

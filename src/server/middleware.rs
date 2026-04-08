@@ -76,6 +76,18 @@ pub(crate) async fn auth_middleware(
     let path = req.uri().path();
     let method = req.method().clone();
 
+    if state.setup_required.load(Ordering::Relaxed)
+        && path != "/api/health"
+        && path != "/api/ready"
+        && !request_is_lan(&req)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Alchemist setup is only available from the local network",
+        )
+            .into_response();
+    }
+
     // 1. API Protection: Only lock down /api routes
     if path.starts_with("/api") {
         // Public API endpoints
@@ -92,28 +104,7 @@ pub(crate) async fn auth_middleware(
             return next.run(req).await;
         }
         if state.setup_required.load(Ordering::Relaxed) && path.starts_with("/api/fs/") {
-            // Only allow filesystem browsing from localhost
-            // during setup — no account exists yet so we
-            // cannot authenticate the caller.
-            let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>();
-            let is_local = connect_info
-                .map(|ci| {
-                    let ip = ci.0.ip();
-                    ip.is_loopback()
-                })
-                .unwrap_or(false);
-
-            if is_local {
-                return next.run(req).await;
-            }
-            // Non-local request during setup -> 403
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(axum::body::Body::from(
-                    "Filesystem browsing is only available \
-                     from localhost during setup",
-                ))
-                .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
+            return next.run(req).await;
         }
         if state.setup_required.load(Ordering::Relaxed) && path == "/api/settings/bundle" {
             return next.run(req).await;
@@ -155,6 +146,10 @@ pub(crate) async fn auth_middleware(
     // Allow everything else. The frontend app (Layout.astro) handles client-side redirects
     // if the user isn't authenticated, and the backend API protects the actual data.
     next.run(req).await
+}
+
+fn request_is_lan(req: &Request) -> bool {
+    request_ip(req).is_some_and(is_lan_ip)
 }
 
 fn read_only_api_token_allows(method: &Method, path: &str) -> bool {
@@ -309,6 +304,13 @@ pub(crate) fn request_ip(req: &Request) -> Option<IpAddr> {
 /// meaning it is likely a local reverse proxy that can be trusted
 /// to set forwarded headers.
 fn is_trusted_peer(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
+}
+
+fn is_lan_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),

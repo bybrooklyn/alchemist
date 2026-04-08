@@ -97,7 +97,6 @@ requires at least one day in every window.
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
-| `base_url` | string | `""` | Path prefix for serving Alchemist under a subpath such as `/alchemist` |
 
 ## Example
 

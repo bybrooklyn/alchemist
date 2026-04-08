@@ -5,7 +5,6 @@ import {
     Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp, AlertCircle
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
-import { withBasePath } from "../lib/basePath";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -502,6 +501,7 @@ function JobManager() {
     const [selected, setSelected] = useState<Set<number>>(new Set());
     const [activeTab, setActiveTab] = useState<TabType>("all");
     const [searchInput, setSearchInput] = useState("");
+    const [compactSearchOpen, setCompactSearchOpen] = useState(false);
     const debouncedSearch = useDebouncedValue(searchInput, 350);
     const [page, setPage] = useState(1);
     const [sortBy, setSortBy] = useState<SortField>("updated_at");
@@ -514,6 +514,8 @@ function JobManager() {
     const menuRef = useRef<HTMLDivElement | null>(null);
     const detailDialogRef = useRef<HTMLDivElement | null>(null);
     const detailLastFocusedRef = useRef<HTMLElement | null>(null);
+    const compactSearchRef = useRef<HTMLDivElement | null>(null);
+    const compactSearchInputRef = useRef<HTMLInputElement | null>(null);
     const confirmOpenRef = useRef(false);
     const encodeStartTimes = useRef<Map<number, number>>(new Map());
     const [confirmState, setConfirmState] = useState<{
@@ -529,6 +531,43 @@ function JobManager() {
         const id = window.setInterval(() => setTick(t => t + 1), 30_000);
         return () => window.clearInterval(id);
     }, []);
+
+    useEffect(() => {
+        if (searchInput.trim()) {
+            setCompactSearchOpen(true);
+        }
+    }, [searchInput]);
+
+    useEffect(() => {
+        if (!compactSearchOpen) {
+            return;
+        }
+
+        compactSearchInputRef.current?.focus();
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (
+                compactSearchRef.current &&
+                !compactSearchRef.current.contains(event.target as Node) &&
+                !searchInput.trim()
+            ) {
+                setCompactSearchOpen(false);
+            }
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape" && !searchInput.trim()) {
+                setCompactSearchOpen(false);
+            }
+        };
+
+        document.addEventListener("mousedown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+        return () => {
+            document.removeEventListener("mousedown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [compactSearchOpen, searchInput]);
 
     const isJobActive = (job: Job) => ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
 
@@ -665,7 +704,7 @@ function JobManager() {
         const connect = () => {
             if (cancelled) return;
             eventSource?.close();
-            eventSource = new EventSource(withBasePath("/api/events"));
+            eventSource = new EventSource("/api/events");
 
             eventSource.onopen = () => {
                 // Reset reconnect attempts on successful connection
@@ -1084,8 +1123,8 @@ function JobManager() {
             </div>
 
             {/* Toolbar */}
-            <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-helios-surface/50 p-1 rounded-lg border border-helios-line/10">
-                <div className="flex gap-1 p-1 bg-helios-surface border border-helios-line/10 rounded-lg">
+            <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-helios-line/10 bg-helios-surface/50 px-3 py-3 md:items-center">
+                <div className="flex flex-wrap gap-1">
                     {(["all", "active", "queued", "completed", "failed", "skipped", "archived"] as TabType[]).map((tab) => (
                         <button
                             key={tab}
@@ -1102,8 +1141,8 @@ function JobManager() {
                     ))}
                 </div>
 
-                <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center md:w-auto">
-                    <div className="relative flex-1 md:w-64">
+                <div className="ml-auto flex w-full min-w-0 flex-wrap items-center justify-end gap-2 md:w-auto md:flex-nowrap">
+                    <div className="relative hidden xl:block xl:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
                         <input
                             type="text"
@@ -1113,7 +1152,7 @@ function JobManager() {
                             className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
                         />
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                         <select
                             value={sortBy}
                             onChange={(e) => {
@@ -1142,10 +1181,45 @@ function JobManager() {
                     </div>
                     <button
                         onClick={() => void fetchJobs()}
-                        className={cn("p-2 rounded-lg border border-helios-line/20 hover:bg-helios-surface-soft", refreshing && "animate-spin")}
+                        className="flex h-10 w-10 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"
+                        title="Refresh jobs"
+                        aria-label="Refresh jobs"
                     >
-                        <RefreshCw size={16} />
+                        <RefreshCw size={16} className={refreshing ? "animate-spin" : undefined} />
                     </button>
+                    <div ref={compactSearchRef} className="relative xl:hidden">
+                        <div
+                            className={cn(
+                                "flex h-10 items-center overflow-hidden rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink transition-[width,box-shadow] duration-200 ease-out",
+                                compactSearchOpen
+                                    ? "w-[min(18rem,calc(100vw-4rem))] px-3 shadow-lg shadow-helios-main/20"
+                                    : "w-10 justify-center"
+                            )}
+                        >
+                            <button
+                                type="button"
+                                onClick={() => setCompactSearchOpen((open) => (searchInput.trim() ? true : !open))}
+                                className="flex h-10 w-10 shrink-0 items-center justify-center text-helios-ink"
+                                title="Search files"
+                                aria-label="Search files"
+                            >
+                                <Search size={16} />
+                            </button>
+                            <input
+                                ref={compactSearchInputRef}
+                                type="text"
+                                placeholder="Search files..."
+                                value={searchInput}
+                                onChange={(e) => setSearchInput(e.target.value)}
+                                className={cn(
+                                    "min-w-0 bg-transparent text-sm text-helios-ink outline-none placeholder:text-helios-slate transition-all duration-200",
+                                    compactSearchOpen
+                                        ? "ml-1 w-full opacity-100"
+                                        : "w-0 opacity-0 pointer-events-none"
+                                )}
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
 
