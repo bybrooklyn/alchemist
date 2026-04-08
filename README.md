@@ -21,10 +21,12 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 ## Features
 
 - Give movies, TV, and home videos different behavior with per-library profiles.
+- Convert or remux a single uploaded file from the **Convert** page using the same pipeline Alchemist uses for library jobs. Experimental.
 - Catch corrupt or broken files before they surprise you with Library Doctor.
 - See exactly how much storage you have recovered in the savings dashboard.
 - Understand every skipped file immediately with plain-English explanations.
-- Get a ping when work finishes through Discord, Gotify, or a webhook.
+- Get a ping when work finishes through Discord, Gotify, Telegram, email, or a webhook.
+- Create named API tokens for automation, with `read_only` and `full_access` access classes.
 - Keep heavy jobs out of the way with a scheduler for off-peak hours.
 - Push urgent files to the front with the priority queue.
 - Switch the engine between background, balanced, and throughput modes without restarting the app.
@@ -32,6 +34,7 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 - Preserve HDR metadata or tonemap to SDR depending on what you need.
 - Add folders once and let watch folders keep monitoring them automatically.
 - Shape audio output with stream rules for commentary stripping, language filtering, and default-track retention.
+- Surface storage-focused recommendations through Library Intelligence, including remux opportunities and commentary cleanup candidates.
 
 ## Hardware Support
 
@@ -61,8 +64,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - /path/to/config:/app/config
-      - /path/to/data:/app/data
+      - ~/.config/alchemist:/app/config
+      - ~/.config/alchemist:/app/data
       - /path/to/media:/media
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
@@ -72,10 +75,15 @@ services:
 
 Then open [http://localhost:3000](http://localhost:3000) in your browser.
 
+On Linux and macOS, the default host-side config location is
+`~/.config/alchemist/config.toml`. When you use Docker, the
+recommended bind mount is still `~/.config/alchemist`, mapped
+into `/app/config` and `/app/data` inside the container.
+
 If you prefer `docker run`, this is the trimmed equivalent:
 
 ```bash
-docker run -d --name alchemist -p 3000:3000 -v /path/to/config:/app/config -v /path/to/data:/app/data -v /path/to/media:/media -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml -e ALCHEMIST_DB_PATH=/app/data/alchemist.db --restart unless-stopped ghcr.io/bybrooklyn/alchemist:latest
+docker run -d --name alchemist -p 3000:3000 -v ~/.config/alchemist:/app/config -v ~/.config/alchemist:/app/data -v /path/to/media:/media -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml -e ALCHEMIST_DB_PATH=/app/data/alchemist.db --restart unless-stopped ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ### Binary
@@ -131,6 +139,13 @@ The core contributor path is supported on Windows. Broader release and utility r
 3. Add your media folders in Watch Folders.
 4. Alchemist scans and starts working automatically.
 5. Check the Dashboard to see progress and savings.
+
+## Automation + Subpath Notes
+
+- API automation can use bearer tokens created in **Settings → API Tokens**.
+- Read-only tokens are limited to observability and monitoring routes.
+- Alchemist can also be served under a subpath such as `/alchemist`
+  using `ALCHEMIST_BASE_URL=/alchemist`.
 
 ## Supported Platforms
 

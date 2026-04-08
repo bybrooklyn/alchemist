@@ -55,7 +55,7 @@ impl LibraryScanner {
         let config = self.config.clone();
 
         tokio::spawn(async move {
-            info!("🚀 Starting full library scan...");
+            info!("Starting full library scan...");
 
             let watch_dirs = match db.get_watch_dirs().await {
                 Ok(dirs) => dirs,
@@ -141,7 +141,7 @@ impl LibraryScanner {
             s.files_added = added;
             s.is_running = false;
             s.current_folder = None;
-            info!("✅ Library scan complete. Added {} new files.", added);
+            info!("Library scan complete. Added {} new files.", added);
         });
 
         Ok(())

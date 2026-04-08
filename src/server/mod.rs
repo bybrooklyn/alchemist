@@ -1,6 +1,7 @@
 //! HTTP server module: routes, state, middleware, and API handlers.
 
 pub mod auth;
+pub mod conversion;
 pub mod jobs;
 pub mod middleware;
 pub mod scan;
@@ -21,9 +22,10 @@ use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareInfo, HardwareProbeLog, HardwareState};
 use axum::{
     Router,
+    extract::State,
     http::{StatusCode, Uri, header},
     middleware as axum_middleware,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post},
 };
 #[cfg(feature = "embed-web")]
@@ -79,6 +81,7 @@ pub struct AppState {
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
     pub config_path: PathBuf,
     pub config_mutable: bool,
+    pub base_url: String,
     pub hardware_state: HardwareState,
     pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
@@ -143,6 +146,11 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
+    let base_url = {
+        let config = config.read().await;
+        config.system.base_url.clone()
+    };
+
     let state = Arc::new(AppState {
         db,
         config,
@@ -160,6 +168,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         library_scanner,
         config_path,
         config_mutable,
+        base_url: base_url.clone(),
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
@@ -171,7 +180,18 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     // Clone agent for shutdown handler before moving state into router
     let shutdown_agent = state.agent.clone();
 
-    let app = app_router(state);
+    let inner_app = app_router(state.clone());
+    let app = if base_url.is_empty() {
+        inner_app
+    } else {
+        let redirect_target = format!("{base_url}/");
+        Router::new()
+            .route(
+                "/",
+                get(move || async move { Redirect::permanent(&redirect_target) }),
+            )
+            .nest(&base_url, inner_app)
+    };
 
     let port = std::env::var("ALCHEMIST_SERVER_PORT")
         .ok()
@@ -284,6 +304,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
 
 fn app_router(state: Arc<AppState>) -> Router {
     use auth::*;
+    use conversion::*;
     use jobs::*;
     use scan::*;
     use settings::*;
@@ -315,6 +336,20 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/:id/restart", post(restart_job_handler))
         .route("/api/jobs/:id/delete", post(delete_job_handler))
         .route("/api/jobs/:id/details", get(get_job_detail_handler))
+        .route("/api/conversion/uploads", post(upload_conversion_handler))
+        .route("/api/conversion/preview", post(preview_conversion_handler))
+        .route(
+            "/api/conversion/jobs/:id/start",
+            post(start_conversion_job_handler),
+        )
+        .route(
+            "/api/conversion/jobs/:id",
+            get(get_conversion_job_handler).delete(delete_conversion_job_handler),
+        )
+        .route(
+            "/api/conversion/jobs/:id/download",
+            get(download_conversion_job_handler),
+        )
         .route("/api/events", get(sse_handler))
         .route("/api/engine/pause", post(pause_engine_handler))
         .route("/api/engine/resume", post(resume_engine_handler))
@@ -373,7 +408,9 @@ fn app_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/settings/notifications",
-            get(get_notifications_handler).post(add_notification_handler),
+            get(get_notifications_handler)
+                .put(update_notifications_settings_handler)
+                .post(add_notification_handler),
         )
         .route(
             "/api/settings/notifications/:id",
@@ -382,6 +419,14 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/settings/notifications/test",
             post(test_notification_handler),
+        )
+        .route(
+            "/api/settings/api-tokens",
+            get(list_api_tokens_handler).post(create_api_token_handler),
+        )
+        .route(
+            "/api/settings/api-tokens/:id",
+            delete(revoke_api_token_handler),
         )
         .route(
             "/api/settings/files",
@@ -405,6 +450,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         // System Routes
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
+        .route("/api/system/update", get(get_system_update_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
         .route(
             "/api/system/hardware/probe-log",
@@ -778,11 +824,11 @@ fn sanitize_asset_path(raw: &str) -> Option<String> {
 
 // Static asset handlers
 
-async fn index_handler() -> impl IntoResponse {
-    static_handler(Uri::from_static("/index.html")).await
+async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    static_handler(State(state), Uri::from_static("/index.html")).await
 }
 
-async fn static_handler(uri: Uri) -> impl IntoResponse {
+async fn static_handler(State(state): State<Arc<AppState>>, uri: Uri) -> impl IntoResponse {
     let raw_path = uri.path().trim_start_matches('/');
     let path = match sanitize_asset_path(raw_path) {
         Some(path) => path,
@@ -791,7 +837,11 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
     if let Some(content) = load_static_asset(&path) {
         let mime = mime_guess::from_path(&path).first_or_octet_stream();
-        return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
+        return (
+            [(header::CONTENT_TYPE, mime.as_ref())],
+            maybe_inject_base_url(content, mime.as_ref(), &state.base_url),
+        )
+            .into_response();
     }
 
     // Attempt to serve index.html for directory paths (e.g. /jobs -> jobs/index.html)
@@ -799,7 +849,11 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         let index_path = format!("{}/index.html", path);
         if let Some(content) = load_static_asset(&index_path) {
             let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-            return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
+            return (
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                maybe_inject_base_url(content, mime.as_ref(), &state.base_url),
+            )
+                .into_response();
         }
     }
 
@@ -835,4 +889,15 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
     // Default fallback to 404 for missing files.
     StatusCode::NOT_FOUND.into_response()
+}
+
+fn maybe_inject_base_url(content: Vec<u8>, mime: &str, base_url: &str) -> Vec<u8> {
+    if !mime.starts_with("text/html") {
+        return content;
+    }
+    let Ok(text) = String::from_utf8(content.clone()) else {
+        return content;
+    };
+    text.replace("__ALCHEMIST_BASE_URL__", base_url)
+        .into_bytes()
 }

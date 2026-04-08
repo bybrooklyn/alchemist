@@ -41,8 +41,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - /path/to/config:/app/config
-      - /path/to/data:/app/data
+      - ~/.config/alchemist:/app/config
+      - ~/.config/alchemist:/app/data
       - /path/to/media:/media
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
@@ -64,8 +64,8 @@ docker run -d \
   --name alchemist \
   --gpus all \
   -p 3000:3000 \
-  -v /path/to/config:/app/config \
-  -v /path/to/data:/app/data \
+  -v ~/.config/alchemist:/app/config \
+  -v ~/.config/alchemist:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \

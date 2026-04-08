@@ -114,6 +114,7 @@ where
         library_scanner: Arc::new(crate::system::scanner::LibraryScanner::new(db, config)),
         config_path: config_path.clone(),
         config_mutable: true,
+        base_url: String::new(),
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
@@ -135,6 +136,17 @@ async fn create_session(
     Ok(token)
 }
 
+async fn create_api_token(
+    db: &crate::db::Db,
+    access_level: crate::db::ApiTokenAccessLevel,
+) -> std::result::Result<String, Box<dyn std::error::Error>> {
+    let token = format!("api-token-{}", rand::random::<u64>());
+    let _ = db
+        .create_api_token("test-token", &token, access_level)
+        .await?;
+    Ok(token)
+}
+
 fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
     match Request::builder()
         .method(method)
@@ -144,6 +156,18 @@ fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<B
     {
         Ok(request) => request,
         Err(err) => panic!("failed to build auth request: {err}"),
+    }
+}
+
+fn bearer_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
+    match Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(body)
+    {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build bearer request: {err}"),
     }
 }
 
@@ -515,6 +539,234 @@ async fn engine_status_endpoint_reports_draining_state()
 }
 
 #[tokio::test]
+async fn read_only_api_token_allows_observability_only_routes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token =
+        create_api_token(state.db.as_ref(), crate::db::ApiTokenAccessLevel::ReadOnly).await?;
+
+    let response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/system/info",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_access_api_token_allows_mutation_routes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_api_token(
+        state.db.as_ref(),
+        crate::db::ApiTokenAccessLevel::FullAccess,
+    )
+    .await?;
+
+    let response = app
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn api_token_endpoints_create_list_and_revoke_tokens()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let session = create_session(state.db.as_ref()).await?;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/settings/api-tokens",
+            &session,
+            json!({
+                "name": "Prometheus",
+                "access_level": "read_only"
+            }),
+        ))
+        .await?;
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_payload: serde_json::Value =
+        serde_json::from_slice(&to_bytes(create_response.into_body(), usize::MAX).await?)?;
+    assert_eq!(create_payload["token"]["name"], "Prometheus");
+    assert_eq!(create_payload["token"]["access_level"], "read_only");
+    assert!(create_payload["plaintext_token"].as_str().is_some());
+
+    let list_response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/settings/api-tokens",
+            &session,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_payload: serde_json::Value =
+        serde_json::from_slice(&to_bytes(list_response.into_body(), usize::MAX).await?)?;
+    let token_id = list_payload[0]["id"].as_i64().ok_or("missing token id")?;
+
+    let revoke_response = app
+        .oneshot(auth_request(
+            Method::DELETE,
+            &format!("/api/settings/api-tokens/{token_id}"),
+            &session,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(revoke_response.status(), StatusCode::OK);
+
+    let tokens = state.db.list_api_tokens().await?;
+    assert_eq!(tokens.len(), 1);
+    assert!(tokens[0].revoked_at.is_some());
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn api_token_storage_hashes_plaintext_token_material()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, _app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let plaintext = format!("api-token-{}", rand::random::<u64>());
+    let _ = state
+        .db
+        .create_api_token(
+            "hash-test",
+            &plaintext,
+            crate::db::ApiTokenAccessLevel::ReadOnly,
+        )
+        .await?;
+
+    let record = state
+        .db
+        .get_active_api_token(&plaintext)
+        .await?
+        .ok_or("missing stored api token")?;
+    assert_ne!(record.token_hash, plaintext);
+    assert_eq!(record.token_hash, crate::db::hash_api_token(&plaintext));
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoked_api_token_is_rejected_by_auth_middleware()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_api_token(
+        state.db.as_ref(),
+        crate::db::ApiTokenAccessLevel::FullAccess,
+    )
+    .await?;
+    let stored = state
+        .db
+        .get_active_api_token(&token)
+        .await?
+        .ok_or("missing api token")?;
+    state.db.revoke_api_token(stored.id).await?;
+
+    let response = app
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/system/info",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_only_api_token_cannot_access_settings_config()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token =
+        create_api_token(state.db.as_ref(), crate::db::ApiTokenAccessLevel::ReadOnly).await?;
+
+    let response = app
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/settings/config",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_base_url_routes_engine_status_through_auth_middleware()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, _app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.system.base_url = "/alchemist".to_string();
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let app = Router::new().nest("/alchemist", app_router(state.clone()));
+
+    let response = app
+        .oneshot(auth_request(
+            Method::GET,
+            "/alchemist/api/engine/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    drop(state);
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
 async fn hardware_probe_log_route_returns_runtime_log()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -664,10 +916,11 @@ async fn setup_complete_accepts_nested_settings_payload()
     settings.appearance.active_theme_id = Some("midnight".to_string());
     settings.notifications.targets = vec![crate::config::NotificationTargetConfig {
         name: "Discord".to_string(),
-        target_type: "discord".to_string(),
-        endpoint_url: "https://discord.com/api/webhooks/test".to_string(),
+        target_type: "discord_webhook".to_string(),
+        config_json: serde_json::json!({ "webhook_url": "https://discord.com/api/webhooks/test" }),
+        endpoint_url: Some("https://discord.com/api/webhooks/test".to_string()),
         auth_token: None,
-        events: vec!["completed".to_string()],
+        events: vec!["encode.completed".to_string()],
         enabled: true,
     }];
     settings.schedule.windows = vec![crate::config::ScheduleWindowConfig {
@@ -1005,10 +1258,11 @@ async fn settings_bundle_put_projects_extended_settings_to_db()
     payload.notifications.enabled = true;
     payload.notifications.targets = vec![crate::config::NotificationTargetConfig {
         name: "Discord".to_string(),
-        target_type: "discord".to_string(),
-        endpoint_url: "https://discord.com/api/webhooks/test".to_string(),
+        target_type: "discord_webhook".to_string(),
+        config_json: serde_json::json!({ "webhook_url": "https://discord.com/api/webhooks/test" }),
+        endpoint_url: Some("https://discord.com/api/webhooks/test".to_string()),
         auth_token: None,
-        events: vec!["completed".to_string()],
+        events: vec!["encode.completed".to_string()],
         enabled: true,
     }];
 
@@ -1035,7 +1289,7 @@ async fn settings_bundle_put_projects_extended_settings_to_db()
 
     let notifications = state.db.get_notification_targets().await?;
     assert_eq!(notifications.len(), 1);
-    assert_eq!(notifications[0].target_type, "discord");
+    assert_eq!(notifications[0].target_type, "discord_webhook");
 
     let theme = state.db.get_preference("active_theme_id").await?;
     assert_eq!(theme.as_deref(), Some("midnight"));

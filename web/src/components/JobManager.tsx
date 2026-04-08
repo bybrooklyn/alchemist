@@ -5,6 +5,7 @@ import {
     Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp, AlertCircle
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import { withBasePath } from "../lib/basePath";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -664,7 +665,7 @@ function JobManager() {
         const connect = () => {
             if (cancelled) return;
             eventSource?.close();
-            eventSource = new EventSource("/api/events");
+            eventSource = new EventSource(withBasePath("/api/events"));
 
             eventSource.onopen = () => {
                 // Reset reconnect attempts on successful connection

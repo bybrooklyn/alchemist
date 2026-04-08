@@ -1,3 +1,5 @@
+import { stripBasePath, withBasePath } from "./basePath";
+
 export interface ApiErrorShape {
     status: number;
     message: string;
@@ -83,6 +85,7 @@ export function isApiError(error: unknown): error is ApiError {
  * Authenticated fetch utility using cookie auth.
  */
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+    const resolvedUrl = withBasePath(url);
     const headers = new Headers(options.headers);
 
     if (!headers.has("Content-Type") && typeof options.body === "string") {
@@ -105,7 +108,7 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
     }
 
     try {
-        const response = await fetch(url, {
+        const response = await fetch(resolvedUrl, {
             ...options,
             headers,
             credentials: options.credentials ?? "same-origin",
@@ -113,10 +116,10 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
         });
 
         if (response.status === 401 && typeof window !== "undefined") {
-            const path = window.location.pathname;
+            const path = stripBasePath(window.location.pathname);
             const isAuthPage = path.startsWith("/login") || path.startsWith("/setup");
             if (!isAuthPage) {
-                window.location.href = "/login";
+                window.location.href = withBasePath("/login");
                 return new Promise(() => {});
             }
         }
@@ -133,7 +136,7 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
 export async function apiJson<T>(url: string, options: RequestInit = {}): Promise<T> {
     const response = await apiFetch(url, options);
     if (!response.ok) {
-        throw await toApiError(url, response);
+        throw await toApiError(withBasePath(url), response);
     }
     return (await parseResponseBody(response)) as T;
 }
@@ -141,7 +144,7 @@ export async function apiJson<T>(url: string, options: RequestInit = {}): Promis
 export async function apiAction(url: string, options: RequestInit = {}): Promise<void> {
     const response = await apiFetch(url, options);
     if (!response.ok) {
-        throw await toApiError(url, response);
+        throw await toApiError(withBasePath(url), response);
     }
 }
 

@@ -242,9 +242,9 @@ release-verify:
     @echo "── Actionlint ──"
     actionlint .github/workflows/*.yml
     @echo "── Web verify ──"
-    cd web && bun install --frozen-lockfile && bun run verify && bun audit
+    cd web && bun install --frozen-lockfile && bun run verify && python3 ../scripts/run_bun_audit.py .
     @echo "── Docs verify ──"
-    cd docs && bun install --frozen-lockfile && bun run build && bun audit
+    cd docs && bun install --frozen-lockfile && bun run build && python3 ../scripts/run_bun_audit.py .
     @echo "── E2E backend build ──"
     rm -rf target/debug/incremental
     CARGO_INCREMENTAL=0 cargo build --locked --no-default-features
@@ -403,7 +403,7 @@ fmt:
 # Clean all build artifacts
 clean:
     cargo clean
-    rm -rf web/dist web/node_modules web-e2e/node_modules
+    rm -rf web/dist web/node_modules web-e2e/node_modules docs/node_modules docs/build
 
 # Count lines of source code
 loc:

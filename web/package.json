@@ -1,6 +1,6 @@
 {
   "name": "alchemist-web",
-  "version": "0.3.0",
+  "version": "0.3.1-rc.1",
   "private": true,
   "packageManager": "bun@1",
   "type": "module",
@@ -40,6 +40,7 @@
     "rollup": "^4.60.1",
     "smol-toml": "^1.6.1",
     "svgo": "^4.0.1",
+    "vite": "6.4.2",
     "unstorage": "^1.17.5",
     "yaml": "^2.8.3"
   }

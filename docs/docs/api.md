@@ -13,10 +13,65 @@ except:
   `/api/settings/bundle`, `/api/system/hardware`
 
 Authentication is established by `POST /api/auth/login`.
-The backend also accepts `Authorization: Bearer <token>`,
-but the web UI uses the session cookie.
+The backend also accepts `Authorization: Bearer <token>`.
+Bearer tokens now come in two classes:
+
+- `read_only` — observability-only routes
+- `full_access` — same route access as an authenticated session
+
+The web UI still uses the session cookie.
+
+Machine-readable contract:
+
+- [OpenAPI spec](/openapi.yaml)
 
 ## Authentication
+
+### API tokens
+
+API tokens are created in **Settings → API Tokens**.
+
+- token values are only shown once at creation time
+- only hashed token material is stored server-side
+- revoked tokens stop working immediately
+
+Read-only tokens are intentionally limited to observability
+routes such as stats, jobs, logs history, SSE, system info,
+hardware info, library intelligence, and health/readiness.
+
+### `GET /api/settings/api-tokens`
+
+Lists token metadata only. Plaintext token values are never
+returned after creation.
+
+### `POST /api/settings/api-tokens`
+
+Request:
+
+```json
+{
+  "name": "Prometheus",
+  "access_level": "read_only"
+}
+```
+
+Response:
+
+```json
+{
+  "token": {
+    "id": 1,
+    "name": "Prometheus",
+    "access_level": "read_only"
+  },
+  "plaintext_token": "alc_tok_..."
+}
+```
+
+### `DELETE /api/settings/api-tokens/:id`
+
+Revokes a token in place. Existing automations using it will
+begin receiving `401` or `403` depending on route class.
 
 ### `POST /api/auth/login`
 

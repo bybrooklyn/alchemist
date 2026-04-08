@@ -181,10 +181,6 @@ impl<'a> FFmpegCommandBuilder<'a> {
             ]);
         }
 
-        let encoder = self
-            .plan
-            .encoder
-            .ok_or_else(|| AlchemistError::Config("Transcode plan missing encoder".into()))?;
         let rate_control = self.plan.rate_control.clone();
         let mut args = vec![
             "-hide_banner".to_string(),
@@ -219,46 +215,60 @@ impl<'a> FFmpegCommandBuilder<'a> {
             args.push("0:s?".to_string());
         }
 
-        match encoder {
-            Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => {
-                qsv::append_args(
-                    &mut args,
-                    encoder,
-                    self.hw_info,
-                    rate_control,
-                    default_quality(&self.plan.rate_control, 23),
-                );
+        if self.plan.copy_video {
+            args.extend(["-c:v".to_string(), "copy".to_string()]);
+        } else {
+            let encoder = self
+                .plan
+                .encoder
+                .ok_or_else(|| AlchemistError::Config("Transcode plan missing encoder".into()))?;
+            match encoder {
+                Encoder::Av1Qsv | Encoder::HevcQsv | Encoder::H264Qsv => {
+                    qsv::append_args(
+                        &mut args,
+                        encoder,
+                        self.hw_info,
+                        rate_control.clone(),
+                        default_quality(&self.plan.rate_control, 23),
+                    );
+                }
+                Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => {
+                    nvenc::append_args(
+                        &mut args,
+                        encoder,
+                        rate_control.clone(),
+                        self.plan.encoder_preset.as_deref(),
+                    );
+                }
+                Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => {
+                    vaapi::append_args(&mut args, encoder, self.hw_info);
+                }
+                Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => {
+                    amf::append_args(&mut args, encoder);
+                }
+                Encoder::Av1Videotoolbox
+                | Encoder::HevcVideotoolbox
+                | Encoder::H264Videotoolbox => {
+                    videotoolbox::append_args(
+                        &mut args,
+                        encoder,
+                        rate_control.clone(),
+                        default_quality(&self.plan.rate_control, 65),
+                    );
+                }
+                Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
+                    cpu::append_args(
+                        &mut args,
+                        encoder,
+                        rate_control.clone(),
+                        self.plan.encoder_preset.as_deref(),
+                    );
+                }
             }
-            Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => {
-                nvenc::append_args(
-                    &mut args,
-                    encoder,
-                    rate_control,
-                    self.plan.encoder_preset.as_deref(),
-                );
-            }
-            Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => {
-                vaapi::append_args(&mut args, encoder, self.hw_info);
-            }
-            Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => {
-                amf::append_args(&mut args, encoder);
-            }
-            Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => {
-                videotoolbox::append_args(
-                    &mut args,
-                    encoder,
-                    rate_control,
-                    default_quality(&self.plan.rate_control, 65),
-                );
-            }
-            Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
-                cpu::append_args(
-                    &mut args,
-                    encoder,
-                    rate_control,
-                    self.plan.encoder_preset.as_deref(),
-                );
-            }
+        }
+
+        if let Some(RateControl::Bitrate { kbps }) = rate_control {
+            args.extend(["-b:v".to_string(), format!("{kbps}k")]);
         }
 
         if let Some(filtergraph) = render_filtergraph(self.input, &self.plan.filters) {
@@ -321,6 +331,7 @@ fn default_quality(rate_control: &Option<RateControl>, fallback: u8) -> u8 {
         Some(RateControl::Cq { value }) => *value,
         Some(RateControl::QsvQuality { value }) => *value,
         Some(RateControl::Crf { value }) => *value,
+        Some(RateControl::Bitrate { .. }) => fallback,
         None => fallback,
     }
 }
@@ -375,8 +386,25 @@ fn apply_color_metadata(
     let tonemapped = filters
         .iter()
         .any(|step| matches!(step, FilterStep::Tonemap { .. }));
+    let strip_hdr_metadata = filters
+        .iter()
+        .any(|step| matches!(step, FilterStep::StripHdrMetadata));
 
     if tonemapped {
+        args.extend([
+            "-color_primaries".to_string(),
+            "bt709".to_string(),
+            "-color_trc".to_string(),
+            "bt709".to_string(),
+            "-colorspace".to_string(),
+            "bt709".to_string(),
+            "-color_range".to_string(),
+            "tv".to_string(),
+        ]);
+        return;
+    }
+
+    if strip_hdr_metadata {
         args.extend([
             "-color_primaries".to_string(),
             "bt709".to_string(),
@@ -426,6 +454,13 @@ fn render_filtergraph(input: &Path, filters: &[FilterStep]) -> Option<String> {
                 escape_filter_path(input)
             ),
             FilterStep::HwUpload => "hwupload".to_string(),
+            FilterStep::Scale { width, height } => {
+                format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease")
+            }
+            FilterStep::StripHdrMetadata => {
+                "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+                    .to_string()
+            }
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -811,6 +846,7 @@ mod tests {
                 reason: "test".to_string(),
             },
             is_remux: false,
+            copy_video: false,
             output_path: None,
             container: "mkv".to_string(),
             requested_codec: encoder.output_codec(),

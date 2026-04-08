@@ -9,11 +9,11 @@ Served by the same binary as the backend. Default:
 ## Header bar
 
 Visible on every page. Shows engine state and provides
-**Start**, **Pause**, and **Stop** controls.
+**Start** and **Stop** controls plus About and Logout.
 
 - **Start** — begins processing
-- **Pause** — freezes active jobs mid-encode, stops new jobs
 - **Stop** — drain mode: active jobs finish, no new jobs start
+- **About** — version info, environment info, and update-check status
 
 ## Dashboard
 
@@ -44,6 +44,23 @@ Filterable by level, searchable.
 Space savings area chart, per-codec breakdown, aggregate
 totals. Fills in as jobs complete.
 
+## Intelligence
+
+- Duplicate groups by basename
+- Remux-only opportunities
+- Wasteful audio layout recommendations
+- Commentary / descriptive-track cleanup candidates
+
+## Convert
+
+Experimental single-file workflow:
+
+- Upload a file
+- Probe streams and metadata
+- Configure transcode or remux settings
+- Preview the generated FFmpeg command
+- Queue the job and download the result when complete
+
 ## Settings tabs
 
 | Tab | Controls |
@@ -54,7 +71,8 @@ totals. Fills in as jobs complete.
 | Hardware | GPU vendor, device path, fallback |
 | File Settings | Output extension, suffix, output root, replace strategy |
 | Quality | VMAF scoring, minimum score, revert on failure |
-| Notifications | Discord, Gotify, webhook targets |
+| Notifications | Discord webhook, Discord bot, Gotify, Telegram, email, webhook targets, daily summary time |
+| API Tokens | Named bearer tokens with `read_only` and `full_access` classes |
 | Schedule | Time windows |
 | Runtime | Engine mode, concurrent jobs override, Library Doctor |
 | Appearance | Color theme (35+ themes) |

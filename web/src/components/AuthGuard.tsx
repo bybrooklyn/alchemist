@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { apiFetch, apiJson } from "../lib/api";
+import { stripBasePath, withBasePath } from "../lib/basePath";
 
 interface SetupStatus {
     setup_required?: boolean;
@@ -10,7 +11,7 @@ export default function AuthGuard() {
         let cancelled = false;
 
         const checkAuth = async () => {
-            const path = window.location.pathname;
+            const path = stripBasePath(window.location.pathname);
             const isAuthPage = path.startsWith("/login") || path.startsWith("/setup");
             if (isAuthPage) {
                 return;
@@ -27,7 +28,9 @@ export default function AuthGuard() {
                     return;
                 }
 
-                window.location.href = setupStatus.setup_required ? "/setup" : "/login";
+                window.location.href = setupStatus.setup_required
+                    ? withBasePath("/setup")
+                    : withBasePath("/login");
             } catch {
                 // Keep user on current page on transient backend/network failures.
             }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -363,13 +364,15 @@ pub(crate) fn default_tonemap_desat() -> f32 {
     0.2
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NotificationsConfig {
     pub enabled: bool,
     #[serde(default)]
     pub allow_local_notifications: bool,
     #[serde(default)]
     pub targets: Vec<NotificationTargetConfig>,
+    #[serde(default = "default_daily_summary_time_local")]
+    pub daily_summary_time_local: String,
     #[serde(default)]
     pub webhook_url: Option<String>,
     #[serde(default)]
@@ -380,17 +383,235 @@ pub struct NotificationsConfig {
     pub notify_on_failure: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct NotificationTargetConfig {
     pub name: String,
     pub target_type: String,
-    pub endpoint_url: String,
     #[serde(default)]
+    pub config_json: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
     #[serde(default)]
     pub events: Vec<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_local_notifications: false,
+            targets: Vec::new(),
+            daily_summary_time_local: default_daily_summary_time_local(),
+            webhook_url: None,
+            discord_webhook: None,
+            notify_on_complete: false,
+            notify_on_failure: false,
+        }
+    }
+}
+
+fn default_daily_summary_time_local() -> String {
+    "09:00".to_string()
+}
+
+pub const NOTIFICATION_EVENT_ENCODE_QUEUED: &str = "encode.queued";
+pub const NOTIFICATION_EVENT_ENCODE_STARTED: &str = "encode.started";
+pub const NOTIFICATION_EVENT_ENCODE_COMPLETED: &str = "encode.completed";
+pub const NOTIFICATION_EVENT_ENCODE_FAILED: &str = "encode.failed";
+pub const NOTIFICATION_EVENT_SCAN_COMPLETED: &str = "scan.completed";
+pub const NOTIFICATION_EVENT_ENGINE_IDLE: &str = "engine.idle";
+pub const NOTIFICATION_EVENT_DAILY_SUMMARY: &str = "daily.summary";
+
+pub const NOTIFICATION_EVENTS: [&str; 7] = [
+    NOTIFICATION_EVENT_ENCODE_QUEUED,
+    NOTIFICATION_EVENT_ENCODE_STARTED,
+    NOTIFICATION_EVENT_ENCODE_COMPLETED,
+    NOTIFICATION_EVENT_ENCODE_FAILED,
+    NOTIFICATION_EVENT_SCAN_COMPLETED,
+    NOTIFICATION_EVENT_ENGINE_IDLE,
+    NOTIFICATION_EVENT_DAILY_SUMMARY,
+];
+
+fn normalize_notification_event(event: &str) -> Option<&'static str> {
+    match event.trim() {
+        "queued" | "encode.queued" => Some(NOTIFICATION_EVENT_ENCODE_QUEUED),
+        "encoding" | "remuxing" | "encode.started" => Some(NOTIFICATION_EVENT_ENCODE_STARTED),
+        "completed" | "encode.completed" => Some(NOTIFICATION_EVENT_ENCODE_COMPLETED),
+        "failed" | "encode.failed" => Some(NOTIFICATION_EVENT_ENCODE_FAILED),
+        "scan.completed" => Some(NOTIFICATION_EVENT_SCAN_COMPLETED),
+        "engine.idle" => Some(NOTIFICATION_EVENT_ENGINE_IDLE),
+        "daily.summary" => Some(NOTIFICATION_EVENT_DAILY_SUMMARY),
+        _ => None,
+    }
+}
+
+pub fn normalize_notification_events(events: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for event in events {
+        if let Some(value) = normalize_notification_event(event) {
+            if !normalized.iter().any(|candidate| candidate == value) {
+                normalized.push(value.to_string());
+            }
+        }
+    }
+    normalized
+}
+
+fn config_json_string(config_json: &JsonValue, key: &str) -> Option<String> {
+    config_json
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+impl NotificationTargetConfig {
+    pub fn migrate_legacy_shape(&mut self) {
+        self.target_type = match self.target_type.as_str() {
+            "discord" => "discord_webhook".to_string(),
+            other => other.to_string(),
+        };
+
+        if !self.config_json.is_object() {
+            self.config_json = JsonValue::Object(JsonMap::new());
+        }
+
+        let mut config_map = self
+            .config_json
+            .as_object()
+            .cloned()
+            .unwrap_or_else(JsonMap::new);
+
+        match self.target_type.as_str() {
+            "discord_webhook" => {
+                if !config_map.contains_key("webhook_url") {
+                    if let Some(endpoint_url) = self.endpoint_url.clone() {
+                        config_map
+                            .insert("webhook_url".to_string(), JsonValue::String(endpoint_url));
+                    }
+                }
+            }
+            "gotify" => {
+                if !config_map.contains_key("server_url") {
+                    if let Some(endpoint_url) = self.endpoint_url.clone() {
+                        config_map
+                            .insert("server_url".to_string(), JsonValue::String(endpoint_url));
+                    }
+                }
+                if !config_map.contains_key("app_token") {
+                    if let Some(auth_token) = self.auth_token.clone() {
+                        config_map.insert("app_token".to_string(), JsonValue::String(auth_token));
+                    }
+                }
+            }
+            "webhook" => {
+                if !config_map.contains_key("url") {
+                    if let Some(endpoint_url) = self.endpoint_url.clone() {
+                        config_map.insert("url".to_string(), JsonValue::String(endpoint_url));
+                    }
+                }
+                if !config_map.contains_key("auth_token") {
+                    if let Some(auth_token) = self.auth_token.clone() {
+                        config_map.insert("auth_token".to_string(), JsonValue::String(auth_token));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.config_json = JsonValue::Object(config_map);
+        self.events = normalize_notification_events(&self.events);
+    }
+
+    pub fn canonicalize_for_save(&mut self) {
+        self.endpoint_url = None;
+        self.auth_token = None;
+        self.events = normalize_notification_events(&self.events);
+        if !self.config_json.is_object() {
+            self.config_json = JsonValue::Object(JsonMap::new());
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            anyhow::bail!("notification target name must not be empty");
+        }
+
+        if !self.config_json.is_object() {
+            anyhow::bail!("notification target config_json must be an object");
+        }
+
+        if self.events.is_empty() {
+            anyhow::bail!("notification target events must not be empty");
+        }
+
+        for event in &self.events {
+            if normalize_notification_event(event).is_none() {
+                anyhow::bail!("unsupported notification event '{}'", event);
+            }
+        }
+
+        match self.target_type.as_str() {
+            "discord_webhook" => {
+                if config_json_string(&self.config_json, "webhook_url").is_none() {
+                    anyhow::bail!("discord_webhook target requires config_json.webhook_url");
+                }
+            }
+            "discord_bot" => {
+                if config_json_string(&self.config_json, "bot_token").is_none() {
+                    anyhow::bail!("discord_bot target requires config_json.bot_token");
+                }
+                if config_json_string(&self.config_json, "channel_id").is_none() {
+                    anyhow::bail!("discord_bot target requires config_json.channel_id");
+                }
+            }
+            "gotify" => {
+                if config_json_string(&self.config_json, "server_url").is_none() {
+                    anyhow::bail!("gotify target requires config_json.server_url");
+                }
+                if config_json_string(&self.config_json, "app_token").is_none() {
+                    anyhow::bail!("gotify target requires config_json.app_token");
+                }
+            }
+            "webhook" => {
+                if config_json_string(&self.config_json, "url").is_none() {
+                    anyhow::bail!("webhook target requires config_json.url");
+                }
+            }
+            "telegram" => {
+                if config_json_string(&self.config_json, "bot_token").is_none() {
+                    anyhow::bail!("telegram target requires config_json.bot_token");
+                }
+                if config_json_string(&self.config_json, "chat_id").is_none() {
+                    anyhow::bail!("telegram target requires config_json.chat_id");
+                }
+            }
+            "email" => {
+                if config_json_string(&self.config_json, "smtp_host").is_none() {
+                    anyhow::bail!("email target requires config_json.smtp_host");
+                }
+                if config_json_string(&self.config_json, "from_address").is_none() {
+                    anyhow::bail!("email target requires config_json.from_address");
+                }
+                if self
+                    .config_json
+                    .get("to_addresses")
+                    .and_then(JsonValue::as_array)
+                    .map(|values| !values.is_empty())
+                    != Some(true)
+                {
+                    anyhow::bail!("email target requires non-empty config_json.to_addresses");
+                }
+            }
+            other => anyhow::bail!("unsupported notification target type '{}'", other),
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -461,6 +682,8 @@ pub struct SystemConfig {
     /// Enable HSTS header (only enable if running behind HTTPS)
     #[serde(default)]
     pub https_only: bool,
+    #[serde(default)]
+    pub base_url: String,
 }
 
 fn default_true() -> bool {
@@ -487,6 +710,7 @@ impl Default for SystemConfig {
             log_retention_days: default_log_retention_days(),
             engine_mode: EngineMode::default(),
             https_only: false,
+            base_url: String::new(),
         }
     }
 }
@@ -602,6 +826,7 @@ impl Default for Config {
                 log_retention_days: default_log_retention_days(),
                 engine_mode: EngineMode::default(),
                 https_only: false,
+                base_url: String::new(),
             },
         }
     }
@@ -615,6 +840,7 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let mut config: Config = toml::from_str(&content)?;
         config.migrate_legacy_notifications();
+        config.apply_env_overrides();
         config.validate()?;
         Ok(config)
     }
@@ -696,6 +922,12 @@ impl Config {
             }
         }
 
+        validate_schedule_time(&self.notifications.daily_summary_time_local)?;
+        normalize_base_url(&self.system.base_url)?;
+        for target in &self.notifications.targets {
+            target.validate()?;
+        }
+
         // Validate VMAF threshold
         if self.quality.min_vmaf_score < 0.0 || self.quality.min_vmaf_score > 100.0 {
             anyhow::bail!(
@@ -737,56 +969,110 @@ impl Config {
     }
 
     pub(crate) fn migrate_legacy_notifications(&mut self) {
-        if !self.notifications.targets.is_empty() {
-            return;
+        if self.notifications.targets.is_empty() {
+            let mut targets = Vec::new();
+            let events = normalize_notification_events(
+                &[
+                    self.notifications
+                        .notify_on_complete
+                        .then_some("completed".to_string()),
+                    self.notifications
+                        .notify_on_failure
+                        .then_some("failed".to_string()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+            );
+
+            if let Some(discord_webhook) = self.notifications.discord_webhook.clone() {
+                targets.push(NotificationTargetConfig {
+                    name: "Discord".to_string(),
+                    target_type: "discord_webhook".to_string(),
+                    config_json: serde_json::json!({ "webhook_url": discord_webhook }),
+                    endpoint_url: None,
+                    auth_token: None,
+                    events: events.clone(),
+                    enabled: self.notifications.enabled,
+                });
+            }
+
+            if let Some(webhook_url) = self.notifications.webhook_url.clone() {
+                targets.push(NotificationTargetConfig {
+                    name: "Webhook".to_string(),
+                    target_type: "webhook".to_string(),
+                    config_json: serde_json::json!({ "url": webhook_url }),
+                    endpoint_url: None,
+                    auth_token: None,
+                    events,
+                    enabled: self.notifications.enabled,
+                });
+            }
+
+            self.notifications.targets = targets;
         }
 
-        let mut targets = Vec::new();
-        let events = [
-            self.notifications
-                .notify_on_complete
-                .then_some("completed".to_string()),
-            self.notifications
-                .notify_on_failure
-                .then_some("failed".to_string()),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-        if let Some(discord_webhook) = self.notifications.discord_webhook.clone() {
-            targets.push(NotificationTargetConfig {
-                name: "Discord".to_string(),
-                target_type: "discord".to_string(),
-                endpoint_url: discord_webhook,
-                auth_token: None,
-                events: events.clone(),
-                enabled: self.notifications.enabled,
-            });
+        for target in &mut self.notifications.targets {
+            target.migrate_legacy_shape();
         }
-
-        if let Some(webhook_url) = self.notifications.webhook_url.clone() {
-            targets.push(NotificationTargetConfig {
-                name: "Webhook".to_string(),
-                target_type: "webhook".to_string(),
-                endpoint_url: webhook_url,
-                auth_token: None,
-                events,
-                enabled: self.notifications.enabled,
-            });
+        self.notifications.daily_summary_time_local = self
+            .notifications
+            .daily_summary_time_local
+            .trim()
+            .to_string();
+        if self.notifications.daily_summary_time_local.is_empty() {
+            self.notifications.daily_summary_time_local = default_daily_summary_time_local();
         }
-
-        self.notifications.targets = targets;
     }
 
     pub(crate) fn canonicalize_for_save(&mut self) {
+        self.system.base_url = normalize_base_url(&self.system.base_url).unwrap_or_default();
         if !self.notifications.targets.is_empty() {
             self.notifications.webhook_url = None;
             self.notifications.discord_webhook = None;
             self.notifications.notify_on_complete = false;
             self.notifications.notify_on_failure = false;
         }
+        self.notifications.daily_summary_time_local = self
+            .notifications
+            .daily_summary_time_local
+            .trim()
+            .to_string();
+        if self.notifications.daily_summary_time_local.is_empty() {
+            self.notifications.daily_summary_time_local = default_daily_summary_time_local();
+        }
+        for target in &mut self.notifications.targets {
+            target.canonicalize_for_save();
+        }
     }
+
+    pub(crate) fn apply_env_overrides(&mut self) {
+        if let Ok(base_url) = std::env::var("ALCHEMIST_BASE_URL") {
+            self.system.base_url = base_url;
+        }
+        self.system.base_url = normalize_base_url(&self.system.base_url).unwrap_or_default();
+    }
+}
+
+pub fn normalize_base_url(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return Ok(String::new());
+    }
+    if trimmed.contains("://") {
+        anyhow::bail!("system.base_url must be a path prefix, not a full URL");
+    }
+    if !trimmed.starts_with('/') {
+        anyhow::bail!("system.base_url must start with '/'");
+    }
+    if trimmed.contains('?') || trimmed.contains('#') {
+        anyhow::bail!("system.base_url must not contain query or fragment components");
+    }
+    let normalized = trimmed.trim_end_matches('/');
+    if normalized.contains("//") {
+        anyhow::bail!("system.base_url must not contain repeated slashes");
+    }
+    Ok(normalized.to_string())
 }
 
 fn validate_schedule_time(value: &str) -> Result<()> {
@@ -837,10 +1123,13 @@ mod tests {
         config.migrate_legacy_notifications();
 
         assert_eq!(config.notifications.targets.len(), 1);
-        assert_eq!(config.notifications.targets[0].target_type, "discord");
+        assert_eq!(
+            config.notifications.targets[0].target_type,
+            "discord_webhook"
+        );
         assert_eq!(
             config.notifications.targets[0].events,
-            vec!["completed".to_string(), "failed".to_string()]
+            vec!["encode.completed".to_string(), "encode.failed".to_string()]
         );
     }
 
@@ -850,9 +1139,10 @@ mod tests {
         config.notifications.targets = vec![NotificationTargetConfig {
             name: "Webhook".to_string(),
             target_type: "webhook".to_string(),
-            endpoint_url: "https://example.com/webhook".to_string(),
+            config_json: serde_json::json!({ "url": "https://example.com/webhook" }),
+            endpoint_url: Some("https://example.com/webhook".to_string()),
             auth_token: None,
-            events: vec!["completed".to_string()],
+            events: vec!["encode.completed".to_string()],
             enabled: true,
         }];
         config.notifications.webhook_url = Some("https://legacy.example.com".to_string());
@@ -867,5 +1157,66 @@ mod tests {
     fn engine_mode_defaults_to_balanced() {
         assert_eq!(EngineMode::default(), EngineMode::Balanced);
         assert_eq!(EngineMode::Balanced.concurrent_jobs_for_cpu_count(8), 4);
+    }
+
+    #[test]
+    fn normalize_base_url_accepts_root_or_empty() {
+        assert_eq!(
+            normalize_base_url("").unwrap_or_else(|err| panic!("empty base url: {err}")),
+            ""
+        );
+        assert_eq!(
+            normalize_base_url("/").unwrap_or_else(|err| panic!("root base url: {err}")),
+            ""
+        );
+        assert_eq!(
+            normalize_base_url("/alchemist/")
+                .unwrap_or_else(|err| panic!("trimmed base url: {err}")),
+            "/alchemist"
+        );
+    }
+
+    #[test]
+    fn normalize_base_url_rejects_invalid_values() {
+        assert!(normalize_base_url("alchemist").is_err());
+        assert!(normalize_base_url("https://example.com/alchemist").is_err());
+        assert!(normalize_base_url("/a//b").is_err());
+    }
+
+    #[test]
+    fn env_base_url_override_takes_priority_on_load() {
+        let config_path = std::env::temp_dir().join(format!(
+            "alchemist_base_url_override_{}.toml",
+            rand::random::<u64>()
+        ));
+        std::fs::write(
+            &config_path,
+            r#"
+[transcode]
+size_reduction_threshold = 0.3
+min_bpp_threshold = 0.1
+min_file_size_mb = 50
+concurrent_jobs = 1
+
+[hardware]
+preferred_vendor = "cpu"
+allow_cpu_fallback = true
+
+[scanner]
+directories = []
+
+[system]
+base_url = "/from-config"
+"#,
+        )
+        .unwrap_or_else(|err| panic!("failed to write temp config: {err}"));
+
+        // SAFETY: test-only environment mutation.
+        unsafe { std::env::set_var("ALCHEMIST_BASE_URL", "/from-env") };
+        let config =
+            Config::load(&config_path).unwrap_or_else(|err| panic!("failed to load config: {err}"));
+        assert_eq!(config.system.base_url, "/from-env");
+        unsafe { std::env::remove_var("ALCHEMIST_BASE_URL") };
+        let _ = std::fs::remove_file(config_path);
     }
 }

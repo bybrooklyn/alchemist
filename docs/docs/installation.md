@@ -18,8 +18,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - /path/to/config:/app/config
-      - /path/to/data:/app/data
+      - ~/.config/alchemist:/app/config
+      - ~/.config/alchemist:/app/data
       - /path/to/media:/media
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
@@ -43,8 +43,8 @@ For GPU passthrough (NVIDIA, Intel, AMD) see
 docker run -d \
   --name alchemist \
   -p 3000:3000 \
-  -v /path/to/config:/app/config \
-  -v /path/to/data:/app/data \
+  -v ~/.config/alchemist:/app/config \
+  -v ~/.config/alchemist:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
@@ -57,6 +57,14 @@ docker run -d \
 Download from [GitHub Releases](https://github.com/bybrooklyn/alchemist/releases).
 Available for Linux x86_64, Linux ARM64, Windows x86_64,
 macOS Apple Silicon, and macOS Intel.
+
+### Package-manager metadata
+
+Release packaging metadata is generated from this repo’s
+`packaging/` templates during release publication.
+
+- Homebrew formula source lives under `packaging/homebrew/`
+- AUR metadata source lives under `packaging/aur/`
 
 FFmpeg must be installed separately:
 
@@ -72,6 +80,11 @@ winget install Gyan.FFmpeg    # Windows
 ./alchemist        # Linux / macOS
 alchemist.exe      # Windows
 ```
+
+On Windows, Alchemist now exposes an in-app update check in
+the About dialog that compares the running version against
+the latest stable GitHub Release and links directly to the
+download page when an update is available.
 
 ## From source
 

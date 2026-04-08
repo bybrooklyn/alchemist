@@ -7,6 +7,7 @@ interface Props {
 }
 
 const { error } = Astro.props;
+const basePath = "__ALCHEMIST_BASE_URL__";
 ---
 
 <Layout title="Alchemist | Server Error">
@@ -28,7 +29,7 @@ const { error } = Astro.props;
             ) : null}
 
             <a
-                href="/"
+                href={`${basePath}/`}
                 class="px-6 py-2.5 bg-helios-orange hover:bg-helios-orange/90 text-helios-main font-medium rounded-md transition-colors"
             >
                 Return to Dashboard

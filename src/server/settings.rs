@@ -8,13 +8,16 @@ use super::{
     validate_notification_url, validate_transcode_payload,
 };
 use crate::config::Config;
+use crate::db::ApiTokenAccessLevel;
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::sync::Arc;
 
 // Transcode settings
@@ -414,47 +417,217 @@ pub(crate) async fn update_settings_config_handler(
 pub(crate) struct AddNotificationTargetPayload {
     name: String,
     target_type: String,
-    endpoint_url: String,
+    #[serde(default)]
+    config_json: JsonValue,
+    #[serde(default)]
+    endpoint_url: Option<String>,
+    #[serde(default)]
     auth_token: Option<String>,
     events: Vec<String>,
     enabled: bool,
 }
 
-pub(crate) async fn get_notifications_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    match state.db.get_notification_targets().await {
-        Ok(t) => axum::Json(serde_json::json!(t)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+#[derive(Serialize)]
+pub(crate) struct NotificationTargetResponse {
+    id: i64,
+    name: String,
+    target_type: String,
+    config_json: JsonValue,
+    events: Vec<String>,
+    enabled: bool,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NotificationsSettingsResponse {
+    daily_summary_time_local: String,
+    targets: Vec<NotificationTargetResponse>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpdateNotificationsSettingsPayload {
+    daily_summary_time_local: String,
+}
+
+fn normalize_notification_payload(
+    payload: &AddNotificationTargetPayload,
+) -> crate::config::NotificationTargetConfig {
+    let mut config_json = payload.config_json.clone();
+    if !config_json.is_object() {
+        config_json = JsonValue::Object(JsonMap::new());
+    }
+
+    let Some(config_map) = config_json.as_object_mut() else {
+        unreachable!("notification config_json should always be an object here");
+    };
+    match payload.target_type.as_str() {
+        "discord_webhook" | "discord" => {
+            if !config_map.contains_key("webhook_url") {
+                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                    config_map.insert(
+                        "webhook_url".to_string(),
+                        JsonValue::String(endpoint_url.clone()),
+                    );
+                }
+            }
+        }
+        "gotify" => {
+            if !config_map.contains_key("server_url") {
+                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                    config_map.insert(
+                        "server_url".to_string(),
+                        JsonValue::String(endpoint_url.clone()),
+                    );
+                }
+            }
+            if !config_map.contains_key("app_token") {
+                if let Some(auth_token) = payload.auth_token.as_ref() {
+                    config_map.insert(
+                        "app_token".to_string(),
+                        JsonValue::String(auth_token.clone()),
+                    );
+                }
+            }
+        }
+        "webhook" => {
+            if !config_map.contains_key("url") {
+                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                    config_map.insert("url".to_string(), JsonValue::String(endpoint_url.clone()));
+                }
+            }
+            if !config_map.contains_key("auth_token") {
+                if let Some(auth_token) = payload.auth_token.as_ref() {
+                    config_map.insert(
+                        "auth_token".to_string(),
+                        JsonValue::String(auth_token.clone()),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let mut target = crate::config::NotificationTargetConfig {
+        name: payload.name.clone(),
+        target_type: payload.target_type.clone(),
+        config_json,
+        endpoint_url: payload.endpoint_url.clone(),
+        auth_token: payload.auth_token.clone(),
+        events: payload.events.clone(),
+        enabled: payload.enabled,
+    };
+    target.migrate_legacy_shape();
+    target
+}
+
+fn notification_target_response(
+    target: crate::db::NotificationTarget,
+) -> NotificationTargetResponse {
+    NotificationTargetResponse {
+        id: target.id,
+        name: target.name,
+        target_type: target.target_type,
+        config_json: serde_json::from_str(&target.config_json)
+            .unwrap_or_else(|_| JsonValue::Object(JsonMap::new())),
+        events: serde_json::from_str(&target.events).unwrap_or_default(),
+        enabled: target.enabled,
+        created_at: target.created_at,
     }
 }
 
-pub(crate) async fn add_notification_handler(
-    State(state): State<Arc<AppState>>,
-    axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
-) -> impl IntoResponse {
+async fn validate_notification_target(
+    state: &AppState,
+    target: &crate::config::NotificationTargetConfig,
+) -> std::result::Result<(), String> {
+    target.validate().map_err(|err| err.to_string())?;
+
     let allow_local = state
         .config
         .read()
         .await
         .notifications
         .allow_local_notifications;
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url, allow_local).await {
+    let url = match target.target_type.as_str() {
+        "discord_webhook" => target
+            .config_json
+            .get("webhook_url")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        "gotify" => target
+            .config_json
+            .get("server_url")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        "webhook" => target
+            .config_json
+            .get("url")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        _ => None,
+    };
+
+    if let Some(url) = url {
+        validate_notification_url(&url, allow_local).await?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn get_notifications_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.db.get_notification_targets().await {
+        Ok(t) => {
+            let daily_summary_time_local = state
+                .config
+                .read()
+                .await
+                .notifications
+                .daily_summary_time_local
+                .clone();
+            axum::Json(NotificationsSettingsResponse {
+                daily_summary_time_local,
+                targets: t
+                    .into_iter()
+                    .map(notification_target_response)
+                    .collect::<Vec<_>>(),
+            })
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub(crate) async fn update_notifications_settings_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<UpdateNotificationsSettingsPayload>,
+) -> impl IntoResponse {
+    let mut next_config = state.config.read().await.clone();
+    next_config.notifications.daily_summary_time_local = payload.daily_summary_time_local;
+    if let Err(err) = next_config.validate() {
+        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+    }
+    if let Err(response) = save_config_or_response(&state, &next_config).await {
+        return *response;
+    }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+    StatusCode::OK.into_response()
+}
+
+pub(crate) async fn add_notification_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
+) -> impl IntoResponse {
+    let target = normalize_notification_payload(&payload);
+    if let Err(msg) = validate_notification_target(&state, &target).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
     let mut next_config = state.config.read().await.clone();
-    next_config
-        .notifications
-        .targets
-        .push(crate::config::NotificationTargetConfig {
-            name: payload.name.clone(),
-            target_type: payload.target_type.clone(),
-            endpoint_url: payload.endpoint_url.clone(),
-            auth_token: payload.auth_token.clone(),
-            events: payload.events.clone(),
-            enabled: payload.enabled,
-        });
+    next_config.notifications.targets.push(target);
 
     if let Err(e) = next_config.validate() {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
@@ -470,12 +643,8 @@ pub(crate) async fn add_notification_handler(
     match state.db.get_notification_targets().await {
         Ok(targets) => targets
             .into_iter()
-            .find(|target| {
-                target.name == payload.name
-                    && target.target_type == payload.target_type
-                    && target.endpoint_url == payload.endpoint_url
-            })
-            .map(|target| axum::Json(serde_json::json!(target)).into_response())
+            .find(|target| target.name == payload.name)
+            .map(|target| axum::Json(notification_target_response(target)).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -494,10 +663,13 @@ pub(crate) async fn delete_notification_handler(
     };
 
     let mut next_config = state.config.read().await.clone();
+    let target_config_json = target.config_json.clone();
+    let parsed_target_config_json =
+        serde_json::from_str::<JsonValue>(&target_config_json).unwrap_or(JsonValue::Null);
     next_config.notifications.targets.retain(|candidate| {
         !(candidate.name == target.name
             && candidate.target_type == target.target_type
-            && candidate.endpoint_url == target.endpoint_url)
+            && candidate.config_json == parsed_target_config_json)
     });
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
@@ -513,32 +685,89 @@ pub(crate) async fn test_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    let allow_local = state
-        .config
-        .read()
-        .await
-        .notifications
-        .allow_local_notifications;
-    if let Err(msg) = validate_notification_url(&payload.endpoint_url, allow_local).await {
+    let target_config = normalize_notification_payload(&payload);
+    if let Err(msg) = validate_notification_target(&state, &target_config).await {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
-    // Construct a temporary target
-    let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
     let target = crate::db::NotificationTarget {
         id: 0,
-        name: payload.name,
-        target_type: payload.target_type,
-        endpoint_url: payload.endpoint_url,
-        auth_token: payload.auth_token,
-        events: events_json,
-        enabled: payload.enabled,
+        name: target_config.name,
+        target_type: target_config.target_type,
+        config_json: target_config.config_json.to_string(),
+        events: serde_json::to_string(&target_config.events).unwrap_or_else(|_| "[]".to_string()),
+        enabled: target_config.enabled,
         created_at: chrono::Utc::now(),
     };
 
     match state.notification_manager.send_test(&target).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// API token settings
+
+#[derive(Deserialize)]
+pub(crate) struct CreateApiTokenPayload {
+    name: String,
+    access_level: ApiTokenAccessLevel,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CreatedApiTokenResponse {
+    token: crate::db::ApiToken,
+    plaintext_token: String,
+}
+
+pub(crate) async fn list_api_tokens_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.db.list_api_tokens().await {
+        Ok(tokens) => axum::Json(tokens).into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+pub(crate) async fn create_api_token_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<CreateApiTokenPayload>,
+) -> impl IntoResponse {
+    if payload.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "token name must not be empty").into_response();
+    }
+
+    let plaintext_token = format!(
+        "alc_tok_{}",
+        rand::rng()
+            .sample_iter(rand::distr::Alphanumeric)
+            .take(48)
+            .map(char::from)
+            .collect::<String>()
+    );
+
+    match state
+        .db
+        .create_api_token(payload.name.trim(), &plaintext_token, payload.access_level)
+        .await
+    {
+        Ok(token) => axum::Json(CreatedApiTokenResponse {
+            token,
+            plaintext_token,
+        })
+        .into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}
+
+pub(crate) async fn revoke_api_token_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.revoke_api_token(id).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(err) if super::is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     }
 }
 

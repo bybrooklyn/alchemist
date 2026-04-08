@@ -1,0 +1,14 @@
+pkgname=alchemist-bin
+pkgver={{VERSION}}
+pkgrel=1
+pkgdesc="Self-hosted media transcoding pipeline with a web UI"
+arch=('x86_64')
+url="https://github.com/bybrooklyn/alchemist"
+license=('GPL3')
+depends=('ffmpeg')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bybrooklyn/alchemist/releases/download/v${pkgver}/alchemist-linux-x86_64.tar.gz")
+sha256sums=('{{LINUX_X86_64_SHA256}}')
+
+package() {
+  install -Dm755 "${srcdir}/alchemist" "${pkgdir}/usr/bin/alchemist"
+}

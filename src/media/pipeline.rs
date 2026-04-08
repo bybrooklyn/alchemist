@@ -260,6 +260,7 @@ pub enum RateControl {
     Crf { value: u8 },
     Cq { value: u8 },
     QsvQuality { value: u8 },
+    Bitrate { kbps: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -281,6 +282,7 @@ pub struct PlannedFallback {
 pub enum AudioCodec {
     Aac,
     Opus,
+    Mp3,
 }
 
 impl AudioCodec {
@@ -288,6 +290,7 @@ impl AudioCodec {
         match self {
             Self::Aac => "aac",
             Self::Opus => "libopus",
+            Self::Mp3 => "libmp3lame",
         }
     }
 }
@@ -345,12 +348,18 @@ pub enum FilterStep {
         stream_index: usize,
     },
     HwUpload,
+    Scale {
+        width: u32,
+        height: u32,
+    },
+    StripHdrMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodePlan {
     pub decision: TranscodeDecision,
     pub is_remux: bool,
+    pub copy_video: bool,
     pub output_path: Option<PathBuf>,
     pub container: String,
     pub requested_codec: crate::config::OutputCodec,
@@ -432,6 +441,7 @@ struct FinalizeJobContext<'a> {
     output_path: &'a Path,
     temp_output_path: &'a Path,
     plan: &'a TranscodePlan,
+    bypass_quality_gates: bool,
     start_time: std::time::Instant,
     metadata: &'a MediaMetadata,
     execution_result: &'a ExecutionResult,
@@ -790,42 +800,88 @@ impl Pipeline {
 
         let config_snapshot = self.config.read().await.clone();
         let hw_info = self.hardware_state.snapshot().await;
-        let planner = BasicPlanner::new(Arc::new(config_snapshot.clone()), hw_info.clone());
-        let profile = match self.db.get_profile_for_path(&job.input_path).await {
-            Ok(profile) => profile,
-            Err(err) => {
-                let msg = format!("Failed to resolve library profile: {err}");
-                tracing::error!("Job {}: {}", job.id, msg);
-                let _ = self.db.add_log("error", Some(job.id), &msg).await;
-                let explanation = crate::explanations::failure_from_summary(&msg);
-                let _ = self
-                    .db
-                    .upsert_job_failure_explanation(job.id, &explanation)
-                    .await;
-                let _ = self
-                    .update_job_state(job.id, crate::db::JobState::Failed)
-                    .await;
-                return Err(JobFailure::Transient);
-            }
-        };
-        let mut plan = match planner
-            .plan(&analysis, &output_path, profile.as_ref())
+        let conversion_job = self
+            .db
+            .get_conversion_job_by_linked_job_id(job.id)
             .await
-        {
-            Ok(plan) => plan,
-            Err(e) => {
-                let msg = format!("Planner failed: {e}");
-                tracing::error!("Job {}: {}", job.id, msg);
-                let _ = self.db.add_log("error", Some(job.id), &msg).await;
-                let explanation = crate::explanations::failure_from_summary(&msg);
-                let _ = self
-                    .db
-                    .upsert_job_failure_explanation(job.id, &explanation)
-                    .await;
-                let _ = self
-                    .update_job_state(job.id, crate::db::JobState::Failed)
-                    .await;
-                return Err(JobFailure::PlannerBug);
+            .ok()
+            .flatten();
+        let bypass_quality_gates = conversion_job.is_some();
+        let mut plan = if let Some(conversion_job) = conversion_job.as_ref() {
+            let settings: crate::conversion::ConversionSettings =
+                match serde_json::from_str(&conversion_job.settings_json) {
+                    Ok(settings) => settings,
+                    Err(err) => {
+                        let msg = format!("Invalid conversion job settings: {err}");
+                        tracing::error!("Job {}: {}", job.id, msg);
+                        let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                        let explanation = crate::explanations::failure_from_summary(&msg);
+                        let _ = self
+                            .db
+                            .upsert_job_failure_explanation(job.id, &explanation)
+                            .await;
+                        let _ = self
+                            .update_job_state(job.id, crate::db::JobState::Failed)
+                            .await;
+                        return Err(JobFailure::PlannerBug);
+                    }
+                };
+            match crate::conversion::build_plan(&analysis, &output_path, &settings, hw_info.clone())
+            {
+                Ok(plan) => plan,
+                Err(err) => {
+                    let msg = format!("Conversion planning failed: {err}");
+                    tracing::error!("Job {}: {}", job.id, msg);
+                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    let explanation = crate::explanations::failure_from_summary(&msg);
+                    let _ = self
+                        .db
+                        .upsert_job_failure_explanation(job.id, &explanation)
+                        .await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
+                    return Err(JobFailure::PlannerBug);
+                }
+            }
+        } else {
+            let planner = BasicPlanner::new(Arc::new(config_snapshot.clone()), hw_info.clone());
+            let profile = match self.db.get_profile_for_path(&job.input_path).await {
+                Ok(profile) => profile,
+                Err(err) => {
+                    let msg = format!("Failed to resolve library profile: {err}");
+                    tracing::error!("Job {}: {}", job.id, msg);
+                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    let explanation = crate::explanations::failure_from_summary(&msg);
+                    let _ = self
+                        .db
+                        .upsert_job_failure_explanation(job.id, &explanation)
+                        .await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
+                    return Err(JobFailure::Transient);
+                }
+            };
+            match planner
+                .plan(&analysis, &output_path, profile.as_ref())
+                .await
+            {
+                Ok(plan) => plan,
+                Err(e) => {
+                    let msg = format!("Planner failed: {e}");
+                    tracing::error!("Job {}: {}", job.id, msg);
+                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    let explanation = crate::explanations::failure_from_summary(&msg);
+                    let _ = self
+                        .db
+                        .upsert_job_failure_explanation(job.id, &explanation)
+                        .await;
+                    let _ = self
+                        .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
+                    return Err(JobFailure::PlannerBug);
+                }
             }
         };
 
@@ -965,6 +1021,7 @@ impl Pipeline {
                             output_path: &output_path,
                             temp_output_path: &temp_output_path,
                             plan: &plan,
+                            bypass_quality_gates,
                             start_time,
                             metadata,
                             execution_result: &result,
@@ -1124,8 +1181,10 @@ impl Pipeline {
         let config = self.config.read().await;
         let telemetry_enabled = config.system.enable_telemetry;
 
-        if output_size == 0
-            || (!context.plan.is_remux && reduction < config.transcode.size_reduction_threshold)
+        if !context.bypass_quality_gates
+            && (output_size == 0
+                || (!context.plan.is_remux
+                    && reduction < config.transcode.size_reduction_threshold))
         {
             tracing::warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
@@ -1152,7 +1211,7 @@ impl Pipeline {
         }
 
         let mut vmaf_score = None;
-        if !context.plan.is_remux && config.quality.enable_vmaf {
+        if !context.bypass_quality_gates && !context.plan.is_remux && config.quality.enable_vmaf {
             tracing::info!("[Job {}] Phase 2: Computing VMAF quality score...", job_id);
             let input_clone = input_path.to_path_buf();
             let output_clone = context.temp_output_path.to_path_buf();
@@ -1552,6 +1611,7 @@ mod tests {
                 reason: "test".to_string(),
             },
             is_remux: false,
+            copy_video: false,
             output_path: None,
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
@@ -1647,6 +1707,7 @@ mod tests {
                 reason: "test".to_string(),
             },
             is_remux: false,
+            copy_video: false,
             output_path: Some(temp_output.clone()),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,

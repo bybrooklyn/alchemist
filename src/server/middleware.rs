@@ -1,9 +1,10 @@
 //! Authentication, rate limiting, and security middleware.
 
 use super::AppState;
+use crate::db::ApiTokenAccessLevel;
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -73,6 +74,7 @@ pub(crate) async fn auth_middleware(
     next: Next,
 ) -> Response {
     let path = req.uri().path();
+    let method = req.method().clone();
 
     // 1. API Protection: Only lock down /api routes
     if path.starts_with("/api") {
@@ -132,6 +134,18 @@ pub(crate) async fn auth_middleware(
             if let Ok(Some(_session)) = state.db.get_session(&t).await {
                 return next.run(req).await;
             }
+            if let Ok(Some(api_token)) = state.db.get_active_api_token(&t).await {
+                let _ = state.db.update_api_token_last_used(api_token.id).await;
+                match api_token.access_level {
+                    ApiTokenAccessLevel::FullAccess => return next.run(req).await,
+                    ApiTokenAccessLevel::ReadOnly => {
+                        if read_only_api_token_allows(&method, path) {
+                            return next.run(req).await;
+                        }
+                        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+                    }
+                }
+            }
         }
 
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -141,6 +155,40 @@ pub(crate) async fn auth_middleware(
     // Allow everything else. The frontend app (Layout.astro) handles client-side redirects
     // if the user isn't authenticated, and the backend API protects the actual data.
     next.run(req).await
+}
+
+fn read_only_api_token_allows(method: &Method, path: &str) -> bool {
+    if *method != Method::GET && *method != Method::HEAD {
+        return false;
+    }
+
+    if path == "/api/health"
+        || path == "/api/ready"
+        || path == "/api/events"
+        || path == "/api/stats"
+        || path == "/api/stats/aggregated"
+        || path == "/api/stats/daily"
+        || path == "/api/stats/detailed"
+        || path == "/api/stats/savings"
+        || path == "/api/jobs"
+        || path == "/api/jobs/table"
+        || path == "/api/logs/history"
+        || path == "/api/engine/status"
+        || path == "/api/engine/mode"
+        || path == "/api/system/resources"
+        || path == "/api/system/info"
+        || path == "/api/system/update"
+        || path == "/api/system/hardware"
+        || path == "/api/system/hardware/probe-log"
+        || path == "/api/library/intelligence"
+        || path == "/api/library/health"
+        || path == "/api/library/health/issues"
+        || path.starts_with("/api/jobs/") && path.ends_with("/details")
+    {
+        return true;
+    }
+
+    false
 }
 
 pub(crate) async fn rate_limit_middleware(

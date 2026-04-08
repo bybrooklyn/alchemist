@@ -48,7 +48,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
 
     let notifications = db.get_notification_targets().await?;
     assert_eq!(notifications.len(), 1);
-    assert_eq!(notifications[0].target_type, "discord");
+    assert_eq!(notifications[0].target_type, "discord_webhook");
 
     let schedule_windows = db.get_schedule_windows().await?;
     assert_eq!(schedule_windows.len(), 1);
@@ -101,7 +101,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "6");
+    assert_eq!(schema_version, "8");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")

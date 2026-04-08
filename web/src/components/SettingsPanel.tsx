@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2 } from "lucide-react";
+import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2, KeyRound } from "lucide-react";
 import WatchFolders from "./WatchFolders";
 import NotificationSettings from "./NotificationSettings";
 import ScheduleSettings from "./ScheduleSettings";
@@ -10,6 +10,7 @@ import HardwareSettings from "./HardwareSettings";
 import AppearanceSettings from "./AppearanceSettings";
 import QualitySettings from "./QualitySettings";
 import ConfigEditorSettings from "./ConfigEditorSettings";
+import ApiTokenSettings from "./ApiTokenSettings";
 
 const TABS = [
     { id: "appearance", label: "Appearance", icon: Palette, component: AppearanceSettings },
@@ -19,6 +20,7 @@ const TABS = [
     { id: "files", label: "Output & Files", icon: FileCog, component: FileSettings },
     { id: "schedule", label: "Automation", icon: Calendar, component: ScheduleSettings },
     { id: "notifications", label: "Notifications", icon: Bell, component: NotificationSettings },
+    { id: "api-tokens", label: "API Tokens", icon: KeyRound, component: ApiTokenSettings },
     { id: "hardware", label: "Hardware", icon: LayoutGrid, component: HardwareSettings },
     { id: "system", label: "Runtime", icon: Server, component: SystemSettings },
     { id: "config", label: "Config", icon: FileCode2, component: ConfigEditorSettings },

@@ -3,6 +3,7 @@ import { Home } from "lucide-react";
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
 import HeaderActions from "../components/HeaderActions.tsx";
+const basePath = "__ALCHEMIST_BASE_URL__";
 ---
 
 <Layout title="Alchemist | Page Not Found">
@@ -23,7 +24,7 @@ import HeaderActions from "../components/HeaderActions.tsx";
                             The page you're looking for couldn't be found. It may have moved or the URL might be wrong.
                         </p>
                         <a
-                            href="/"
+                            href={`${basePath}/`}
                             class="inline-flex items-center gap-2 mt-6 bg-helios-solar text-helios-main rounded-lg px-5 py-2.5 text-sm font-semibold hover:opacity-90 transition-opacity"
                         >
                             <Home size={16} />

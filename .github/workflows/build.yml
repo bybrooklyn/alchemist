@@ -495,6 +495,17 @@ jobs:
           merge-multiple: true
           path: release-assets
 
+      - name: Render distribution metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.release_tag }}"
+          VERSION="${VERSION#v}"
+          python3 scripts/render_distribution.py \
+            --version "${VERSION}" \
+            --assets-dir release-assets \
+            --output-dir release-assets/distribution
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

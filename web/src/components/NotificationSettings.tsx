@@ -1,33 +1,144 @@
-import { useState, useEffect } from "react";
-import { Plus, Trash2, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bell, Plus, Trash2, Zap } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 
+type NotificationTargetType =
+    | "discord_webhook"
+    | "discord_bot"
+    | "gotify"
+    | "webhook"
+    | "telegram"
+    | "email";
+
 interface NotificationTarget {
     id: number;
     name: string;
-    target_type: "gotify" | "discord" | "webhook";
-    endpoint_url: string;
-    auth_token?: string;
-    events: string;
+    target_type: NotificationTargetType;
+    config_json: Record<string, unknown>;
+    events: string[];
     enabled: boolean;
+    created_at: string;
 }
 
-const TARGET_TYPES: NotificationTarget["target_type"][] = ["discord", "gotify", "webhook"];
+interface NotificationsSettingsResponse {
+    daily_summary_time_local: string;
+    targets: NotificationTarget[];
+}
+
+interface LegacyNotificationTarget {
+    id: number;
+    name: string;
+    target_type: "discord" | "gotify" | "webhook";
+    endpoint_url: string;
+    auth_token: string | null;
+    events: string;
+    enabled: boolean;
+    created_at?: string;
+}
+
+const TARGET_TYPES: Array<{ value: NotificationTargetType; label: string }> = [
+    { value: "discord_webhook", label: "Discord Webhook" },
+    { value: "discord_bot", label: "Discord Bot" },
+    { value: "gotify", label: "Gotify" },
+    { value: "webhook", label: "Generic Webhook" },
+    { value: "telegram", label: "Telegram" },
+    { value: "email", label: "Email" },
+];
+
+const EVENT_OPTIONS = [
+    "encode.queued",
+    "encode.started",
+    "encode.completed",
+    "encode.failed",
+    "scan.completed",
+    "engine.idle",
+    "daily.summary",
+];
+
+function targetSummary(target: NotificationTarget): string {
+    const config = target.config_json;
+    switch (target.target_type) {
+        case "discord_webhook":
+            return String(config.webhook_url ?? "");
+        case "discord_bot":
+            return `channel ${String(config.channel_id ?? "")}`;
+        case "gotify":
+            return String(config.server_url ?? "");
+        case "webhook":
+            return String(config.url ?? "");
+        case "telegram":
+            return `chat ${String(config.chat_id ?? "")}`;
+        case "email":
+            return String((config.to_addresses as string[] | undefined)?.join(", ") ?? "");
+        default:
+            return "";
+    }
+}
+
+function normalizeTarget(target: NotificationTarget | LegacyNotificationTarget): NotificationTarget {
+    if ("config_json" in target) {
+        return target;
+    }
+
+    const normalizedType: NotificationTargetType =
+        target.target_type === "discord" ? "discord_webhook" : target.target_type;
+    const config_json =
+        normalizedType === "discord_webhook"
+            ? { webhook_url: target.endpoint_url }
+            : normalizedType === "gotify"
+              ? { server_url: target.endpoint_url, app_token: target.auth_token ?? "" }
+              : { url: target.endpoint_url, auth_token: target.auth_token ?? "" };
+
+    return {
+        id: target.id,
+        name: target.name,
+        target_type: normalizedType,
+        config_json,
+        events: JSON.parse(target.events),
+        enabled: target.enabled,
+        created_at: target.created_at ?? new Date().toISOString(),
+    };
+}
+
+function defaultConfigForType(type: NotificationTargetType): Record<string, unknown> {
+    switch (type) {
+        case "discord_webhook":
+            return { webhook_url: "" };
+        case "discord_bot":
+            return { bot_token: "", channel_id: "" };
+        case "gotify":
+            return { server_url: "", app_token: "" };
+        case "webhook":
+            return { url: "", auth_token: "" };
+        case "telegram":
+            return { bot_token: "", chat_id: "" };
+        case "email":
+            return {
+                smtp_host: "",
+                smtp_port: 587,
+                username: "",
+                password: "",
+                from_address: "",
+                to_addresses: [""],
+                security: "starttls",
+            };
+    }
+}
 
 export default function NotificationSettings() {
     const [targets, setTargets] = useState<NotificationTarget[]>([]);
+    const [dailySummaryTime, setDailySummaryTime] = useState("09:00");
     const [loading, setLoading] = useState(true);
     const [testingId, setTestingId] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const [showForm, setShowForm] = useState(false);
-    const [newName, setNewName] = useState("");
-    const [newType, setNewType] = useState<NotificationTarget["target_type"]>("discord");
-    const [newUrl, setNewUrl] = useState("");
-    const [newToken, setNewToken] = useState("");
-    const [newEvents, setNewEvents] = useState<string[]>(["completed", "failed"]);
+    const [draftName, setDraftName] = useState("");
+    const [draftType, setDraftType] = useState<NotificationTargetType>("discord_webhook");
+    const [draftConfig, setDraftConfig] = useState<Record<string, unknown>>(defaultConfigForType("discord_webhook"));
+    const [draftEvents, setDraftEvents] = useState<string[]>(["encode.completed", "encode.failed"]);
     const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
     useEffect(() => {
@@ -36,8 +147,16 @@ export default function NotificationSettings() {
 
     const fetchTargets = async () => {
         try {
-            const data = await apiJson<NotificationTarget[]>("/api/settings/notifications");
-            setTargets(data);
+            const data = await apiJson<NotificationsSettingsResponse | LegacyNotificationTarget[]>(
+                "/api/settings/notifications",
+            );
+            if (Array.isArray(data)) {
+                setTargets(data.map(normalizeTarget));
+                setDailySummaryTime("09:00");
+            } else {
+                setTargets(data.targets.map(normalizeTarget));
+                setDailySummaryTime(data.daily_summary_time_local);
+            }
             setError(null);
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to load notification targets";
@@ -47,6 +166,32 @@ export default function NotificationSettings() {
         }
     };
 
+    const saveDailySummaryTime = async () => {
+        try {
+            await apiAction("/api/settings/notifications", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ daily_summary_time_local: dailySummaryTime }),
+            });
+            showToast({
+                kind: "success",
+                title: "Notifications",
+                message: "Daily summary time saved.",
+            });
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to save daily summary time";
+            setError(message);
+            showToast({ kind: "error", title: "Notifications", message });
+        }
+    };
+
+    const resetDraft = (type: NotificationTargetType = "discord_webhook") => {
+        setDraftName("");
+        setDraftType(type);
+        setDraftConfig(defaultConfigForType(type));
+        setDraftEvents(["encode.completed", "encode.failed"]);
+    };
+
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
@@ -54,18 +199,15 @@ export default function NotificationSettings() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    name: newName,
-                    target_type: newType,
-                    endpoint_url: newUrl,
-                    auth_token: newToken || null,
-                    events: newEvents,
+                    name: draftName,
+                    target_type: draftType,
+                    config_json: draftConfig,
+                    events: draftEvents,
                     enabled: true,
                 }),
             });
             setShowForm(false);
-            setNewName("");
-            setNewUrl("");
-            setNewToken("");
+            resetDraft();
             setError(null);
             await fetchTargets();
             showToast({ kind: "success", title: "Notifications", message: "Target added." });
@@ -92,29 +234,17 @@ export default function NotificationSettings() {
     const handleTest = async (target: NotificationTarget) => {
         setTestingId(target.id);
         try {
-            let events: string[] = [];
-            try {
-                const parsed = JSON.parse(target.events);
-                if (Array.isArray(parsed)) {
-                    events = parsed;
-                }
-            } catch {
-                events = [];
-            }
-
             await apiAction("/api/settings/notifications/test", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     name: target.name,
                     target_type: target.target_type,
-                    endpoint_url: target.endpoint_url,
-                    auth_token: target.auth_token,
-                    events,
+                    config_json: target.config_json,
+                    events: target.events,
                     enabled: target.enabled,
                 }),
             });
-
             showToast({ kind: "success", title: "Notifications", message: "Test notification sent." });
         } catch (e) {
             const message = isApiError(e) ? e.message : "Test notification failed";
@@ -126,18 +256,46 @@ export default function NotificationSettings() {
     };
 
     const toggleEvent = (evt: string) => {
-        if (newEvents.includes(evt)) {
-            setNewEvents(newEvents.filter(e => e !== evt));
-        } else {
-            setNewEvents([...newEvents, evt]);
-        }
+        setDraftEvents((current) =>
+            current.includes(evt)
+                ? current.filter((candidate) => candidate !== evt)
+                : [...current, evt],
+        );
+    };
+
+    const setConfigField = (key: string, value: unknown) => {
+        setDraftConfig((current) => ({ ...current, [key]: value }));
     };
 
     return (
         <div className="space-y-6" aria-live="polite">
-            <div className="flex justify-end mb-6">
+            <div className="grid gap-4 md:grid-cols-[1fr_auto] items-end">
+                <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft p-4">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink">
+                        <Bell size={16} className="text-helios-solar" />
+                        Daily Summary Time
+                    </div>
+                    <p className="mt-1 text-xs text-helios-slate">
+                        Daily summaries are opt-in per target, but they all use one global local-time send window.
+                    </p>
+                    <input
+                        type="time"
+                        value={dailySummaryTime}
+                        onChange={(event) => setDailySummaryTime(event.target.value)}
+                        className="mt-3 w-full max-w-xs bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
+                    />
+                </div>
                 <button
-                    onClick={() => setShowForm(!showForm)}
+                    onClick={() => void saveDailySummaryTime()}
+                    className="rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:bg-helios-surface-soft transition-colors"
+                >
+                    Save Summary Time
+                </button>
+            </div>
+
+            <div className="flex justify-end">
+                <button
+                    onClick={() => setShowForm((current) => !current)}
                     className="flex items-center gap-2 px-3 py-1.5 bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft text-helios-ink rounded-lg text-xs font-medium transition-colors"
                 >
                     <Plus size={14} />
@@ -157,8 +315,8 @@ export default function NotificationSettings() {
                         <div>
                             <label className="block text-xs font-medium text-helios-slate mb-1">Name</label>
                             <input
-                                value={newName}
-                                onChange={e => setNewName(e.target.value)}
+                                value={draftName}
+                                onChange={(event) => setDraftName(event.target.value)}
                                 className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
                                 placeholder="My Discord"
                                 required
@@ -167,53 +325,177 @@ export default function NotificationSettings() {
                         <div>
                             <label className="block text-xs font-medium text-helios-slate mb-1">Type</label>
                             <select
-                                value={newType}
-                                onChange={e => setNewType(e.target.value as NotificationTarget["target_type"])}
+                                value={draftType}
+                                onChange={(event) => {
+                                    const nextType = event.target.value as NotificationTargetType;
+                                    setDraftType(nextType);
+                                    setDraftConfig(defaultConfigForType(nextType));
+                                }}
                                 className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
                             >
                                 {TARGET_TYPES.map((type) => (
-                                    <option key={type} value={type}>
-                                        {type === "discord" ? "Discord Webhook" : type === "gotify" ? "Gotify" : "Generic Webhook"}
+                                    <option key={type.value} value={type.value}>
+                                        {type.label}
                                     </option>
                                 ))}
                             </select>
                         </div>
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-medium text-helios-slate mb-1">Endpoint URL</label>
-                        <input
-                            value={newUrl}
-                            onChange={e => setNewUrl(e.target.value)}
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
+                    {draftType === "discord_webhook" && (
+                        <TextField
+                            label="Webhook URL"
+                            value={String(draftConfig.webhook_url ?? "")}
+                            onChange={(value) => setConfigField("webhook_url", value)}
                             placeholder="https://discord.com/api/webhooks/..."
-                            required
                         />
-                    </div>
+                    )}
 
-                    <div>
-                        <label className="block text-xs font-medium text-helios-slate mb-1">Auth Token (Optional)</label>
-                        <input
-                            value={newToken}
-                            onChange={e => setNewToken(e.target.value)}
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
-                            placeholder="Bearer token or API Key"
-                        />
-                    </div>
+                    {draftType === "discord_bot" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="Bot Token"
+                                value={String(draftConfig.bot_token ?? "")}
+                                onChange={(value) => setConfigField("bot_token", value)}
+                                placeholder="Discord bot token"
+                            />
+                            <TextField
+                                label="Channel ID"
+                                value={String(draftConfig.channel_id ?? "")}
+                                onChange={(value) => setConfigField("channel_id", value)}
+                                placeholder="123456789012345678"
+                            />
+                        </div>
+                    )}
+
+                    {draftType === "gotify" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="Server URL"
+                                value={String(draftConfig.server_url ?? "")}
+                                onChange={(value) => setConfigField("server_url", value)}
+                                placeholder="https://gotify.example.com/message"
+                            />
+                            <TextField
+                                label="App Token"
+                                value={String(draftConfig.app_token ?? "")}
+                                onChange={(value) => setConfigField("app_token", value)}
+                                placeholder="Gotify app token"
+                            />
+                        </div>
+                    )}
+
+                    {draftType === "webhook" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="Endpoint URL"
+                                value={String(draftConfig.url ?? "")}
+                                onChange={(value) => setConfigField("url", value)}
+                                placeholder="https://example.com/webhook"
+                            />
+                            <TextField
+                                label="Bearer Token (Optional)"
+                                value={String(draftConfig.auth_token ?? "")}
+                                onChange={(value) => setConfigField("auth_token", value)}
+                                placeholder="Bearer token"
+                            />
+                        </div>
+                    )}
+
+                    {draftType === "telegram" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="Bot Token"
+                                value={String(draftConfig.bot_token ?? "")}
+                                onChange={(value) => setConfigField("bot_token", value)}
+                                placeholder="Telegram bot token"
+                            />
+                            <TextField
+                                label="Chat ID"
+                                value={String(draftConfig.chat_id ?? "")}
+                                onChange={(value) => setConfigField("chat_id", value)}
+                                placeholder="Telegram chat ID"
+                            />
+                        </div>
+                    )}
+
+                    {draftType === "email" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="SMTP Host"
+                                value={String(draftConfig.smtp_host ?? "")}
+                                onChange={(value) => setConfigField("smtp_host", value)}
+                                placeholder="smtp.example.com"
+                            />
+                            <TextField
+                                label="SMTP Port"
+                                value={String(draftConfig.smtp_port ?? 587)}
+                                onChange={(value) => setConfigField("smtp_port", Number(value))}
+                                placeholder="587"
+                            />
+                            <TextField
+                                label="Username"
+                                value={String(draftConfig.username ?? "")}
+                                onChange={(value) => setConfigField("username", value)}
+                                placeholder="Optional"
+                            />
+                            <TextField
+                                label="Password"
+                                value={String(draftConfig.password ?? "")}
+                                onChange={(value) => setConfigField("password", value)}
+                                placeholder="Optional"
+                            />
+                            <TextField
+                                label="From Address"
+                                value={String(draftConfig.from_address ?? "")}
+                                onChange={(value) => setConfigField("from_address", value)}
+                                placeholder="alchemist@example.com"
+                            />
+                            <TextField
+                                label="To Addresses"
+                                value={Array.isArray(draftConfig.to_addresses) ? String((draftConfig.to_addresses as string[]).join(", ")) : ""}
+                                onChange={(value) =>
+                                    setConfigField(
+                                        "to_addresses",
+                                        value
+                                            .split(",")
+                                            .map((candidate) => candidate.trim())
+                                            .filter(Boolean),
+                                    )
+                                }
+                                placeholder="ops@example.com, alerts@example.com"
+                            />
+                            <div>
+                                <label className="block text-xs font-medium text-helios-slate mb-1">Security</label>
+                                <select
+                                    value={String(draftConfig.security ?? "starttls")}
+                                    onChange={(event) => setConfigField("security", event.target.value)}
+                                    className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
+                                >
+                                    <option value="starttls">STARTTLS</option>
+                                    <option value="tls">TLS / SMTPS</option>
+                                    <option value="none">None</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
 
                     <div>
                         <label className="block text-xs font-medium text-helios-slate mb-2">Events</label>
-                        <div className="flex gap-4 flex-wrap">
-                            {["completed", "failed", "queued"].map(evt => (
-                                <label key={evt} className="flex items-center gap-2 text-sm text-helios-ink cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={newEvents.includes(evt)}
-                                        onChange={() => toggleEvent(evt)}
-                                        className="rounded border-helios-line/30 bg-helios-surface accent-helios-solar"
-                                    />
-                                    <span className="capitalize">{evt}</span>
-                                </label>
+                        <div className="flex gap-2 flex-wrap">
+                            {EVENT_OPTIONS.map((evt) => (
+                                <button
+                                    key={evt}
+                                    type="button"
+                                    onClick={() => toggleEvent(evt)}
+                                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition-all ${
+                                        draftEvents.includes(evt)
+                                            ? "border-helios-solar bg-helios-solar/10 text-helios-ink"
+                                            : "border-helios-line/20 text-helios-slate"
+                                    }`}
+                                >
+                                    {evt}
+                                </button>
                             ))}
                         </div>
                     </div>
@@ -228,19 +510,28 @@ export default function NotificationSettings() {
                 <div className="text-sm text-helios-slate animate-pulse">Loading targets…</div>
             ) : (
                 <div className="space-y-3">
-                    {targets.map(target => (
+                    {targets.map((target) => (
                         <div key={target.id} className="flex items-center justify-between p-4 bg-helios-surface border border-helios-line/10 rounded-xl group/item">
                             <div className="flex items-center gap-4">
                                 <div className="p-2 bg-helios-surface-soft rounded-lg text-helios-slate">
-                                    <Zap size={18} />
+                                    <Bell size={18} />
                                 </div>
-                                <div>
+                                <div className="min-w-0">
                                     <h3 className="font-bold text-sm text-helios-ink">{target.name}</h3>
-                                    <div className="flex items-center gap-2 mt-0.5">
+                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                         <span className="text-xs font-medium text-helios-slate bg-helios-surface-soft px-1.5 rounded">
                                             {target.target_type}
                                         </span>
-                                        <span className="text-xs text-helios-slate truncate max-w-[200px]">{target.endpoint_url}</span>
+                                        <span className="text-xs text-helios-slate break-all">
+                                            {targetSummary(target)}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {target.events.map((eventName) => (
+                                            <span key={eventName} className="rounded-full border border-helios-line/20 px-2 py-0.5 text-[11px] text-helios-slate">
+                                                {eventName}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
@@ -277,6 +568,30 @@ export default function NotificationSettings() {
                     if (pendingDeleteId === null) return;
                     await handleDelete(pendingDeleteId);
                 }}
+            />
+        </div>
+    );
+}
+
+function TextField({
+    label,
+    value,
+    onChange,
+    placeholder,
+}: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+}) {
+    return (
+        <div>
+            <label className="block text-xs font-medium text-helios-slate mb-1">{label}</label>
+            <input
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
+                placeholder={placeholder}
             />
         </div>
     );

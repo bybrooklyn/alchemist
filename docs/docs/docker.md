@@ -13,8 +13,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - /path/to/config:/app/config
-      - /path/to/data:/app/data
+      - ~/.config/alchemist:/app/config
+      - ~/.config/alchemist:/app/data
       - /path/to/media:/media
       - /tmp/alchemist:/tmp   # optional: fast SSD for temp files
     environment:
@@ -27,8 +27,7 @@ services:
 
 | Mount | Purpose |
 |-------|---------|
-| `/app/config` | `config.toml` — persists across restarts |
-| `/app/data` | `alchemist.db` (SQLite) — persists across restarts |
+| `~/.config/alchemist` on the host | Mounted into `/app/config` and `/app/data` so `config.toml` and `alchemist.db` persist across restarts |
 | `/media` | Your media library — mount read-write |
 | `/tmp` (optional) | Temp dir for in-progress encodes — use a fast SSD |
 
