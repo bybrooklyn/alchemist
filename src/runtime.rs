@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_DB_PATH: &str = "alchemist.db";
+const DEFAULT_TEMP_DIR: &str = "temp";
 
 fn parse_bool_env(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -69,6 +70,13 @@ pub fn db_path() -> PathBuf {
         return Path::new(&data_dir).join(DEFAULT_DB_PATH);
     }
     default_data_dir().join(DEFAULT_DB_PATH)
+}
+
+pub fn temp_dir() -> PathBuf {
+    if let Ok(temp_dir) = env::var("ALCHEMIST_TEMP_DIR") {
+        return PathBuf::from(temp_dir);
+    }
+    default_data_dir().join(DEFAULT_TEMP_DIR)
 }
 
 pub fn config_mutable() -> bool {

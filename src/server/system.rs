@@ -1,6 +1,7 @@
 //! System information, hardware info, resources, health handlers.
 
 use super::{AppState, config_read_error_response};
+use crate::media::pipeline::{Analyzer as _, Planner as _, TranscodeDecision};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -44,6 +45,26 @@ struct DuplicatePath {
 struct LibraryIntelligenceResponse {
     duplicate_groups: Vec<DuplicateGroup>,
     total_duplicates: usize,
+    recommendation_counts: RecommendationCounts,
+    recommendations: Vec<IntelligenceRecommendation>,
+}
+
+#[derive(Serialize, Default)]
+struct RecommendationCounts {
+    duplicates: usize,
+    remux_only_candidate: usize,
+    wasteful_audio_layout: usize,
+    commentary_cleanup_candidate: usize,
+}
+
+#[derive(Serialize, Clone)]
+struct IntelligenceRecommendation {
+    #[serde(rename = "type")]
+    recommendation_type: String,
+    title: String,
+    summary: String,
+    path: String,
+    suggested_action: String,
 }
 
 pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Response {
@@ -118,55 +139,158 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
     use std::collections::HashMap;
     use std::path::Path;
 
-    match state.db.get_duplicate_candidates().await {
-        Ok(candidates) => {
-            let mut groups: HashMap<String, Vec<_>> = HashMap::new();
-            for candidate in candidates {
-                let stem = Path::new(&candidate.input_path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_lowercase())
-                    .unwrap_or_default();
-                if stem.is_empty() {
-                    continue;
-                }
-                groups.entry(stem).or_default().push(candidate);
-            }
-
-            let mut duplicate_groups: Vec<DuplicateGroup> = groups
-                .into_iter()
-                .filter(|(_, paths)| paths.len() > 1)
-                .map(|(stem, paths)| {
-                    let count = paths.len();
-                    DuplicateGroup {
-                        stem,
-                        count,
-                        paths: paths
-                            .into_iter()
-                            .map(|candidate| DuplicatePath {
-                                id: candidate.id,
-                                path: candidate.input_path,
-                                status: candidate.status,
-                            })
-                            .collect(),
-                    }
-                })
-                .collect();
-
-            duplicate_groups.sort_by(|a, b| b.count.cmp(&a.count).then(a.stem.cmp(&b.stem)));
-
-            let total_duplicates = duplicate_groups.iter().map(|group| group.count - 1).sum();
-
-            axum::Json(LibraryIntelligenceResponse {
-                duplicate_groups,
-                total_duplicates,
-            })
-            .into_response()
-        }
+    let duplicate_candidates = match state.db.get_duplicate_candidates().await {
+        Ok(candidates) => candidates,
         Err(err) => {
             error!("Failed to fetch duplicate candidates: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut groups: HashMap<String, Vec<_>> = HashMap::new();
+    for candidate in duplicate_candidates {
+        let stem = Path::new(&candidate.input_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if stem.is_empty() {
+            continue;
+        }
+        groups.entry(stem).or_default().push(candidate);
+    }
+
+    let mut duplicate_groups: Vec<DuplicateGroup> = groups
+        .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .map(|(stem, paths)| {
+            let count = paths.len();
+            DuplicateGroup {
+                stem,
+                count,
+                paths: paths
+                    .into_iter()
+                    .map(|candidate| DuplicatePath {
+                        id: candidate.id,
+                        path: candidate.input_path,
+                        status: candidate.status,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    duplicate_groups.sort_by(|a, b| b.count.cmp(&a.count).then(a.stem.cmp(&b.stem)));
+    let total_duplicates = duplicate_groups.iter().map(|group| group.count - 1).sum();
+
+    let mut recommendations = Vec::new();
+    let mut recommendation_counts = RecommendationCounts {
+        duplicates: duplicate_groups.len(),
+        ..RecommendationCounts::default()
+    };
+
+    let jobs = match state.db.get_all_jobs().await {
+        Ok(jobs) => jobs,
+        Err(err) => {
+            error!("Failed to fetch jobs for intelligence recommendations: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let analyzer = crate::media::analyzer::FfmpegAnalyzer;
+    let config_snapshot = state.config.read().await.clone();
+    let hw_snapshot = state.hardware_state.snapshot().await;
+    let planner = crate::media::planner::BasicPlanner::new(
+        std::sync::Arc::new(config_snapshot.clone()),
+        hw_snapshot,
+    );
+
+    for job in jobs {
+        if job.status == crate::db::JobState::Cancelled {
+            continue;
+        }
+        let input_path = std::path::Path::new(&job.input_path);
+        if !input_path.exists() {
+            continue;
+        }
+
+        let analysis = match analyzer.analyze(input_path).await {
+            Ok(analysis) => analysis,
+            Err(_) => continue,
+        };
+
+        let profile: Option<crate::db::LibraryProfile> = state
+            .db
+            .get_profile_for_path(&job.input_path)
+            .await
+            .unwrap_or_default();
+
+        if let Ok(plan) = planner
+            .plan(
+                &analysis,
+                std::path::Path::new(&job.output_path),
+                profile.as_ref(),
+            )
+            .await
+        {
+            if matches!(plan.decision, TranscodeDecision::Remux { .. }) {
+                recommendation_counts.remux_only_candidate += 1;
+                recommendations.push(IntelligenceRecommendation {
+                    recommendation_type: "remux_only_candidate".to_string(),
+                    title: "Remux-only opportunity".to_string(),
+                    summary: "This file already matches the target video codec and looks like a container-normalization candidate instead of a full re-encode.".to_string(),
+                    path: job.input_path.clone(),
+                    suggested_action: "Queue a remux to normalize the container without re-encoding the video stream.".to_string(),
+                });
+            }
+        }
+
+        if analysis.metadata.audio_is_heavy {
+            recommendation_counts.wasteful_audio_layout += 1;
+            recommendations.push(IntelligenceRecommendation {
+                recommendation_type: "wasteful_audio_layout".to_string(),
+                title: "Wasteful audio layout".to_string(),
+                summary: "This file contains a lossless or oversized audio stream that is likely worth transcoding for storage recovery.".to_string(),
+                path: job.input_path.clone(),
+                suggested_action: "Use a profile that transcodes heavy audio instead of copying it through unchanged.".to_string(),
+            });
+        }
+
+        if analysis.metadata.audio_streams.iter().any(|stream| {
+            stream
+                .title
+                .as_deref()
+                .map(|title| {
+                    let lower = title.to_ascii_lowercase();
+                    lower.contains("commentary")
+                        || lower.contains("director")
+                        || lower.contains("description")
+                        || lower.contains("descriptive")
+                })
+                .unwrap_or(false)
+        }) {
+            recommendation_counts.commentary_cleanup_candidate += 1;
+            recommendations.push(IntelligenceRecommendation {
+                recommendation_type: "commentary_cleanup_candidate".to_string(),
+                title: "Commentary or descriptive track cleanup".to_string(),
+                summary: "This file appears to contain commentary or descriptive audio tracks that existing stream rules could strip automatically.".to_string(),
+                path: job.input_path.clone(),
+                suggested_action: "Enable stream rules to strip commentary or descriptive tracks for this library.".to_string(),
+            });
         }
     }
+
+    recommendations.sort_by(|a, b| {
+        a.recommendation_type
+            .cmp(&b.recommendation_type)
+            .then(a.path.cmp(&b.path))
+    });
+
+    axum::Json(LibraryIntelligenceResponse {
+        duplicate_groups,
+        total_duplicates,
+        recommendation_counts,
+        recommendations,
+    })
+    .into_response()
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools
@@ -236,6 +360,14 @@ struct SystemInfo {
     ffmpeg_version: String,
 }
 
+#[derive(Serialize)]
+struct UpdateInfo {
+    current_version: String,
+    latest_version: Option<String>,
+    update_available: bool,
+    release_url: Option<String>,
+}
+
 pub(crate) async fn get_system_info_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
@@ -256,6 +388,96 @@ pub(crate) async fn get_system_info_handler(
         ffmpeg_version,
     })
     .into_response()
+}
+
+pub(crate) async fn get_system_update_handler() -> impl IntoResponse {
+    let current_version = crate::version::current().to_string();
+    match fetch_latest_stable_release().await {
+        Ok(Some((latest_version, release_url))) => {
+            let update_available = version_is_newer(&latest_version, &current_version);
+            axum::Json(UpdateInfo {
+                current_version,
+                latest_version: Some(latest_version),
+                update_available,
+                release_url: Some(release_url),
+            })
+            .into_response()
+        }
+        Ok(None) => axum::Json(UpdateInfo {
+            current_version,
+            latest_version: None,
+            update_available: false,
+            release_url: None,
+        })
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to check for updates: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubReleaseResponse {
+    tag_name: String,
+    html_url: String,
+}
+
+async fn fetch_latest_stable_release() -> Result<Option<(String, String)>, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(format!("alchemist/{}", crate::version::current()))
+        .build()?;
+    let response = client
+        .get("https://api.github.com/repos/bybrooklyn/alchemist/releases/latest")
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+
+    let release: GitHubReleaseResponse = response.error_for_status()?.json().await?;
+    Ok(Some((
+        release.tag_name.trim_start_matches('v').to_string(),
+        release.html_url,
+    )))
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    parse_version(latest) > parse_version(current)
+}
+
+fn parse_version(value: &str) -> (u64, u64, u64) {
+    let sanitized = value.trim_start_matches('v');
+    let parts = sanitized
+        .split(['.', '-'])
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    (
+        *parts.first().unwrap_or(&0),
+        *parts.get(1).unwrap_or(&0),
+        *parts.get(2).unwrap_or(&0),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_compare_detects_newer_stable_release() {
+        assert!(version_is_newer("0.3.1", "0.3.0"));
+        assert!(!version_is_newer("0.3.0", "0.3.0"));
+        assert!(!version_is_newer("0.2.9", "0.3.0"));
+    }
+
+    #[test]
+    fn parse_version_ignores_prefix_and_suffix() {
+        assert_eq!(parse_version("v0.3.1"), (0, 3, 1));
+        assert_eq!(parse_version("0.3.1-rc.1"), (0, 3, 1));
+    }
 }
 
 pub(crate) async fn get_hardware_info_handler(

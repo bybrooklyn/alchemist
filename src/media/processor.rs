@@ -28,6 +28,7 @@ pub struct Agent {
     pub(crate) engine_mode: Arc<tokio::sync::RwLock<crate::config::EngineMode>>,
     dry_run: bool,
     in_flight_jobs: Arc<AtomicUsize>,
+    idle_notified: Arc<AtomicBool>,
     analyzing_boot: Arc<AtomicBool>,
     analysis_semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -65,6 +66,7 @@ impl Agent {
             engine_mode: Arc::new(tokio::sync::RwLock::new(engine_mode)),
             dry_run,
             in_flight_jobs: Arc::new(AtomicUsize::new(0)),
+            idle_notified: Arc::new(AtomicBool::new(false)),
             analyzing_boot: Arc::new(AtomicBool::new(false)),
             analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
@@ -105,6 +107,7 @@ impl Agent {
 
         // Notify scan completed
         let _ = self.event_channels.system.send(SystemEvent::ScanCompleted);
+        let _ = self.tx.send(AlchemistEvent::ScanCompleted);
 
         Ok(())
     }
@@ -144,6 +147,7 @@ impl Agent {
 
     pub fn resume(&self) {
         self.paused.store(false, Ordering::SeqCst);
+        self.idle_notified.store(false, Ordering::SeqCst);
         info!("Engine resumed.");
     }
 
@@ -151,6 +155,7 @@ impl Agent {
         // Stop accepting new jobs but finish active ones.
         // Sets draining=true. Does NOT set paused=true.
         self.draining.store(true, Ordering::SeqCst);
+        self.idle_notified.store(false, Ordering::SeqCst);
         info!("Engine draining — finishing active jobs, no new jobs will start.");
     }
 
@@ -397,6 +402,7 @@ impl Agent {
 
             match self.db.claim_next_job().await {
                 Ok(Some(job)) => {
+                    self.idle_notified.store(false, Ordering::SeqCst);
                     self.in_flight_jobs.fetch_add(1, Ordering::SeqCst);
                     let agent = self.clone();
                     let counter = self.in_flight_jobs.clone();
@@ -417,6 +423,11 @@ impl Agent {
                     });
                 }
                 Ok(None) => {
+                    if self.in_flight_jobs.load(Ordering::SeqCst) == 0
+                        && !self.idle_notified.swap(true, Ordering::SeqCst)
+                    {
+                        let _ = self.tx.send(crate::db::AlchemistEvent::EngineIdle);
+                    }
                     drop(permit);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }

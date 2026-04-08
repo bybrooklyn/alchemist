@@ -83,6 +83,7 @@ impl Planner for BasicPlanner {
                     reason: reason.clone(),
                 },
                 is_remux: true,
+                copy_video: true,
                 output_path: None,
                 container,
                 requested_codec,
@@ -188,6 +189,7 @@ impl Planner for BasicPlanner {
         Ok(TranscodePlan {
             decision,
             is_remux: false,
+            copy_video: false,
             output_path: None,
             container,
             requested_codec,
@@ -217,6 +219,7 @@ fn skip_plan(
     TranscodePlan {
         decision: TranscodeDecision::Skip { reason },
         is_remux: false,
+        copy_video: false,
         output_path: None,
         container,
         requested_codec,
@@ -845,6 +848,15 @@ fn audio_bitrate_kbps(codec: AudioCodec, channels: Option<u32>) -> u16 {
                 320
             }
         }
+        AudioCodec::Mp3 => {
+            if channels <= 2 {
+                192
+            } else if channels <= 6 {
+                320
+            } else {
+                384
+            }
+        }
     }
 }
 
@@ -1083,6 +1095,7 @@ fn apply_crf_override(rate_control: RateControl, crf_override: Option<i32>) -> R
         RateControl::Crf { .. } => RateControl::Crf { value },
         RateControl::Cq { .. } => RateControl::Cq { value },
         RateControl::QsvQuality { .. } => RateControl::QsvQuality { value },
+        RateControl::Bitrate { kbps } => RateControl::Bitrate { kbps },
     }
 }
 

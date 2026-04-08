@@ -3,6 +3,7 @@ import { Terminal, Pause, Play, Trash2, RefreshCw, Search } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import { withBasePath } from "../lib/basePath";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 
@@ -72,7 +73,7 @@ export default function LogViewer() {
 
             setStreamError(null);
             eventSource?.close();
-            eventSource = new EventSource("/api/events");
+            eventSource = new EventSource(withBasePath("/api/events"));
 
             const appendLog = (message: string, level: string, jobId?: number) => {
                 if (pausedRef.current) {

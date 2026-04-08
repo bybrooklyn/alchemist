@@ -1,0 +1,163 @@
+openapi: 3.0.3
+info:
+  title: Alchemist API
+  version: 0.3.0
+  description: >
+    Hand-maintained API contract for Alchemist. Authentication may use the
+    alchemist_session cookie or a bearer token. Bearer tokens support
+    read_only and full_access classes.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: alchemist_session
+    bearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  schemas:
+    ApiToken:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        access_level:
+          type: string
+          enum: [read_only, full_access]
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+paths:
+  /api/auth/login:
+    post:
+      summary: Create an authenticated session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Session created
+  /api/settings/api-tokens:
+    get:
+      summary: List API token metadata
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Token metadata list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiToken"
+    post:
+      summary: Create an API token
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, access_level]
+              properties:
+                name:
+                  type: string
+                access_level:
+                  type: string
+                  enum: [read_only, full_access]
+      responses:
+        "200":
+          description: Token created; plaintext token shown once
+  /api/settings/api-tokens/{id}:
+    delete:
+      summary: Revoke an API token
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Token revoked
+  /api/system/info:
+    get:
+      summary: Get runtime version and environment information
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Runtime info
+  /api/system/update:
+    get:
+      summary: Check GitHub Releases for the latest stable version
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Update status
+  /api/jobs:
+    get:
+      summary: List jobs
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Job list
+  /api/jobs/{id}/details:
+    get:
+      summary: Get a single job detail record
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Job detail
+  /api/engine/status:
+    get:
+      summary: Get current engine status
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Engine status

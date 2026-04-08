@@ -65,6 +65,7 @@ pub fn parse_raw_config(raw_toml: &str) -> Result<Config> {
     let mut config: Config =
         toml::from_str(raw_toml).map_err(|err| AlchemistError::Config(err.to_string()))?;
     config.migrate_legacy_notifications();
+    config.apply_env_overrides();
     config
         .validate()
         .map_err(|err| AlchemistError::Config(err.to_string()))?;

@@ -59,7 +59,8 @@ Default config file location:
 | Field | Type | Default | Description |
 |------|------|---------|-------------|
 | `enabled` | bool | `false` | Master switch for notifications |
-| `targets` | list | `[]` | Notification target objects with `name`, `target_type`, `endpoint_url`, `auth_token`, `events`, and `enabled` |
+| `daily_summary_time_local` | string | `"09:00"` | Global local-time send window for daily summary notifications |
+| `targets` | list | `[]` | Notification target objects with `name`, `target_type`, `config_json`, `events`, and `enabled` |
 
 ## `[files]`
 
@@ -96,6 +97,7 @@ requires at least one day in every window.
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
+| `base_url` | string | `""` | Path prefix for serving Alchemist under a subpath such as `/alchemist` |
 
 ## Example
 

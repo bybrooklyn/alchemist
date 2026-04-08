@@ -68,11 +68,12 @@ import { ArrowRight } from "lucide-react";
 
 <script>
     import { apiAction, apiJson, isApiError } from "../lib/api";
+    const basePath = "__ALCHEMIST_BASE_URL__";
 
     void apiJson<{ setup_required: boolean }>("/api/setup/status")
         .then((data) => {
             if (data?.setup_required) {
-                window.location.href = "/setup";
+                window.location.href = `${basePath}/setup`;
             }
         })
         .catch(() => undefined);
@@ -95,7 +96,7 @@ import { ArrowRight } from "lucide-react";
                 credentials: 'same-origin',
                 body: JSON.stringify(data)
             });
-            window.location.href = '/';
+            window.location.href = `${basePath}/`;
         } catch (err) {
             console.error("Login failed", err);
             errorMsg?.classList.remove('hidden');

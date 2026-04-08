@@ -7,12 +7,12 @@ services:
       - "3000:3000"
     volumes:
       # Configuration file
-      - ./config.toml:/app/config/config.toml:ro
+      - ${HOME}/.config/alchemist/config.toml:/app/config/config.toml:ro
       # Media directories (adjust paths as needed)
       - /path/to/media:/media
       - /path/to/output:/output
       # Persistent database
-      - alchemist_data:/app/data
+      - ${HOME}/.config/alchemist:/app/data
     environment:
       - RUST_LOG=info
       - TZ=America/New_York
@@ -29,6 +29,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-volumes:
-  alchemist_data:

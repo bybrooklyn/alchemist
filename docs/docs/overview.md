@@ -23,6 +23,10 @@ quality validation. Nothing is deleted until you say so.
 - Encodes to AV1, HEVC, or H.264 based on your configured target
 - Validates output quality (optional VMAF scoring) before promoting the result
 - Tells you exactly why every skipped file was skipped
+- Supports named API tokens for automation clients and external observability
+- Can be served under a path prefix such as `/alchemist`
+- Includes an experimental single-file Conversion / Remux workflow
+- Expands Library Intelligence beyond duplicate detection into storage-focused recommendations
 
 ## What it is not
 
@@ -48,6 +52,7 @@ FFmpeg expert.
 | Get it running | [Installation](/installation) |
 | Docker setup | [Docker](/docker) |
 | Get your GPU working | [Hardware](/hardware) |
+| Automate with tokens | [API](/api) |
 | Understand skip decisions | [Skip Decisions](/skip-decisions) |
 | Tune per-library behavior | [Profiles](/profiles) |
 

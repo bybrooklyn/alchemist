@@ -77,6 +77,14 @@ test("About modal opens and does not contain Al badge", async ({ page }) => {
       ffmpeg_version: "N-12345",
     });
   });
+  await page.route("**/api/system/update", async (route) => {
+    await fulfillJson(route, 200, {
+      current_version: "0.3.0",
+      latest_version: "0.3.1",
+      update_available: true,
+      release_url: "https://github.com/bybrooklyn/alchemist/releases/tag/v0.3.1",
+    });
+  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "About" }).click();
@@ -84,6 +92,8 @@ test("About modal opens and does not contain Al badge", async ({ page }) => {
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Alchemist" })).toBeVisible();
   await expect(page.getByText("v0.3.0")).toBeVisible();
+  await expect(page.getByText("v0.3.1")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download Update" })).toBeVisible();
   await expect(page.getByText(/^Al$/)).toHaveCount(0);
 });
 

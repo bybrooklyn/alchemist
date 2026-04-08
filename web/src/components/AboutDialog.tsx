@@ -12,6 +12,13 @@ interface SystemInfo {
     ffmpeg_version: string;
 }
 
+interface UpdateInfo {
+    current_version: string;
+    latest_version: string | null;
+    update_available: boolean;
+    release_url: string | null;
+}
+
 interface AboutDialogProps {
     isOpen: boolean;
     onClose: () => void;
@@ -34,6 +41,7 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
 
 export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
     const [info, setInfo] = useState<SystemInfo | null>(null);
+    const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const dialogRef = useRef<HTMLDivElement | null>(null);
     const lastFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -47,6 +55,16 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                 });
         }
     }, [isOpen, info]);
+
+    useEffect(() => {
+        if (isOpen && !updateInfo) {
+            apiJson<UpdateInfo>("/api/system/update")
+                .then(setUpdateInfo)
+                .catch(() => {
+                    // Non-critical; keep update checks soft-fail.
+                });
+        }
+    }, [isOpen, updateInfo]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -161,6 +179,31 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                                         <InfoRow icon={Server} label="System" value={info.os_version} />
                                         <InfoRow icon={Cpu} label="Environment" value={info.is_docker ? "Docker Container" : "Native"} />
                                         <InfoRow icon={ShieldCheck} label="Telemetry" value={info.telemetry_enabled ? "Enabled" : "Disabled"} />
+                                        {updateInfo?.latest_version && (
+                                            <div className="rounded-xl bg-helios-surface-soft border border-helios-line/10 p-3">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-xs font-medium text-helios-slate">Latest Stable</p>
+                                                        <p className="text-sm font-bold text-helios-ink">v{updateInfo.latest_version}</p>
+                                                    </div>
+                                                    {updateInfo.update_available && updateInfo.release_url && (
+                                                        <a
+                                                            href={updateInfo.release_url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="rounded-lg bg-helios-solar px-3 py-2 text-xs font-bold text-helios-main hover:opacity-90 transition-opacity"
+                                                        >
+                                                            Download Update
+                                                        </a>
+                                                    )}
+                                                </div>
+                                                <p className="mt-2 text-xs text-helios-slate">
+                                                    {updateInfo.update_available
+                                                        ? "A newer stable release is available."
+                                                        : "You are on the latest stable release."}
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="flex justify-center p-8">

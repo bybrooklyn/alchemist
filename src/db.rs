@@ -40,6 +40,17 @@ pub struct JobStats {
     pub failed: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct DailySummaryStats {
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub bytes_saved: i64,
+    pub top_failure_reasons: Vec<String>,
+    pub top_skip_reasons: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct LogEntry {
     pub id: i64,
@@ -56,6 +67,8 @@ pub enum AlchemistEvent {
         job_id: i64,
         status: JobState,
     },
+    ScanCompleted,
+    EngineIdle,
     Progress {
         job_id: i64,
         percentage: f64,
@@ -170,6 +183,11 @@ impl From<AlchemistEvent> for JobEvent {
             AlchemistEvent::JobStateChanged { job_id, status } => {
                 JobEvent::StateChanged { job_id, status }
             }
+            AlchemistEvent::ScanCompleted | AlchemistEvent::EngineIdle => JobEvent::Log {
+                level: "info".to_string(),
+                job_id: None,
+                message: "non-job event".to_string(),
+            },
             AlchemistEvent::Progress {
                 job_id,
                 percentage,
@@ -331,11 +349,26 @@ pub struct NotificationTarget {
     pub id: i64,
     pub name: String,
     pub target_type: String,
-    pub endpoint_url: String,
-    pub auth_token: Option<String>,
+    pub config_json: String,
     pub events: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct ConversionJob {
+    pub id: i64,
+    pub upload_path: String,
+    pub output_path: Option<String>,
+    pub mode: String,
+    pub settings_json: String,
+    pub probe_json: Option<String>,
+    pub linked_job_id: Option<i64>,
+    pub status: String,
+    pub expires_at: String,
+    pub downloaded_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -1813,7 +1846,9 @@ impl Db {
     }
 
     pub async fn get_notification_targets(&self) -> Result<Vec<NotificationTarget>> {
-        let targets = sqlx::query_as::<_, NotificationTarget>("SELECT id, name, target_type, endpoint_url, auth_token, events, enabled, created_at FROM notification_targets")
+        let targets = sqlx::query_as::<_, NotificationTarget>(
+            "SELECT id, name, target_type, config_json, events, enabled, created_at FROM notification_targets",
+        )
             .fetch_all(&self.pool)
             .await?;
         Ok(targets)
@@ -1823,19 +1858,17 @@ impl Db {
         &self,
         name: &str,
         target_type: &str,
-        endpoint_url: &str,
-        auth_token: Option<&str>,
+        config_json: &str,
         events: &str,
         enabled: bool,
     ) -> Result<NotificationTarget> {
         let row = sqlx::query_as::<_, NotificationTarget>(
-            "INSERT INTO notification_targets (name, target_type, endpoint_url, auth_token, events, enabled) 
-             VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+            "INSERT INTO notification_targets (name, target_type, config_json, events, enabled)
+             VALUES (?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(name)
         .bind(target_type)
-        .bind(endpoint_url)
-        .bind(auth_token)
+        .bind(config_json)
         .bind(events)
         .bind(enabled)
         .fetch_one(&self.pool)
@@ -1866,12 +1899,11 @@ impl Db {
             .await?;
         for target in targets {
             sqlx::query(
-                "INSERT INTO notification_targets (name, target_type, endpoint_url, auth_token, events, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO notification_targets (name, target_type, config_json, events, enabled) VALUES (?, ?, ?, ?, ?)",
             )
             .bind(&target.name)
             .bind(&target.target_type)
-            .bind(&target.endpoint_url)
-            .bind(target.auth_token.as_deref())
+            .bind(target.config_json.to_string())
             .bind(serde_json::to_string(&target.events).unwrap_or_else(|_| "[]".to_string()))
             .bind(target.enabled)
             .execute(&mut *tx)
@@ -1879,6 +1911,152 @@ impl Db {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn create_conversion_job(
+        &self,
+        upload_path: &str,
+        mode: &str,
+        settings_json: &str,
+        probe_json: Option<&str>,
+        expires_at: &str,
+    ) -> Result<ConversionJob> {
+        let row = sqlx::query_as::<_, ConversionJob>(
+            "INSERT INTO conversion_jobs (upload_path, mode, settings_json, probe_json, expires_at)
+             VALUES (?, ?, ?, ?, ?)
+             RETURNING *",
+        )
+        .bind(upload_path)
+        .bind(mode)
+        .bind(settings_json)
+        .bind(probe_json)
+        .bind(expires_at)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_conversion_job(&self, id: i64) -> Result<Option<ConversionJob>> {
+        let row = sqlx::query_as::<_, ConversionJob>(
+            "SELECT id, upload_path, output_path, mode, settings_json, probe_json, linked_job_id, status, expires_at, downloaded_at, created_at, updated_at
+             FROM conversion_jobs
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_conversion_job_by_linked_job_id(
+        &self,
+        linked_job_id: i64,
+    ) -> Result<Option<ConversionJob>> {
+        let row = sqlx::query_as::<_, ConversionJob>(
+            "SELECT id, upload_path, output_path, mode, settings_json, probe_json, linked_job_id, status, expires_at, downloaded_at, created_at, updated_at
+             FROM conversion_jobs
+             WHERE linked_job_id = ?",
+        )
+        .bind(linked_job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_conversion_job_probe(&self, id: i64, probe_json: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET probe_json = ?, updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(probe_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_conversion_job_settings(
+        &self,
+        id: i64,
+        settings_json: &str,
+        mode: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET settings_json = ?, mode = ?, updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(settings_json)
+        .bind(mode)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_conversion_job_start(
+        &self,
+        id: i64,
+        output_path: &str,
+        linked_job_id: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET output_path = ?, linked_job_id = ?, status = 'queued', updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(output_path)
+        .bind(linked_job_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_conversion_job_status(&self, id: i64, status: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET status = ?, updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(status)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_conversion_job_downloaded(&self, id: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET downloaded_at = datetime('now'), status = 'downloaded', updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_conversion_job(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM conversion_jobs WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_expired_conversion_jobs(&self, now: &str) -> Result<Vec<ConversionJob>> {
+        let rows = sqlx::query_as::<_, ConversionJob>(
+            "SELECT id, upload_path, output_path, mode, settings_json, probe_json, linked_job_id, status, expires_at, downloaded_at, created_at, updated_at
+             FROM conversion_jobs
+             WHERE expires_at <= ?",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn get_schedule_windows(&self) -> Result<Vec<ScheduleWindow>> {
@@ -2040,7 +2218,7 @@ impl Db {
         let days_str = format!("-{}", days);
         timed_query("get_daily_stats", || async {
             let rows = sqlx::query(
-                "SELECT 
+                "SELECT
                     DATE(e.created_at) as date,
                     COUNT(*) as jobs_completed,
                     COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved,
@@ -2284,6 +2462,75 @@ impl Db {
         .await
     }
 
+    pub async fn get_daily_summary_stats(&self) -> Result<DailySummaryStats> {
+        let pool = &self.pool;
+        timed_query("get_daily_summary_stats", || async {
+            let row = sqlx::query(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS completed,
+                    COALESCE(SUM(CASE WHEN status = 'failed' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS failed,
+                    COALESCE(SUM(CASE WHEN status = 'skipped' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS skipped
+                 FROM jobs",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            let completed: i64 = row.get("completed");
+            let failed: i64 = row.get("failed");
+            let skipped: i64 = row.get("skipped");
+
+            let bytes_row = sqlx::query(
+                "SELECT COALESCE(SUM(input_size_bytes - output_size_bytes), 0) AS bytes_saved
+                 FROM encode_stats
+                 WHERE DATE(created_at, 'localtime') = DATE('now', 'localtime')",
+            )
+            .fetch_one(pool)
+            .await?;
+            let bytes_saved: i64 = bytes_row.get("bytes_saved");
+
+            let failure_rows = sqlx::query(
+                "SELECT code, COUNT(*) AS count
+                 FROM job_failure_explanations
+                 WHERE DATE(updated_at, 'localtime') = DATE('now', 'localtime')
+                 GROUP BY code
+                 ORDER BY count DESC, code ASC
+                 LIMIT 3",
+            )
+            .fetch_all(pool)
+            .await?;
+            let top_failure_reasons = failure_rows
+                .into_iter()
+                .map(|row| row.get::<String, _>("code"))
+                .collect::<Vec<_>>();
+
+            let skip_rows = sqlx::query(
+                "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
+                 FROM decisions
+                 WHERE action = 'skip'
+                   AND DATE(created_at, 'localtime') = DATE('now', 'localtime')
+                 GROUP BY COALESCE(reason_code, action)
+                 ORDER BY count DESC, code ASC
+                 LIMIT 3",
+            )
+            .fetch_all(pool)
+            .await?;
+            let top_skip_reasons = skip_rows
+                .into_iter()
+                .map(|row| row.get::<String, _>("code"))
+                .collect::<Vec<_>>();
+
+            Ok(DailySummaryStats {
+                completed,
+                failed,
+                skipped,
+                bytes_saved,
+                top_failure_reasons,
+                top_skip_reasons,
+            })
+        })
+        .await
+    }
+
     pub async fn add_log(&self, level: &str, job_id: Option<i64>, message: &str) -> Result<()> {
         sqlx::query("INSERT INTO logs (level, job_id, message) VALUES (?, ?, ?)")
             .bind(level)
@@ -2430,6 +2677,75 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn list_api_tokens(&self) -> Result<Vec<ApiToken>> {
+        let tokens = sqlx::query_as::<_, ApiToken>(
+            "SELECT id, name, access_level, created_at, last_used_at, revoked_at
+             FROM api_tokens
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(tokens)
+    }
+
+    pub async fn create_api_token(
+        &self,
+        name: &str,
+        token: &str,
+        access_level: ApiTokenAccessLevel,
+    ) -> Result<ApiToken> {
+        let token_hash = hash_api_token(token);
+        let row = sqlx::query_as::<_, ApiToken>(
+            "INSERT INTO api_tokens (name, token_hash, access_level)
+             VALUES (?, ?, ?)
+             RETURNING id, name, access_level, created_at, last_used_at, revoked_at",
+        )
+        .bind(name)
+        .bind(token_hash)
+        .bind(access_level)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_active_api_token(&self, token: &str) -> Result<Option<ApiTokenRecord>> {
+        let token_hash = hash_api_token(token);
+        let row = sqlx::query_as::<_, ApiTokenRecord>(
+            "SELECT id, name, token_hash, access_level, created_at, last_used_at, revoked_at
+             FROM api_tokens
+             WHERE token_hash = ? AND revoked_at IS NULL",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_api_token_last_used(&self, id: i64) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn revoke_api_token(&self, id: i64) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE api_tokens
+             SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+             WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AlchemistError::Database(
+                sqlx::Error::RowNotFound,
+            ));
+        }
+        Ok(())
     }
 
     pub async fn record_health_check(
@@ -2599,6 +2915,35 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ApiTokenAccessLevel {
+    ReadOnly,
+    FullAccess,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct ApiToken {
+    pub id: i64,
+    pub name: String,
+    pub access_level: ApiTokenAccessLevel,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ApiTokenRecord {
+    pub id: i64,
+    pub name: String,
+    pub token_hash: String,
+    pub access_level: ApiTokenAccessLevel,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
 /// Hash a session token using SHA256 for secure storage.
 ///
 /// # Security: Timing Attack Resistance
@@ -2614,6 +2959,18 @@ pub struct Session {
 /// This design makes timing attacks infeasible without requiring the `subtle`
 /// crate for constant-time comparison.
 fn hash_session_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{:02x}", byte);
+    }
+    out
+}
+
+pub fn hash_api_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     let digest = hasher.finalize();

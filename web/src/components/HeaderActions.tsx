@@ -3,6 +3,7 @@ import { Info, LogOut, Play, Square } from "lucide-react";
 import { motion } from "framer-motion";
 import AboutDialog from "./AboutDialog";
 import { apiAction, apiJson } from "../lib/api";
+import { withBasePath } from "../lib/basePath";
 import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 
@@ -146,7 +147,7 @@ export default function HeaderActions() {
                 message: "Logout request failed. Redirecting to login.",
             });
         } finally {
-            window.location.href = '/login';
+            window.location.href = withBasePath("/login");
         }
     };
 

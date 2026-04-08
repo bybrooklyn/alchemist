@@ -1,6 +1,7 @@
 #![deny(clippy::expect_used, clippy::unwrap_used)]
 
 pub mod config;
+pub mod conversion;
 pub mod db;
 pub mod error;
 pub mod explanations;

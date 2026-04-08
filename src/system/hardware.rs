@@ -203,13 +203,13 @@ impl HardwareState {
 }
 
 pub trait CommandRunner {
-    fn output(&self, program: &str, args: &[String]) -> std::io::Result<Output>;
+    fn output(&self, program: &str, args: &[String]) -> io::Result<Output>;
 }
 
 pub struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
-    fn output(&self, program: &str, args: &[String]) -> std::io::Result<Output> {
+    fn output(&self, program: &str, args: &[String]) -> io::Result<Output> {
         run_command_with_timeout(program, args, Duration::from_secs(8))
     }
 }
@@ -1389,7 +1389,7 @@ mod tests {
     }
 
     impl CommandRunner for FakeRunner {
-        fn output(&self, program: &str, args: &[String]) -> std::io::Result<Output> {
+        fn output(&self, program: &str, args: &[String]) -> io::Result<Output> {
             match program {
                 "nvidia-smi" if self.nvidia_smi_ok => Ok(Output {
                     status: exit_status(true),
