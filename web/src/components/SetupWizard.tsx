@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
-import { withBasePath } from "../lib/basePath";
 import AdminAccountStep from "./setup/AdminAccountStep";
 import LibraryStep from "./setup/LibraryStep";
 import ProcessingStep from "./setup/ProcessingStep";
@@ -103,7 +102,7 @@ export default function SetupWizard() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "setup_complete", value: "true" }),
             }).catch(() => undefined);
-            window.location.href = withBasePath("/");
+            window.location.href = "/";
         } catch (err) {
             let message = "Failed to save setup configuration.";
             if (isApiError(err)) {
@@ -113,7 +112,7 @@ export default function SetupWizard() {
                         : "Setup configuration was rejected. Check that your username is at least 3 characters and password is at least 8 characters.";
                 } else if (err.status === 403) {
                     message = "Setup has already been completed. Redirecting to dashboard...";
-                    setTimeout(() => { window.location.href = withBasePath("/"); }, 1500);
+                    setTimeout(() => { window.location.href = "/"; }, 1500);
                 } else if (err.status >= 500) {
                     message = `Server error during setup (${err.status}). Check the Alchemist logs for details.`;
                 } else {

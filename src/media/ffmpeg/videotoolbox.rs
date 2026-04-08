@@ -1,51 +1,29 @@
-use crate::media::pipeline::{Encoder, RateControl};
+use crate::media::pipeline::Encoder;
 
-pub fn append_args(
-    args: &mut Vec<String>,
-    encoder: Encoder,
-    rate_control: Option<RateControl>,
-    default_quality: u8,
-) {
-    let cq = match rate_control {
-        Some(RateControl::Cq { value }) => value,
-        _ => default_quality,
-    };
-
+pub fn append_args(args: &mut Vec<String>, encoder: Encoder, tag_hevc_as_hvc1: bool) {
+    // Current FFmpeg VideoToolbox encoders on macOS do not expose qscale-style
+    // quality controls, so bitrate mode is handled by the shared builder and
+    // CQ-style requests intentionally fall back to the encoder defaults.
     match encoder {
         Encoder::Av1Videotoolbox => {
             args.extend([
                 "-c:v".to_string(),
                 "av1_videotoolbox".to_string(),
-                "-b:v".to_string(),
-                "0".to_string(),
-                "-q:v".to_string(),
-                cq.to_string(),
                 "-allow_sw".to_string(),
                 "1".to_string(),
             ]);
         }
         Encoder::HevcVideotoolbox => {
-            args.extend([
-                "-c:v".to_string(),
-                "hevc_videotoolbox".to_string(),
-                "-b:v".to_string(),
-                "0".to_string(),
-                "-q:v".to_string(),
-                cq.to_string(),
-                "-tag:v".to_string(),
-                "hvc1".to_string(),
-                "-allow_sw".to_string(),
-                "1".to_string(),
-            ]);
+            args.extend(["-c:v".to_string(), "hevc_videotoolbox".to_string()]);
+            if tag_hevc_as_hvc1 {
+                args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+            }
+            args.extend(["-allow_sw".to_string(), "1".to_string()]);
         }
         Encoder::H264Videotoolbox => {
             args.extend([
                 "-c:v".to_string(),
                 "h264_videotoolbox".to_string(),
-                "-b:v".to_string(),
-                "0".to_string(),
-                "-q:v".to_string(),
-                cq.to_string(),
                 "-allow_sw".to_string(),
                 "1".to_string(),
             ]);

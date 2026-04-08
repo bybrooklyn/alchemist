@@ -1,5 +1,3 @@
-import { stripBasePath, withBasePath } from "./basePath";
-
 export interface ApiErrorShape {
     status: number;
     message: string;
@@ -85,7 +83,7 @@ export function isApiError(error: unknown): error is ApiError {
  * Authenticated fetch utility using cookie auth.
  */
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-    const resolvedUrl = withBasePath(url);
+    const resolvedUrl = url;
     const headers = new Headers(options.headers);
 
     if (!headers.has("Content-Type") && typeof options.body === "string") {
@@ -116,10 +114,10 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
         });
 
         if (response.status === 401 && typeof window !== "undefined") {
-            const path = stripBasePath(window.location.pathname);
+            const path = window.location.pathname;
             const isAuthPage = path.startsWith("/login") || path.startsWith("/setup");
             if (!isAuthPage) {
-                window.location.href = withBasePath("/login");
+                window.location.href = "/login";
                 return new Promise(() => {});
             }
         }
@@ -136,7 +134,7 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
 export async function apiJson<T>(url: string, options: RequestInit = {}): Promise<T> {
     const response = await apiFetch(url, options);
     if (!response.ok) {
-        throw await toApiError(withBasePath(url), response);
+        throw await toApiError(url, response);
     }
     return (await parseResponseBody(response)) as T;
 }
@@ -144,7 +142,7 @@ export async function apiJson<T>(url: string, options: RequestInit = {}): Promis
 export async function apiAction(url: string, options: RequestInit = {}): Promise<void> {
     const response = await apiFetch(url, options);
     if (!response.ok) {
-        throw await toApiError(withBasePath(url), response);
+        throw await toApiError(url, response);
     }
 }
 

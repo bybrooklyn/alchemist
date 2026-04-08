@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Upload, Wand2, Play, Download, Trash2 } from "lucide-react";
 import { apiAction, apiFetch, apiJson, isApiError } from "../lib/api";
-import { withBasePath } from "../lib/basePath";
 import { showToast } from "../lib/toast";
 
 interface SubtitleStreamMetadata {
@@ -105,7 +104,7 @@ const DEFAULT_SETTINGS: ConversionSettings = {
     },
 };
 
-export default function ConversionTool() {
+export function ConversionTool() {
     const [uploading, setUploading] = useState(false);
     const [previewing, setPreviewing] = useState(false);
     const [starting, setStarting] = useState(false);
@@ -121,13 +120,14 @@ export default function ConversionTool() {
         const id = window.setInterval(() => {
             void apiJson<JobStatusResponse>(`/api/conversion/jobs/${conversionJobId}`)
                 .then(setStatus)
-                .catch(() => {});
+                .catch(() => {
+                });
         }, 2000);
         return () => window.clearInterval(id);
     }, [conversionJobId]);
 
     const updateSettings = (patch: Partial<ConversionSettings>) => {
-        setSettings((current) => ({ ...current, ...patch }));
+        setSettings((current) => ({...current, ...patch}));
     };
 
     const uploadFile = async (file: File) => {
@@ -157,7 +157,7 @@ export default function ConversionTool() {
         } catch (err) {
             const message = err instanceof Error ? err.message : "Upload failed";
             setError(message);
-            showToast({ kind: "error", title: "Conversion", message });
+            showToast({kind: "error", title: "Conversion", message});
         } finally {
             setUploading(false);
         }
@@ -169,7 +169,7 @@ export default function ConversionTool() {
         try {
             const payload = await apiJson<PreviewResponse>("/api/conversion/preview", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     conversion_job_id: conversionJobId,
                     settings,
@@ -177,11 +177,11 @@ export default function ConversionTool() {
             });
             setSettings(payload.normalized_settings);
             setCommandPreview(payload.command_preview);
-            showToast({ kind: "success", title: "Conversion", message: "Preview updated." });
+            showToast({kind: "success", title: "Conversion", message: "Preview updated."});
         } catch (err) {
             const message = isApiError(err) ? err.message : "Preview failed";
             setError(message);
-            showToast({ kind: "error", title: "Conversion", message });
+            showToast({kind: "error", title: "Conversion", message});
         } finally {
             setPreviewing(false);
         }
@@ -191,14 +191,14 @@ export default function ConversionTool() {
         if (!conversionJobId) return;
         setStarting(true);
         try {
-            await apiAction(`/api/conversion/jobs/${conversionJobId}/start`, { method: "POST" });
+            await apiAction(`/api/conversion/jobs/${conversionJobId}/start`, {method: "POST"});
             const payload = await apiJson<JobStatusResponse>(`/api/conversion/jobs/${conversionJobId}`);
             setStatus(payload);
-            showToast({ kind: "success", title: "Conversion", message: "Conversion job queued." });
+            showToast({kind: "success", title: "Conversion", message: "Conversion job queued."});
         } catch (err) {
             const message = isApiError(err) ? err.message : "Failed to start conversion";
             setError(message);
-            showToast({ kind: "error", title: "Conversion", message });
+            showToast({kind: "error", title: "Conversion", message});
         } finally {
             setStarting(false);
         }
@@ -207,23 +207,23 @@ export default function ConversionTool() {
     const remove = async () => {
         if (!conversionJobId) return;
         try {
-            await apiAction(`/api/conversion/jobs/${conversionJobId}`, { method: "DELETE" });
+            await apiAction(`/api/conversion/jobs/${conversionJobId}`, {method: "DELETE"});
             setConversionJobId(null);
             setProbe(null);
             setStatus(null);
             setSettings(DEFAULT_SETTINGS);
             setCommandPreview("");
-            showToast({ kind: "success", title: "Conversion", message: "Conversion job removed." });
+            showToast({kind: "success", title: "Conversion", message: "Conversion job removed."});
         } catch (err) {
             const message = isApiError(err) ? err.message : "Failed to remove conversion job";
             setError(message);
-            showToast({ kind: "error", title: "Conversion", message });
+            showToast({kind: "error", title: "Conversion", message});
         }
     };
 
     const download = async () => {
         if (!conversionJobId) return;
-        window.location.href = withBasePath(`/api/conversion/jobs/${conversionJobId}/download`);
+        window.location.href = `/api/conversion/jobs/${conversionJobId}/download`;
     };
 
     return (
@@ -231,22 +231,26 @@ export default function ConversionTool() {
             <div>
                 <h1 className="text-xl font-bold text-helios-ink">Conversion / Remux</h1>
                 <p className="mt-1 text-sm text-helios-slate">
-                    Upload a single file, inspect the streams, preview the generated FFmpeg command, and run it through Alchemist.
+                    Upload a single file, inspect the streams, preview the generated FFmpeg command, and run it through
+                    Alchemist.
                 </p>
             </div>
 
             {error && (
-                <div className="rounded-lg border border-status-error/20 bg-status-error/10 px-4 py-3 text-sm text-status-error">
+                <div
+                    className="rounded-lg border border-status-error/20 bg-status-error/10 px-4 py-3 text-sm text-status-error">
                     {error}
                 </div>
             )}
 
             {!probe && (
-                <label className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-helios-line/30 bg-helios-surface p-10 text-center cursor-pointer hover:bg-helios-surface-soft transition-colors">
-                    <Upload size={28} className="text-helios-solar" />
+                <label
+                    className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-helios-line/30 bg-helios-surface p-10 text-center cursor-pointer hover:bg-helios-surface-soft transition-colors">
+                    <Upload size={28} className="text-helios-solar"/>
                     <div>
                         <p className="text-sm font-semibold text-helios-ink">Upload a source file</p>
-                        <p className="text-xs text-helios-slate mt-1">The uploaded file is stored temporarily under Alchemist-managed temp storage.</p>
+                        <p className="text-xs text-helios-slate mt-1">You can select a couple options here to
+                            convert/remux a video file.</p>
                     </div>
                     <input
                         type="file"
@@ -270,16 +274,18 @@ export default function ConversionTool() {
                     <section className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <h2 className="text-sm font-semibold text-helios-ink">Input</h2>
                         <div className="grid gap-3 md:grid-cols-4 text-sm">
-                            <Stat label="Container" value={probe.metadata.container} />
-                            <Stat label="Video" value={probe.metadata.codec_name} />
-                            <Stat label="Resolution" value={`${probe.metadata.width}x${probe.metadata.height}`} />
-                            <Stat label="Dynamic Range" value={probe.metadata.dynamic_range} />
+                            <Stat label="Container" value={probe.metadata.container}/>
+                            <Stat label="Video" value={probe.metadata.codec_name}/>
+                            <Stat label="Resolution" value={`${probe.metadata.width}x${probe.metadata.height}`}/>
+                            <Stat label="Dynamic Range" value={probe.metadata.dynamic_range}/>
                         </div>
                     </section>
 
                     <section className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <h2 className="text-sm font-semibold text-helios-ink">Output Container</h2>
-                        <select value={settings.output_container} onChange={(event) => updateSettings({ output_container: event.target.value })} className="w-full md:w-60 bg-helios-surface-soft border border-helios-line/20 rounded p-2 text-sm text-helios-ink">
+                        <select value={settings.output_container}
+                                onChange={(event) => updateSettings({output_container: event.target.value})}
+                                className="w-full md:w-60 bg-helios-surface-soft border border-helios-line/20 rounded p-2 text-sm text-helios-ink">
                             {["mkv", "mp4", "webm", "mov"].map((option) => (
                                 <option key={option} value={option}>{option.toUpperCase()}</option>
                             ))}
@@ -293,7 +299,7 @@ export default function ConversionTool() {
                                 <input
                                     type="checkbox"
                                     checked={settings.remux_only}
-                                    onChange={(event) => updateSettings({ remux_only: event.target.checked })}
+                                    onChange={(event) => updateSettings({remux_only: event.target.checked})}
                                 />
                                 Remux only
                             </label>
@@ -311,41 +317,59 @@ export default function ConversionTool() {
                                 value={settings.video.codec}
                                 disabled={settings.remux_only}
                                 options={["copy", "h264", "hevc", "av1"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, codec: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, codec: value}
+                                }))}
                             />
                             <SelectField
                                 label="Mode"
                                 value={settings.video.mode}
                                 disabled={settings.remux_only || settings.video.codec === "copy"}
                                 options={["crf", "bitrate"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, mode: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, mode: value}
+                                }))}
                             />
                             <NumberField
                                 label={settings.video.mode === "bitrate" ? "Bitrate (kbps)" : "Quality Value"}
                                 value={settings.video.value ?? 0}
                                 disabled={settings.remux_only || settings.video.codec === "copy"}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, value}
+                                }))}
                             />
                             <SelectField
                                 label="Preset"
                                 value={settings.video.preset ?? "medium"}
                                 disabled={settings.remux_only || settings.video.codec === "copy"}
                                 options={["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, preset: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, preset: value}
+                                }))}
                             />
                             <SelectField
                                 label="Resolution Mode"
                                 value={settings.video.resolution.mode}
                                 disabled={settings.remux_only || settings.video.codec === "copy"}
                                 options={["original", "custom", "scale_factor"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, resolution: { ...current.video.resolution, mode: value } } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, resolution: {...current.video.resolution, mode: value}}
+                                }))}
                             />
                             <SelectField
                                 label="HDR"
                                 value={settings.video.hdr_mode}
                                 disabled={settings.remux_only || settings.video.codec === "copy"}
                                 options={["preserve", "tonemap", "strip_metadata"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, hdr_mode: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    video: {...current.video, hdr_mode: value}
+                                }))}
                             />
                             {settings.video.resolution.mode === "custom" && (
                                 <>
@@ -353,13 +377,25 @@ export default function ConversionTool() {
                                         label="Width"
                                         value={settings.video.resolution.width ?? probe.metadata.width}
                                         disabled={settings.remux_only || settings.video.codec === "copy"}
-                                        onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, resolution: { ...current.video.resolution, width: value } } }))}
+                                        onChange={(value) => setSettings((current) => ({
+                                            ...current,
+                                            video: {
+                                                ...current.video,
+                                                resolution: {...current.video.resolution, width: value}
+                                            }
+                                        }))}
                                     />
                                     <NumberField
                                         label="Height"
                                         value={settings.video.resolution.height ?? probe.metadata.height}
                                         disabled={settings.remux_only || settings.video.codec === "copy"}
-                                        onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, resolution: { ...current.video.resolution, height: value } } }))}
+                                        onChange={(value) => setSettings((current) => ({
+                                            ...current,
+                                            video: {
+                                                ...current.video,
+                                                resolution: {...current.video.resolution, height: value}
+                                            }
+                                        }))}
                                     />
                                 </>
                             )}
@@ -369,7 +405,13 @@ export default function ConversionTool() {
                                     value={settings.video.resolution.scale_factor ?? 1}
                                     disabled={settings.remux_only || settings.video.codec === "copy"}
                                     step="0.1"
-                                    onChange={(value) => setSettings((current) => ({ ...current, video: { ...current.video, resolution: { ...current.video.resolution, scale_factor: value } } }))}
+                                    onChange={(value) => setSettings((current) => ({
+                                        ...current,
+                                        video: {
+                                            ...current.video,
+                                            resolution: {...current.video.resolution, scale_factor: value}
+                                        }
+                                    }))}
                                 />
                             )}
                         </div>
@@ -383,20 +425,29 @@ export default function ConversionTool() {
                                 value={settings.audio.codec}
                                 disabled={settings.remux_only}
                                 options={["copy", "aac", "opus", "mp3"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, audio: { ...current.audio, codec: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    audio: {...current.audio, codec: value}
+                                }))}
                             />
                             <NumberField
                                 label="Bitrate (kbps)"
                                 value={settings.audio.bitrate_kbps ?? 160}
                                 disabled={settings.remux_only || settings.audio.codec === "copy"}
-                                onChange={(value) => setSettings((current) => ({ ...current, audio: { ...current.audio, bitrate_kbps: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    audio: {...current.audio, bitrate_kbps: value}
+                                }))}
                             />
                             <SelectField
                                 label="Channels"
                                 value={settings.audio.channels ?? "auto"}
                                 disabled={settings.remux_only || settings.audio.codec === "copy"}
                                 options={["auto", "stereo", "5.1"]}
-                                onChange={(value) => setSettings((current) => ({ ...current, audio: { ...current.audio, channels: value } }))}
+                                onChange={(value) => setSettings((current) => ({
+                                    ...current,
+                                    audio: {...current.audio, channels: value}
+                                }))}
                             />
                         </div>
                     </section>
@@ -408,31 +459,36 @@ export default function ConversionTool() {
                             value={settings.subtitles.mode}
                             disabled={settings.remux_only}
                             options={["copy", "burn", "remove"]}
-                            onChange={(value) => setSettings((current) => ({ ...current, subtitles: { mode: value } }))}
+                            onChange={(value) => setSettings((current) => ({...current, subtitles: {mode: value}}))}
                         />
                     </section>
 
                     <section className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-4">
                         <div className="flex flex-wrap gap-3">
-                            <button onClick={() => void preview()} disabled={previewing} className="flex items-center gap-2 rounded-lg bg-helios-solar px-4 py-2 text-sm font-bold text-helios-main">
-                                <Wand2 size={16} />
+                            <button onClick={() => void preview()} disabled={previewing}
+                                    className="flex items-center gap-2 rounded-lg bg-helios-solar px-4 py-2 text-sm font-bold text-helios-main">
+                                <Wand2 size={16}/>
                                 {previewing ? "Previewing..." : "Preview Command"}
                             </button>
-                            <button onClick={() => void start()} disabled={starting || !commandPreview} className="flex items-center gap-2 rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">
-                                <Play size={16} />
+                            <button onClick={() => void start()} disabled={starting || !commandPreview}
+                                    className="flex items-center gap-2 rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink">
+                                <Play size={16}/>
                                 {starting ? "Starting..." : "Start Job"}
                             </button>
-                            <button onClick={() => void download()} disabled={!status?.download_ready} className="flex items-center gap-2 rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink disabled:opacity-50">
-                                <Download size={16} />
+                            <button onClick={() => void download()} disabled={!status?.download_ready}
+                                    className="flex items-center gap-2 rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink disabled:opacity-50">
+                                <Download size={16}/>
                                 Download Result
                             </button>
-                            <button onClick={() => void remove()} className="flex items-center gap-2 rounded-lg border border-red-500/20 px-4 py-2 text-sm font-semibold text-red-500">
-                                <Trash2 size={16} />
+                            <button onClick={() => void remove()}
+                                    className="flex items-center gap-2 rounded-lg border border-red-500/20 px-4 py-2 text-sm font-semibold text-red-500">
+                                <Trash2 size={16}/>
                                 Remove
                             </button>
                         </div>
                         {commandPreview && (
-                            <pre className="overflow-x-auto rounded-lg border border-helios-line/20 bg-helios-surface-soft p-4 text-xs text-helios-ink whitespace-pre-wrap">
+                            <pre
+                                className="overflow-x-auto rounded-lg border border-helios-line/20 bg-helios-surface-soft p-4 text-xs text-helios-ink whitespace-pre-wrap">
                                 {commandPreview}
                             </pre>
                         )}
@@ -442,10 +498,11 @@ export default function ConversionTool() {
                         <section className="rounded-xl border border-helios-line/20 bg-helios-surface p-5 space-y-3">
                             <h2 className="text-sm font-semibold text-helios-ink">Status</h2>
                             <div className="grid gap-3 md:grid-cols-4 text-sm">
-                                <Stat label="State" value={status.status} />
-                                <Stat label="Progress" value={`${status.progress.toFixed(1)}%`} />
-                                <Stat label="Linked Job" value={status.linked_job_id ? `#${status.linked_job_id}` : "None"} />
-                                <Stat label="Download" value={status.download_ready ? "Ready" : "Pending"} />
+                                <Stat label="State" value={status.status}/>
+                                <Stat label="Progress" value={`${status.progress.toFixed(1)}%`}/>
+                                <Stat label="Linked Job"
+                                      value={status.linked_job_id ? `#${status.linked_job_id}` : "None"}/>
+                                <Stat label="Download" value={status.download_ready ? "Ready" : "Pending"}/>
                             </div>
                         </section>
                     )}

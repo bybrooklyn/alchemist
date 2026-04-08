@@ -15,11 +15,10 @@ import SetupSidebar from "../components/SetupSidebar.astro";
 
 <script>
     import { apiJson } from "../lib/api";
-    const basePath = "__ALCHEMIST_BASE_URL__";
     apiJson<{ setup_required: boolean }>("/api/setup/status")
         .then((data) => {
             if (!data.setup_required) {
-                window.location.href = `${basePath}/`;
+                window.location.href = "/";
             }
         })
         .catch(() => undefined);

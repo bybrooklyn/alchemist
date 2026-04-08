@@ -74,6 +74,7 @@ services:
 ```
 
 Then open [http://localhost:3000](http://localhost:3000) in your browser.
+First-time setup is only reachable from the local network.
 
 On Linux and macOS, the default host-side config location is
 `~/.config/alchemist/config.toml`. When you use Docker, the
@@ -132,10 +133,26 @@ just check
 
 The core contributor path is supported on Windows. Broader release and utility recipes remain Unix-first.
 
+## CLI
+
+Alchemist exposes explicit CLI subcommands:
+
+```bash
+alchemist scan /path/to/media
+alchemist run /path/to/media
+alchemist plan /path/to/media
+alchemist plan /path/to/media --json
+```
+
+- `scan` enqueues matching work and exits
+- `run` scans, enqueues, and waits for processing to finish
+- `plan` analyzes files and reports what Alchemist would do without enqueuing jobs
+
 ## First Run
 
 1. Open [http://localhost:3000](http://localhost:3000).
 2. Complete the setup wizard. It takes about 2 minutes.
+   During first-time setup, the web UI is reachable only from the local network.
 3. Add your media folders in Watch Folders.
 4. Alchemist scans and starts working automatically.
 5. Check the Dashboard to see progress and savings.
@@ -144,8 +161,6 @@ The core contributor path is supported on Windows. Broader release and utility r
 
 - API automation can use bearer tokens created in **Settings → API Tokens**.
 - Read-only tokens are limited to observability and monitoring routes.
-- Alchemist can also be served under a subpath such as `/alchemist`
-  using `ALCHEMIST_BASE_URL=/alchemist`.
 
 ## Supported Platforms
 

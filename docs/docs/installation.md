@@ -32,7 +32,8 @@ docker compose up -d
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The
-setup wizard runs on first visit.
+setup wizard runs on first visit and is only reachable
+from the local network until the first account is created.
 
 For GPU passthrough (NVIDIA, Intel, AMD) see
 [GPU Passthrough](/gpu-passthrough).
@@ -109,6 +110,19 @@ just dev
 
 Windows contributor support covers the core `install/dev/check` path.
 Broader `just` release and utility recipes remain Unix-first.
+
+## CLI subcommands
+
+```bash
+alchemist scan /path/to/media
+alchemist run /path/to/media
+alchemist plan /path/to/media
+alchemist plan /path/to/media --json
+```
+
+- `scan` enqueues matching jobs and exits
+- `run` scans, enqueues, and waits for processing to finish
+- `plan` reports what Alchemist would do without enqueueing jobs
 
 ## Nightly builds
 

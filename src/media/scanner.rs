@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use walkdir::WalkDir;
 
 use crate::media::pipeline::DiscoveredMedia;
@@ -45,7 +45,7 @@ impl Scanner {
         );
 
         directories.into_par_iter().for_each(|(dir, recursive)| {
-            info!("Scanning directory: {:?} (recursive: {})", dir, recursive);
+            debug!("Scanning directory: {:?} (recursive: {})", dir, recursive);
             let mut local_files = Vec::new();
             let source_roots = source_roots.clone();
             let walker = if recursive {
@@ -90,7 +90,6 @@ impl Scanner {
         // Deterministic ordering
         final_files.sort_by(|a, b| a.path.cmp(&b.path));
 
-        info!("Found {} candidate media files", final_files.len());
         final_files
     }
 }

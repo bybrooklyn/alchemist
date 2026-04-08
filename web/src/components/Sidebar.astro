@@ -13,12 +13,7 @@ import {
 import SystemStatus from "./SystemStatus.tsx";
 
 const currentPath = Astro.url.pathname;
-const basePath = "__ALCHEMIST_BASE_URL__";
-const withBase = (href: string) => `${basePath}${href === "/" ? "/" : href}`;
-const strippedPath =
-    basePath && currentPath.startsWith(basePath)
-        ? currentPath.slice(basePath.length) || "/"
-        : currentPath;
+const strippedPath = currentPath;
 
 const navItems = [
     { href: "/", label: "Dashboard", Icon: Activity },
@@ -33,7 +28,7 @@ const navItems = [
 
 {/* Mobile top bar */}
 <div class="lg:hidden flex items-center justify-between px-4 py-3 bg-helios-surface border-b border-helios-line/60">
-    <a href={withBase("/")} class="font-bold text-lg tracking-tight text-helios-ink">Alchemist</a>
+    <a href="/" class="font-bold text-lg tracking-tight text-helios-ink">Alchemist</a>
     <button
         id="sidebar-hamburger"
         aria-label="Open navigation"
@@ -58,7 +53,7 @@ const navItems = [
            transition-transform duration-200 lg:transition-none"
 >
     <a
-        href={withBase("/")}
+        href="/"
         class="flex items-center px-3 pb-4 border-b border-helios-line/40"
     >
         <span class="font-bold text-lg tracking-tight text-helios-ink">
@@ -81,7 +76,7 @@ const navItems = [
                     (href !== "/" && strippedPath.startsWith(href));
                 return (
                     <a
-                        href={withBase(href)}
+                        href={href}
                         class:list={[
                             "flex items-center gap-3 px-3 py-2 rounded-md border-l-2 border-transparent transition-colors whitespace-nowrap",
                             isActive

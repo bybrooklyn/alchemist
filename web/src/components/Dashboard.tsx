@@ -9,7 +9,6 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
-import { withBasePath } from "../lib/basePath";
 import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 import ResourceMonitor from "./ResourceMonitor";
@@ -145,7 +144,7 @@ function Dashboard() {
                     }
 
                     if (setupComplete !== "true") {
-                        window.location.href = withBasePath("/setup");
+                        window.location.href = "/setup";
                     }
                 }
             } catch {
@@ -233,7 +232,7 @@ function Dashboard() {
                             <Activity size={16} className="text-helios-solar" />
                             Recent Activity
                         </h3>
-                        <a href={withBasePath("/jobs")} className="text-xs font-medium text-helios-solar hover:underline">
+                        <a href="/jobs" className="text-xs font-medium text-helios-solar hover:underline">
                             View all
                         </a>
                     </div>
@@ -249,7 +248,7 @@ function Dashboard() {
                                 <span className="text-sm text-helios-slate/60">
                                     No recent activity.
                                 </span>
-                                <a href={withBasePath("/settings")} className="text-xs text-helios-solar hover:underline">
+                                <a href="/settings" className="text-xs text-helios-solar hover:underline">
                                     Add a library folder
                                 </a>
                             </div>

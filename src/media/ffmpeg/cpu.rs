@@ -6,6 +6,7 @@ pub fn append_args(
     encoder: Encoder,
     rate_control: Option<RateControl>,
     preset: Option<&str>,
+    tag_hevc_as_hvc1: bool,
 ) {
     match encoder {
         Encoder::Av1Svt => {
@@ -48,9 +49,10 @@ pub fn append_args(
                 preset.unwrap_or(CpuPreset::Medium.as_str()).to_string(),
                 "-crf".to_string(),
                 crf,
-                "-tag:v".to_string(),
-                "hvc1".to_string(),
             ]);
+            if tag_hevc_as_hvc1 {
+                args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+            }
         }
         Encoder::H264X264 => {
             let crf = match rate_control {

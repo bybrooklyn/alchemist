@@ -2,15 +2,18 @@
 
 use alchemist::db::EventChannels;
 use alchemist::error::Result;
+use alchemist::media::pipeline::{Analyzer as _, Planner as _};
 use alchemist::system::hardware;
 use alchemist::version;
 use alchemist::{Agent, Transcoder, config, db, runtime};
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::time::time;
 
 use notify::{RecursiveMode, Watcher};
 use tokio::sync::RwLock;
@@ -19,21 +22,55 @@ use tokio::sync::broadcast;
 #[derive(Parser, Debug)]
 #[command(author, version = version::current(), about, long_about = None)]
 struct Args {
-    /// Run in CLI mode (process directories and exit)
-    #[arg(long)]
-    cli: bool,
-
-    /// Directories to scan for media files (CLI mode only)
-    #[arg(long, value_name = "DIR")]
-    directories: Vec<PathBuf>,
-
-    /// Dry run (don't actually transcode)
-    #[arg(short, long)]
-    dry_run: bool,
-
     /// Reset admin user/password and sessions (forces setup mode)
     #[arg(long)]
     reset_auth: bool,
+
+    /// Enable verbose terminal logging and default DEBUG filtering
+    #[arg(long)]
+    debug_flags: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Commands {
+    /// Scan directories and enqueue matching work, then exit
+    Scan {
+        #[arg(value_name = "DIR", required = true)]
+        directories: Vec<PathBuf>,
+    },
+    /// Scan directories, enqueue work, and wait for processing to finish
+    Run {
+        #[arg(value_name = "DIR", required = true)]
+        directories: Vec<PathBuf>,
+        /// Don't actually transcode
+        #[arg(short, long)]
+        dry_run: bool,
+    },
+    /// Analyze files and report what Alchemist would do without enqueuing jobs
+    Plan {
+        #[arg(value_name = "DIR", required = true)]
+        directories: Vec<PathBuf>,
+        /// Emit machine-readable JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct CliPlanItem {
+    input_path: String,
+    output_path: Option<String>,
+    profile: Option<String>,
+    decision: String,
+    reason: String,
+    encoder: Option<String>,
+    backend: Option<String>,
+    rate_control: Option<String>,
+    fallback: Option<String>,
+    error: Option<String>,
 }
 
 #[tokio::main]
@@ -160,76 +197,79 @@ fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bo
 }
 
 async fn run() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_thread_names(true)
-        .init();
+    let args = Args::parse();
+    init_logging(args.debug_flags);
+    let is_server_mode = args.command.is_none();
 
     let boot_start = Instant::now();
 
-    // Startup Banner
-    info!(
-        " ______     __         ______     __  __     ______     __    __     __     ______     ______ "
-    );
-    info!(
-        "/\\  __ \\   /\\ \\       /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\ \"-./  \\   /\\ \\   /\\  ___\\   /\\__  _\\"
-    );
-    info!(
-        "\\ \\  __ \\  \\ \\ \\____  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\-./\\ \\  \\ \\ \\  \\ \\___  \\  \\/_/\\ \\/"
-    );
-    info!(
-        " \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\ \\_\\  \\ \\_\\  \\/\\_____\\    \\ \\_\\"
-    );
-    info!(
-        "  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/"
-    );
-    info!("");
-    info!("");
-    let version = alchemist::version::current();
-    let build_info = option_env!("BUILD_INFO")
-        .or(option_env!("GIT_SHA"))
-        .or(option_env!("VERGEN_GIT_SHA"))
-        .unwrap_or("unknown");
-    info!("Version: {}", version);
-    info!("Build: {}", build_info);
-    info!("");
-    info!("System Information:");
-    info!(
-        "  OS: {} ({})",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
-    info!("  CPUs: {}", num_cpus::get());
-    info!("");
-
-    let args = Args::parse();
     info!(
         target: "startup",
-        "Parsed CLI args: cli_mode={}, reset_auth={}, dry_run={}, directories={}",
-        args.cli,
+        "Parsed CLI args: command={:?}, reset_auth={}, debug_flags={}",
+        args.command,
         args.reset_auth,
-        args.dry_run,
-        args.directories.len()
+        args.debug_flags
     );
 
-    // ... rest of logic remains largely the same, just inside run()
-    // Default to server mode unless CLI is explicitly requested.
-    let is_server_mode = !args.cli;
-    info!(target: "startup", "Resolved server mode: {}", is_server_mode);
-    if is_server_mode && !args.directories.is_empty() {
-        warn!("Directories were provided without --cli; ignoring CLI inputs.");
+    if is_server_mode {
+        info!(
+            " ______     __         ______     __  __     ______     __    __     __     ______     ______ "
+        );
+        info!(
+            "/\\  __ \\   /\\ \\       /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\ \"-./  \\   /\\ \\   /\\  ___\\   /\\__  _\\"
+        );
+        info!(
+            "\\ \\  __ \\  \\ \\ \\____  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\-./\\ \\  \\ \\ \\  \\ \\___  \\  \\/_/\\ \\/"
+        );
+        info!(
+            " \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\ \\_\\  \\ \\_\\  \\/\\_____\\    \\ \\_\\"
+        );
+        info!(
+            "  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/"
+        );
+        info!("");
+        info!("");
+        let version = alchemist::version::current();
+        let build_info = option_env!("BUILD_INFO")
+            .or(option_env!("GIT_SHA"))
+            .or(option_env!("VERGEN_GIT_SHA"))
+            .unwrap_or("unknown");
+        info!("Version: {}", version);
+        info!("Build: {}", build_info);
+        info!("");
+        info!("System Information:");
+        info!(
+            "  OS: {} ({})",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        info!("  CPUs: {}", num_cpus::get());
+        info!("");
     }
+
+    info!(target: "startup", "Resolved server mode: {}", is_server_mode);
 
     // 0. Load Configuration
     let config_start = Instant::now();
     let config_path = runtime::config_path();
     let db_path = runtime::db_path();
     let config_mutable = runtime::config_mutable();
-    let (config, mut setup_mode, config_exists) =
-        load_startup_config(config_path.as_path(), is_server_mode);
+    let (config, mut setup_mode, config_exists) = if is_server_mode {
+        load_startup_config(config_path.as_path(), true)
+    } else {
+        if !config_path.exists() {
+            error!(
+                "Configuration required. Run Alchemist in server mode to complete setup, or create {:?} manually.",
+                config_path
+            );
+            return Err(alchemist::error::AlchemistError::Config(
+                "Missing configuration".into(),
+            ));
+        }
+        let config = config::Config::load(config_path.as_path())
+            .map_err(|err| alchemist::error::AlchemistError::Config(err.to_string()))?;
+        (config, false, true)
+    };
     info!(
         target: "startup",
         "Config loaded (path={:?}, exists={}, mutable={}, setup_mode={}) in {} ms",
@@ -371,9 +411,9 @@ async fn run() -> Result<()> {
         warn!("Auth reset requested. All users and sessions cleared.");
         setup_mode = true;
     }
+    let has_users = db.has_users().await?;
     if is_server_mode {
         let users_start = Instant::now();
-        let has_users = db.has_users().await?;
         info!(
             target: "startup",
             "User check completed (has_users={}) in {} ms",
@@ -386,6 +426,13 @@ async fn run() -> Result<()> {
             }
             setup_mode = true;
         }
+    } else if !has_users {
+        error!(
+            "Setup is not complete. Run Alchemist in server mode to finish creating the first account."
+        );
+        return Err(alchemist::error::AlchemistError::Config(
+            "Setup incomplete".into(),
+        ));
     }
 
     if !setup_mode {
@@ -518,7 +565,7 @@ async fn run() -> Result<()> {
             hardware_state.clone(),
             tx.clone(),
             event_channels.clone(),
-            args.dry_run,
+            matches!(args.command, Some(Commands::Run { dry_run: true, .. })),
         )
         .await,
     );
@@ -748,54 +795,305 @@ async fn run() -> Result<()> {
             }
         }
     } else {
-        // CLI Mode
-        if setup_mode {
-            error!(
-                "Configuration required. Run without --cli to use the web-based setup wizard, or create {:?} manually.",
-                config_path
-            );
-
-            // CLI early exit - error
-            // (Caller will handle pause-on-exit if needed)
-            return Err(alchemist::error::AlchemistError::Config(
-                "Missing configuration".into(),
-            ));
-        }
-
-        if args.directories.is_empty() {
-            error!("No directories provided. Usage: alchemist --cli --dir <DIR> [--dir <DIR> ...]");
-            return Err(alchemist::error::AlchemistError::Config(
-                "Missing directories for CLI mode".into(),
-            ));
-        }
-        agent.scan_and_enqueue(args.directories).await?;
-
-        // Wait until all jobs are processed
-        info!("Waiting for jobs to complete...");
-        loop {
-            let stats = db.get_stats().await?;
-            let active = stats
-                .as_object()
-                .map(|m| {
-                    m.iter()
-                        .filter(|(k, _)| {
-                            ["encoding", "analyzing", "remuxing", "resuming"].contains(&k.as_str())
-                        })
-                        .map(|(_, v)| v.as_i64().unwrap_or(0))
-                        .sum::<i64>()
-                })
-                .unwrap_or(0);
-            let queued = stats.get("queued").and_then(|v| v.as_i64()).unwrap_or(0);
-
-            if active + queued == 0 {
-                break;
+        match args
+            .command
+            .clone()
+            .expect("CLI branch requires a subcommand")
+        {
+            Commands::Scan { directories } => {
+                agent.scan_and_enqueue(directories).await?;
+                info!("Scan complete. Matching files were enqueued.");
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            Commands::Run { directories, .. } => {
+                agent.scan_and_enqueue(directories).await?;
+                wait_for_cli_jobs(db.as_ref()).await?;
+                info!("All jobs processed.");
+            }
+            Commands::Plan { directories, json } => {
+                let items =
+                    build_cli_plan(db.as_ref(), config.clone(), &hardware_state, directories)
+                        .await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string())
+                    );
+                } else {
+                    print_cli_plan(&items);
+                }
+            }
         }
-        info!("All jobs processed.");
     }
 
     Ok(())
+}
+
+async fn wait_for_cli_jobs(db: &db::Db) -> Result<()> {
+    info!("Waiting for jobs to complete...");
+    loop {
+        let stats = db.get_stats().await?;
+        let active = stats
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .filter(|(k, _)| {
+                        ["encoding", "analyzing", "remuxing", "resuming"].contains(&k.as_str())
+                    })
+                    .map(|(_, v)| v.as_i64().unwrap_or(0))
+                    .sum::<i64>()
+            })
+            .unwrap_or(0);
+        let queued = stats.get("queued").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        if active + queued == 0 {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+    Ok(())
+}
+
+async fn build_cli_plan(
+    db: &db::Db,
+    config_state: Arc<RwLock<config::Config>>,
+    hardware_state: &hardware::HardwareState,
+    directories: Vec<PathBuf>,
+) -> Result<Vec<CliPlanItem>> {
+    let files = tokio::task::spawn_blocking(move || {
+        let scanner = alchemist::media::scanner::Scanner::new();
+        scanner.scan(directories)
+    })
+    .await
+    .map_err(|err| alchemist::error::AlchemistError::Unknown(format!("scan task failed: {err}")))?;
+
+    let file_settings = match db.get_file_settings().await {
+        Ok(settings) => settings,
+        Err(err) => {
+            error!("Failed to fetch file settings, using defaults: {}", err);
+            alchemist::media::pipeline::default_file_settings()
+        }
+    };
+    let config_snapshot = Arc::new(config_state.read().await.clone());
+    let hw_info = hardware_state.snapshot().await;
+    let planner = alchemist::media::planner::BasicPlanner::new(config_snapshot, hw_info);
+    let analyzer = alchemist::media::analyzer::FfmpegAnalyzer;
+
+    let mut items = Vec::new();
+    for discovered in files {
+        let input_path = discovered.path.clone();
+        let input_path_string = input_path.display().to_string();
+
+        if let Some(reason) = alchemist::media::pipeline::skip_reason_for_discovered_path(
+            db,
+            &input_path,
+            &file_settings,
+        )
+        .await?
+        {
+            items.push(CliPlanItem {
+                input_path: input_path_string,
+                output_path: None,
+                profile: None,
+                decision: "skip".to_string(),
+                reason: reason.to_string(),
+                encoder: None,
+                backend: None,
+                rate_control: None,
+                fallback: None,
+                error: None,
+            });
+            continue;
+        }
+
+        let output_path =
+            file_settings.output_path_for_source(&input_path, discovered.source_root.as_deref());
+        if output_path.exists() && !file_settings.should_replace_existing_output() {
+            items.push(CliPlanItem {
+                input_path: input_path_string,
+                output_path: Some(output_path.display().to_string()),
+                profile: None,
+                decision: "skip".to_string(),
+                reason: "output exists and replace strategy is keep".to_string(),
+                encoder: None,
+                backend: None,
+                rate_control: None,
+                fallback: None,
+                error: None,
+            });
+            continue;
+        }
+
+        let analysis = match analyzer.analyze(&input_path).await {
+            Ok(analysis) => analysis,
+            Err(err) => {
+                items.push(CliPlanItem {
+                    input_path: input_path_string,
+                    output_path: Some(output_path.display().to_string()),
+                    profile: None,
+                    decision: "error".to_string(),
+                    reason: "analysis failed".to_string(),
+                    encoder: None,
+                    backend: None,
+                    rate_control: None,
+                    fallback: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        let profile = match db.get_profile_for_path(&input_path.to_string_lossy()).await {
+            Ok(profile) => profile,
+            Err(err) => {
+                items.push(CliPlanItem {
+                    input_path: input_path_string,
+                    output_path: Some(output_path.display().to_string()),
+                    profile: None,
+                    decision: "error".to_string(),
+                    reason: "profile resolution failed".to_string(),
+                    encoder: None,
+                    backend: None,
+                    rate_control: None,
+                    fallback: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        let plan = match planner
+            .plan(&analysis, &output_path, profile.as_ref())
+            .await
+        {
+            Ok(plan) => plan,
+            Err(err) => {
+                items.push(CliPlanItem {
+                    input_path: input_path_string,
+                    output_path: Some(output_path.display().to_string()),
+                    profile: profile.as_ref().map(|p| p.name.clone()),
+                    decision: "error".to_string(),
+                    reason: "planning failed".to_string(),
+                    encoder: None,
+                    backend: None,
+                    rate_control: None,
+                    fallback: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        let (decision, reason) = match &plan.decision {
+            alchemist::media::pipeline::TranscodeDecision::Skip { reason } => {
+                ("skip".to_string(), reason.clone())
+            }
+            alchemist::media::pipeline::TranscodeDecision::Remux { reason } => {
+                ("remux".to_string(), reason.clone())
+            }
+            alchemist::media::pipeline::TranscodeDecision::Transcode { reason } => {
+                ("transcode".to_string(), reason.clone())
+            }
+        };
+
+        items.push(CliPlanItem {
+            input_path: input_path_string,
+            output_path: Some(output_path.display().to_string()),
+            profile: profile.as_ref().map(|p| p.name.clone()),
+            decision,
+            reason,
+            encoder: plan
+                .encoder
+                .map(|encoder| encoder.ffmpeg_encoder_name().to_string()),
+            backend: plan.backend.map(|backend| backend.as_str().to_string()),
+            rate_control: plan.rate_control.as_ref().map(format_rate_control),
+            fallback: plan
+                .fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.clone()),
+            error: None,
+        });
+    }
+
+    Ok(items)
+}
+
+fn format_rate_control(rate_control: &alchemist::media::pipeline::RateControl) -> String {
+    match rate_control {
+        alchemist::media::pipeline::RateControl::Crf { value } => format!("crf:{value}"),
+        alchemist::media::pipeline::RateControl::Cq { value } => format!("cq:{value}"),
+        alchemist::media::pipeline::RateControl::QsvQuality { value } => {
+            format!("qsv_quality:{value}")
+        }
+        alchemist::media::pipeline::RateControl::Bitrate { kbps } => format!("bitrate:{kbps}k"),
+    }
+}
+
+fn print_cli_plan(items: &[CliPlanItem]) {
+    for item in items {
+        println!("{}", item.input_path);
+        println!("  decision: {} — {}", item.decision, item.reason);
+        if let Some(output_path) = &item.output_path {
+            println!("  output:   {}", output_path);
+        }
+        if let Some(profile) = &item.profile {
+            println!("  profile:  {}", profile);
+        }
+        if let Some(encoder) = &item.encoder {
+            let backend = item.backend.as_deref().unwrap_or("unknown");
+            println!("  encoder:  {} ({})", encoder, backend);
+        }
+        if let Some(rate_control) = &item.rate_control {
+            println!("  rate:     {}", rate_control);
+        }
+        if let Some(fallback) = &item.fallback {
+            println!("  fallback: {}", fallback);
+        }
+        if let Some(error) = &item.error {
+            println!("  error:    {}", error);
+        }
+        println!();
+    }
+}
+
+fn init_logging(debug_flags: bool) {
+    let default_level = if debug_flags {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+    let env_filter = EnvFilter::from_default_env().add_directive(default_level.into());
+
+    if debug_flags {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_timer(time())
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .without_time()
+            .with_target(false)
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .compact()
+            .init();
+    }
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn debug_flags_arg_parses() {
+        let args = Args::try_parse_from(["alchemist", "--debug-flags"])
+            .unwrap_or_else(|err| panic!("failed to parse debug flag: {err}"));
+        assert!(args.debug_flags);
+    }
 }
 
 #[cfg(test)]
@@ -834,6 +1132,41 @@ mod tests {
     #[test]
     fn args_reject_removed_output_dir_flag() {
         assert!(Args::try_parse_from(["alchemist", "--output-dir", "/tmp/out"]).is_err());
+    }
+
+    #[test]
+    fn args_reject_removed_cli_flag() {
+        assert!(Args::try_parse_from(["alchemist", "--cli"]).is_err());
+    }
+
+    #[test]
+    fn scan_subcommand_parses() {
+        let args = Args::try_parse_from(["alchemist", "scan", "/tmp/media"])
+            .unwrap_or_else(|err| panic!("failed to parse scan subcommand: {err}"));
+        assert!(matches!(
+            args.command,
+            Some(Commands::Scan { directories }) if directories == vec![PathBuf::from("/tmp/media")]
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_parses_with_dry_run() {
+        let args = Args::try_parse_from(["alchemist", "run", "/tmp/media", "--dry-run"])
+            .unwrap_or_else(|err| panic!("failed to parse run subcommand: {err}"));
+        assert!(matches!(
+            args.command,
+            Some(Commands::Run { directories, dry_run }) if directories == vec![PathBuf::from("/tmp/media")] && dry_run
+        ));
+    }
+
+    #[test]
+    fn plan_subcommand_parses_with_json() {
+        let args = Args::try_parse_from(["alchemist", "plan", "/tmp/media", "--json"])
+            .unwrap_or_else(|err| panic!("failed to parse plan subcommand: {err}"));
+        assert!(matches!(
+            args.command,
+            Some(Commands::Plan { directories, json }) if directories == vec![PathBuf::from("/tmp/media")] && json
+        ));
     }
 
     #[test]

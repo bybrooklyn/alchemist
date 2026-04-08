@@ -9,7 +9,6 @@ description: All environment variables Alchemist reads at startup.
 | `ALCHEMIST_CONFIG` | (alias) | Alias for `ALCHEMIST_CONFIG_PATH` |
 | `ALCHEMIST_DB_PATH` | `~/.config/alchemist/alchemist.db` | Path to SQLite database |
 | `ALCHEMIST_DATA_DIR` | (none) | Sets data dir; `alchemist.db` placed here |
-| `ALCHEMIST_BASE_URL` | root (`/`) | Path prefix for serving Alchemist under a subpath such as `/alchemist` |
 | `ALCHEMIST_CONFIG_MUTABLE` | `true` | Set `false` to block runtime config writes |
 | `RUST_LOG` | `info` | Log level: `info`, `debug`, `alchemist=trace` |
 
