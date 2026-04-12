@@ -101,3 +101,16 @@ pub(crate) async fn savings_summary_handler(
         Err(err) => config_read_error_response("load storage savings summary", &err),
     }
 }
+
+pub(crate) async fn skip_reasons_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.db.get_skip_reason_counts().await {
+        Ok(counts) => {
+            let items: Vec<serde_json::Value> = counts
+                .into_iter()
+                .map(|(code, count)| serde_json::json!({ "code": code, "count": count }))
+                .collect();
+            axum::Json(serde_json::json!({ "today": items })).into_response()
+        }
+        Err(err) => config_read_error_response("load skip reason counts", &err),
+    }
+}

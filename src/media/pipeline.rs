@@ -443,6 +443,8 @@ struct FinalizeJobContext<'a> {
     plan: &'a TranscodePlan,
     bypass_quality_gates: bool,
     start_time: std::time::Instant,
+    encode_started_at: chrono::DateTime<chrono::Utc>,
+    attempt_number: i32,
     metadata: &'a MediaMetadata,
     execution_result: &'a ExecutionResult,
 }
@@ -453,6 +455,8 @@ struct FinalizeFailureContext<'a> {
     execution_result: &'a ExecutionResult,
     config_snapshot: &'a crate::config::Config,
     start_time: std::time::Instant,
+    encode_started_at: chrono::DateTime<chrono::Utc>,
+    attempt_number: i32,
     temp_output_path: &'a Path,
 }
 
@@ -657,6 +661,13 @@ impl Pipeline {
         // Store the decision and return to queued — do NOT encode
         match &plan.decision {
             crate::media::pipeline::TranscodeDecision::Skip { reason } => {
+                let skip_code = reason.split('|').next().unwrap_or(reason).trim();
+                tracing::info!(
+                    job_id = job_id,
+                    skip_code = skip_code,
+                    "Job skipped: {}",
+                    skip_code
+                );
                 self.db.add_decision(job_id, "skip", reason).await.ok();
                 self.db
                     .update_job_status(job_id, crate::db::JobState::Skipped)
@@ -747,6 +758,7 @@ impl Pipeline {
         if self.db.increment_attempt_count(job.id).await.is_err() {
             return Err(JobFailure::Transient);
         }
+        let current_attempt_number = job.attempt_count + 1;
         if self
             .update_job_state(job.id, crate::db::JobState::Analyzing)
             .await
@@ -905,6 +917,15 @@ impl Pipeline {
             }
         }
 
+        match self.should_stop_job(job.id).await {
+            Ok(true) => {
+                tracing::info!("Job {} was cancelled during encode planning.", job.id);
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(_) => return Err(JobFailure::Transient),
+        }
+
         let (should_execute, action, reason, next_status) = match &plan.decision {
             TranscodeDecision::Transcode { reason } => (
                 true,
@@ -925,7 +946,14 @@ impl Pipeline {
         };
 
         if !should_execute {
-            tracing::info!("Decision: SKIP Job {} - {}", job.id, &reason);
+            let explanation = crate::explanations::decision_from_legacy("skip", &reason);
+            tracing::info!(
+                "Decision: SKIP Job {} - {} (code={}, summary={})",
+                job.id,
+                &reason,
+                explanation.code,
+                explanation.summary
+            );
             let _ = self.db.add_decision(job.id, "skip", &reason).await;
             let _ = self
                 .update_job_state(job.id, crate::db::JobState::Skipped)
@@ -999,6 +1027,7 @@ impl Pipeline {
             self.dry_run,
         );
 
+        let encode_started_at = chrono::Utc::now();
         match executor.execute(&job, &plan, &analysis).await {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
@@ -1013,6 +1042,20 @@ impl Pipeline {
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await;
+                    let _ = self
+                        .db
+                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                            job_id: job.id,
+                            attempt_number: current_attempt_number,
+                            started_at: Some(encode_started_at.to_rfc3339()),
+                            outcome: "failed".to_string(),
+                            failure_code: Some("fallback_blocked".to_string()),
+                            failure_summary: Some(summary.to_string()),
+                            input_size_bytes: Some(metadata.size_bytes as i64),
+                            output_size_bytes: None,
+                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                        })
+                        .await;
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
@@ -1026,6 +1069,8 @@ impl Pipeline {
                             plan: &plan,
                             bypass_quality_gates,
                             start_time,
+                            encode_started_at,
+                            attempt_number: current_attempt_number,
                             metadata,
                             execution_result: &result,
                         },
@@ -1040,6 +1085,8 @@ impl Pipeline {
                             execution_result: &result,
                             config_snapshot: &config_snapshot,
                             start_time,
+                            encode_started_at,
+                            attempt_number: current_attempt_number,
                             temp_output_path: &temp_output_path,
                         },
                         &err,
@@ -1093,6 +1140,20 @@ impl Pipeline {
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Cancelled)
                         .await;
+                    let _ = self
+                        .db
+                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                            job_id: job.id,
+                            attempt_number: current_attempt_number,
+                            started_at: Some(encode_started_at.to_rfc3339()),
+                            outcome: "cancelled".to_string(),
+                            failure_code: None,
+                            failure_summary: None,
+                            input_size_bytes: Some(metadata.size_bytes as i64),
+                            output_size_bytes: None,
+                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                        })
+                        .await;
                 } else {
                     let msg = format!("Transcode failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
@@ -1104,6 +1165,20 @@ impl Pipeline {
                         .await;
                     let _ = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
+                        .await;
+                    let _ = self
+                        .db
+                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                            job_id: job.id,
+                            attempt_number: current_attempt_number,
+                            started_at: Some(encode_started_at.to_rfc3339()),
+                            outcome: "failed".to_string(),
+                            failure_code: Some(explanation.code.clone()),
+                            failure_summary: Some(msg),
+                            input_size_bytes: Some(metadata.size_bytes as i64),
+                            output_size_bytes: None,
+                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                        })
                         .await;
                 }
                 Err(map_failure(&e))
@@ -1360,6 +1435,20 @@ impl Pipeline {
         self.update_job_state(job_id, crate::db::JobState::Completed)
             .await?;
         self.update_job_progress(job_id, 100.0).await;
+        let _ = self
+            .db
+            .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                job_id,
+                attempt_number: context.attempt_number,
+                started_at: Some(context.encode_started_at.to_rfc3339()),
+                outcome: "completed".to_string(),
+                failure_code: None,
+                failure_summary: None,
+                input_size_bytes: Some(input_size as i64),
+                output_size_bytes: Some(output_size as i64),
+                encode_time_seconds: Some(encode_duration),
+            })
+            .await;
 
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled,
@@ -1465,6 +1554,20 @@ impl Pipeline {
 
         let _ = self
             .update_job_state(job_id, crate::db::JobState::Failed)
+            .await;
+        let _ = self
+            .db
+            .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                job_id,
+                attempt_number: context.attempt_number,
+                started_at: Some(context.encode_started_at.to_rfc3339()),
+                outcome: "failed".to_string(),
+                failure_code: Some(failure_explanation.code.clone()),
+                failure_summary: Some(message),
+                input_size_bytes: Some(context.metadata.size_bytes as i64),
+                output_size_bytes: None,
+                encode_time_seconds: Some(context.start_time.elapsed().as_secs_f64()),
+            })
             .await;
     }
 
@@ -1779,6 +1882,8 @@ mod tests {
                     execution_result: &result,
                     config_snapshot: &config_snapshot,
                     start_time: std::time::Instant::now(),
+                    encode_started_at: chrono::Utc::now(),
+                    attempt_number: 1,
                     temp_output_path: &temp_output,
                 },
                 &crate::error::AlchemistError::Unknown("disk full".to_string()),

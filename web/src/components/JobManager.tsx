@@ -1,17 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import {
-    Search, RefreshCw, Trash2, Ban,
-    Clock, X, Info, Activity, Database, Zap, Maximize2, MoreHorizontal, ArrowDown, ArrowUp, AlertCircle
-} from "lucide-react";
+import { RefreshCw, Trash2, Ban } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { motion, AnimatePresence } from "framer-motion";
 import { withErrorBoundary } from "./ErrorBoundary";
+import type { Job, JobDetail, TabType, SortField, ConfirmConfig, CountMessageResponse } from "./jobs/types";
+import { SORT_OPTIONS, isJobActive, jobDetailEmptyState } from "./jobs/types";
+import { normalizeDecisionExplanation, normalizeFailureExplanation } from "./jobs/JobExplanations";
+import { useJobSSE } from "./jobs/useJobSSE";
+import { JobsToolbar } from "./jobs/JobsToolbar";
+import { JobsTable } from "./jobs/JobsTable";
+import { JobDetailModal } from "./jobs/JobDetailModal";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -32,468 +35,25 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
     );
 }
 
-export interface ExplanationView {
-    category: "decision" | "failure";
-    code: string;
-    summary: string;
-    detail: string;
-    operator_guidance: string | null;
-    measured: Record<string, string | number | boolean | null>;
-    legacy_reason: string;
-}
-
-interface ExplanationPayload {
-    category: "decision" | "failure";
-    code: string;
-    summary: string;
-    detail: string;
-    operator_guidance: string | null;
-    measured: Record<string, string | number | boolean | null>;
-    legacy_reason: string;
-}
-
-function formatReductionPercent(value?: string): string {
-    if (!value) {
-        return "?";
-    }
-
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(0)}%` : value;
-}
-
-export function humanizeSkipReason(reason: string): ExplanationView {
-    const pipeIdx = reason.indexOf("|");
-    const key = pipeIdx === -1
-        ? reason.trim()
-        : reason.slice(0, pipeIdx).trim();
-    const paramStr = pipeIdx === -1 ? "" : reason.slice(pipeIdx + 1);
-
-    const measured: Record<string, string | number | boolean | null> = {};
-    for (const pair of paramStr.split(",")) {
-        const [rawKey, ...rawValueParts] = pair.split("=");
-        if (!rawKey || rawValueParts.length === 0) {
-            continue;
-        }
-
-        measured[rawKey.trim()] = rawValueParts.join("=").trim();
-    }
-
-    const makeDecision = (
-        code: string,
-        summary: string,
-        detail: string,
-        operator_guidance: string | null,
-    ): ExplanationView => ({
-        category: "decision",
-        code,
-        summary,
-        detail,
-        operator_guidance,
-        measured,
-        legacy_reason: reason,
-    });
-
-    switch (key) {
-        case "analysis_failed":
-            return makeDecision(
-                "analysis_failed",
-                "File could not be analyzed",
-                `FFprobe failed to read this file. It may be corrupt, incomplete, or in an unsupported format. Error: ${measured.error ?? "unknown"}`,
-                "Try playing the file in VLC or another media player. If it plays fine, re-run the scan. If not, the file may be damaged.",
-            );
-        case "planning_failed":
-            return makeDecision(
-                "planning_failed",
-                "Transcoding plan could not be created",
-                `An internal error occurred while planning the transcode for this file. This is likely a bug. Error: ${measured.error ?? "unknown"}`,
-                "Check the logs below for details. If this happens repeatedly, please report it as a bug.",
-            );
-        case "already_target_codec":
-            return makeDecision(
-                "already_target_codec",
-                "Already in target format",
-                `This file is already encoded as ${measured.codec ?? "the target codec"}${measured.bit_depth ? ` at ${measured.bit_depth}-bit` : ""}. Re-encoding would waste time and could reduce quality.`,
-                null,
-            );
-        case "already_target_codec_wrong_container":
-            return makeDecision(
-                "already_target_codec_wrong_container",
-                "Target codec, wrong container",
-                `The video is already in the right codec but wrapped in a ${measured.container ?? "MP4"} container. Alchemist will remux it to ${measured.target_extension ?? "MKV"} - fast and lossless, no quality loss.`,
-                null,
-            );
-        case "bpp_below_threshold":
-            return makeDecision(
-                "bpp_below_threshold",
-                "Already efficiently compressed",
-                `Bits-per-pixel (${measured.bpp ?? "?"}) is below the minimum threshold (${measured.threshold ?? "?"}). This file is already well-compressed - transcoding it would spend significant time for minimal space savings.`,
-                "If you want to force transcoding, lower the BPP threshold in Settings -> Transcoding.",
-            );
-        case "below_min_file_size":
-            return makeDecision(
-                "below_min_file_size",
-                "File too small to process",
-                `File size (${measured.size_mb ?? "?"}MB) is below the minimum threshold (${measured.threshold_mb ?? "?"}MB). Small files aren't worth the transcoding overhead.`,
-                "Lower the minimum file size threshold in Settings -> Transcoding if you want small files processed.",
-            );
-        case "size_reduction_insufficient":
-            return makeDecision(
-                "size_reduction_insufficient",
-                "Not enough space would be saved",
-                `The predicted size reduction (${formatReductionPercent(String(measured.reduction ?? measured.predicted ?? ""))}) is below the required threshold (${formatReductionPercent(String(measured.threshold ?? ""))}). Transcoding this file wouldn't recover meaningful storage.`,
-                "Lower the size reduction threshold in Settings -> Transcoding to encode files with smaller savings.",
-            );
-        case "no_suitable_encoder":
-        case "no_available_encoders":
-            return makeDecision(
-                key,
-                "No encoder available",
-                `No encoder was found for ${measured.codec ?? measured.requested_codec ?? "the target codec"}. Hardware detection may have failed, or CPU fallback is disabled.`,
-                "Check Settings -> Hardware. Enable CPU fallback, or verify your GPU is detected correctly.",
-            );
-        case "preferred_codec_unavailable_fallback_disabled":
-            return makeDecision(
-                "preferred_codec_unavailable_fallback_disabled",
-                "Preferred encoder unavailable",
-                `The preferred codec (${measured.codec ?? "target codec"}) is not available and CPU fallback is disabled in settings.`,
-                "Go to Settings -> Hardware and enable CPU fallback, or check that your GPU encoder is working correctly.",
-            );
-        case "Output path matches input path":
-        case "output_path_matches_input":
-            return makeDecision(
-                "output_path_matches_input",
-                "Output would overwrite source",
-                "The configured output path is the same as the source file. Alchemist refused to proceed to avoid overwriting your original file.",
-                "Go to Settings -> Files and configure a different output suffix or output folder.",
-            );
-        case "Output already exists":
-        case "output_already_exists":
-            return makeDecision(
-                "output_already_exists",
-                "Output file already exists",
-                "A transcoded version of this file already exists at the output path. Alchemist skipped it to avoid duplicating work.",
-                "If you want to re-transcode it, delete the existing output file first, then retry the job.",
-            );
-        case "incomplete_metadata":
-            return makeDecision(
-                "incomplete_metadata",
-                "Missing file metadata",
-                `FFprobe could not determine the ${measured.missing ?? "required metadata"} for this file. Without reliable metadata Alchemist cannot make a valid transcoding decision.`,
-                "Run a Library Doctor scan to check if this file is corrupt. Try playing it in a media player to confirm it is readable.",
-            );
-        case "already_10bit":
-            return makeDecision(
-                "already_10bit",
-                "Already 10-bit",
-                "This file is already encoded in high-quality 10-bit depth. Re-encoding it could reduce quality.",
-                null,
-            );
-        case "remux: mp4_to_mkv_stream_copy":
-        case "remux_mp4_to_mkv_stream_copy":
-            return makeDecision(
-                "remux_mp4_to_mkv_stream_copy",
-                "Remuxed (no re-encode)",
-                "This file was remuxed from MP4 to MKV using stream copy - fast and lossless. No quality was lost.",
-                null,
-            );
-        case "Low quality (VMAF)":
-        case "quality_below_threshold":
-            return makeDecision(
-                "quality_below_threshold",
-                "Quality check failed",
-                "The encoded file scored below the minimum VMAF quality threshold. Alchemist rejected the output to protect quality.",
-                "The original file has been preserved. You can lower the VMAF threshold in Settings -> Quality, or disable VMAF checking entirely.",
-            );
-        case "transcode_h264_source":
-            return makeDecision(
-                "transcode_h264_source",
-                "H.264 source prioritized",
-                "This file is H.264, which is typically a strong candidate for reclaiming space, so Alchemist prioritized it for transcoding.",
-                null,
-            );
-        case "transcode_recommended":
-            return makeDecision(
-                "transcode_recommended",
-                "Transcode recommended",
-                "Alchemist determined this file is a strong candidate for transcoding based on the current codec and measured efficiency.",
-                null,
-            );
-        default:
-            return makeDecision("legacy_decision", "Decision recorded", reason, null);
-    }
-}
-
-function explainFailureSummary(summary: string): ExplanationView {
-    const normalized = summary.toLowerCase();
-
-    const makeFailure = (
-        code: string,
-        title: string,
-        detail: string,
-        operator_guidance: string | null,
-    ): ExplanationView => ({
-        category: "failure",
-        code,
-        summary: title,
-        detail,
-        operator_guidance,
-        measured: {},
-        legacy_reason: summary,
-    });
-
-    if (normalized.includes("cancelled")) {
-        return makeFailure(
-            "cancelled",
-            "Job was cancelled",
-            "This job was cancelled before encoding completed. The original file is untouched.",
-            null,
-        );
-    }
-    if (normalized.includes("no such file or directory")) {
-        return makeFailure(
-            "source_missing",
-            "Source file missing",
-            "The source file could not be found. It may have been moved or deleted.",
-            "Check that the source file still exists and is readable by Alchemist.",
-        );
-    }
-    if (normalized.includes("invalid data found") || normalized.includes("moov atom not found")) {
-        return makeFailure(
-            "corrupt_or_unreadable_media",
-            "Media could not be read",
-            "This file appears to be corrupt or incomplete. Try running a Library Doctor scan.",
-            "Verify the source file manually or run Library Doctor to confirm whether it is readable.",
-        );
-    }
-    if (normalized.includes("permission denied")) {
-        return makeFailure(
-            "permission_denied",
-            "Permission denied",
-            "Alchemist doesn't have permission to read this file. Check the file permissions.",
-            "Check the file and output path permissions for the Alchemist process user.",
-        );
-    }
-    if (normalized.includes("encoder not found") || normalized.includes("unknown encoder")) {
-        return makeFailure(
-            "encoder_unavailable",
-            "Required encoder unavailable",
-            "The required encoder is not available in your FFmpeg installation.",
-            "Check FFmpeg encoder availability and hardware settings.",
-        );
-    }
-    if (normalized.includes("out of memory") || normalized.includes("cannot allocate memory")) {
-        return makeFailure(
-            "resource_exhausted",
-            "System ran out of memory",
-            "The system ran out of memory during encoding. Try reducing concurrent jobs.",
-            "Reduce concurrent jobs or rerun under lower system load.",
-        );
-    }
-    if (normalized.includes("transcode_failed") || normalized.includes("ffmpeg exited")) {
-        return makeFailure(
-            "unknown_ffmpeg_failure",
-            "FFmpeg failed",
-            "FFmpeg failed during encoding. This is often caused by a corrupt source file or an encoder configuration issue. Check the logs below for the specific FFmpeg error.",
-            "Inspect the FFmpeg output in the job logs for the exact failure.",
-        );
-    }
-    if (normalized.includes("probing failed")) {
-        return makeFailure(
-            "analysis_failed",
-            "Analysis failed",
-            "FFprobe could not read this file. It may be corrupt or in an unsupported format.",
-            "Inspect the source file manually or run Library Doctor to confirm whether it is readable.",
-        );
-    }
-    if (normalized.includes("planning_failed") || normalized.includes("planner")) {
-        return makeFailure(
-            "planning_failed",
-            "Planner failed",
-            "An error occurred while planning the transcode. Check the logs below for details.",
-            "Treat repeated planner failures as a bug and inspect the logs for the triggering input.",
-        );
-    }
-    if (normalized.includes("output_size=0") || normalized.includes("output was empty")) {
-        return makeFailure(
-            "unknown_ffmpeg_failure",
-            "Empty output produced",
-            "Encoding produced an empty output file. This usually means FFmpeg crashed silently. Check the logs below for FFmpeg output.",
-            "Inspect the FFmpeg logs before retrying the job.",
-        );
-    }
-    if (
-        normalized.includes("videotoolbox") ||
-        normalized.includes("vt_compression") ||
-        normalized.includes("err=-12902") ||
-        normalized.includes("mediaserverd") ||
-        normalized.includes("no capable devices")
-    ) {
-        return makeFailure(
-            "hardware_backend_failure",
-            "Hardware backend failed",
-            "The VideoToolbox hardware encoder failed. This can happen when the GPU is busy, the file uses an unsupported pixel format, or macOS Media Services are unavailable.",
-            "Retry the job. If it keeps failing, check the hardware probe log or enable CPU fallback in Settings -> Hardware.",
-        );
-    }
-    if (normalized.includes("encoder fallback") || normalized.includes("fallback detected")) {
-        return makeFailure(
-            "fallback_blocked",
-            "Fallback blocked by policy",
-            "The hardware encoder was unavailable and fell back to software encoding, which was not allowed by your settings.",
-            "Enable CPU fallback in Settings -> Hardware, or retry when the GPU is less busy.",
-        );
-    }
-    if (normalized.includes("ffmpeg failed")) {
-        return makeFailure(
-            "unknown_ffmpeg_failure",
-            "FFmpeg failed",
-            "FFmpeg failed during encoding. Check the logs below for the specific error. Common causes: unsupported pixel format, codec not available, or corrupt source file.",
-            "Inspect the FFmpeg output in the job logs for the exact failure.",
-        );
-    }
-
-    return makeFailure(
-        "legacy_failure",
-        "Failure recorded",
-        summary,
-        "Inspect the job logs for additional context.",
+function getStatusBadge(status: string) {
+    const styles: Record<string, string> = {
+        queued: "bg-helios-slate/10 text-helios-slate border-helios-slate/20",
+        analyzing: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+        encoding: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
+        remuxing: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
+        completed: "bg-green-500/10 text-green-500 border-green-500/20",
+        failed: "bg-red-500/10 text-red-500 border-red-500/20",
+        cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
+        skipped: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+        archived: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
+        resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
+    };
+    return (
+        <span className={cn("px-2.5 py-1 rounded-md text-xs font-medium border capitalize", styles[status] || styles.queued)}>
+            {status}
+        </span>
     );
 }
-
-function normalizeDecisionExplanation(
-    explanation: ExplanationPayload | null | undefined,
-    legacyReason?: string | null,
-): ExplanationView | null {
-    if (explanation) {
-        return explanation;
-    }
-    if (legacyReason) {
-        return humanizeSkipReason(legacyReason);
-    }
-    return null;
-}
-
-function normalizeFailureExplanation(
-    explanation: ExplanationPayload | null | undefined,
-    legacySummary?: string | null,
-): ExplanationView | null {
-    if (explanation) {
-        return explanation;
-    }
-    if (legacySummary) {
-        return explainFailureSummary(legacySummary);
-    }
-    return null;
-}
-
-function logLevelClass(level: string): string {
-    switch (level.toLowerCase()) {
-        case "error":
-            return "text-status-error";
-        case "warn":
-        case "warning":
-            return "text-helios-solar";
-        default:
-            return "text-helios-slate";
-    }
-}
-
-interface Job {
-    id: number;
-    input_path: string;
-    output_path: string;
-    status: string;
-    priority: number;
-    progress: number;
-    created_at: string;
-    updated_at: string;
-    attempt_count: number;
-    vmaf_score?: number;
-    decision_reason?: string;
-    decision_explanation?: ExplanationPayload | null;
-    encoder?: string;
-}
-
-function retryCountdown(job: Job): string | null {
-    if (job.status !== "failed") return null;
-    if (!job.attempt_count || job.attempt_count === 0) return null;
-
-    const backoffMins =
-        job.attempt_count === 1 ? 5
-        : job.attempt_count === 2 ? 15
-        : job.attempt_count === 3 ? 60
-        : 360;
-
-    const updatedMs = new Date(job.updated_at).getTime();
-    const retryAtMs = updatedMs + backoffMins * 60 * 1000;
-    const remainingMs = retryAtMs - Date.now();
-
-    if (remainingMs <= 0) return "Retrying soon";
-
-    const remainingMins = Math.ceil(remainingMs / 60_000);
-    if (remainingMins < 60) return `Retrying in ${remainingMins}m`;
-    const hrs = Math.floor(remainingMins / 60);
-    const mins = remainingMins % 60;
-    return mins > 0 ? `Retrying in ${hrs}h ${mins}m` : `Retrying in ${hrs}h`;
-}
-
-interface JobMetadata {
-    duration_secs: number;
-    codec_name: string;
-    width: number;
-    height: number;
-    bit_depth?: number;
-    size_bytes: number;
-    video_bitrate_bps?: number;
-    container_bitrate_bps?: number;
-    fps: number;
-    container: string;
-    audio_codec?: string;
-    audio_channels?: number;
-    dynamic_range?: string;
-}
-
-interface EncodeStats {
-    input_size_bytes: number;
-    output_size_bytes: number;
-    compression_ratio: number;
-    encode_time_seconds: number;
-    encode_speed: number;
-    avg_bitrate_kbps: number;
-    vmaf_score?: number;
-}
-
-interface LogEntry {
-    id: number;
-    level: string;
-    message: string;
-    created_at: string;
-}
-
-interface JobDetail {
-    job: Job;
-    metadata: JobMetadata | null;
-    encode_stats: EncodeStats | null;
-    job_logs: LogEntry[];
-    job_failure_summary: string | null;
-    decision_explanation: ExplanationPayload | null;
-    failure_explanation: ExplanationPayload | null;
-}
-
-interface CountMessageResponse {
-    count: number;
-    message: string;
-}
-
-type TabType = "all" | "active" | "queued" | "completed" | "failed" | "skipped" | "archived";
-type SortField = "updated_at" | "created_at" | "input_path" | "size";
-
-const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
-    { value: "updated_at", label: "Last Updated" },
-    { value: "created_at", label: "Date Added" },
-    { value: "input_path", label: "File Name" },
-    { value: "size", label: "File Size" },
-];
 
 function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
@@ -518,13 +78,7 @@ function JobManager() {
     const compactSearchInputRef = useRef<HTMLInputElement | null>(null);
     const confirmOpenRef = useRef(false);
     const encodeStartTimes = useRef<Map<number, number>>(new Map());
-    const [confirmState, setConfirmState] = useState<{
-        title: string;
-        body: string;
-        confirmLabel: string;
-        confirmTone?: "danger" | "primary";
-        onConfirm: () => Promise<void> | void;
-    } | null>(null);
+    const [confirmState, setConfirmState] = useState<ConfirmConfig | null>(null);
     const [tick, setTick] = useState(0);
 
     useEffect(() => {
@@ -569,8 +123,6 @@ function JobManager() {
         };
     }, [compactSearchOpen, searchInput]);
 
-    const isJobActive = (job: Job) => ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
-
     const formatJobActionError = (error: unknown, fallback: string) => {
         if (!isApiError(error)) {
             return fallback;
@@ -589,7 +141,6 @@ function JobManager() {
         return `${error.message}: ${summary}`;
     };
 
-    // Filter mapping
     const getStatusFilter = (tab: TabType) => {
         switch (tab) {
             case "active": return ["analyzing", "encoding", "remuxing", "resuming"];
@@ -634,12 +185,8 @@ function JobManager() {
                         terminal.includes(local.status) &&
                         serverIsTerminal
                     ) {
-                        // Both agree this is terminal — keep
-                        // local status to prevent SSE→poll flicker.
                         return { ...serverJob, status: local.status };
                     }
-                    // Server says it changed (e.g. retry queued it)
-                    // — trust the server.
                     return serverJob;
                 })
             );
@@ -685,94 +232,7 @@ function JobManager() {
         };
     }, []);
 
-    useEffect(() => {
-        let eventSource: EventSource | null = null;
-        let cancelled = false;
-        let reconnectTimeout: number | null = null;
-        let reconnectAttempts = 0;
-
-        const getReconnectDelay = () => {
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-            const baseDelay = 1000;
-            const maxDelay = 30000;
-            const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), maxDelay);
-            // Add jitter (±25%) to prevent thundering herd
-            const jitter = delay * 0.25 * (Math.random() * 2 - 1);
-            return Math.round(delay + jitter);
-        };
-
-        const connect = () => {
-            if (cancelled) return;
-            eventSource?.close();
-            eventSource = new EventSource("/api/events");
-
-            eventSource.onopen = () => {
-                // Reset reconnect attempts on successful connection
-                reconnectAttempts = 0;
-            };
-
-            eventSource.addEventListener("status", (e) => {
-                try {
-                    const { job_id, status } = JSON.parse(e.data) as {
-                        job_id: number;
-                        status: string;
-                    };
-                    if (status === "encoding") {
-                        encodeStartTimes.current.set(job_id, Date.now());
-                    } else {
-                        encodeStartTimes.current.delete(job_id);
-                    }
-                    setJobs((prev) =>
-                        prev.map((job) =>
-                            job.id === job_id ? { ...job, status } : job
-                        )
-                    );
-                } catch {
-                    /* ignore malformed */
-                }
-            });
-
-            eventSource.addEventListener("progress", (e) => {
-                try {
-                    const { job_id, percentage } = JSON.parse(e.data) as {
-                        job_id: number;
-                        percentage: number;
-                    };
-                    setJobs((prev) =>
-                        prev.map((job) =>
-                            job.id === job_id ? { ...job, progress: percentage } : job
-                        )
-                    );
-                } catch {
-                    /* ignore malformed */
-                }
-            });
-
-            eventSource.addEventListener("decision", () => {
-                // Re-fetch full job list when decisions are made
-                void fetchJobsRef.current();
-            });
-
-            eventSource.onerror = () => {
-                eventSource?.close();
-                if (!cancelled) {
-                    reconnectAttempts++;
-                    const delay = getReconnectDelay();
-                    reconnectTimeout = window.setTimeout(connect, delay);
-                }
-            };
-        };
-
-        connect();
-
-        return () => {
-            cancelled = true;
-            eventSource?.close();
-            if (reconnectTimeout !== null) {
-                window.clearTimeout(reconnectTimeout);
-            }
-        };
-    }, []);
+    useJobSSE({ setJobs, fetchJobsRef, encodeStartTimes });
 
     useEffect(() => {
         const encodingJobIds = new Set<number>();
@@ -1008,74 +468,7 @@ function JobManager() {
         }
     };
 
-    const formatBytes = (bytes: number) => {
-        if (bytes === 0) return "0 B";
-        const k = 1024;
-        const sizes = ["B", "KB", "MB", "GB", "TB"];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-    };
-
-    const formatDuration = (seconds: number) => {
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        return [h, m, s].map(v => v.toString().padStart(2, "0")).join(":");
-    };
-
-    const calcEta = (jobId: number, progress: number): string | null => {
-        if (progress <= 0 || progress >= 100) {
-            return null;
-        }
-
-        const startMs = encodeStartTimes.current.get(jobId);
-        if (!startMs) {
-            return null;
-        }
-
-        const elapsedMs = Date.now() - startMs;
-        const totalMs = elapsedMs / (progress / 100);
-        const remainingMs = totalMs - elapsedMs;
-        const remainingSecs = Math.round(remainingMs / 1000);
-
-        if (remainingSecs < 0) {
-            return null;
-        }
-        if (remainingSecs < 60) {
-            return `~${remainingSecs}s remaining`;
-        }
-
-        const mins = Math.ceil(remainingSecs / 60);
-        return `~${mins} min remaining`;
-    };
-
-    const getStatusBadge = (status: string) => {
-        const styles: Record<string, string> = {
-            queued: "bg-helios-slate/10 text-helios-slate border-helios-slate/20",
-            analyzing: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-            encoding: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-            remuxing: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-            completed: "bg-green-500/10 text-green-500 border-green-500/20",
-            failed: "bg-red-500/10 text-red-500 border-red-500/20",
-            cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
-            skipped: "bg-gray-500/10 text-gray-500 border-gray-500/20",
-            archived: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
-            resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-        };
-        return (
-            <span className={cn("px-2.5 py-1 rounded-md text-xs font-medium border capitalize", styles[status] || styles.queued)}>
-                {status}
-            </span>
-        );
-    };
-
-    const openConfirm = (config: {
-        title: string;
-        body: string;
-        confirmLabel: string;
-        confirmTone?: "danger" | "primary";
-        onConfirm: () => Promise<void> | void;
-    }) => {
+    const openConfirm = (config: ConfirmConfig) => {
         setConfirmState(config);
     };
 
@@ -1089,6 +482,7 @@ function JobManager() {
         ? normalizeFailureExplanation(
             focusedJob.failure_explanation,
             focusedJob.job_failure_summary,
+            focusedJob.job_logs,
         )
         : null;
     const focusedJobLogs = focusedJob?.job_logs ?? [];
@@ -1098,130 +492,44 @@ function JobManager() {
     const completedEncodeStats = focusedJob?.job.status === "completed"
         ? focusedJob.encode_stats
         : null;
+    const focusedEmptyState = focusedJob
+        ? jobDetailEmptyState(focusedJob.job.status)
+        : null;
 
     return (
         <div className="space-y-6 relative">
             <div className="flex items-center gap-4 px-1 text-xs text-helios-slate">
                 <span>
-                    <span className="font-medium text-helios-ink">
-                        {activeCount}
-                    </span>
+                    <span className="font-medium text-helios-ink">{activeCount}</span>
                     {" "}active
                 </span>
                 <span>
-                    <span className="font-medium text-red-500">
-                        {failedCount}
-                    </span>
+                    <span className="font-medium text-red-500">{failedCount}</span>
                     {" "}failed
                 </span>
                 <span>
-                    <span className="font-medium text-emerald-500">
-                        {completedCount}
-                    </span>
+                    <span className="font-medium text-emerald-500">{completedCount}</span>
                     {" "}completed
                 </span>
             </div>
 
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-helios-line/10 bg-helios-surface/50 px-3 py-3 md:items-center">
-                <div className="flex flex-wrap gap-1">
-                    {(["all", "active", "queued", "completed", "failed", "skipped", "archived"] as TabType[]).map((tab) => (
-                        <button
-                            key={tab}
-                            onClick={() => { setActiveTab(tab); setPage(1); }}
-                            className={cn(
-                                "px-4 py-1.5 rounded-md text-sm font-medium transition-all capitalize",
-                                activeTab === tab
-                                    ? "bg-helios-surface-soft text-helios-ink shadow-sm"
-                                    : "text-helios-slate hover:text-helios-ink"
-                            )}
-                        >
-                            {tab}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="ml-auto flex w-full min-w-0 flex-wrap items-center justify-end gap-2 md:w-auto md:flex-nowrap">
-                    <div className="relative hidden xl:block xl:w-64">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
-                        <input
-                            type="text"
-                            placeholder="Search files..."
-                            value={searchInput}
-                            onChange={(e) => setSearchInput(e.target.value)}
-                            className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
-                        />
-                    </div>
-                    <div className="flex min-w-0 items-center gap-2">
-                        <select
-                            value={sortBy}
-                            onChange={(e) => {
-                                setSortBy(e.target.value as SortField);
-                                setPage(1);
-                            }}
-                            className="h-10 rounded-lg border border-helios-line/20 bg-helios-surface px-3 text-sm text-helios-ink outline-none focus:border-helios-solar"
-                        >
-                            {SORT_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                    {option.label}
-                                </option>
-                            ))}
-                        </select>
-                        <button
-                            onClick={() => {
-                                setSortDesc((current) => !current);
-                                setPage(1);
-                            }}
-                            className="flex h-10 w-10 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"
-                            title={sortDesc ? "Sort descending" : "Sort ascending"}
-                            aria-label={sortDesc ? "Sort descending" : "Sort ascending"}
-                        >
-                            {sortDesc ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
-                        </button>
-                    </div>
-                    <button
-                        onClick={() => void fetchJobs()}
-                        className="flex h-10 w-10 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"
-                        title="Refresh jobs"
-                        aria-label="Refresh jobs"
-                    >
-                        <RefreshCw size={16} className={refreshing ? "animate-spin" : undefined} />
-                    </button>
-                    <div ref={compactSearchRef} className="relative xl:hidden">
-                        <div
-                            className={cn(
-                                "flex h-10 items-center overflow-hidden rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink transition-[width,box-shadow] duration-200 ease-out",
-                                compactSearchOpen
-                                    ? "w-[min(18rem,calc(100vw-4rem))] px-3 shadow-lg shadow-helios-main/20"
-                                    : "w-10 justify-center"
-                            )}
-                        >
-                            <button
-                                type="button"
-                                onClick={() => setCompactSearchOpen((open) => (searchInput.trim() ? true : !open))}
-                                className="flex h-10 w-10 shrink-0 items-center justify-center text-helios-ink"
-                                title="Search files"
-                                aria-label="Search files"
-                            >
-                                <Search size={16} />
-                            </button>
-                            <input
-                                ref={compactSearchInputRef}
-                                type="text"
-                                placeholder="Search files..."
-                                value={searchInput}
-                                onChange={(e) => setSearchInput(e.target.value)}
-                                className={cn(
-                                    "min-w-0 bg-transparent text-sm text-helios-ink outline-none placeholder:text-helios-slate transition-all duration-200",
-                                    compactSearchOpen
-                                        ? "ml-1 w-full opacity-100"
-                                        : "w-0 opacity-0 pointer-events-none"
-                                )}
-                            />
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <JobsToolbar
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                setPage={setPage}
+                searchInput={searchInput}
+                setSearchInput={setSearchInput}
+                compactSearchOpen={compactSearchOpen}
+                setCompactSearchOpen={setCompactSearchOpen}
+                compactSearchRef={compactSearchRef}
+                compactSearchInputRef={compactSearchInputRef}
+                sortBy={sortBy}
+                setSortBy={setSortBy}
+                sortDesc={sortDesc}
+                setSortDesc={setSortDesc}
+                refreshing={refreshing}
+                fetchJobs={fetchJobs}
+            />
 
             {actionError && (
                 <div role="alert" aria-live="polite" className="rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error">
@@ -1293,238 +601,24 @@ function JobManager() {
                 </div>
             )}
 
-            {/* Table */}
-            <div className="bg-helios-surface/50 border border-helios-line/20 rounded-lg overflow-hidden shadow-sm">
-                <table className="w-full text-left border-collapse">
-                    <thead className="bg-helios-surface border-b border-helios-line/20 text-xs font-medium text-helios-slate">
-                        <tr>
-                            <th className="px-6 py-4 w-10">
-                                <input type="checkbox"
-                                    checked={jobs.length > 0 && jobs.every(j => selected.has(j.id))}
-                                    onChange={toggleSelectAll}
-                                    className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
-                                />
-                            </th>
-                            <th className="px-6 py-4">File</th>
-                            <th className="px-6 py-4">Status</th>
-                            <th className="px-6 py-4">Progress</th>
-                            <th className="hidden md:table-cell px-6 py-4">Updated</th>
-                            <th className="px-6 py-4 w-14"></th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-helios-line/10">
-                        {loading && jobs.length === 0 ? (
-                            Array.from({ length: 5 }).map((_, index) => (
-                                <tr key={`loading-${index}`}>
-                                    <td colSpan={6} className="px-6 py-3">
-                                        <div className="h-10 w-full rounded-md bg-helios-surface-soft/60 animate-pulse" />
-                                    </td>
-                                </tr>
-                            ))
-                        ) : jobs.length === 0 ? (
-                            <tr>
-                                <td colSpan={6} className="px-6 py-12 text-center text-helios-slate">
-                                    No jobs found
-                                </td>
-                            </tr>
-                        ) : (
-                            jobs.map((job) => (
-                                <tr
-                                    key={job.id}
-                                    onClick={() => void fetchJobDetails(job.id)}
-                                    className={cn(
-                                        "group hover:bg-helios-surface/80 transition-all cursor-pointer",
-                                        selected.has(job.id) && "bg-helios-surface-soft",
-                                        focusedJob?.job.id === job.id && "bg-helios-solar/5"
-                                    )}
-                                >
-                                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                                        <input type="checkbox"
-                                            checked={selected.has(job.id)}
-                                            onChange={() => toggleSelect(job.id)}
-                                            className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
-                                        />
-                                    </td>
-                                    <td className="px-6 py-4 relative">
-                                        <motion.div layoutId={`job-name-${job.id}`} className="flex flex-col">
-                                            <span className="font-medium text-helios-ink truncate max-w-[300px]" title={job.input_path}>
-                                                {job.input_path.split(/[/\\]/).pop()}
-                                            </span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs text-helios-slate truncate max-w-[240px]">
-                                                    {job.input_path}
-                                                </span>
-                                                <span className="hidden md:inline rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
-                                                    P{job.priority}
-                                                </span>
-                                            </div>
-                                        </motion.div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <motion.div layoutId={`job-status-${job.id}`}>
-                                            {getStatusBadge(job.status)}
-                                        </motion.div>
-                                        {job.status === "failed" && (() => {
-                                            // Reference tick so React re-renders countdowns on interval
-                                            void tick;
-                                            const countdown = retryCountdown(job);
-                                            return countdown ? (
-                                                <p className="text-[10px] font-mono text-helios-slate mt-0.5">
-                                                    {countdown}
-                                                </p>
-                                            ) : null;
-                                        })()}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {["encoding", "analyzing", "remuxing"].includes(job.status) ? (
-                                            <div className="w-24 space-y-1">
-                                                <div className="h-1.5 w-full bg-helios-line/10 rounded-full overflow-hidden">
-                                                    <div className="h-full bg-helios-solar rounded-full transition-all duration-500" style={{ width: `${job.progress}%` }} />
-                                                </div>
-                                                <div className="text-xs text-right font-mono text-helios-slate">
-                                                    {job.progress.toFixed(1)}%
-                                                </div>
-                                                {job.status === "encoding" && (() => {
-                                                    const eta = calcEta(job.id, job.progress);
-                                                    return eta ? (
-                                                        <p className="text-[10px] text-helios-slate mt-0.5 font-mono">
-                                                            {eta}
-                                                        </p>
-                                                    ) : null;
-                                                })()}
-                                                {job.status === "encoding" && job.encoder && (
-                                                    <span className="text-[10px] font-mono text-helios-solar opacity-70">
-                                                        {job.encoder}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            job.vmaf_score ? (
-                                                <span className="text-xs font-mono text-helios-slate">
-                                                    VMAF: {job.vmaf_score.toFixed(1)}
-                                                </span>
-                                            ) : (
-                                                <span className="text-helios-slate/50">-</span>
-                                            )
-                                        )}
-                                    </td>
-                                    <td className="hidden md:table-cell px-6 py-4 text-xs text-helios-slate font-mono">
-                                        {new Date(job.updated_at).toLocaleString()}
-                                    </td>
-                                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                                        <div className="relative" ref={menuJobId === job.id ? menuRef : null}>
-                                            <button
-                                                onClick={() => setMenuJobId(menuJobId === job.id ? null : job.id)}
-                                                className="p-2 rounded-lg border border-helios-line/20 hover:bg-helios-surface-soft text-helios-slate"
-                                                title="Actions"
-                                            >
-                                                <MoreHorizontal size={14} />
-                                            </button>
-                                            <AnimatePresence>
-                                                {menuJobId === job.id && (
-                                                    <motion.div
-                                                        initial={{ opacity: 0, y: 6 }}
-                                                        animate={{ opacity: 1, y: 0 }}
-                                                        exit={{ opacity: 0, y: 6 }}
-                                                        className="absolute right-0 mt-2 w-44 rounded-lg border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden"
-                                                    >
-                                                        <button
-                                                            onClick={() => {
-                                                                setMenuJobId(null);
-                                                                void fetchJobDetails(job.id);
-                                                            }}
-                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                        >
-                                                            View details
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                setMenuJobId(null);
-                                                                void handlePriority(job, job.priority + 10, "Priority boosted");
-                                                            }}
-                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                        >
-                                                            Boost priority (+10)
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                setMenuJobId(null);
-                                                                void handlePriority(job, job.priority - 10, "Priority lowered");
-                                                            }}
-                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                        >
-                                                            Lower priority (-10)
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                setMenuJobId(null);
-                                                                void handlePriority(job, 0, "Priority reset");
-                                                            }}
-                                                            className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                        >
-                                                            Reset priority
-                                                        </button>
-                                                        {(job.status === "failed" || job.status === "cancelled") && (
-                                                            <button
-                                                                onClick={() => {
-                                                                    setMenuJobId(null);
-                                                                    openConfirm({
-                                                                        title: "Retry job",
-                                                                        body: "Retry this job now?",
-                                                                        confirmLabel: "Retry",
-                                                                        onConfirm: () => handleAction(job.id, "restart"),
-                                                                    });
-                                                                }}
-                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                            >
-                                                                Retry
-                                                            </button>
-                                                        )}
-                                                        {["encoding", "analyzing", "remuxing"].includes(job.status) && (
-                                                            <button
-                                                                onClick={() => {
-                                                                    setMenuJobId(null);
-                                                                    openConfirm({
-                                                                        title: "Cancel job",
-                                                                        body: "Stop this job immediately?",
-                                                                        confirmLabel: "Cancel",
-                                                                        confirmTone: "danger",
-                                                                        onConfirm: () => handleAction(job.id, "cancel"),
-                                                                    });
-                                                                }}
-                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
-                                                            >
-                                                                Stop / Cancel
-                                                            </button>
-                                                        )}
-                                                        {!isJobActive(job) && (
-                                                            <button
-                                                                onClick={() => {
-                                                                    setMenuJobId(null);
-                                                                    openConfirm({
-                                                                        title: "Delete job",
-                                                                        body: "Delete this job from history?",
-                                                                        confirmLabel: "Delete",
-                                                                        confirmTone: "danger",
-                                                                        onConfirm: () => handleAction(job.id, "delete"),
-                                                                    });
-                                                                }}
-                                                                className="w-full px-4 py-2 text-left text-xs font-semibold text-red-500 hover:bg-red-500/5"
-                                                            >
-                                                                Delete
-                                                            </button>
-                                                        )}
-                                                    </motion.div>
-                                                )}
-                                            </AnimatePresence>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
+            <JobsTable
+                jobs={jobs}
+                loading={loading}
+                selected={selected}
+                focusedJobId={focusedJob?.job.id ?? null}
+                tick={tick}
+                encodeStartTimes={encodeStartTimes}
+                menuJobId={menuJobId}
+                menuRef={menuRef}
+                toggleSelect={toggleSelect}
+                toggleSelectAll={toggleSelectAll}
+                fetchJobDetails={fetchJobDetails}
+                setMenuJobId={setMenuJobId}
+                openConfirm={openConfirm}
+                handleAction={handleAction}
+                handlePriority={handlePriority}
+                getStatusBadge={getStatusBadge}
+            />
 
             {/* Footer Actions */}
             <div className="flex justify-between items-center pt-2">
@@ -1545,431 +639,24 @@ function JobManager() {
                 </button>
             </div>
 
-            {/* Detail Overlay - rendered via portal to escape layout constraints */}
+            {/* Detail Overlay */}
             {typeof document !== "undefined" && createPortal(
-                <AnimatePresence>
-                    {focusedJob && (
-                        <>
-                            <motion.div
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                onClick={() => setFocusedJob(null)}
-                                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
-                            />
-                            <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-[101]">
-                            <motion.div
-                                key="modal-content"
-                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                                transition={{ duration: 0.2 }}
-                                ref={detailDialogRef}
-                                role="dialog"
-                                aria-modal="true"
-                                aria-labelledby="job-details-title"
-                                aria-describedby="job-details-path"
-                                tabIndex={-1}
-                                className="w-full max-w-2xl bg-helios-surface border border-helios-line/20 rounded-lg shadow-2xl pointer-events-auto overflow-hidden mx-4"
-                            >
-                                {/* Header */}
-                                <div className="p-6 border-b border-helios-line/10 flex justify-between items-start gap-4 bg-helios-surface-soft/50">
-                                    <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-3 mb-1">
-                                            {getStatusBadge(focusedJob.job.status)}
-                                            <span className="text-xs font-medium text-helios-slate">Job ID #{focusedJob.job.id}</span>
-                                            <span className="text-xs font-medium text-helios-slate">Priority {focusedJob.job.priority}</span>
-                                        </div>
-                                        <h2 id="job-details-title" className="text-lg font-bold text-helios-ink truncate" title={focusedJob.job.input_path}>
-                                            {focusedJob.job.input_path.split(/[/\\]/).pop()}
-                                        </h2>
-                                        <p id="job-details-path" className="text-xs text-helios-slate truncate opacity-60">{focusedJob.job.input_path}</p>
-                                    </div>
-                                    <button
-                                        onClick={() => setFocusedJob(null)}
-                                        className="p-2 hover:bg-helios-line/10 rounded-md transition-colors text-helios-slate"
-                                    >
-                                        <X size={20} />
-                                    </button>
-                                </div>
-
-                                <div className="p-6 space-y-8 max-h-[70vh] overflow-y-auto custom-scrollbar">
-                                    {detailLoading && (
-                                        <p className="text-xs text-helios-slate" aria-live="polite">Loading job details...</p>
-                                    )}
-                                    {focusedJob.metadata || completedEncodeStats ? (
-                                        <>
-                                            {focusedJob.metadata && (
-                                                <>
-                                                    {/* Stats Grid */}
-                                                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                                <Activity size={12} />
-                                                                <span className="text-xs font-medium text-helios-slate">Video Codec</span>
-                                                            </div>
-                                                            <p className="text-sm font-bold text-helios-ink capitalize">
-                                                                {focusedJob.metadata.codec_name || "Unknown"}
-                                                            </p>
-                                                            <p className="text-xs text-helios-slate">
-                                                                {(focusedJob.metadata.bit_depth ? `${focusedJob.metadata.bit_depth}-bit` : "Unknown bit depth")} • {focusedJob.metadata.container.toUpperCase()}
-                                                            </p>
-                                                        </div>
-
-                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                                <Maximize2 size={12} />
-                                                                <span className="text-xs font-medium text-helios-slate">Resolution</span>
-                                                            </div>
-                                                            <p className="text-sm font-bold text-helios-ink">
-                                                                {`${focusedJob.metadata.width}x${focusedJob.metadata.height}`}
-                                                            </p>
-                                                            <p className="text-xs text-helios-slate">
-                                                                {focusedJob.metadata.fps.toFixed(2)} FPS
-                                                            </p>
-                                                        </div>
-
-                                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-1">
-                                                            <div className="flex items-center gap-2 text-helios-slate mb-1">
-                                                                <Clock size={12} />
-                                                                <span className="text-xs font-medium text-helios-slate">Duration</span>
-                                                            </div>
-                                                            <p className="text-sm font-bold text-helios-ink">
-                                                                {formatDuration(focusedJob.metadata.duration_secs)}
-                                                            </p>
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Media Details */}
-                                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                                        <div className="space-y-4">
-                                                            <h3 className="text-xs font-medium text-helios-slate/70 flex items-center gap-2">
-                                                                <Database size={12} /> Input Details
-                                                            </h3>
-                                                            <div className="space-y-3">
-                                                                <div className="flex justify-between items-center text-xs">
-                                                                    <span className="text-helios-slate font-medium">File Size</span>
-                                                                    <span className="text-helios-ink font-bold">{formatBytes(focusedJob.metadata.size_bytes)}</span>
-                                                                </div>
-                                                                <div className="flex justify-between items-center text-xs">
-                                                                    <span className="text-helios-slate font-medium">Video Bitrate</span>
-                                                                    <span className="text-helios-ink font-bold">
-                                                                        {(focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps)
-                                                                            ? `${(((focusedJob.metadata.video_bitrate_bps ?? focusedJob.metadata.container_bitrate_bps) as number) / 1000).toFixed(0)} kbps`
-                                                                            : "-"}
-                                                                    </span>
-                                                                </div>
-                                                                <div className="flex justify-between items-center text-xs">
-                                                                    <span className="text-helios-slate font-medium">Audio</span>
-                                                                    <span className="text-helios-ink font-bold capitalize">
-                                                                        {focusedJob.metadata.audio_codec || "N/A"} ({focusedJob.metadata.audio_channels || 0}ch)
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="space-y-4">
-                                                            <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
-                                                                <Zap size={12} /> Output Details
-                                                            </h3>
-                                                            {focusedJob.encode_stats ? (
-                                                                <div className="space-y-3">
-                                                                    <div className="flex justify-between items-center text-xs">
-                                                                        <span className="text-helios-slate font-medium">Result Size</span>
-                                                                        <span className="text-helios-solar font-bold">{formatBytes(focusedJob.encode_stats.output_size_bytes)}</span>
-                                                                    </div>
-                                                                    <div className="flex justify-between items-center text-xs">
-                                                                        <span className="text-helios-slate font-medium">Reduction</span>
-                                                                        <span className="text-green-500 font-bold">
-                                                                            {((1 - focusedJob.encode_stats.compression_ratio) * 100).toFixed(1)}% Saved
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="flex justify-between items-center text-xs">
-                                                                        <span className="text-helios-slate font-medium">VMAF Score</span>
-                                                                        <div className="flex items-center gap-1.5">
-                                                                            <div className="h-1.5 w-16 bg-helios-line/10 rounded-full overflow-hidden">
-                                                                                <div className="h-full bg-helios-solar" style={{ width: `${focusedJob.encode_stats.vmaf_score || 0}%` }} />
-                                                                            </div>
-                                                                            <span className="text-helios-ink font-bold">
-                                                                                {focusedJob.encode_stats.vmaf_score?.toFixed(1) || "-"}
-                                                                            </span>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            ) : (
-                                                                <div className="h-[80px] flex items-center justify-center border border-dashed border-helios-line/20 rounded-lg text-xs text-helios-slate italic">
-                                                                    {focusedJob.job.status === "encoding"
-                                                                        ? "Encoding in progress..."
-                                                                        : focusedJob.job.status === "remuxing"
-                                                                            ? "Remuxing in progress..."
-                                                                            : "No encode data available"}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </>
-                                            )}
-
-                                            {completedEncodeStats && (
-                                                <div className="space-y-4">
-                                                    <h3 className="text-xs font-medium text-helios-solar flex items-center gap-2">
-                                                        <Zap size={12} /> Encode Results
-                                                    </h3>
-                                                    <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/20 space-y-3">
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Input size</span>
-                                                            <span className="text-helios-ink font-bold">{formatBytes(completedEncodeStats.input_size_bytes)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Output size</span>
-                                                            <span className="text-helios-ink font-bold">{formatBytes(completedEncodeStats.output_size_bytes)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Reduction</span>
-                                                            <span className="text-green-500 font-bold">
-                                                                {completedEncodeStats.input_size_bytes > 0
-                                                                    ? `${((1 - completedEncodeStats.output_size_bytes / completedEncodeStats.input_size_bytes) * 100).toFixed(1)}% saved`
-                                                                    : "—"}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Encode time</span>
-                                                            <span className="text-helios-ink font-bold">{formatDuration(completedEncodeStats.encode_time_seconds)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Speed</span>
-                                                            <span className="text-helios-ink font-bold">{`${completedEncodeStats.encode_speed.toFixed(2)}\u00d7 realtime`}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">Avg bitrate</span>
-                                                            <span className="text-helios-ink font-bold">{`${completedEncodeStats.avg_bitrate_kbps} kbps`}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-xs">
-                                                            <span className="text-helios-slate font-medium">VMAF</span>
-                                                            <span className="text-helios-ink font-bold">{completedEncodeStats.vmaf_score?.toFixed(1) ?? "—"}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <div className="flex items-center gap-3 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-4 py-5">
-                                            <div className="p-2 rounded-lg bg-helios-surface border border-helios-line/20 text-helios-slate shrink-0">
-                                                <Clock size={18} />
-                                            </div>
-                                            <div>
-                                                <p className="text-sm font-medium text-helios-ink">
-                                                    Waiting for analysis
-                                                </p>
-                                                <p className="text-xs text-helios-slate mt-0.5">
-                                                    Metadata will appear once this job is picked up by the engine.
-                                                </p>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Decision Info */}
-                                    {focusedDecision && focusedJob.job.status !== "failed" && focusedJob.job.status !== "skipped" && (
-                                        <div className="p-4 rounded-lg bg-helios-solar/5 border border-helios-solar/10">
-                                            <div className="flex items-center gap-2 text-helios-solar mb-1">
-                                                <Info size={12} />
-                                                <span className="text-xs font-medium text-helios-slate">Decision Context</span>
-                                            </div>
-                                            <div className="space-y-3">
-                                                <p className="text-sm font-medium text-helios-ink">
-                                                    {focusedJob.job.status === "completed"
-                                                        ? "Transcoded"
-                                                        : focusedDecision.summary}
-                                                </p>
-                                                <p className="text-xs leading-relaxed text-helios-slate">
-                                                    {focusedDecision.detail}
-                                                </p>
-                                                {Object.keys(focusedDecision.measured).length > 0 && (
-                                                    <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft px-3 py-2.5">
-                                                        {Object.entries(focusedDecision.measured).map(([k, v]) => (
-                                                            <div key={k} className="flex items-center justify-between text-xs">
-                                                                <span className="font-mono text-helios-slate">{k}</span>
-                                                                <span className="font-mono font-bold text-helios-ink">{String(v)}</span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                                {focusedDecision.operator_guidance && (
-                                                    <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
-                                                        <span className="text-xs leading-relaxed text-helios-solar">
-                                                            {focusedDecision.operator_guidance}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {focusedJob.job.status === "skipped" && focusedDecision && (
-                                        <div className="p-4 rounded-lg bg-helios-surface-soft border border-helios-line/10">
-                                            <p className="text-sm text-helios-ink leading-relaxed">
-                                                Alchemist analysed this file and decided not to transcode it. Here&apos;s why:
-                                            </p>
-                                            <div className="mt-3 space-y-3">
-                                                <p className="text-sm font-medium text-helios-ink">
-                                                    {focusedDecision.summary}
-                                                </p>
-                                                <p className="text-xs leading-relaxed text-helios-slate">
-                                                    {focusedDecision.detail}
-                                                </p>
-                                                {Object.keys(focusedDecision.measured).length > 0 && (
-                                                    <div className="space-y-1.5 rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2.5">
-                                                        {Object.entries(focusedDecision.measured).map(([k, v]) => (
-                                                            <div key={k} className="flex items-center justify-between text-xs">
-                                                                <span className="font-mono text-helios-slate">{k}</span>
-                                                                <span className="font-mono font-bold text-helios-ink">{String(v)}</span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                                {focusedDecision.operator_guidance && (
-                                                    <div className="flex items-start gap-2 rounded-lg border border-helios-solar/20 bg-helios-solar/5 px-3 py-2.5">
-                                                        <span className="text-xs leading-relaxed text-helios-solar">
-                                                            {focusedDecision.operator_guidance}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {focusedJob.job.status === "failed" && (
-                                        <div className="rounded-lg border border-status-error/20 bg-status-error/5 px-4 py-4 space-y-2">
-                                            <div className="flex items-center gap-2">
-                                                <AlertCircle size={14} className="text-status-error shrink-0" />
-                                                <span className="text-xs font-semibold text-status-error uppercase tracking-wide">
-                                                    Failure Reason
-                                                </span>
-                                            </div>
-                                            {focusedFailure ? (
-                                                <>
-                                                    <p className="text-sm font-medium text-helios-ink">
-                                                        {focusedFailure.summary}
-                                                    </p>
-                                                    <p className="text-xs leading-relaxed text-helios-slate">
-                                                        {focusedFailure.detail}
-                                                    </p>
-                                                    {focusedFailure.operator_guidance && (
-                                                        <p className="text-xs leading-relaxed text-status-error">
-                                                            {focusedFailure.operator_guidance}
-                                                        </p>
-                                                    )}
-                                                    {focusedFailure.legacy_reason !== focusedFailure.detail && (
-                                                        <p className="text-xs font-mono text-helios-slate/70 break-all leading-relaxed">
-                                                            {focusedFailure.legacy_reason}
-                                                        </p>
-                                                    )}
-                                                </>
-                                            ) : (
-                                                <p className="text-sm text-helios-slate">
-                                                    No error details captured. Check the logs below.
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {shouldShowFfmpegOutput && (
-                                        <details className="rounded-lg border border-helios-line/15 bg-helios-surface-soft/40 p-4">
-                                            <summary className="cursor-pointer text-xs text-helios-solar">
-                                                Show FFmpeg output ({focusedJobLogs.length} lines)
-                                            </summary>
-                                            <div className="mt-3 max-h-48 overflow-y-auto rounded-lg bg-helios-main/70 p-3">
-                                                {focusedJobLogs.map((entry) => (
-                                                    <div
-                                                        key={entry.id}
-                                                        className={cn(
-                                                            "font-mono text-xs leading-relaxed whitespace-pre-wrap break-words",
-                                                            logLevelClass(entry.level)
-                                                        )}
-                                                    >
-                                                        {entry.message}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </details>
-                                    )}
-
-                                    {/* Action Toolbar */}
-                                    <div className="flex items-center justify-between pt-4 border-t border-helios-line/10">
-                                        <div className="flex gap-2">
-                                            <button
-                                                onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority + 10, "Priority boosted")}
-                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                            >
-                                                Boost +10
-                                            </button>
-                                            <button
-                                                onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority - 10, "Priority lowered")}
-                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                            >
-                                                Lower -10
-                                            </button>
-                                            <button
-                                                onClick={() => void handlePriority(focusedJob.job, 0, "Priority reset")}
-                                                className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                            >
-                                                Reset
-                                            </button>
-                                            {(focusedJob.job.status === 'failed' || focusedJob.job.status === 'cancelled') && (
-                                                <button
-                                                    onClick={() =>
-                                                        openConfirm({
-                                                            title: "Retry job",
-                                                            body: "Retry this job now?",
-                                                            confirmLabel: "Retry",
-                                                            onConfirm: () => handleAction(focusedJob.job.id, 'restart'),
-                                                        })
-                                                    }
-                                                    className="px-4 py-2 bg-helios-solar text-helios-main rounded-lg text-sm font-bold flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-sm"
-                                                >
-                                                    <RefreshCw size={14} /> Retry Job
-                                                </button>
-                                            )}
-                                            {["encoding", "analyzing", "remuxing"].includes(focusedJob.job.status) && (
-                                                <button
-                                                    onClick={() =>
-                                                        openConfirm({
-                                                            title: "Cancel job",
-                                                            body: "Stop this job immediately?",
-                                                            confirmLabel: "Cancel",
-                                                            confirmTone: "danger",
-                                                            onConfirm: () => handleAction(focusedJob.job.id, 'cancel'),
-                                                        })
-                                                    }
-                                                    className="px-4 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-helios-surface-soft active:scale-95 transition-all"
-                                                >
-                                                    <Ban size={14} /> Stop / Cancel
-                                                </button>
-                                            )}
-                                        </div>
-                                        {!isJobActive(focusedJob.job) && (
-                                            <button
-                                                onClick={() =>
-                                                    openConfirm({
-                                                        title: "Delete job",
-                                                        body: "Delete this job from history?",
-                                                        confirmLabel: "Delete",
-                                                        confirmTone: "danger",
-                                                        onConfirm: () => handleAction(focusedJob.job.id, 'delete'),
-                                                    })
-                                                }
-                                                className="px-4 py-2 text-red-500 hover:bg-red-500/5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
-                                            >
-                                                <Trash2 size={14} /> Delete
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            </motion.div>
-                        </div>
-                    </>
-                )}
-            </AnimatePresence>,
+                <JobDetailModal
+                    focusedJob={focusedJob}
+                    detailDialogRef={detailDialogRef}
+                    detailLoading={detailLoading}
+                    onClose={() => setFocusedJob(null)}
+                    focusedDecision={focusedDecision}
+                    focusedFailure={focusedFailure}
+                    focusedJobLogs={focusedJobLogs}
+                    shouldShowFfmpegOutput={shouldShowFfmpegOutput}
+                    completedEncodeStats={completedEncodeStats}
+                    focusedEmptyState={focusedEmptyState}
+                    openConfirm={openConfirm}
+                    handleAction={handleAction}
+                    handlePriority={handlePriority}
+                    getStatusBadge={getStatusBadge}
+                />,
                 document.body
             )}
 

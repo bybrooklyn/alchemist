@@ -159,6 +159,18 @@ impl Executor for FfmpegExecutor {
             self.event_channels.clone(),
         ));
 
+        tracing::info!(
+            "Job {} execution path: requested_codec={}, planned_codec={}, encoder={:?}, backend={:?}, fallback={:?}",
+            job.id,
+            plan.requested_codec.as_str(),
+            planned_output_codec.as_str(),
+            encoder.map(|value| value.ffmpeg_encoder_name()),
+            used_backend.map(|value| value.as_str()),
+            plan.fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.as_str())
+        );
+
         self.transcoder
             .transcode_media(TranscodeRequest {
                 job_id: Some(job.id),
@@ -243,6 +255,14 @@ impl Executor for FfmpegExecutor {
                     .and_then(|probe| probe.stream_encoder_tag.as_deref())
             );
         }
+
+        tracing::info!(
+            "Job {} output probe: actual_codec={:?}, actual_encoder={:?}, fallback_occurred={}",
+            job.id,
+            actual_output_codec.map(|value| value.as_str()),
+            actual_encoder_name.as_deref(),
+            plan.fallback.is_some() || codec_mismatch || encoder_mismatch
+        );
 
         Ok(ExecutionResult {
             requested_codec: plan.requested_codec,

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::process::Command;
 
-const FFPROBE_TIMEOUT_SECS: u64 = 120;
+const FFPROBE_TIMEOUT_SECS: u64 = 30;
 
 async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output> {
     match tokio::time::timeout(

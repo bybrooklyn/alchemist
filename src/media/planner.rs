@@ -339,12 +339,13 @@ fn should_transcode(
     };
     let normalized_bpp = bpp.map(|value| value * res_correction);
 
+    // Raise threshold for uncertain analysis: low confidence = fewer speculative encodes.
     let mut threshold = match analysis.confidence {
         crate::media::pipeline::AnalysisConfidence::High => config.transcode.min_bpp_threshold,
         crate::media::pipeline::AnalysisConfidence::Medium => {
-            config.transcode.min_bpp_threshold * 0.7
+            config.transcode.min_bpp_threshold * 1.3
         }
-        crate::media::pipeline::AnalysisConfidence::Low => config.transcode.min_bpp_threshold * 0.5,
+        crate::media::pipeline::AnalysisConfidence::Low => config.transcode.min_bpp_threshold * 1.8,
     };
     if target_codec == OutputCodec::Av1 {
         threshold *= 0.7;
@@ -626,8 +627,16 @@ fn encoder_runtime_settings(
             },
             None,
         ),
-        Encoder::Av1Nvenc | Encoder::HevcNvenc | Encoder::H264Nvenc => (
-            RateControl::Cq { value: 25 },
+        Encoder::Av1Nvenc => (
+            RateControl::Cq { value: 28 },
+            Some(quality_profile.nvenc_preset().to_string()),
+        ),
+        Encoder::HevcNvenc => (
+            RateControl::Cq { value: 24 },
+            Some(quality_profile.nvenc_preset().to_string()),
+        ),
+        Encoder::H264Nvenc => (
+            RateControl::Cq { value: 21 },
             Some(quality_profile.nvenc_preset().to_string()),
         ),
         Encoder::Av1Videotoolbox | Encoder::HevcVideotoolbox | Encoder::H264Videotoolbox => (
@@ -645,7 +654,18 @@ fn encoder_runtime_settings(
                 Some(preset.to_string()),
             )
         }
-        Encoder::Av1Aom => (RateControl::Crf { value: 32 }, Some("6".to_string())),
+        Encoder::Av1Aom => {
+            let (cpu_used, default_crf) = match config.hardware.cpu_preset {
+                crate::config::CpuPreset::Slow => ("2", 24u8),
+                crate::config::CpuPreset::Medium => ("4", 28u8),
+                crate::config::CpuPreset::Fast => ("6", 30u8),
+                crate::config::CpuPreset::Faster => ("8", 32u8),
+            };
+            (
+                RateControl::Crf { value: default_crf },
+                Some(cpu_used.to_string()),
+            )
+        }
         Encoder::HevcX265 => {
             let preset = config.hardware.cpu_preset.as_str().to_string();
             let default_crf = match config.hardware.cpu_preset {
@@ -901,7 +921,10 @@ fn plan_subtitles(
     }
 }
 
-fn subtitle_copy_supported(container: &str, subtitle_streams: &[SubtitleStreamMetadata]) -> bool {
+pub(crate) fn subtitle_copy_supported(
+    container: &str,
+    subtitle_streams: &[SubtitleStreamMetadata],
+) -> bool {
     if subtitle_streams.is_empty() {
         return true;
     }

@@ -32,7 +32,7 @@ pub fn append_args(
                 "-global_quality".to_string(),
                 quality.to_string(),
                 "-look_ahead".to_string(),
-                "1".to_string(),
+                "20".to_string(),
             ]);
         }
         Encoder::HevcQsv => {
@@ -42,7 +42,7 @@ pub fn append_args(
                 "-global_quality".to_string(),
                 quality.to_string(),
                 "-look_ahead".to_string(),
-                "1".to_string(),
+                "20".to_string(),
             ]);
         }
         Encoder::H264Qsv => {
@@ -52,7 +52,7 @@ pub fn append_args(
                 "-global_quality".to_string(),
                 quality.to_string(),
                 "-look_ahead".to_string(),
-                "1".to_string(),
+                "20".to_string(),
             ]);
         }
         _ => {}

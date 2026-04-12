@@ -39,15 +39,16 @@ export default function HeaderActions() {
             labelColor: "text-helios-solar",
         },
         draining: {
-            dot: "bg-helios-slate animate-pulse",
+            dot: "bg-helios-solar animate-pulse",
             label: "Stopping",
-            labelColor: "text-helios-slate",
+            labelColor: "text-helios-solar",
         },
     } as const;
 
     const status = engineStatus?.status ?? "paused";
     const isIdle = status === "running" && (stats?.active ?? 0) === 0;
-    const displayStatus: keyof typeof statusConfig = isIdle ? "idle" : status;
+    const displayStatus: keyof typeof statusConfig =
+        status === "draining" ? "draining" : isIdle ? "idle" : status;
 
     const refreshEngineStatus = async () => {
         const data = await apiJson<EngineStatus>("/api/engine/status");

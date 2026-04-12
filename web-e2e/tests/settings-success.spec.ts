@@ -162,7 +162,7 @@ test("notification targets can be added, tested, and removed", async ({ page }) 
   await expect(page.getByText("Test notification sent.").first()).toBeVisible();
   expect(testPayload).toMatchObject({
     name: "Playwright Target",
-    target_type: "discord",
+    target_type: "discord_webhook",
   });
 
   await page.getByLabel("Delete notification target Playwright Target").click();

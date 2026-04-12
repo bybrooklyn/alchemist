@@ -606,6 +606,21 @@ pub fn failure_from_summary(summary: &str) -> Explanation {
         );
     }
 
+    if normalized.contains("vtcompressionsession")
+        || normalized.contains("kvtvideoencoder")
+        || normalized.contains("kvtvideoencodenotavailablenowerr")
+        || normalized.contains("videotoolbox session")
+    {
+        return Explanation::new(
+            ExplanationCategory::Failure,
+            "videotoolbox_session_failure",
+            "VideoToolbox session failed",
+            "The macOS VideoToolbox hardware encoder could not initialize or lost its session mid-encode. This can happen when the GPU is under load or when another process holds the hardware encoder.",
+            Some("Retry the job. If this repeats, reduce concurrent jobs, restart Alchemist, or enable CPU fallback.".to_string()),
+            summary,
+        );
+    }
+
     if normalized.contains("videotoolbox")
         || normalized.contains("vt_compression")
         || normalized.contains("mediaserverd")

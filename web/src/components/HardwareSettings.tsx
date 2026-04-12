@@ -14,24 +14,24 @@ interface HardwareInfo {
         failed: number;
     };
     backends?: Array<{
-        kind: string;
         codec: string;
-        encoder: string;
         device_path: string | null;
+        encoder: string;
+        kind: string;
     }>;
     detection_notes?: string[];
 }
 
 interface HardwareProbeEntry {
-    vendor: string;
-    codec: string;
-    encoder: string;
     backend: string;
+    codec: string;
     device_path: string | null;
-    success: boolean;
+    encoder: string;
     selected: boolean;
-    summary: string;
     stderr?: string | null;
+    success: boolean;
+    summary: string;
+    vendor: string;
 }
 
 interface HardwareProbeLog {
@@ -39,11 +39,11 @@ interface HardwareProbeLog {
 }
 
 interface HardwareSettings {
-    allow_cpu_fallback: boolean;
     allow_cpu_encoding: boolean;
+    allow_cpu_fallback: boolean;
     cpu_preset: string;
-    preferred_vendor: string | null;
     device_path: string | null;
+    preferred_vendor: string | null;
 }
 
 export default function HardwareSettings() {

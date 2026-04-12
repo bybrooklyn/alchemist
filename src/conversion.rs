@@ -195,8 +195,8 @@ pub fn build_plan(
         match normalized.video.hdr_mode.as_str() {
             "tonemap" => filters.push(FilterStep::Tonemap {
                 algorithm: TonemapAlgorithm::Hable,
-                peak: 100.0,
-                desat: 0.2,
+                peak: crate::config::default_tonemap_peak(),
+                desat: crate::config::default_tonemap_desat(),
             }),
             "strip_metadata" => filters.push(FilterStep::StripHdrMetadata),
             _ => {}
@@ -369,7 +369,18 @@ fn build_subtitle_plan(
     copy_video: bool,
 ) -> Result<SubtitleStreamPlan> {
     match settings.subtitles.mode.as_str() {
-        "copy" => Ok(SubtitleStreamPlan::CopyAllCompatible),
+        "copy" => {
+            if !crate::media::planner::subtitle_copy_supported(
+                &settings.output_container,
+                &analysis.metadata.subtitle_streams,
+            ) {
+                return Err(AlchemistError::Config(
+                    "Subtitle copy is not supported for the selected output container with these subtitle codecs. \
+                     Use 'remove' or 'burn' instead.".to_string(),
+                ));
+            }
+            Ok(SubtitleStreamPlan::CopyAllCompatible)
+        }
         "remove" | "drop" | "none" => Ok(SubtitleStreamPlan::Drop),
         "burn" => {
             if copy_video {

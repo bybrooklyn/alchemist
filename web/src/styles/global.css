@@ -364,13 +364,13 @@
 
     [data-color-profile="midnight"] {
         --bg-main: 0 0 0;
-        --bg-panel: 5 5 5;
-        --bg-elevated: 10 10 10;
+        --bg-panel: 0 0 0;
+        --bg-elevated: 0 0 0;
         --accent-primary: 255 255 255;
         --accent-secondary: 200 200 200;
         --text-primary: 255 255 255;
         --text-muted: 150 150 150;
-        --border-subtle: 50 50 50;
+        --border-subtle: 34 34 34;
     }
 
     [data-color-profile="monochrome"] {
@@ -474,6 +474,33 @@
         background: inherit;
         z-index: -1;
         pointer-events: none;
+    }
+
+    html[data-color-profile="midnight"] {
+        background: rgb(0 0 0);
+    }
+
+    html[data-color-profile="midnight"] body,
+    html[data-color-profile="midnight"] body::before,
+    html[data-color-profile="midnight"] .app-main {
+        background: rgb(0 0 0);
+        background-color: rgb(0 0 0);
+    }
+
+    /* Midnight OLED: suppress decorative accent-tinted gradient overlays so
+       OLED pixels stay fully off. These divs use from-helios-solar/10 which
+       maps to rgba(255,255,255,0.10) — a visible gray on pure-black OLED. */
+    html[data-color-profile="midnight"] .from-helios-solar\/10 {
+        --tw-gradient-from: rgb(0 0 0 / 0) var(--tw-gradient-from-position);
+        --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+    }
+
+    /* Midnight OLED: darken scrollbar thumb so it doesn't glow white. */
+    html[data-color-profile="midnight"] *::-webkit-scrollbar-thumb {
+        background-color: rgba(255 255 255 / 0.08);
+    }
+    html[data-color-profile="midnight"] *::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(255 255 255 / 0.15);
     }
 }
 

@@ -19,6 +19,8 @@ pub fn append_args(
                 "av1_nvenc".to_string(),
                 "-preset".to_string(),
                 preset.clone(),
+                "-rc".to_string(),
+                "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
             ]);
@@ -29,6 +31,8 @@ pub fn append_args(
                 "hevc_nvenc".to_string(),
                 "-preset".to_string(),
                 preset.clone(),
+                "-rc".to_string(),
+                "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
             ]);
@@ -39,6 +43,8 @@ pub fn append_args(
                 "h264_nvenc".to_string(),
                 "-preset".to_string(),
                 preset,
+                "-rc".to_string(),
+                "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
             ]);

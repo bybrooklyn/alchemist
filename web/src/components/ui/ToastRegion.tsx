@@ -9,24 +9,24 @@ function kindStyles(kind: ToastKind): { icon: LucideIcon; className: string } {
     if (kind === "success") {
         return {
             icon: CheckCircle2,
-            className: "border-status-success/30 bg-status-success/10 text-status-success",
+            className: "border-status-success/35 bg-helios-surface/95 text-status-success supports-[backdrop-filter]:bg-helios-surface/80 backdrop-blur-xl",
         };
     }
     if (kind === "error") {
         return {
             icon: AlertCircle,
-            className: "border-status-error/30 bg-status-error/10 text-status-error",
+            className: "border-status-error/35 bg-helios-surface/95 text-status-error supports-[backdrop-filter]:bg-helios-surface/80 backdrop-blur-xl",
         };
     }
     if (kind === "warning") {
         return {
             icon: AlertTriangle,
-            className: "border-amber-500/30 bg-amber-500/10 text-amber-500",
+            className: "border-amber-500/35 bg-helios-surface/95 text-amber-500 supports-[backdrop-filter]:bg-helios-surface/80 backdrop-blur-xl",
         };
     }
     return {
         icon: Info,
-        className: "border-helios-line/40 bg-helios-surface text-helios-ink",
+        className: "border-helios-line/40 bg-helios-surface/95 text-helios-ink supports-[backdrop-filter]:bg-helios-surface/80 backdrop-blur-xl",
     };
 }
 
@@ -84,7 +84,7 @@ export default function ToastRegion() {
                         <div
                             key={toast.id}
                             role={toast.kind === "error" ? "alert" : "status"}
-                            className={`pointer-events-auto rounded-lg border p-3 shadow-xl ${className}`}
+                            className={`pointer-events-auto rounded-lg border p-3 shadow-xl shadow-black/30 ${className}`}
                         >
                             <div className="flex items-start gap-2">
                                 <Icon size={16} />

@@ -325,6 +325,7 @@ pub(crate) struct JobDetailResponse {
     job: Job,
     metadata: Option<crate::media::pipeline::MediaMetadata>,
     encode_stats: Option<crate::db::DetailedEncodeStats>,
+    encode_attempts: Vec<crate::db::EncodeAttempt>,
     job_logs: Vec<crate::db::LogEntry>,
     job_failure_summary: Option<String>,
     decision_explanation: Option<Explanation>,
@@ -343,11 +344,7 @@ pub(crate) async fn get_job_detail_handler(
 
     // Avoid long probes while the job is still active.
     let metadata = match job.status {
-        JobState::Queued
-        | JobState::Analyzing
-        | JobState::Encoding
-        | JobState::Remuxing
-        | JobState::Completed => None,
+        JobState::Queued | JobState::Analyzing => None,
         _ => {
             let analyzer = crate::media::analyzer::FfmpegAnalyzer;
             use crate::media::pipeline::Analyzer;
@@ -403,10 +400,17 @@ pub(crate) async fn get_job_detail_handler(
         (None, None)
     };
 
+    let encode_attempts = state
+        .db
+        .get_encode_attempts_by_job(id)
+        .await
+        .unwrap_or_default();
+
     axum::Json(JobDetailResponse {
         job,
         metadata,
         encode_stats,
+        encode_attempts,
         job_logs,
         job_failure_summary,
         decision_explanation,
@@ -436,6 +440,13 @@ pub(crate) async fn drain_engine_handler(State(state): State<Arc<AppState>>) -> 
 
 pub(crate) async fn stop_drain_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.agent.stop_drain();
+    axum::Json(serde_json::json!({ "status": "running" }))
+}
+
+pub(crate) async fn restart_engine_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    state.agent.restart().await;
     axum::Json(serde_json::json!({ "status": "running" }))
 }
 

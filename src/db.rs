@@ -576,6 +576,35 @@ pub struct DetailedEncodeStats {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct EncodeAttempt {
+    pub id: i64,
+    pub job_id: i64,
+    pub attempt_number: i32,
+    pub started_at: Option<String>,
+    pub finished_at: String,
+    pub outcome: String,
+    pub failure_code: Option<String>,
+    pub failure_summary: Option<String>,
+    pub input_size_bytes: Option<i64>,
+    pub output_size_bytes: Option<i64>,
+    pub encode_time_seconds: Option<f64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EncodeAttemptInput {
+    pub job_id: i64,
+    pub attempt_number: i32,
+    pub started_at: Option<String>,
+    pub outcome: String,
+    pub failure_code: Option<String>,
+    pub failure_summary: Option<String>,
+    pub input_size_bytes: Option<i64>,
+    pub output_size_bytes: Option<i64>,
+    pub encode_time_seconds: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct EncodeStatsInput {
     pub job_id: i64,
@@ -1159,6 +1188,45 @@ impl Db {
         }
 
         Ok(())
+    }
+
+    /// Record a single encode attempt outcome
+    pub async fn insert_encode_attempt(&self, input: EncodeAttemptInput) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO encode_attempts
+             (job_id, attempt_number, started_at, finished_at, outcome,
+              failure_code, failure_summary, input_size_bytes, output_size_bytes,
+              encode_time_seconds)
+             VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(input.job_id)
+        .bind(input.attempt_number)
+        .bind(input.started_at)
+        .bind(input.outcome)
+        .bind(input.failure_code)
+        .bind(input.failure_summary)
+        .bind(input.input_size_bytes)
+        .bind(input.output_size_bytes)
+        .bind(input.encode_time_seconds)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get all encode attempts for a job, ordered by attempt_number
+    pub async fn get_encode_attempts_by_job(&self, job_id: i64) -> Result<Vec<EncodeAttempt>> {
+        let attempts = sqlx::query_as::<_, EncodeAttempt>(
+            "SELECT id, job_id, attempt_number, started_at, finished_at, outcome,
+                    failure_code, failure_summary, input_size_bytes, output_size_bytes,
+                    encode_time_seconds, created_at
+             FROM encode_attempts
+             WHERE job_id = ?
+             ORDER BY attempt_number ASC",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(attempts)
     }
 
     /// Get job by ID
@@ -2527,6 +2595,32 @@ impl Db {
                 top_failure_reasons,
                 top_skip_reasons,
             })
+        })
+        .await
+    }
+
+    pub async fn get_skip_reason_counts(&self) -> Result<Vec<(String, i64)>> {
+        let pool = &self.pool;
+        timed_query("get_skip_reason_counts", || async {
+            let rows = sqlx::query(
+                "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
+                 FROM decisions
+                 WHERE action = 'skip'
+                   AND DATE(created_at, 'localtime') = DATE('now', 'localtime')
+                 GROUP BY COALESCE(reason_code, action)
+                 ORDER BY count DESC, code ASC
+                 LIMIT 20",
+            )
+            .fetch_all(pool)
+            .await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| {
+                    let code: String = row.get("code");
+                    let count: i64 = row.get("count");
+                    (code, count)
+                })
+                .collect())
         })
         .await
     }
