@@ -68,7 +68,7 @@ impl Agent {
             in_flight_jobs: Arc::new(AtomicUsize::new(0)),
             idle_notified: Arc::new(AtomicBool::new(false)),
             analyzing_boot: Arc::new(AtomicBool::new(false)),
-            analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(concurrent_jobs.clamp(1, 4))),
         }
     }
 
@@ -165,6 +165,38 @@ impl Agent {
 
     pub fn stop_drain(&self) {
         self.draining.store(false, Ordering::SeqCst);
+    }
+
+    /// Restart the engine loop without re-execing the process.
+    /// Pauses the engine, cancels all in-flight jobs, resets state flags,
+    /// and resumes. Cancelled jobs remain in the cancelled state.
+    pub async fn restart(&self) {
+        info!("Engine restart requested.");
+        self.pause();
+
+        let active_states = [
+            crate::db::JobState::Encoding,
+            crate::db::JobState::Remuxing,
+            crate::db::JobState::Analyzing,
+            crate::db::JobState::Resuming,
+        ];
+        for state in &active_states {
+            match self.db.get_jobs_by_status(*state).await {
+                Ok(jobs) => {
+                    for job in jobs {
+                        self.orchestrator.cancel_job(job.id);
+                    }
+                }
+                Err(e) => {
+                    error!("Restart: failed to fetch {:?} jobs: {}", state, e);
+                }
+            }
+        }
+
+        self.draining.store(false, Ordering::SeqCst);
+        self.idle_notified.store(false, Ordering::SeqCst);
+        self.resume();
+        info!("Engine restart complete.");
     }
 
     pub fn set_boot_analyzing(&self, value: bool) {
@@ -311,6 +343,11 @@ impl Agent {
             return;
         }
 
+        info!(
+            "Updating concurrent job limit from {} to {}",
+            current, new_limit
+        );
+
         if new_limit > current {
             let mut held = self.held_permits.lock().await;
             let mut increase = new_limit - current;
@@ -392,6 +429,11 @@ impl Agent {
                     continue;
                 }
             };
+            debug!(
+                "Worker slot acquired (in_flight={}, limit={})",
+                self.in_flight_jobs.load(Ordering::SeqCst),
+                self.concurrent_jobs_limit()
+            );
 
             // Re-check drain after permit acquisition (belt-and-suspenders)
             if self.is_draining() {
@@ -403,7 +445,13 @@ impl Agent {
             match self.db.claim_next_job().await {
                 Ok(Some(job)) => {
                     self.idle_notified.store(false, Ordering::SeqCst);
-                    self.in_flight_jobs.fetch_add(1, Ordering::SeqCst);
+                    let next_in_flight = self.in_flight_jobs.fetch_add(1, Ordering::SeqCst) + 1;
+                    info!(
+                        "Claimed job {} for processing (in_flight={}, limit={})",
+                        job.id,
+                        next_in_flight,
+                        self.concurrent_jobs_limit()
+                    );
                     let agent = self.clone();
                     let counter = self.in_flight_jobs.clone();
                     tokio::spawn(async move {
@@ -423,6 +471,11 @@ impl Agent {
                     });
                 }
                 Ok(None) => {
+                    debug!(
+                        "No queued job available (in_flight={}, limit={})",
+                        self.in_flight_jobs.load(Ordering::SeqCst),
+                        self.concurrent_jobs_limit()
+                    );
                     if self.in_flight_jobs.load(Ordering::SeqCst) == 0
                         && !self.idle_notified.swap(true, Ordering::SeqCst)
                     {

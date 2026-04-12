@@ -5,18 +5,18 @@ import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
 interface SystemInfo {
-    version: string;
-    os_version: string;
-    is_docker: boolean;
-    telemetry_enabled: boolean;
     ffmpeg_version: string;
+    is_docker: boolean;
+    os_version: string;
+    telemetry_enabled: boolean;
+    version: string;
 }
 
 interface UpdateInfo {
     current_version: string;
     latest_version: string | null;
-    update_available: boolean;
     release_url: string | null;
+    update_available: boolean;
 }
 
 interface AboutDialogProps {

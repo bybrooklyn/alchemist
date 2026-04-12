@@ -14,24 +14,24 @@ import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
 interface CodecSavings {
-    codec: string;
     bytes_saved: number;
+    codec: string;
     job_count: number;
 }
 
 interface DailySavings {
-    date: string;
     bytes_saved: number;
+    date: string;
 }
 
 interface SavingsSummary {
-    total_input_bytes: number;
-    total_output_bytes: number;
-    total_bytes_saved: number;
-    savings_percent: number;
     job_count: number;
     savings_by_codec: CodecSavings[];
     savings_over_time: DailySavings[];
+    savings_percent: number;
+    total_bytes_saved: number;
+    total_input_bytes: number;
+    total_output_bytes: number;
 }
 
 const GIB = 1_073_741_824;

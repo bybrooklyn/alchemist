@@ -242,15 +242,20 @@ impl<'a> FFmpegCommandBuilder<'a> {
                     );
                 }
                 Encoder::Av1Vaapi | Encoder::HevcVaapi | Encoder::H264Vaapi => {
-                    vaapi::append_args(&mut args, encoder, self.hw_info);
+                    vaapi::append_args(&mut args, encoder, self.hw_info, rate_control.as_ref());
                 }
                 Encoder::Av1Amf | Encoder::HevcAmf | Encoder::H264Amf => {
-                    amf::append_args(&mut args, encoder);
+                    amf::append_args(&mut args, encoder, rate_control.as_ref());
                 }
                 Encoder::Av1Videotoolbox
                 | Encoder::HevcVideotoolbox
                 | Encoder::H264Videotoolbox => {
-                    videotoolbox::append_args(&mut args, encoder, tag_hevc_as_hvc1);
+                    videotoolbox::append_args(
+                        &mut args,
+                        encoder,
+                        tag_hevc_as_hvc1,
+                        rate_control.as_ref(),
+                    );
                 }
                 Encoder::Av1Svt | Encoder::Av1Aom | Encoder::HevcX265 | Encoder::H264X264 => {
                     cpu::append_args(
@@ -262,6 +267,12 @@ impl<'a> FFmpegCommandBuilder<'a> {
                     );
                 }
             }
+        }
+
+        // Set maximum keyframe interval (~10s GOP) for all non-copy encodes.
+        // Improves seeking reliability; hardware encoders respect this upper bound.
+        if !self.plan.copy_video {
+            args.extend(["-g".to_string(), "250".to_string()]);
         }
 
         if let Some(RateControl::Bitrate { kbps }) = rate_control {

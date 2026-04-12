@@ -12,7 +12,22 @@
       "Bash(bash --version)",
       "Bash(git tag:*)",
       "Bash(cargo clippy:*)",
-      "Bash(bun run:*)"
+      "Bash(bun run:*)",
+      "Bash(ls /Users/brooklyn/data/alchemist/*.md)",
+      "Bash(ls /Users/brooklyn/data/alchemist/docs/*.md)",
+      "Bash(npx skills:*)",
+      "Bash(find /Users/brooklyn/data/alchemist/web -name tailwind.config.* -o -name *.config.ts -o -name *.config.js)",
+      "Bash(just check-web:*)",
+      "Bash(git stash:*)",
+      "Bash(just test-e2e:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(wait)",
+      "Bash(npx playwright:*)",
+      "Bash(just check-rust:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo test:*)",
+      "Bash(just check:*)",
+      "Bash(just test:*)"
     ]
   }
 }

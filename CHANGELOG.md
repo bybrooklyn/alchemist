@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1-rc.3] - 2026-04-12
+
+### New Features
+
+#### Job Management Refactor
+- **Componentized Job Manager** — extracted monolithic `JobManager.tsx` into a modular suite under `web/src/components/jobs/`, including dedicated components for the toolbar, table, and detail modal.
+- **Enhanced Job Detail Modal** — rebuilt the job detail view with better loading states, smoother transitions, and improved information hierarchy for analysis, decisions, and failure reasons.
+- **Job SSE Hook** — unified job-related Server-Sent Events logic into a custom `useJobSSE` hook for better state management and reduced re-renders.
+
+#### Themes & UX
+- **Midnight OLED+** — enhanced the `midnight` theme with true-black surfaces and suppressed decorative gradients to maximize OLED power savings.
+- **Improved Toasts** — toast notifications now feature a high-quality backdrop blur and refined border styling for better visibility against busy backgrounds.
+
+#### Reliability & Observability
+- **Engine Lifecycle Specs** — added a comprehensive Playwright suite for validating engine transitions (Running -> Draining -> Paused -> Stopped).
+- **Planner & Lifecycle Docs** — added detailed technical documentation for the transcoding planner logic and engine state machine.
+- **Encode Attempt Tracking** — added a database migration to track individual encode attempts, laying the groundwork for more granular retry statistics.
+
+#### Hardware & Performance
+- **Concurrency & Speed Optimizations** — internal refinements to the executor and processor to improve hardware utilization and address reported speed issues on certain platforms.
+- **Backlog Grooming** — updated `TODO.md` with a focus on validating AMF and VAAPI AV1 hardware encoders.
+
 ## [0.3.1-rc.1] - 2026-04-08
 
 ### New Features

@@ -357,7 +357,9 @@ pub(crate) fn default_allow_fallback() -> bool {
 }
 
 pub(crate) fn default_tonemap_peak() -> f32 {
-    100.0
+    // HDR10 content is typically mastered at 1000 nits. Using 100 (SDR level)
+    // causes severe over-compression of highlights during tone-mapping.
+    1000.0
 }
 
 pub(crate) fn default_tonemap_desat() -> f32 {

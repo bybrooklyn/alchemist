@@ -795,11 +795,16 @@ async fn run() -> Result<()> {
             }
         }
     } else {
-        match args
-            .command
-            .clone()
-            .expect("CLI branch requires a subcommand")
-        {
+        let command = match args.command.clone() {
+            Some(command) => command,
+            None => {
+                return Err(alchemist::error::AlchemistError::Config(
+                    "Missing CLI command".into(),
+                ));
+            }
+        };
+
+        match command {
             Commands::Scan { directories } => {
                 agent.scan_and_enqueue(directories).await?;
                 info!("Scan complete. Matching files were enqueued.");

@@ -159,6 +159,18 @@ export interface JobDetailFixture {
     message: string;
     created_at: string;
   }>;
+  encode_attempts?: Array<{
+    id: number;
+    attempt_number: number;
+    started_at: string | null;
+    finished_at: string;
+    outcome: "completed" | "failed" | "cancelled";
+    failure_code: string | null;
+    failure_summary: string | null;
+    input_size_bytes: number | null;
+    output_size_bytes: number | null;
+    encode_time_seconds: number | null;
+  }>;
   job_failure_summary?: string;
   decision_explanation?: ExplanationFixture | null;
   failure_explanation?: ExplanationFixture | null;

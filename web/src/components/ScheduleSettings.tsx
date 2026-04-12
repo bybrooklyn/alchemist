@@ -5,11 +5,11 @@ import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 
 interface ScheduleWindow {
-    id: number;
-    start_time: string;
-    end_time: string;
     days_of_week: string;
     enabled: boolean;
+    end_time: string;
+    id: number;
+    start_time: string;
 }
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

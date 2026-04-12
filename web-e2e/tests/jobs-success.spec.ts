@@ -142,7 +142,7 @@ test("search requests are debounced and failed job details show summary and logs
   await mockJobDetails(page, { 2: failedDetail });
 
   await page.goto("/jobs");
-  await page.getByPlaceholder("Search files...").fill("failed");
+  await page.getByPlaceholder("Search files...").first().fill("failed");
 
   await expect
     .poll(() => requests.some((url) => url.searchParams.get("search") === "failed"))
@@ -286,7 +286,7 @@ test("queued job with no metadata shows waiting for analysis placeholder", async
   await page.getByTitle("/media/queued.mkv").click();
 
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByText("Waiting for analysis")).toBeVisible();
+  await expect(page.getByText("Waiting in queue")).toBeVisible();
   await expect(page.getByText("Unknown bit depth")).not.toBeVisible();
 });
 

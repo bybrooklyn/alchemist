@@ -149,7 +149,28 @@ pub(crate) async fn auth_middleware(
 }
 
 fn request_is_lan(req: &Request) -> bool {
-    request_ip(req).is_some_and(is_lan_ip)
+    let direct_peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let resolved = request_ip(req);
+
+    // If resolved IP differs from direct peer, forwarded headers were used.
+    // Warn operators so misconfigured proxies surface in logs.
+    if let (Some(peer), Some(resolved_ip)) = (direct_peer, resolved) {
+        if peer != resolved_ip && is_lan_ip(resolved_ip) {
+            tracing::warn!(
+                peer_ip = %peer,
+                resolved_ip = %resolved_ip,
+                "Setup gate: access permitted via forwarded headers. \
+                 Verify your reverse proxy is forwarding client IPs correctly \
+                 (X-Forwarded-For / X-Real-IP). Misconfigured proxies may \
+                 expose setup to public traffic."
+            );
+        }
+    }
+
+    resolved.is_some_and(is_lan_ip)
 }
 
 fn read_only_api_token_allows(method: &Method, path: &str) -> bool {

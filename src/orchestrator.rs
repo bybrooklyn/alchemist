@@ -13,6 +13,8 @@ use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
 pub struct Transcoder {
+    // std::sync::Mutex is intentional: critical sections never cross .await boundaries,
+    // so there is no deadlock risk. Contention is negligible (≤ concurrent_jobs entries).
     cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
     pending_cancels: Arc<Mutex<HashSet<i64>>>,
 }
@@ -234,6 +236,7 @@ impl Transcoder {
         total_duration: Option<f64>,
     ) -> Result<()> {
         info!("Executing FFmpeg command: {:?}", cmd);
+        let ffmpeg_start = std::time::Instant::now();
         cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
         if let Some(id) = job_id {
@@ -286,15 +289,21 @@ impl Transcoder {
             }
         }
 
+        info!(
+            "Job {:?}: FFmpeg spawned ({:.3}s since command start)",
+            job_id,
+            ffmpeg_start.elapsed().as_secs_f64()
+        );
         let mut reader = BufReader::new(stderr).lines();
         let mut kill_rx = kill_rx;
         let mut killed = false;
         let mut last_lines = std::collections::VecDeque::with_capacity(20);
         let mut progress_state = FFmpegProgressState::default();
+        let mut first_frame_logged = false;
 
         loop {
             tokio::select! {
-                line_res_timeout = tokio::time::timeout(tokio::time::Duration::from_secs(600), reader.next_line()) => {
+                line_res_timeout = tokio::time::timeout(tokio::time::Duration::from_secs(120), reader.next_line()) => {
                     match line_res_timeout {
                         Ok(line_res) => match line_res {
                             Ok(Some(line)) => {
@@ -308,11 +317,28 @@ impl Transcoder {
                                     last_lines.pop_front();
                                 }
 
+                                // Detect VideoToolbox software fallback
+                                if line.contains("Using software encoder") || line.contains("using software encoder") {
+                                    warn!(
+                                        "Job {:?}: VideoToolbox falling back to software encoder ({}s elapsed)",
+                                        job_id,
+                                        ffmpeg_start.elapsed().as_secs_f64()
+                                    );
+                                }
+
                                 if let Some(observer) = observer.as_ref() {
                                     observer.on_log(line.clone()).await;
 
                                     if let Some(total_duration) = total_duration {
                                         if let Some(progress) = progress_state.ingest_line(&line) {
+                                            if !first_frame_logged {
+                                                first_frame_logged = true;
+                                                info!(
+                                                    "Job {:?}: first progress event ({:.3}s since spawn)",
+                                                    job_id,
+                                                    ffmpeg_start.elapsed().as_secs_f64()
+                                                );
+                                            }
                                             observer.on_progress(progress, total_duration).await;
                                         }
                                     }
@@ -325,7 +351,7 @@ impl Transcoder {
                             }
                         },
                         Err(_) => {
-                            error!("Job {:?} stalled: No output from FFmpeg for 10 minutes. Killing process...", job_id);
+                            error!("Job {:?} stalled: No output from FFmpeg for 2 minutes. Killing process...", job_id);
                             let _ = child.kill().await;
                             killed = true;
                             if let Some(id) = job_id {
@@ -379,7 +405,11 @@ impl Transcoder {
         }
 
         if status.success() {
-            info!("FFmpeg command completed successfully");
+            info!(
+                "Job {:?}: FFmpeg completed successfully ({:.3}s total)",
+                job_id,
+                ffmpeg_start.elapsed().as_secs_f64()
+            );
             Ok(())
         } else {
             let error_detail = last_lines.make_contiguous().join("\n");
