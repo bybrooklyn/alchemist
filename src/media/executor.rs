@@ -44,11 +44,7 @@ struct JobExecutionObserver {
 }
 
 impl JobExecutionObserver {
-    fn new(
-        job_id: i64,
-        db: Arc<Db>,
-        event_channels: Arc<EventChannels>,
-    ) -> Self {
+    fn new(job_id: i64, db: Arc<Db>, event_channels: Arc<EventChannels>) -> Self {
         Self {
             job_id,
             db,

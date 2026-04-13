@@ -128,10 +128,7 @@ impl NotificationManager {
     /// Build an HTTP client with SSRF protections: DNS resolution timeout,
     /// private-IP blocking (unless allow_local_notifications), no redirects,
     /// and a 10-second request timeout.
-    async fn build_safe_client(
-        &self,
-        target: &NotificationTarget,
-    ) -> NotificationResult<Client> {
+    async fn build_safe_client(&self, target: &NotificationTarget) -> NotificationResult<Client> {
         if let Some(endpoint_url) = endpoint_url_for_target(target)? {
             let url = Url::parse(&endpoint_url)?;
             let host = url
@@ -209,12 +206,18 @@ impl NotificationManager {
             loop {
                 match system_rx.recv().await {
                     Ok(SystemEvent::ScanCompleted) => {
-                        if let Err(e) = manager_clone.handle_event(NotifiableEvent::ScanCompleted).await {
+                        if let Err(e) = manager_clone
+                            .handle_event(NotifiableEvent::ScanCompleted)
+                            .await
+                        {
                             error!("Notification error: {}", e);
                         }
                     }
                     Ok(SystemEvent::EngineIdle) => {
-                        if let Err(e) = manager_clone.handle_event(NotifiableEvent::EngineIdle).await {
+                        if let Err(e) = manager_clone
+                            .handle_event(NotifiableEvent::EngineIdle)
+                            .await
+                        {
                             error!("Notification error: {}", e);
                         }
                     }
