@@ -1,9 +1,9 @@
 use crate::error::Result;
 use sqlx::Row;
 
+use super::Db;
 use super::timed_query;
 use super::types::*;
-use super::Db;
 
 impl Db {
     pub async fn get_stats(&self) -> Result<serde_json::Value> {

@@ -48,7 +48,7 @@ pub enum SystemEvent {
 }
 
 pub struct EventChannels {
-    pub jobs: tokio::sync::broadcast::Sender<JobEvent>,     // 1000 capacity - high volume
+    pub jobs: tokio::sync::broadcast::Sender<JobEvent>, // 1000 capacity - high volume
     pub config: tokio::sync::broadcast::Sender<ConfigEvent>, // 50 capacity - rare
     pub system: tokio::sync::broadcast::Sender<SystemEvent>, // 100 capacity - medium
 }
