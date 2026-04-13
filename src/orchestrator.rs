@@ -17,6 +17,7 @@ pub struct Transcoder {
     // so there is no deadlock risk. Contention is negligible (≤ concurrent_jobs entries).
     cancel_channels: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
     pending_cancels: Arc<Mutex<HashSet<i64>>>,
+    pub(crate) cancel_requested: Arc<tokio::sync::RwLock<HashSet<i64>>>,
 }
 
 pub struct TranscodeRequest<'a> {
@@ -80,7 +81,20 @@ impl Transcoder {
         Self {
             cancel_channels: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashSet::new())),
+            cancel_requested: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         }
+    }
+
+    pub async fn is_cancel_requested(&self, job_id: i64) -> bool {
+        self.cancel_requested.read().await.contains(&job_id)
+    }
+
+    pub async fn remove_cancel_request(&self, job_id: i64) {
+        self.cancel_requested.write().await.remove(&job_id);
+    }
+
+    pub async fn add_cancel_request(&self, job_id: i64) {
+        self.cancel_requested.write().await.insert(job_id);
     }
 
     pub fn cancel_job(&self, job_id: i64) -> bool {

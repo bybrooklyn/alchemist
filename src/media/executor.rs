@@ -1,8 +1,6 @@
-use crate::db::{AlchemistEvent, Db, EventChannels, Job, JobEvent};
+use crate::db::{Db, EventChannels, Job, JobEvent};
 use crate::error::Result;
-use crate::media::pipeline::{
-    Encoder, ExecutionResult, ExecutionStats, Executor, MediaAnalysis, TranscodePlan,
-};
+use crate::media::pipeline::{Encoder, ExecutionResult, Executor, MediaAnalysis, TranscodePlan};
 use crate::orchestrator::{
     AsyncExecutionObserver, ExecutionObserver, TranscodeRequest, Transcoder,
 };
@@ -10,13 +8,12 @@ use crate::system::hardware::HardwareInfo;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::Mutex;
 
 pub struct FfmpegExecutor {
     transcoder: Arc<Transcoder>,
     db: Arc<Db>,
     hw_info: Option<HardwareInfo>,
-    event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
     event_channels: Arc<EventChannels>,
     dry_run: bool,
 }
@@ -26,7 +23,6 @@ impl FfmpegExecutor {
         transcoder: Arc<Transcoder>,
         db: Arc<Db>,
         hw_info: Option<HardwareInfo>,
-        event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
         event_channels: Arc<EventChannels>,
         dry_run: bool,
     ) -> Self {
@@ -34,7 +30,6 @@ impl FfmpegExecutor {
             transcoder,
             db,
             hw_info,
-            event_tx,
             event_channels,
             dry_run,
         }
@@ -44,7 +39,6 @@ impl FfmpegExecutor {
 struct JobExecutionObserver {
     job_id: i64,
     db: Arc<Db>,
-    event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
     event_channels: Arc<EventChannels>,
     last_progress: Mutex<Option<(f64, Instant)>>,
 }
@@ -53,13 +47,11 @@ impl JobExecutionObserver {
     fn new(
         job_id: i64,
         db: Arc<Db>,
-        event_tx: Arc<broadcast::Sender<AlchemistEvent>>,
         event_channels: Arc<EventChannels>,
     ) -> Self {
         Self {
             job_id,
             db,
-            event_tx,
             event_channels,
             last_progress: Mutex::new(None),
         }
@@ -68,14 +60,7 @@ impl JobExecutionObserver {
 
 impl AsyncExecutionObserver for JobExecutionObserver {
     async fn on_log(&self, message: String) {
-        // Send to typed channel
         let _ = self.event_channels.jobs.send(JobEvent::Log {
-            level: "info".to_string(),
-            job_id: Some(self.job_id),
-            message: message.clone(),
-        });
-        // Also send to legacy channel for backwards compatibility
-        let _ = self.event_tx.send(AlchemistEvent::Log {
             level: "info".to_string(),
             job_id: Some(self.job_id),
             message: message.clone(),
@@ -117,14 +102,7 @@ impl AsyncExecutionObserver for JobExecutionObserver {
             }
         }
 
-        // Send to typed channel
         let _ = self.event_channels.jobs.send(JobEvent::Progress {
-            job_id: self.job_id,
-            percentage,
-            time: progress.time.clone(),
-        });
-        // Also send to legacy channel for backwards compatibility
-        let _ = self.event_tx.send(AlchemistEvent::Progress {
             job_id: self.job_id,
             percentage,
             time: progress.time,
@@ -155,7 +133,6 @@ impl Executor for FfmpegExecutor {
         let observer: Arc<dyn ExecutionObserver> = Arc::new(JobExecutionObserver::new(
             job.id,
             self.db.clone(),
-            self.event_tx.clone(),
             self.event_channels.clone(),
         ));
 
@@ -274,12 +251,6 @@ impl Executor for FfmpegExecutor {
             fallback_occurred: plan.fallback.is_some() || codec_mismatch || encoder_mismatch,
             actual_output_codec,
             actual_encoder_name,
-            stats: ExecutionStats {
-                encode_time_secs: 0.0,
-                input_size: 0,
-                output_size: 0,
-                vmaf: None,
-            },
         })
     }
 }
@@ -392,8 +363,7 @@ mod tests {
         let Some(job) = db.get_job_by_input_path("input.mkv").await? else {
             panic!("expected seeded job");
         };
-        let (tx, mut rx) = broadcast::channel(8);
-        let (jobs_tx, _) = broadcast::channel(100);
+        let (jobs_tx, mut jobs_rx) = broadcast::channel(100);
         let (config_tx, _) = broadcast::channel(10);
         let (system_tx, _) = broadcast::channel(10);
         let event_channels = Arc::new(crate::db::EventChannels {
@@ -401,7 +371,7 @@ mod tests {
             config: config_tx,
             system: system_tx,
         });
-        let observer = JobExecutionObserver::new(job.id, db.clone(), Arc::new(tx), event_channels);
+        let observer = JobExecutionObserver::new(job.id, db.clone(), event_channels);
 
         LocalExecutionObserver::on_log(&observer, "ffmpeg line".to_string()).await;
         LocalExecutionObserver::on_progress(
@@ -423,10 +393,10 @@ mod tests {
         };
         assert!((updated.progress - 20.0).abs() < 0.01);
 
-        let first = rx.recv().await?;
-        assert!(matches!(first, AlchemistEvent::Log { .. }));
-        let second = rx.recv().await?;
-        assert!(matches!(second, AlchemistEvent::Progress { .. }));
+        let first = jobs_rx.recv().await?;
+        assert!(matches!(first, JobEvent::Log { .. }));
+        let second = jobs_rx.recv().await?;
+        assert!(matches!(second, JobEvent::Progress { .. }));
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

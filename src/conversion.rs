@@ -442,6 +442,7 @@ fn build_rate_control(mode: &str, value: Option<u32>, encoder: Encoder) -> Resul
             match encoder.backend() {
                 EncoderBackend::Qsv => Ok(RateControl::QsvQuality { value: quality }),
                 EncoderBackend::Cpu => Ok(RateControl::Crf { value: quality }),
+                EncoderBackend::Videotoolbox => Ok(RateControl::Cq { value: quality }),
                 _ => Ok(RateControl::Cq { value: quality }),
             }
         }

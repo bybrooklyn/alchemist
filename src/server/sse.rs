@@ -108,6 +108,10 @@ pub(crate) fn sse_message_for_system_event(event: &SystemEvent) -> SseMessage {
             event_name: "scan_completed",
             data: "{}".to_string(),
         },
+        SystemEvent::EngineIdle => SseMessage {
+            event_name: "engine_idle",
+            data: "{}".to_string(),
+        },
         SystemEvent::EngineStatusChanged => SseMessage {
             event_name: "engine_status_changed",
             data: "{}".to_string(),

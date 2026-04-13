@@ -120,7 +120,6 @@ where
             selection_reason: String::new(),
             probe_summary: alchemist::system::hardware::ProbeSummary::default(),
         })),
-        Arc::new(broadcast::channel(16).0),
         event_channels,
         false,
     );

@@ -61,7 +61,6 @@ where
         probe_summary: crate::system::hardware::ProbeSummary::default(),
     }));
     let hardware_probe_log = Arc::new(RwLock::new(HardwareProbeLog::default()));
-    let (tx, _rx) = broadcast::channel(tx_capacity);
     let transcoder = Arc::new(Transcoder::new());
 
     // Create event channels before Agent
@@ -81,7 +80,6 @@ where
             transcoder.clone(),
             config.clone(),
             hardware_state.clone(),
-            tx.clone(),
             event_channels.clone(),
             true,
         )
@@ -101,7 +99,6 @@ where
         transcoder,
         scheduler: scheduler.handle(),
         event_channels,
-        tx,
         setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: Instant::now(),
         telemetry_runtime_id: "test-runtime".to_string(),
@@ -120,6 +117,8 @@ where
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        trusted_proxies: Vec::new(),
+        setup_token: None,
     });
 
     Ok((state.clone(), app_router(state), config_path, db_path))
@@ -1719,7 +1718,9 @@ async fn clear_completed_archives_jobs_and_preserves_stats()
 
     assert!(state.db.get_job_by_id(job.id).await?.is_none());
     let aggregated = state.db.get_aggregated_stats().await?;
-    assert_eq!(aggregated.completed_jobs, 1);
+    // Archived jobs are excluded from active stats.
+    assert_eq!(aggregated.completed_jobs, 0);
+    // encode_stats rows are preserved even after archiving.
     assert_eq!(aggregated.total_input_size, 2_000);
     assert_eq!(aggregated.total_output_size, 1_000);
 

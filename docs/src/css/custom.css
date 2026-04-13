@@ -94,8 +94,9 @@ html {
 }
 
 .footer {
-  border-top: 1px solid rgba(200, 155, 90, 0.22);
-  background: var(--ifm-footer-background-color);
+  border-top: 1px solid var(--doc-border);
+  background-color: var(--ifm-footer-background-color) !important;
+  color: #ddd0be;
 }
 
 .footer__links {
@@ -118,13 +119,22 @@ html {
 }
 
 .footer__title {
+  color: #fdf6ee;
   font-weight: 700;
 }
 
-.footer__bottom,
+.footer__link-item {
+  color: #cfc0aa;
+}
+
+.footer__link-item:hover {
+  color: var(--ifm-link-hover-color);
+  text-decoration: none;
+}
+
 .footer__copyright {
-  text-align: center;
   color: #b8a88e;
+  text-align: center;
 }
 
 .main-wrapper {

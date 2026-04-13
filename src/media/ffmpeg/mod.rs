@@ -1054,7 +1054,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to build videotoolbox args: {err}"));
         assert!(args.contains(&"hevc_videotoolbox".to_string()));
         assert!(!args.contains(&"hvc1".to_string()));
-        assert!(!args.contains(&"-q:v".to_string()));
+        assert!(args.contains(&"-q:v".to_string())); // P1-2 fix: Cq maps to -q:v
         assert!(!args.contains(&"-b:v".to_string()));
     }
 
@@ -1074,7 +1074,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to build mp4 videotoolbox args: {err}"));
         assert!(args.contains(&"hevc_videotoolbox".to_string()));
         assert!(args.contains(&"hvc1".to_string()));
-        assert!(!args.contains(&"-q:v".to_string()));
+        assert!(args.contains(&"-q:v".to_string())); // P1-2 fix: Cq maps to -q:v
     }
 
     #[test]

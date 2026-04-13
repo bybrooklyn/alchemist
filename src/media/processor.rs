@@ -1,6 +1,6 @@
 use crate::Transcoder;
 use crate::config::Config;
-use crate::db::{AlchemistEvent, Db, EventChannels, JobEvent, SystemEvent};
+use crate::db::{Db, EventChannels, JobEvent, SystemEvent};
 use crate::error::Result;
 use crate::media::pipeline::Pipeline;
 use crate::media::scanner::Scanner;
@@ -8,7 +8,7 @@ use crate::system::hardware::HardwareState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{debug, error, info};
 
 pub struct Agent {
@@ -16,7 +16,6 @@ pub struct Agent {
     orchestrator: Arc<Transcoder>,
     config: Arc<RwLock<Config>>,
     hardware_state: HardwareState,
-    tx: Arc<broadcast::Sender<AlchemistEvent>>,
     event_channels: Arc<EventChannels>,
     semaphore: Arc<Semaphore>,
     semaphore_limit: Arc<AtomicUsize>,
@@ -39,7 +38,6 @@ impl Agent {
         orchestrator: Arc<Transcoder>,
         config: Arc<RwLock<Config>>,
         hardware_state: HardwareState,
-        tx: broadcast::Sender<AlchemistEvent>,
         event_channels: Arc<EventChannels>,
         dry_run: bool,
     ) -> Self {
@@ -54,7 +52,6 @@ impl Agent {
             orchestrator,
             config,
             hardware_state,
-            tx: Arc::new(tx),
             event_channels,
             semaphore: Arc::new(Semaphore::new(concurrent_jobs)),
             semaphore_limit: Arc::new(AtomicUsize::new(concurrent_jobs)),
@@ -99,15 +96,8 @@ impl Agent {
             job_id: 0,
             status: crate::db::JobState::Queued,
         });
-        // Also send to legacy channel for backwards compatibility
-        let _ = self.tx.send(AlchemistEvent::JobStateChanged {
-            job_id: 0,
-            status: crate::db::JobState::Queued,
-        });
 
-        // Notify scan completed
         let _ = self.event_channels.system.send(SystemEvent::ScanCompleted);
-        let _ = self.tx.send(AlchemistEvent::ScanCompleted);
 
         Ok(())
     }
@@ -479,7 +469,7 @@ impl Agent {
                     if self.in_flight_jobs.load(Ordering::SeqCst) == 0
                         && !self.idle_notified.swap(true, Ordering::SeqCst)
                     {
-                        let _ = self.tx.send(crate::db::AlchemistEvent::EngineIdle);
+                        let _ = self.event_channels.system.send(SystemEvent::EngineIdle);
                     }
                     drop(permit);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -507,7 +497,6 @@ impl Agent {
             self.orchestrator.clone(),
             self.config.clone(),
             self.hardware_state.clone(),
-            self.tx.clone(),
             self.event_channels.clone(),
             self.dry_run,
         )

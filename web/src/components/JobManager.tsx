@@ -182,6 +182,7 @@ function JobManager() {
                     const serverIsTerminal = terminal.includes(serverJob.status);
                     if (
                         local &&
+                        local.status === serverJob.status &&
                         terminal.includes(local.status) &&
                         serverIsTerminal
                     ) {
@@ -232,7 +233,7 @@ function JobManager() {
         };
     }, []);
 
-    useJobSSE({ setJobs, fetchJobsRef, encodeStartTimes });
+    useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTimes });
 
     useEffect(() => {
         const encodingJobIds = new Set<number>();
