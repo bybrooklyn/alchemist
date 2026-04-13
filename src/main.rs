@@ -306,6 +306,10 @@ async fn run() -> Result<()> {
             Ok(mut remuxing_jobs) => jobs.append(&mut remuxing_jobs),
             Err(err) => error!("Failed to load interrupted remuxing jobs: {}", err),
         }
+        match db.get_jobs_by_status(db::JobState::Resuming).await {
+            Ok(mut resuming_jobs) => jobs.append(&mut resuming_jobs),
+            Err(err) => error!("Failed to load interrupted resuming jobs: {}", err),
+        }
         match db.get_jobs_by_status(db::JobState::Analyzing).await {
             Ok(mut analyzing_jobs) => jobs.append(&mut analyzing_jobs),
             Err(err) => error!("Failed to load interrupted analyzing jobs: {}", err),
@@ -515,9 +519,6 @@ async fn run() -> Result<()> {
         system: system_tx,
     });
 
-    // Keep legacy channel for transition compatibility
-    let (tx, _rx) = broadcast::channel(100);
-
     let transcoder = Arc::new(Transcoder::new());
     let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
     let hardware_probe_log = Arc::new(RwLock::new(initial_probe_log));
@@ -528,7 +529,7 @@ async fn run() -> Result<()> {
         db.as_ref().clone(),
         config.clone(),
     ));
-    notification_manager.start_listener(tx.subscribe());
+    notification_manager.start_listener(&event_channels);
 
     let maintenance_db = db.clone();
     let maintenance_config = config.clone();
@@ -563,7 +564,6 @@ async fn run() -> Result<()> {
             transcoder.clone(),
             config.clone(),
             hardware_state.clone(),
-            tx.clone(),
             event_channels.clone(),
             matches!(args.command, Some(Commands::Run { dry_run: true, .. })),
         )
@@ -767,7 +767,6 @@ async fn run() -> Result<()> {
             transcoder,
             scheduler: scheduler_handle,
             event_channels,
-            tx,
             setup_required: setup_mode,
             config_path: config_path.clone(),
             config_mutable,
@@ -1278,7 +1277,6 @@ mod tests {
         }));
         let hardware_probe_log = Arc::new(RwLock::new(hardware::HardwareProbeLog::default()));
         let transcoder = Arc::new(Transcoder::new());
-        let (tx, _rx) = broadcast::channel(8);
         let (jobs_tx, _) = broadcast::channel(100);
         let (config_tx, _) = broadcast::channel(10);
         let (system_tx, _) = broadcast::channel(10);
@@ -1293,7 +1291,6 @@ mod tests {
                 transcoder,
                 config_state.clone(),
                 hardware_state.clone(),
-                tx,
                 event_channels,
                 true,
             )

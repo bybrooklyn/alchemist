@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::db::{AlchemistEvent, Db, NotificationTarget};
+use crate::db::{Db, EventChannels, JobEvent, NotificationTarget, SystemEvent};
 use crate::explanations::Explanation;
 use chrono::Timelike;
 use lettre::message::{Mailbox, Message, SinglePart, header::ContentType};
@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::lookup_host;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, warn};
 
 type NotificationResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -86,9 +86,21 @@ fn endpoint_url_for_target(target: &NotificationTarget) -> NotificationResult<Op
     }
 }
 
-fn event_key_from_event(event: &AlchemistEvent) -> Option<&'static str> {
+/// Internal event type that unifies the events the notification system cares about.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", content = "data")]
+enum NotifiableEvent {
+    JobStateChanged {
+        job_id: i64,
+        status: crate::db::JobState,
+    },
+    ScanCompleted,
+    EngineIdle,
+}
+
+fn event_key(event: &NotifiableEvent) -> Option<&'static str> {
     match event {
-        AlchemistEvent::JobStateChanged { status, .. } => match status {
+        NotifiableEvent::JobStateChanged { status, .. } => match status {
             crate::db::JobState::Queued => Some(crate::config::NOTIFICATION_EVENT_ENCODE_QUEUED),
             crate::db::JobState::Encoding | crate::db::JobState::Remuxing => {
                 Some(crate::config::NOTIFICATION_EVENT_ENCODE_STARTED)
@@ -99,9 +111,8 @@ fn event_key_from_event(event: &AlchemistEvent) -> Option<&'static str> {
             crate::db::JobState::Failed => Some(crate::config::NOTIFICATION_EVENT_ENCODE_FAILED),
             _ => None,
         },
-        AlchemistEvent::ScanCompleted => Some(crate::config::NOTIFICATION_EVENT_SCAN_COMPLETED),
-        AlchemistEvent::EngineIdle => Some(crate::config::NOTIFICATION_EVENT_ENGINE_IDLE),
-        _ => None,
+        NotifiableEvent::ScanCompleted => Some(crate::config::NOTIFICATION_EVENT_SCAN_COMPLETED),
+        NotifiableEvent::EngineIdle => Some(crate::config::NOTIFICATION_EVENT_ENGINE_IDLE),
     }
 }
 
@@ -114,22 +125,104 @@ impl NotificationManager {
         }
     }
 
-    pub fn start_listener(&self, mut rx: broadcast::Receiver<AlchemistEvent>) {
+    /// Build an HTTP client with SSRF protections: DNS resolution timeout,
+    /// private-IP blocking (unless allow_local_notifications), no redirects,
+    /// and a 10-second request timeout.
+    async fn build_safe_client(
+        &self,
+        target: &NotificationTarget,
+    ) -> NotificationResult<Client> {
+        if let Some(endpoint_url) = endpoint_url_for_target(target)? {
+            let url = Url::parse(&endpoint_url)?;
+            let host = url
+                .host_str()
+                .ok_or("notification endpoint host is missing")?;
+            let port = url.port_or_known_default().ok_or("invalid port")?;
+
+            let allow_local = self
+                .config
+                .read()
+                .await
+                .notifications
+                .allow_local_notifications;
+
+            if !allow_local && host.eq_ignore_ascii_case("localhost") {
+                return Err("localhost is not allowed as a notification endpoint".into());
+            }
+
+            let addr = format!("{}:{}", host, port);
+            let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
+
+            let target_ip = if allow_local {
+                ips.into_iter()
+                    .map(|a| a.ip())
+                    .next()
+                    .ok_or("no IP address found for notification endpoint")?
+            } else {
+                ips.into_iter()
+                    .map(|a| a.ip())
+                    .find(|ip| !is_private_ip(*ip))
+                    .ok_or("no public IP address found for notification endpoint")?
+            };
+
+            Ok(Client::builder()
+                .timeout(Duration::from_secs(10))
+                .redirect(Policy::none())
+                .resolve(host, std::net::SocketAddr::new(target_ip, port))
+                .build()?)
+        } else {
+            Ok(Client::builder()
+                .timeout(Duration::from_secs(10))
+                .redirect(Policy::none())
+                .build()?)
+        }
+    }
+
+    pub fn start_listener(&self, event_channels: &EventChannels) {
         let manager_clone = self.clone();
         let summary_manager = self.clone();
 
+        // Listen for job events (state changes are the only ones we notify on)
+        let mut jobs_rx = event_channels.jobs.subscribe();
+        let job_manager = self.clone();
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if let Err(e) = manager_clone.handle_event(event).await {
+                match jobs_rx.recv().await {
+                    Ok(JobEvent::StateChanged { job_id, status }) => {
+                        let event = NotifiableEvent::JobStateChanged { job_id, status };
+                        if let Err(e) = job_manager.handle_event(event).await {
                             error!("Notification error: {}", e);
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        warn!("Notification listener lagged")
+                    Ok(_) => {} // Ignore Progress, Decision, Log
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        warn!("Notification job listener lagged")
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // Listen for system events (scan completed, engine idle)
+        let mut system_rx = event_channels.system.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match system_rx.recv().await {
+                    Ok(SystemEvent::ScanCompleted) => {
+                        if let Err(e) = manager_clone.handle_event(NotifiableEvent::ScanCompleted).await {
+                            error!("Notification error: {}", e);
+                        }
+                    }
+                    Ok(SystemEvent::EngineIdle) => {
+                        if let Err(e) = manager_clone.handle_event(NotifiableEvent::EngineIdle).await {
+                            error!("Notification error: {}", e);
+                        }
+                    }
+                    Ok(_) => {} // Ignore ScanStarted, EngineStatusChanged, HardwareStateChanged
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        warn!("Notification system listener lagged")
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
@@ -145,14 +238,14 @@ impl NotificationManager {
     }
 
     pub async fn send_test(&self, target: &NotificationTarget) -> NotificationResult<()> {
-        let event = AlchemistEvent::JobStateChanged {
+        let event = NotifiableEvent::JobStateChanged {
             job_id: 0,
             status: crate::db::JobState::Completed,
         };
         self.send(target, &event).await
     }
 
-    async fn handle_event(&self, event: AlchemistEvent) -> NotificationResult<()> {
+    async fn handle_event(&self, event: NotifiableEvent) -> NotificationResult<()> {
         let targets = match self.db.get_notification_targets().await {
             Ok(t) => t,
             Err(e) => {
@@ -165,7 +258,7 @@ impl NotificationManager {
             return Ok(());
         }
 
-        let event_key = match event_key_from_event(&event) {
+        let event_key = match event_key(&event) {
             Some(event_key) => event_key,
             None => return Ok(()),
         };
@@ -224,10 +317,13 @@ impl NotificationManager {
 
         let summary_key = now.format("%Y-%m-%d").to_string();
         {
-            let last_sent = self.daily_summary_last_sent.lock().await;
+            let mut last_sent = self.daily_summary_last_sent.lock().await;
             if last_sent.as_deref() == Some(summary_key.as_str()) {
                 return Ok(());
             }
+            // Mark sent before releasing lock to prevent duplicate sends
+            // if the scheduler fires twice in the same minute.
+            *last_sent = Some(summary_key.clone());
         }
 
         let summary = self.db.get_daily_summary_stats().await?;
@@ -252,63 +348,19 @@ impl NotificationManager {
             }
         }
 
-        *self.daily_summary_last_sent.lock().await = Some(summary_key);
         Ok(())
     }
 
     async fn send(
         &self,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
     ) -> NotificationResult<()> {
-        let event_key = event_key_from_event(event).unwrap_or("unknown");
-        let client = if let Some(endpoint_url) = endpoint_url_for_target(target)? {
-            let url = Url::parse(&endpoint_url)?;
-            let host = url
-                .host_str()
-                .ok_or("notification endpoint host is missing")?;
-            let port = url.port_or_known_default().ok_or("invalid port")?;
-
-            let allow_local = self
-                .config
-                .read()
-                .await
-                .notifications
-                .allow_local_notifications;
-
-            if !allow_local && host.eq_ignore_ascii_case("localhost") {
-                return Err("localhost is not allowed as a notification endpoint".into());
-            }
-
-            let addr = format!("{}:{}", host, port);
-            let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
-
-            let target_ip = if allow_local {
-                ips.into_iter()
-                    .map(|a| a.ip())
-                    .next()
-                    .ok_or("no IP address found for notification endpoint")?
-            } else {
-                ips.into_iter()
-                    .map(|a| a.ip())
-                    .find(|ip| !is_private_ip(*ip))
-                    .ok_or("no public IP address found for notification endpoint")?
-            };
-
-            Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(Policy::none())
-                .resolve(host, std::net::SocketAddr::new(target_ip, port))
-                .build()?
-        } else {
-            Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(Policy::none())
-                .build()?
-        };
+        let event_key = event_key(event).unwrap_or("unknown");
+        let client = self.build_safe_client(target).await?;
 
         let (decision_explanation, failure_explanation) = match event {
-            AlchemistEvent::JobStateChanged { job_id, status } => {
+            NotifiableEvent::JobStateChanged { job_id, status } => {
                 let decision_explanation = self
                     .db
                     .get_job_decision_explanation(*job_id)
@@ -423,25 +475,24 @@ impl NotificationManager {
 
     fn message_for_event(
         &self,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
     ) -> String {
         match event {
-            AlchemistEvent::JobStateChanged { job_id, status } => self.notification_message(
+            NotifiableEvent::JobStateChanged { job_id, status } => self.notification_message(
                 *job_id,
                 &status.to_string(),
                 decision_explanation,
                 failure_explanation,
             ),
-            AlchemistEvent::ScanCompleted => {
+            NotifiableEvent::ScanCompleted => {
                 "Library scan completed. Review the queue for newly discovered work.".to_string()
             }
-            AlchemistEvent::EngineIdle => {
+            NotifiableEvent::EngineIdle => {
                 "The engine is idle. There are no active jobs and no queued work ready to run."
                     .to_string()
             }
-            _ => "Event occurred".to_string(),
         }
     }
 
@@ -472,7 +523,7 @@ impl NotificationManager {
         &self,
         client: &Client,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -511,7 +562,7 @@ impl NotificationManager {
         &self,
         client: &Client,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         _event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -536,7 +587,7 @@ impl NotificationManager {
         &self,
         client: &Client,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -550,16 +601,21 @@ impl NotificationManager {
             _ => 2,
         };
 
-        let req = client.post(&config.server_url).json(&json!({
-            "title": "Alchemist",
-            "message": message,
-            "priority": priority,
-            "extras": {
-                "client::display": {
-                    "contentType": "text/plain"
+        let req = client
+            .post(format!(
+                "{}/message",
+                config.server_url.trim_end_matches('/')
+            ))
+            .json(&json!({
+                "title": "Alchemist",
+                "message": message,
+                "priority": priority,
+                "extras": {
+                    "client::display": {
+                        "contentType": "text/plain"
+                    }
                 }
-            }
-        }));
+            }));
         req.header("X-Gotify-Key", config.app_token)
             .send()
             .await?
@@ -571,7 +627,7 @@ impl NotificationManager {
         &self,
         client: &Client,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -601,7 +657,7 @@ impl NotificationManager {
         &self,
         client: &Client,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         _event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -627,7 +683,7 @@ impl NotificationManager {
     async fn send_email(
         &self,
         target: &NotificationTarget,
-        event: &AlchemistEvent,
+        event: &NotifiableEvent,
         _event_key: &str,
         decision_explanation: Option<&Explanation>,
         failure_explanation: Option<&Explanation>,
@@ -677,10 +733,11 @@ impl NotificationManager {
         summary: &crate::db::DailySummaryStats,
     ) -> NotificationResult<()> {
         let message = self.daily_summary_message(summary);
+        let client = self.build_safe_client(target).await?;
         match target.target_type.as_str() {
             "discord_webhook" => {
                 let config = parse_target_config::<DiscordWebhookConfig>(target)?;
-                Client::new()
+                client
                     .post(config.webhook_url)
                     .json(&json!({
                         "embeds": [{
@@ -696,7 +753,7 @@ impl NotificationManager {
             }
             "discord_bot" => {
                 let config = parse_target_config::<DiscordBotConfig>(target)?;
-                Client::new()
+                client
                     .post(format!(
                         "https://discord.com/api/v10/channels/{}/messages",
                         config.channel_id
@@ -709,7 +766,7 @@ impl NotificationManager {
             }
             "gotify" => {
                 let config = parse_target_config::<GotifyConfig>(target)?;
-                Client::new()
+                client
                     .post(config.server_url)
                     .header("X-Gotify-Key", config.app_token)
                     .json(&json!({
@@ -723,7 +780,7 @@ impl NotificationManager {
             }
             "webhook" => {
                 let config = parse_target_config::<WebhookConfig>(target)?;
-                let mut req = Client::new().post(config.url).json(&json!({
+                let mut req = client.post(config.url).json(&json!({
                     "event": crate::config::NOTIFICATION_EVENT_DAILY_SUMMARY,
                     "summary": summary,
                     "message": message,
@@ -736,7 +793,7 @@ impl NotificationManager {
             }
             "telegram" => {
                 let config = parse_target_config::<TelegramConfig>(target)?;
-                Client::new()
+                client
                     .post(format!(
                         "https://api.telegram.org/bot{}/sendMessage",
                         config.bot_token
@@ -896,7 +953,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now(),
         };
-        let event = AlchemistEvent::JobStateChanged {
+        let event = NotifiableEvent::JobStateChanged {
             job_id: 1,
             status: crate::db::JobState::Failed,
         };
@@ -976,7 +1033,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now(),
         };
-        let event = AlchemistEvent::JobStateChanged {
+        let event = NotifiableEvent::JobStateChanged {
             job_id: job.id,
             status: JobState::Failed,
         };

@@ -76,16 +76,26 @@ pub(crate) async fn auth_middleware(
     let path = req.uri().path();
     let method = req.method().clone();
 
-    if state.setup_required.load(Ordering::Relaxed)
-        && path != "/api/health"
-        && path != "/api/ready"
-        && !request_is_lan(&req)
+    if state.setup_required.load(Ordering::Relaxed) && path != "/api/health" && path != "/api/ready"
     {
-        return (
-            StatusCode::FORBIDDEN,
-            "Alchemist setup is only available from the local network",
-        )
-            .into_response();
+        let allowed = if let Some(expected_token) = &state.setup_token {
+            // Token mode: require `?token=<value>` regardless of client IP.
+            req.uri()
+                .query()
+                .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
+                .map(|t| t == expected_token.as_str())
+                .unwrap_or(false)
+        } else {
+            request_is_lan(&req, &state.trusted_proxies)
+        };
+
+        if !allowed {
+            return (
+                StatusCode::FORBIDDEN,
+                "Alchemist setup is only available from the local network",
+            )
+                .into_response();
+        }
     }
 
     // 1. API Protection: Only lock down /api routes
@@ -148,12 +158,12 @@ pub(crate) async fn auth_middleware(
     next.run(req).await
 }
 
-fn request_is_lan(req: &Request) -> bool {
+fn request_is_lan(req: &Request, trusted_proxies: &[IpAddr]) -> bool {
     let direct_peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
-    let resolved = request_ip(req);
+    let resolved = request_ip(req, trusted_proxies);
 
     // If resolved IP differs from direct peer, forwarded headers were used.
     // Warn operators so misconfigured proxies surface in logs.
@@ -216,7 +226,7 @@ pub(crate) async fn rate_limit_middleware(
         return next.run(req).await;
     }
 
-    let ip = request_ip(&req).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    let ip = request_ip(&req, &state.trusted_proxies).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     if !allow_global_request(&state, ip).await {
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
     }
@@ -287,18 +297,18 @@ pub(crate) fn get_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> O
     None
 }
 
-pub(crate) fn request_ip(req: &Request) -> Option<IpAddr> {
+pub(crate) fn request_ip(req: &Request, trusted_proxies: &[IpAddr]) -> Option<IpAddr> {
     let peer_ip = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
 
     // Only trust proxy headers (X-Forwarded-For, X-Real-IP) when the direct
-    // TCP peer is a loopback or private IP — i.e., a trusted reverse proxy.
-    // This prevents external attackers from spoofing these headers to bypass
-    // rate limiting.
+    // TCP peer is a trusted reverse proxy. When trusted_proxies is non-empty,
+    // only those exact IPs (plus loopback) are trusted. Otherwise, fall back
+    // to trusting all RFC-1918 private ranges (legacy behaviour).
     if let Some(peer) = peer_ip {
-        if is_trusted_peer(peer) {
+        if is_trusted_peer(peer, trusted_proxies) {
             if let Some(xff) = req.headers().get("X-Forwarded-For") {
                 if let Ok(xff_str) = xff.to_str() {
                     if let Some(ip_str) = xff_str.split(',').next() {
@@ -321,13 +331,27 @@ pub(crate) fn request_ip(req: &Request) -> Option<IpAddr> {
     peer_ip
 }
 
-/// Returns true if the peer IP is a loopback or private address,
-/// meaning it is likely a local reverse proxy that can be trusted
-/// to set forwarded headers.
-fn is_trusted_peer(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+/// Returns true if the peer IP may be trusted to set forwarded headers.
+///
+/// When `trusted_proxies` is non-empty, only loopback addresses and the
+/// explicitly configured IPs are trusted, tightening the default which
+/// previously trusted all RFC-1918 private ranges.
+fn is_trusted_peer(ip: IpAddr, trusted_proxies: &[IpAddr]) -> bool {
+    let is_loopback = match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => v6.is_loopback(),
+    };
+    if is_loopback {
+        return true;
+    }
+    if trusted_proxies.is_empty() {
+        // Legacy: trust all private ranges when no explicit list is configured.
+        match ip {
+            IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+            IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
+        }
+    } else {
+        trusted_proxies.contains(&ip)
     }
 }
 

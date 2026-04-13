@@ -18,7 +18,6 @@ pub mod version;
 pub mod wizard;
 
 pub use config::QualityProfile;
-pub use db::AlchemistEvent;
 pub use media::ffmpeg::{EncodeStats, EncoderCapabilities, HardwareAccelerators};
 pub use media::processor::Agent;
 pub use orchestrator::Transcoder;

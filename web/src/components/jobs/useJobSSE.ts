@@ -1,14 +1,15 @@
 import { useEffect } from "react";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
-import type { Job } from "./types";
+import type { Job, JobDetail } from "./types";
 
 interface UseJobSSEOptions {
     setJobs: Dispatch<SetStateAction<Job[]>>;
+    setFocusedJob: Dispatch<SetStateAction<JobDetail | null>>;
     fetchJobsRef: MutableRefObject<() => Promise<void>>;
     encodeStartTimes: MutableRefObject<Map<number, number>>;
 }
 
-export function useJobSSE({ setJobs, fetchJobsRef, encodeStartTimes }: UseJobSSEOptions): void {
+export function useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTimes }: UseJobSSEOptions): void {
     useEffect(() => {
         let eventSource: EventSource | null = null;
         let cancelled = false;
@@ -38,13 +39,17 @@ export function useJobSSE({ setJobs, fetchJobsRef, encodeStartTimes }: UseJobSSE
                         job_id: number;
                         status: string;
                     };
+                    const terminalStatuses = ["completed", "failed", "cancelled", "skipped"];
                     if (status === "encoding") {
                         encodeStartTimes.current.set(job_id, Date.now());
-                    } else {
+                    } else if (terminalStatuses.includes(status)) {
                         encodeStartTimes.current.delete(job_id);
                     }
                     setJobs((prev) =>
                         prev.map((job) => job.id === job_id ? { ...job, status } : job)
+                    );
+                    setFocusedJob((prev) =>
+                        prev?.job.id === job_id ? { ...prev, job: { ...prev.job, status } } : prev
                     );
                 } catch {
                     /* ignore malformed */

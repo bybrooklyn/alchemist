@@ -1,37 +1,39 @@
 ---
-title: Engine Modes
-description: Background, Balanced, and Throughput — what they mean and when to use each.
+title: Engine Modes & States
+description: Background, Balanced, and Throughput — understanding concurrency and execution flow.
 ---
 
-Engine modes set the concurrent job limit.
+Alchemist uses **Modes** to dictate performance limits and **States** to control execution flow.
 
-## Modes
+## Engine Modes (Concurrency)
 
-| Mode | Concurrent jobs | Use when |
-|------|----------------|----------|
-| Background | 1 | Server in active use |
-| Balanced (default) | floor(cpu_count / 2), min 1, max 4 | General shared server |
-| Throughput | floor(cpu_count / 2), min 1, no cap | Dedicated server, clear a backlog |
+Modes define the maximum number of concurrent jobs the engine will attempt to run. 
 
-## Manual override
+| Mode | Concurrent Jobs | Ideal For |
+|------|----------------|-----------|
+| **Background** | 1 | Server in active use by other applications. |
+| **Balanced** | `floor(cpu_count / 2)` (min 1, max 4) | Default. Shared server usage. |
+| **Throughput** | `floor(cpu_count / 2)` (min 1, no cap) | Dedicated server; clearing a large backlog. |
 
-Override the computed limit in **Settings → Runtime**. Takes
-effect immediately. A "manual" badge appears in engine
-status. Switching modes clears the override.
+:::tip Manual Override
+You can override the computed limit in **Settings → Runtime**. A "Manual" badge will appear in the engine status. Switching modes clears manual overrides.
+:::
 
-## States vs. modes
+---
 
-Modes determine *how many* jobs run. States determine
-*whether* they run.
+## Engine States (Execution)
+
+States determine whether the engine is actively processing the queue.
 
 | State | Behavior |
 |-------|----------|
-| Running | Jobs start up to the mode's limit |
-| Paused | No jobs start; active jobs freeze |
-| Draining | Active jobs finish; no new jobs start |
-| Scheduler paused | Paused by a schedule window |
+| **Running** | Engine is active. Jobs start up to the current mode's limit. |
+| **Paused** | Engine is suspended. No new jobs start; active jobs are frozen. |
+| **Draining** | Engine is stopping. Active jobs finish, but no new jobs start. |
+| **Scheduler Paused** | Engine is temporarily paused by a configured [Schedule Window](/scheduling). |
 
-## Changing modes
+---
 
-**Settings → Runtime**. Takes effect immediately; in-progress
-jobs are not cancelled.
+## Changing Engine Behavior
+
+Engine behavior can be adjusted in real-time via the **Runtime** dashboard or the [API](/api#engine). Changes take effect immediately without cancelling in-progress jobs.

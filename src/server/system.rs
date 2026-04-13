@@ -1,7 +1,7 @@
 //! System information, hardware info, resources, health handlers.
 
 use super::{AppState, config_read_error_response};
-use crate::media::pipeline::{Analyzer as _, Planner as _, TranscodeDecision};
+use crate::media::pipeline::{Planner as _, TranscodeDecision};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -195,7 +195,6 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let analyzer = crate::media::analyzer::FfmpegAnalyzer;
     let config_snapshot = state.config.read().await.clone();
     let hw_snapshot = state.hardware_state.snapshot().await;
     let planner = crate::media::planner::BasicPlanner::new(
@@ -207,14 +206,16 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
         if job.status == crate::db::JobState::Cancelled {
             continue;
         }
-        let input_path = std::path::Path::new(&job.input_path);
-        if !input_path.exists() {
-            continue;
-        }
 
-        let analysis = match analyzer.analyze(input_path).await {
-            Ok(analysis) => analysis,
-            Err(_) => continue,
+        // Use stored metadata only — no live ffprobe spawning per job.
+        let metadata = match job.input_metadata() {
+            Some(m) => m,
+            None => continue,
+        };
+        let analysis = crate::media::pipeline::MediaAnalysis {
+            metadata,
+            warnings: vec![],
+            confidence: crate::media::pipeline::AnalysisConfidence::High,
         };
 
         let profile: Option<crate::db::LibraryProfile> = state

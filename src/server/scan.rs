@@ -126,7 +126,7 @@ async fn run_library_health_scan(db: Arc<crate::db::Db>) {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
 
             stream::iter(jobs)
-                .for_each_concurrent(Some(10), {
+                .for_each_concurrent(None, {
                     let db = db.clone();
                     let counters = counters.clone();
                     let semaphore = semaphore.clone();

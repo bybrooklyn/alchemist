@@ -82,12 +82,12 @@ impl QualityProfile {
         }
     }
 
-    /// Get FFmpeg quality value for Apple VideoToolbox
+    /// Get FFmpeg quality value for Apple VideoToolbox (-q:v 1-100, lower is better)
     pub fn videotoolbox_quality(&self) -> &'static str {
         match self {
-            Self::Quality => "55",
-            Self::Balanced => "65",
-            Self::Speed => "75",
+            Self::Quality => "24",
+            Self::Balanced => "28",
+            Self::Speed => "32",
         }
     }
 }
@@ -684,6 +684,13 @@ pub struct SystemConfig {
     /// Enable HSTS header (only enable if running behind HTTPS)
     #[serde(default)]
     pub https_only: bool,
+    /// Explicit list of reverse proxy IPs (e.g. "192.168.1.1") whose
+    /// X-Forwarded-For / X-Real-IP headers are trusted. When non-empty,
+    /// only these IPs (plus loopback) are trusted as proxies; private
+    /// ranges are no longer trusted by default. Leave empty to preserve
+    /// the previous behaviour (trust all RFC-1918 private addresses).
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -710,6 +717,7 @@ impl Default for SystemConfig {
             log_retention_days: default_log_retention_days(),
             engine_mode: EngineMode::default(),
             https_only: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -825,6 +833,7 @@ impl Default for Config {
                 log_retention_days: default_log_retention_days(),
                 engine_mode: EngineMode::default(),
                 https_only: false,
+                trusted_proxies: Vec::new(),
             },
         }
     }

@@ -70,7 +70,7 @@ Default config file location:
 | `output_extension` | string | `"mkv"` | Output file extension |
 | `output_suffix` | string | `"-alchemist"` | Suffix added to the output filename |
 | `replace_strategy` | string | `"keep"` | Replace behavior for output collisions |
-| `output_root` | string | optional | Mirror outputs into another root path instead of writing beside the source |
+| `output_root` | string | optional | If set, Alchemist mirrors the source library directory structure under this root path instead of writing outputs alongside the source files |
 
 ## `[schedule]`
 

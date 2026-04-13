@@ -44,6 +44,8 @@ just test-e2e-headed           # E2e with browser visible
 
 Integration tests require FFmpeg and FFprobe installed locally.
 
+Integration tests live in `tests/` — notably `integration_db_upgrade.rs` tests schema migrations against a v0.2.5 baseline database. Every migration must pass this.
+
 ### Database
 ```bash
 just db-reset       # Wipe dev database (keeps config)
@@ -52,6 +54,10 @@ just db-shell       # SQLite shell
 ```
 
 ## Architecture
+
+### Clippy Strictness
+
+CI enforces `-D clippy::unwrap_used` and `-D clippy::expect_used`. Use `?` propagation or explicit match — no `.unwrap()` or `.expect()` in production code paths.
 
 ### Rust Backend (`src/`)
 
@@ -77,15 +83,32 @@ The backend is structured around a central `AppState` (holding SQLite pool, conf
   - `pipeline.rs` — Orchestrates scan → analyze → plan → execute
   - `processor.rs` — Job queue controller (concurrency, pausing, draining)
   - `ffmpeg/` — FFmpeg command builder and progress parser, with platform-specific encoder modules
-- **`orchestrator.rs`** — Spawns and monitors FFmpeg processes, streams progress back via channels
+- **`orchestrator.rs`** — Spawns and monitors FFmpeg processes, streams progress back via channels. Uses `std::sync::Mutex` (not tokio) intentionally — critical sections never cross `.await` boundaries.
 - **`system/`** — Hardware detection (`hardware.rs`), file watcher (`watcher.rs`), library scanner (`scanner.rs`)
 - **`scheduler.rs`** — Off-peak cron scheduling
 - **`notifications.rs`** — Discord, Gotify, Webhook integrations
 - **`wizard.rs`** — First-run setup flow
 
+#### Event Channel Architecture
+
+Three typed broadcast channels in `AppState` (defined in `db.rs`):
+- `jobs` (capacity 1000) — high-frequency: progress, state changes, decisions, logs
+- `config` (capacity 50) — watch folder changes, settings updates
+- `system` (capacity 100) — scan lifecycle, hardware state changes
+
+`sse.rs` merges all three via `futures::stream::select_all`. SSE is capped at 50 concurrent connections (`MAX_SSE_CONNECTIONS`), enforced with a RAII guard that decrements on stream drop.
+
+`AlchemistEvent` still exists as a legacy bridge; `JobEvent` is the canonical type — new code uses `JobEvent`/`ConfigEvent`/`SystemEvent`.
+
+#### FFmpeg Command Builder
+
+`FFmpegCommandBuilder<'a>` in `src/media/ffmpeg/mod.rs` uses lifetime references to avoid cloning input/output paths. `.with_hardware(Option<&HardwareInfo>)` injects hardware flags; `.build_args()` returns `Vec<String>` for unit testing without spawning a process. Each hardware platform is a submodule (amf, cpu, nvenc, qsv, vaapi, videotoolbox). `EncoderCapabilities` is detected once via live ffmpeg invocation and cached in `OnceLock`.
+
 ### Frontend (`web/src/`)
 
-Astro pages with React islands. UI reflects backend state via Server-Sent Events (SSE) — avoid optimistic UI unless reconciled with backend truth.
+Astro pages (`web/src/pages/`) with React islands. UI reflects backend state via SSE — avoid optimistic UI unless reconciled with backend truth.
+
+Job management UI is split into focused subcomponents under `web/src/components/jobs/`: `JobsTable`, `JobDetailModal`, `JobsToolbar`, `JobExplanations`, `useJobSSE.ts` (SSE hook), and `types.ts` (shared types + pure data utilities). `JobManager.tsx` is the parent that owns state and wires them together.
 
 ### Database Schema
 

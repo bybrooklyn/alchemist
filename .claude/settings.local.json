@@ -27,7 +27,17 @@
       "Bash(cargo fmt:*)",
       "Bash(cargo test:*)",
       "Bash(just check:*)",
-      "Bash(just test:*)"
+      "Bash(just test:*)",
+      "Bash(find /Users/brooklyn/data/alchemist -name *.sql -o -name *migration*)",
+      "Bash(grep -l \"DROP\\\\|RENAME\\\\|DELETE FROM\" /Users/brooklyn/data/alchemist/migrations/*.sql)",
+      "Bash(just test-filter:*)",
+      "Bash(npx tsc:*)",
+      "Bash(find /Users/brooklyn/data/alchemist -type f -name *.rs)",
+      "Bash(ls -la /Users/brooklyn/data/alchemist/src/*.rs)",
+      "Bash(grep -rn \"from_alchemist_event\\\\|AlchemistEvent.*JobEvent\\\\|JobEvent.*AlchemistEvent\" /Users/brooklyn/data/alchemist/src/ --include=*.rs)",
+      "Bash(grep -l AlchemistEvent /Users/brooklyn/data/alchemist/src/*.rs /Users/brooklyn/data/alchemist/src/**/*.rs)",
+      "Bash(/tmp/audit_report.txt:*)",
+      "Read(//tmp/**)"
     ]
   }
 }

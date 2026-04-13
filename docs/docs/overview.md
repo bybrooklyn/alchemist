@@ -37,13 +37,9 @@ FFmpeg expert.
 
 ## Hardware support
 
-| Vendor | AV1 | HEVC | H.264 | Notes |
-|--------|-----|------|-------|-------|
-| NVIDIA NVENC | RTX 30/40 | Maxwell+ | All | Best for speed |
-| Intel QSV | 12th gen+ | 6th gen+ | All | Best for power efficiency |
-| AMD VAAPI/AMF | RDNA 2+ on compatible driver/FFmpeg stacks | Polaris+ | All | Linux VAAPI / Windows AMF; HEVC/H.264 are the validated AMD paths for `0.3.0` |
-| Apple VideoToolbox | M3+ | M1+ / T2 | All | Binary install recommended |
-| CPU (SVT-AV1/x265/x264) | All | All | All | Always available |
+Alchemist detects and selects the best available hardware encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, or CPU fallback). 
+
+For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup guides, see the [Hardware Acceleration](/hardware) documentation.
 
 ## Where to start
 

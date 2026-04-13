@@ -179,7 +179,7 @@ export function JobDetailModal({
                                                                 <div className="flex justify-between items-center text-xs">
                                                                     <span className="text-helios-slate font-medium">Reduction</span>
                                                                     <span className="text-green-500 font-bold">
-                                                                        {((1 - focusedJob.encode_stats.compression_ratio) * 100).toFixed(1)}% Saved
+                                                                        {(focusedJob.encode_stats.compression_ratio * 100).toFixed(1)}% Saved
                                                                     </span>
                                                                 </div>
                                                                 <div className="flex justify-between items-center text-xs">
@@ -262,6 +262,11 @@ export function JobDetailModal({
                                             <p className="text-xs text-helios-slate mt-0.5">
                                                 {focusedEmptyState.detail}
                                             </p>
+                                            {focusedJob.job.status === "queued" && focusedJob.queue_position != null && (
+                                                <p className="text-xs text-helios-slate mt-1">
+                                                    Queue position: <span className="font-semibold text-helios-ink">#{focusedJob.queue_position}</span>
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 ) : null}

@@ -91,6 +91,7 @@ export interface JobDetail {
     job_failure_summary: string | null;
     decision_explanation: ExplanationPayload | null;
     failure_explanation: ExplanationPayload | null;
+    queue_position: number | null;
 }
 
 export interface CountMessageResponse {

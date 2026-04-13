@@ -17,7 +17,7 @@ mod tests;
 use crate::Agent;
 use crate::Transcoder;
 use crate::config::Config;
-use crate::db::{AlchemistEvent, Db, EventChannels};
+use crate::db::{Db, EventChannels};
 use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareInfo, HardwareProbeLog, HardwareState};
 use axum::{
@@ -38,7 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::net::lookup_host;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::Duration;
 #[cfg(not(feature = "embed-web"))]
 use tracing::warn;
@@ -71,7 +71,6 @@ pub struct AppState {
     pub transcoder: Arc<Transcoder>,
     pub scheduler: crate::scheduler::SchedulerHandle,
     pub event_channels: Arc<EventChannels>,
-    pub tx: broadcast::Sender<AlchemistEvent>, // Legacy channel for transition
     pub setup_required: Arc<AtomicBool>,
     pub start_time: Instant,
     pub telemetry_runtime_id: String,
@@ -87,6 +86,10 @@ pub struct AppState {
     pub(crate) login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) sse_connections: Arc<std::sync::atomic::AtomicUsize>,
+    /// IPs whose proxy headers are trusted. Empty = trust all private ranges.
+    pub(crate) trusted_proxies: Vec<IpAddr>,
+    /// If set, setup endpoints require `?token=<value>` query parameter.
+    pub(crate) setup_token: Option<String>,
 }
 
 pub struct RunServerArgs {
@@ -96,7 +99,6 @@ pub struct RunServerArgs {
     pub transcoder: Arc<Transcoder>,
     pub scheduler: crate::scheduler::SchedulerHandle,
     pub event_channels: Arc<EventChannels>,
-    pub tx: broadcast::Sender<AlchemistEvent>, // Legacy channel for transition
     pub setup_required: bool,
     pub config_path: PathBuf,
     pub config_mutable: bool,
@@ -115,7 +117,6 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         transcoder,
         scheduler,
         event_channels,
-        tx,
         setup_required,
         config_path,
         config_mutable,
@@ -145,6 +146,34 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
+    // Read setup token from environment (opt-in security layer).
+    let setup_token = std::env::var("ALCHEMIST_SETUP_TOKEN").ok();
+    if setup_token.is_some() {
+        info!("ALCHEMIST_SETUP_TOKEN is set — setup endpoints require token query param");
+    }
+
+    // Parse trusted proxy IPs from config. Unparseable entries are logged and skipped.
+    let trusted_proxies: Vec<IpAddr> = {
+        let cfg = config.read().await;
+        cfg.system
+            .trusted_proxies
+            .iter()
+            .filter_map(|s| {
+                s.parse::<IpAddr>()
+                    .map_err(|_| {
+                        error!("Invalid trusted_proxy entry (not a valid IP address): {s}");
+                    })
+                    .ok()
+            })
+            .collect()
+    };
+    if !trusted_proxies.is_empty() {
+        info!(
+            "Trusted proxies configured ({}): only these IPs will be trusted for X-Forwarded-For headers",
+            trusted_proxies.len()
+        );
+    }
+
     let state = Arc::new(AppState {
         db,
         config,
@@ -152,7 +181,6 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         transcoder,
         scheduler,
         event_channels,
-        tx,
         setup_required: Arc::new(AtomicBool::new(setup_required)),
         start_time: std::time::Instant::now(),
         telemetry_runtime_id: Uuid::new_v4().to_string(),
@@ -168,6 +196,8 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        trusted_proxies,
+        setup_token,
     });
 
     // Clone agent for shutdown handler before moving state into router

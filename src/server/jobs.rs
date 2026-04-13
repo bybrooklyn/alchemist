@@ -39,12 +39,14 @@ pub(crate) fn blocked_jobs_response(message: impl Into<String>, blocked: &[Job])
 }
 
 pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bool> {
+    state.transcoder.add_cancel_request(job.id).await;
     match job.status {
         JobState::Queued => {
             state
                 .db
                 .update_job_status(job.id, JobState::Cancelled)
                 .await?;
+            state.transcoder.remove_cancel_request(job.id).await;
             Ok(true)
         }
         JobState::Analyzing | JobState::Resuming => {
@@ -55,6 +57,7 @@ pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bo
                 .db
                 .update_job_status(job.id, JobState::Cancelled)
                 .await?;
+            state.transcoder.remove_cancel_request(job.id).await;
             Ok(true)
         }
         JobState::Encoding | JobState::Remuxing => Ok(state.transcoder.cancel_job(job.id)),
@@ -162,17 +165,49 @@ pub(crate) async fn batch_jobs_handler(
 
     match payload.action.as_str() {
         "cancel" => {
-            let mut count = 0_u64;
+            // Add all cancel requests first (in-memory, cheap).
             for job in &jobs {
-                match request_job_cancel(&state, job).await {
-                    Ok(true) => count += 1,
-                    Ok(false) => {}
-                    Err(e) if is_row_not_found(&e) => {}
+                state.transcoder.add_cancel_request(job.id).await;
+            }
+
+            // Collect IDs that can be immediately set to Cancelled in the DB.
+            let mut immediate_ids: Vec<i64> = Vec::new();
+            let mut active_count: u64 = 0;
+
+            for job in &jobs {
+                match job.status {
+                    JobState::Queued => {
+                        immediate_ids.push(job.id);
+                    }
+                    JobState::Analyzing | JobState::Resuming => {
+                        if state.transcoder.cancel_job(job.id) {
+                            immediate_ids.push(job.id);
+                        }
+                    }
+                    JobState::Encoding | JobState::Remuxing => {
+                        if state.transcoder.cancel_job(job.id) {
+                            active_count += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Single batch DB update instead of N individual queries.
+            if !immediate_ids.is_empty() {
+                match state.db.batch_cancel_jobs(&immediate_ids).await {
+                    Ok(_) => {}
                     Err(e) => {
                         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                     }
                 }
+                // Remove cancel requests for jobs already resolved in DB.
+                for id in &immediate_ids {
+                    state.transcoder.remove_cancel_request(*id).await;
+                }
             }
+
+            let count = immediate_ids.len() as u64 + active_count;
             axum::Json(serde_json::json!({ "count": count })).into_response()
         }
         "delete" | "restart" => {
@@ -330,6 +365,7 @@ pub(crate) struct JobDetailResponse {
     job_failure_summary: Option<String>,
     decision_explanation: Option<Explanation>,
     failure_explanation: Option<Explanation>,
+    queue_position: Option<u32>,
 }
 
 pub(crate) async fn get_job_detail_handler(
@@ -342,19 +378,7 @@ pub(crate) async fn get_job_detail_handler(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    // Avoid long probes while the job is still active.
-    let metadata = match job.status {
-        JobState::Queued | JobState::Analyzing => None,
-        _ => {
-            let analyzer = crate::media::analyzer::FfmpegAnalyzer;
-            use crate::media::pipeline::Analyzer;
-            analyzer
-                .analyze(std::path::Path::new(&job.input_path))
-                .await
-                .ok()
-                .map(|analysis| analysis.metadata)
-        }
-    };
+    let metadata = job.input_metadata();
 
     // Try to get encode stats (using the subquery result or a specific query)
     // For now we'll just query the encode_stats table if completed
@@ -406,6 +430,12 @@ pub(crate) async fn get_job_detail_handler(
         .await
         .unwrap_or_default();
 
+    let queue_position = if job.status == JobState::Queued {
+        state.db.get_queue_position(id).await.unwrap_or(None)
+    } else {
+        None
+    };
+
     axum::Json(JobDetailResponse {
         job,
         metadata,
@@ -415,6 +445,7 @@ pub(crate) async fn get_job_detail_handler(
         job_failure_summary,
         decision_explanation,
         failure_explanation,
+        queue_position,
     })
     .into_response()
 }

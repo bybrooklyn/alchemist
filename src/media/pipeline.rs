@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -92,14 +92,6 @@ pub struct MediaAnalysis {
     pub metadata: MediaMetadata,
     pub warnings: Vec<AnalysisWarning>,
     pub confidence: AnalysisConfidence,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionStats {
-    pub encode_time_secs: f64,
-    pub input_size: u64,
-    pub output_size: u64,
-    pub vmaf: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,7 +382,6 @@ pub struct ExecutionResult {
     pub fallback_occurred: bool,
     pub actual_output_codec: Option<crate::config::OutputCodec>,
     pub actual_encoder_name: Option<String>,
-    pub stats: ExecutionStats,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,7 +423,6 @@ pub struct Pipeline {
     orchestrator: Arc<Transcoder>,
     config: Arc<RwLock<crate::config::Config>>,
     hardware_state: HardwareState,
-    tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
     event_channels: Arc<crate::db::EventChannels>,
     dry_run: bool,
 }
@@ -466,7 +456,6 @@ impl Pipeline {
         orchestrator: Arc<Transcoder>,
         config: Arc<RwLock<crate::config::Config>>,
         hardware_state: HardwareState,
-        tx: Arc<broadcast::Sender<crate::db::AlchemistEvent>>,
         event_channels: Arc<crate::db::EventChannels>,
         dry_run: bool,
     ) -> Self {
@@ -475,7 +464,6 @@ impl Pipeline {
             orchestrator,
             config,
             hardware_state,
-            tx,
             event_channels,
             dry_run,
         }
@@ -594,8 +582,7 @@ impl Pipeline {
         let job_id = job.id;
 
         // Update status to analyzing
-        self.db
-            .update_job_status(job_id, crate::db::JobState::Analyzing)
+        self.update_job_state(job_id, crate::db::JobState::Analyzing)
             .await?;
 
         // Run ffprobe analysis
@@ -604,18 +591,24 @@ impl Pipeline {
             .analyze(std::path::Path::new(&job.input_path))
             .await
         {
-            Ok(a) => a,
+            Ok(a) => {
+                // Store analyzed metadata for completed job detail retrieval
+                let _ = self.db.set_job_input_metadata(job_id, &a.metadata).await;
+                a
+            }
             Err(e) => {
                 let reason = format!("analysis_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
-                let _ = self.db.add_log("error", Some(job_id), &reason).await;
-                self.db.add_decision(job_id, "skip", &reason).await.ok();
-                self.db
-                    .upsert_job_failure_explanation(job_id, &failure_explanation)
-                    .await
-                    .ok();
-                self.db
-                    .update_job_status(job_id, crate::db::JobState::Failed)
+                if let Err(e) = self.db.add_log("error", Some(job_id), &reason).await {
+                    tracing::warn!(job_id, "Failed to record log: {e}");
+                }
+                if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
+                    tracing::warn!(job_id, "Failed to record decision: {e}");
+                }
+                if let Err(e) = self.db.upsert_job_failure_explanation(job_id, &failure_explanation).await {
+                    tracing::warn!(job_id, "Failed to record failure explanation: {e}");
+                }
+                self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
             }
@@ -645,14 +638,16 @@ impl Pipeline {
             Err(e) => {
                 let reason = format!("planning_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
-                let _ = self.db.add_log("error", Some(job_id), &reason).await;
-                self.db.add_decision(job_id, "skip", &reason).await.ok();
-                self.db
-                    .upsert_job_failure_explanation(job_id, &failure_explanation)
-                    .await
-                    .ok();
-                self.db
-                    .update_job_status(job_id, crate::db::JobState::Failed)
+                if let Err(e) = self.db.add_log("error", Some(job_id), &reason).await {
+                    tracing::warn!(job_id, "Failed to record log: {e}");
+                }
+                if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
+                    tracing::warn!(job_id, "Failed to record decision: {e}");
+                }
+                if let Err(e) = self.db.upsert_job_failure_explanation(job_id, &failure_explanation).await {
+                    tracing::warn!(job_id, "Failed to record failure explanation: {e}");
+                }
+                self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
             }
@@ -668,23 +663,26 @@ impl Pipeline {
                     "Job skipped: {}",
                     skip_code
                 );
-                self.db.add_decision(job_id, "skip", reason).await.ok();
-                self.db
-                    .update_job_status(job_id, crate::db::JobState::Skipped)
+                if let Err(e) = self.db.add_decision(job_id, "skip", reason).await {
+                    tracing::warn!(job_id, "Failed to record decision: {e}");
+                }
+                self.update_job_state(job_id, crate::db::JobState::Skipped)
                     .await?;
             }
             crate::media::pipeline::TranscodeDecision::Remux { reason } => {
-                self.db.add_decision(job_id, "transcode", reason).await.ok();
+                if let Err(e) = self.db.add_decision(job_id, "transcode", reason).await {
+                    tracing::warn!(job_id, "Failed to record decision: {e}");
+                }
                 // Leave as queued — will be picked up for remux when engine starts
-                self.db
-                    .update_job_status(job_id, crate::db::JobState::Queued)
+                self.update_job_state(job_id, crate::db::JobState::Queued)
                     .await?;
             }
             crate::media::pipeline::TranscodeDecision::Transcode { reason } => {
-                self.db.add_decision(job_id, "transcode", reason).await.ok();
+                if let Err(e) = self.db.add_decision(job_id, "transcode", reason).await {
+                    tracing::warn!(job_id, "Failed to record decision: {e}");
+                }
                 // Leave as queued — will be picked up for encoding when engine starts
-                self.db
-                    .update_job_status(job_id, crate::db::JobState::Queued)
+                self.update_job_state(job_id, crate::db::JobState::Queued)
                     .await?;
             }
         }
@@ -775,15 +773,16 @@ impl Pipeline {
             Err(e) => {
                 let msg = format!("Probing failed: {e}");
                 tracing::error!("Job {}: {}", job.id, msg);
-                let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                    tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                }
                 let explanation = crate::explanations::failure_from_summary(&msg);
-                let _ = self
-                    .db
-                    .upsert_job_failure_explanation(job.id, &explanation)
-                    .await;
-                let _ = self
-                    .update_job_state(job.id, crate::db::JobState::Failed)
-                    .await;
+                if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                    tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                }
+                if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                    tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                }
                 return Err(JobFailure::MediaCorrupt);
             }
         };
@@ -829,15 +828,16 @@ impl Pipeline {
                     Err(err) => {
                         let msg = format!("Invalid conversion job settings: {err}");
                         tracing::error!("Job {}: {}", job.id, msg);
-                        let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                        if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                            tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                        }
                         let explanation = crate::explanations::failure_from_summary(&msg);
-                        let _ = self
-                            .db
-                            .upsert_job_failure_explanation(job.id, &explanation)
-                            .await;
-                        let _ = self
-                            .update_job_state(job.id, crate::db::JobState::Failed)
-                            .await;
+                        if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                            tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                        }
+                        if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                            tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                        }
                         return Err(JobFailure::PlannerBug);
                     }
                 };
@@ -847,15 +847,16 @@ impl Pipeline {
                 Err(err) => {
                     let msg = format!("Conversion planning failed: {err}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                    }
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    let _ = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await;
+                    if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                        tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                    }
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                    }
                     return Err(JobFailure::PlannerBug);
                 }
             }
@@ -866,15 +867,16 @@ impl Pipeline {
                 Err(err) => {
                     let msg = format!("Failed to resolve library profile: {err}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                    }
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    let _ = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await;
+                    if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                        tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                    }
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                    }
                     return Err(JobFailure::Transient);
                 }
             };
@@ -886,15 +888,16 @@ impl Pipeline {
                 Err(e) => {
                     let msg = format!("Planner failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                    }
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    let _ = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await;
+                    if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                        tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                    }
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                    }
                     return Err(JobFailure::PlannerBug);
                 }
             }
@@ -954,10 +957,12 @@ impl Pipeline {
                 explanation.code,
                 explanation.summary
             );
-            let _ = self.db.add_decision(job.id, "skip", &reason).await;
-            let _ = self
-                .update_job_state(job.id, crate::db::JobState::Skipped)
-                .await;
+            if let Err(e) = self.db.add_decision(job.id, "skip", &reason).await {
+                tracing::warn!(job_id = job.id, "Failed to record decision: {e}");
+            }
+            if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Skipped).await {
+                tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+            }
             return Ok(());
         }
 
@@ -981,13 +986,6 @@ impl Pipeline {
                 reason: explanation.legacy_reason.clone(),
                 explanation: Some(explanation.clone()),
             });
-        let _ = self.tx.send(crate::db::AlchemistEvent::Decision {
-            job_id: job.id,
-            action: action.to_string(),
-            reason: explanation.legacy_reason.clone(),
-            explanation: Some(explanation),
-        });
-
         if self.update_job_state(job.id, next_status).await.is_err() {
             return Err(JobFailure::Transient);
         }
@@ -1022,7 +1020,6 @@ impl Pipeline {
             self.orchestrator.clone(),
             self.db.clone(),
             hw_info.clone(),
-            self.tx.clone(),
             self.event_channels.clone(),
             self.dry_run,
         );
@@ -1034,28 +1031,28 @@ impl Pipeline {
                     tracing::error!("Job {}: Encoder fallback detected and not allowed.", job.id);
                     let summary = "Encoder fallback detected and not allowed.";
                     let explanation = crate::explanations::failure_from_summary(summary);
-                    let _ = self.db.add_log("error", Some(job.id), summary).await;
-                    let _ = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await;
-                    let _ = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
-                            job_id: job.id,
-                            attempt_number: current_attempt_number,
-                            started_at: Some(encode_started_at.to_rfc3339()),
-                            outcome: "failed".to_string(),
-                            failure_code: Some("fallback_blocked".to_string()),
-                            failure_summary: Some(summary.to_string()),
-                            input_size_bytes: Some(metadata.size_bytes as i64),
-                            output_size_bytes: None,
-                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await;
+                    if let Err(e) = self.db.add_log("error", Some(job.id), summary).await {
+                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                    }
+                    if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                        tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                    }
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                    }
+                    if let Err(e) = self.db.insert_encode_attempt(crate::db::EncodeAttemptInput {
+                        job_id: job.id,
+                        attempt_number: current_attempt_number,
+                        started_at: Some(encode_started_at.to_rfc3339()),
+                        outcome: "failed".to_string(),
+                        failure_code: Some("fallback_blocked".to_string()),
+                        failure_summary: Some(summary.to_string()),
+                        input_size_bytes: Some(metadata.size_bytes as i64),
+                        output_size_bytes: None,
+                        encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                    }).await {
+                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
+                    }
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
@@ -1137,49 +1134,48 @@ impl Pipeline {
                 .await;
 
                 if let crate::error::AlchemistError::Cancelled = e {
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Cancelled)
-                        .await;
-                    let _ = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
-                            job_id: job.id,
-                            attempt_number: current_attempt_number,
-                            started_at: Some(encode_started_at.to_rfc3339()),
-                            outcome: "cancelled".to_string(),
-                            failure_code: None,
-                            failure_summary: None,
-                            input_size_bytes: Some(metadata.size_bytes as i64),
-                            output_size_bytes: None,
-                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await;
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Cancelled).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state to cancelled: {e}");
+                    }
+                    if let Err(e) = self.db.insert_encode_attempt(crate::db::EncodeAttemptInput {
+                        job_id: job.id,
+                        attempt_number: current_attempt_number,
+                        started_at: Some(encode_started_at.to_rfc3339()),
+                        outcome: "cancelled".to_string(),
+                        failure_code: None,
+                        failure_summary: None,
+                        input_size_bytes: Some(metadata.size_bytes as i64),
+                        output_size_bytes: None,
+                        encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                    }).await {
+                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
+                    }
                 } else {
                     let msg = format!("Transcode failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    let _ = self.db.add_log("error", Some(job.id), &msg).await;
+                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
+                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
+                    }
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    let _ = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    let _ = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await;
-                    let _ = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
-                            job_id: job.id,
-                            attempt_number: current_attempt_number,
-                            started_at: Some(encode_started_at.to_rfc3339()),
-                            outcome: "failed".to_string(),
-                            failure_code: Some(explanation.code.clone()),
-                            failure_summary: Some(msg),
-                            input_size_bytes: Some(metadata.size_bytes as i64),
-                            output_size_bytes: None,
-                            encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await;
+                    if let Err(e) = self.db.upsert_job_failure_explanation(job.id, &explanation).await {
+                        tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
+                    }
+                    if let Err(e) = self.update_job_state(job.id, crate::db::JobState::Failed).await {
+                        tracing::warn!(job_id = job.id, "Failed to update job state to failed: {e}");
+                    }
+                    if let Err(e) = self.db.insert_encode_attempt(crate::db::EncodeAttemptInput {
+                        job_id: job.id,
+                        attempt_number: current_attempt_number,
+                        started_at: Some(encode_started_at.to_rfc3339()),
+                        outcome: "failed".to_string(),
+                        failure_code: Some(explanation.code.clone()),
+                        failure_summary: Some(msg),
+                        input_size_bytes: Some(metadata.size_bytes as i64),
+                        output_size_bytes: None,
+                        encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                    }).await {
+                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
+                    }
                 }
                 Err(map_failure(&e))
             }
@@ -1187,30 +1183,51 @@ impl Pipeline {
     }
 
     async fn update_job_state(&self, job_id: i64, status: crate::db::JobState) -> Result<()> {
+        if self.orchestrator.is_cancel_requested(job_id).await {
+            match status {
+                crate::db::JobState::Encoding
+                | crate::db::JobState::Remuxing
+                | crate::db::JobState::Skipped
+                | crate::db::JobState::Completed => {
+                    tracing::info!(
+                        "Ignoring state update to {:?} for job {} because it was cancelled",
+                        status,
+                        job_id
+                    );
+                    self.orchestrator.remove_cancel_request(job_id).await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         if let Err(e) = self.db.update_job_status(job_id, status).await {
             tracing::error!("Failed to update job {} status {:?}: {}", job_id, status, e);
             return Err(e);
         }
+
+        // Remove from cancel_requested if it's a terminal state
+        match status {
+            crate::db::JobState::Completed
+            | crate::db::JobState::Failed
+            | crate::db::JobState::Cancelled
+            | crate::db::JobState::Skipped => {
+                self.orchestrator.remove_cancel_request(job_id).await;
+            }
+            _ => {}
+        }
+
         let _ = self
             .event_channels
             .jobs
             .send(crate::db::JobEvent::StateChanged { job_id, status });
-        let _ = self
-            .tx
-            .send(crate::db::AlchemistEvent::JobStateChanged { job_id, status });
         Ok(())
     }
 
     async fn update_job_progress(&self, job_id: i64, progress: f64) {
         if let Err(e) = self.db.update_job_progress(job_id, progress).await {
             tracing::error!("Failed to update job progress: {}", e);
-            return;
         }
-        let _ = self.tx.send(crate::db::AlchemistEvent::Progress {
-            job_id,
-            percentage: progress,
-            time: String::new(),
-        });
     }
 
     async fn should_stop_job(&self, job_id: i64) -> Result<bool> {
@@ -1247,10 +1264,9 @@ impl Pipeline {
             tracing::error!("Job {}: Input file is empty. Finalizing as failed.", job_id);
             let _ = std::fs::remove_file(context.temp_output_path);
             cleanup_temp_subtitle_output(job_id, context.plan).await;
-
-            self.update_job_state(job_id, crate::db::JobState::Failed)
-                .await?;
-            return Ok(());
+            return Err(crate::error::AlchemistError::FFmpeg(
+                "Input file is empty".to_string(),
+            ));
         }
 
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
@@ -1282,7 +1298,9 @@ impl Pipeline {
                     reduction, config.transcode.size_reduction_threshold, output_size
                 )
             };
-            let _ = self.db.add_decision(job_id, "skip", &reason).await;
+            if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
+                tracing::warn!(job_id, "Failed to record decision: {e}");
+            }
             self.update_job_state(job_id, crate::db::JobState::Skipped)
                 .await?;
             return Ok(());
@@ -1353,11 +1371,14 @@ impl Pipeline {
 
         let mut media_duration = context.metadata.duration_secs;
         if media_duration <= 0.0 {
-            media_duration = crate::media::analyzer::Analyzer::probe_async(input_path)
-                .await
-                .ok()
-                .and_then(|meta| meta.format.duration.parse::<f64>().ok())
-                .unwrap_or(0.0);
+            match crate::media::analyzer::Analyzer::probe_async(input_path).await {
+                Ok(meta) => {
+                    media_duration = meta.format.duration.parse::<f64>().unwrap_or(0.0);
+                }
+                Err(e) => {
+                    tracing::warn!(job_id, "Failed to reprobe output for duration: {e}");
+                }
+            }
         }
 
         let encode_speed = if encode_duration > 0.0 && media_duration > 0.0 {
@@ -1511,14 +1532,17 @@ impl Pipeline {
         tracing::error!("Job {}: Finalization failed: {}", job_id, err);
 
         let message = format!("Finalization failed: {err}");
-        let _ = self.db.add_log("error", Some(job_id), &message).await;
+        if let Err(e) = self.db.add_log("error", Some(job_id), &message).await {
+            tracing::warn!(job_id, "Failed to record log: {e}");
+        }
         let failure_explanation = crate::explanations::failure_from_summary(&message);
-        let _ = self
-            .db
-            .upsert_job_failure_explanation(job_id, &failure_explanation)
-            .await;
+        if let Err(e) = self.db.upsert_job_failure_explanation(job_id, &failure_explanation).await {
+            tracing::warn!(job_id, "Failed to record failure explanation: {e}");
+        }
         if let crate::error::AlchemistError::QualityCheckFailed(reason) = err {
-            let _ = self.db.add_decision(job_id, "reject", reason).await;
+            if let Err(e) = self.db.add_decision(job_id, "reject", reason).await {
+                tracing::warn!(job_id, "Failed to record decision: {e}");
+            }
         }
 
         if context.temp_output_path.exists() {
@@ -1653,7 +1677,7 @@ mod tests {
     use crate::db::Db;
     use crate::system::hardware::{HardwareInfo, HardwareState, Vendor};
     use std::sync::Arc;
-    use tokio::sync::{RwLock, broadcast};
+    use tokio::sync::RwLock;
 
     #[test]
     fn generated_output_pattern_matches_default_suffix() {
@@ -1789,10 +1813,9 @@ mod tests {
             selection_reason: String::new(),
             probe_summary: crate::system::hardware::ProbeSummary::default(),
         }));
-        let (tx, _rx) = broadcast::channel(8);
-        let (jobs_tx, _) = broadcast::channel(100);
-        let (config_tx, _) = broadcast::channel(10);
-        let (system_tx, _) = broadcast::channel(10);
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
         let event_channels = Arc::new(crate::db::EventChannels {
             jobs: jobs_tx,
             config: config_tx,
@@ -1803,7 +1826,6 @@ mod tests {
             Arc::new(Transcoder::new()),
             config.clone(),
             hardware_state,
-            Arc::new(tx),
             event_channels,
             true,
         );
@@ -1864,12 +1886,6 @@ mod tests {
             fallback_occurred: false,
             actual_output_codec: Some(crate::config::OutputCodec::H264),
             actual_encoder_name: Some("libx264".to_string()),
-            stats: ExecutionStats {
-                encode_time_secs: 0.0,
-                input_size: 0,
-                output_size: 0,
-                vmaf: None,
-            },
         };
         let config_snapshot = config.read().await.clone();
 

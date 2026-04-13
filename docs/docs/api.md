@@ -1,54 +1,35 @@
 ---
-title: API
+title: API Reference
 description: REST and SSE API reference for Alchemist.
 ---
 
-All API routes require the `alchemist_session` auth cookie
-except:
-
-- `/api/auth/*`
-- `/api/health`
-- `/api/ready`
-- during first-time setup, the setup UI and setup-related
-  unauthenticated routes are only reachable from the local
-  network
-
-Authentication is established by `POST /api/auth/login`.
-The backend also accepts `Authorization: Bearer <token>`.
-Bearer tokens now come in two classes:
-
-- `read_only` — observability-only routes
-- `full_access` — same route access as an authenticated session
-
-The web UI still uses the session cookie.
-
-Machine-readable contract:
-
-- [OpenAPI spec](/openapi.yaml)
-
 ## Authentication
 
-### API tokens
+All API routes require the `alchemist_session` auth cookie established via `/api/auth/login`, or an `Authorization: Bearer <token>` header. 
 
-API tokens are created in **Settings → API Tokens**.
+Machine-readable contract: [OpenAPI spec](/openapi.yaml)
 
-- token values are only shown once at creation time
-- only hashed token material is stored server-side
-- revoked tokens stop working immediately
+### `POST /api/auth/login`
+Establish a session. Returns a `Set-Cookie` header.
 
-Read-only tokens are intentionally limited to observability
-routes such as stats, jobs, logs history, SSE, system info,
-hardware info, library intelligence, and health/readiness.
+**Request:**
+```json
+{
+  "username": "admin",
+  "password": "..."
+}
+```
+
+### `POST /api/auth/logout`
+Invalidate current session and clear cookie.
 
 ### `GET /api/settings/api-tokens`
-
-Lists token metadata only. Plaintext token values are never
-returned after creation.
+List metadata for configured API tokens.
 
 ### `POST /api/settings/api-tokens`
+Create a new API token. The plaintext value is only returned once.
 
-Request:
-
+**Request:**
 ```json
 {
   "name": "Prometheus",
@@ -56,411 +37,114 @@ Request:
 }
 ```
 
-Response:
-
-```json
-{
-  "token": {
-    "id": 1,
-    "name": "Prometheus",
-    "access_level": "read_only"
-  },
-  "plaintext_token": "alc_tok_..."
-}
-```
-
 ### `DELETE /api/settings/api-tokens/:id`
+Revoke a token.
 
-Revokes a token in place. Existing automations using it will
-begin receiving `401` or `403` depending on route class.
-
-### `POST /api/auth/login`
-
-Request:
-
-```json
-{
-  "username": "admin",
-  "password": "secret"
-}
-```
-
-Response:
-
-```http
-HTTP/1.1 200 OK
-Set-Cookie: alchemist_session=...; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000
-```
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### `POST /api/auth/logout`
-
-Clears the session cookie and deletes the server-side
-session if one exists.
-
-```json
-{
-  "status": "ok"
-}
-```
+---
 
 ## Jobs
 
 ### `GET /api/jobs`
+List jobs with filtering and pagination.
 
-Canonical job listing endpoint. Supports query params such
-as `limit`, `page`, `status`, `search`, `sort_by`,
-`sort_desc`, and `archived`.
-
-Each returned job row still includes the legacy
-`decision_reason` string when present, and now also includes
-an optional `decision_explanation` object:
-
-- `category`
-- `code`
-- `summary`
-- `detail`
-- `operator_guidance`
-- `measured`
-- `legacy_reason`
-
-Example:
-
-```bash
-curl -b cookie.txt \
-  'http://localhost:3000/api/jobs?status=queued,failed&limit=50&page=1'
-```
+**Params:** `limit`, `page`, `status`, `search`, `sort_by`, `sort_desc`, `archived`.
 
 ### `GET /api/jobs/:id/details`
-
-Returns the job row, any available analyzed metadata,
-encode stats for completed jobs, recent job logs, and a
-failure summary for failed jobs. Structured explanation
-fields are included when available:
-
-- `decision_explanation`
-- `failure_explanation`
-- `job_failure_summary` is retained as a compatibility field
-
-Example response shape:
-
-```json
-{
-  "job": {
-    "id": 42,
-    "input_path": "/media/movies/example.mkv",
-    "status": "completed"
-  },
-  "metadata": {
-    "codec_name": "h264",
-    "width": 1920,
-    "height": 1080
-  },
-  "encode_stats": {
-    "input_size_bytes": 8011223344,
-    "output_size_bytes": 4112233445,
-    "compression_ratio": 1.95,
-    "encode_speed": 2.4,
-    "vmaf_score": 93.1
-  },
-  "job_logs": [],
-  "job_failure_summary": null,
-  "decision_explanation": {
-    "category": "decision",
-    "code": "transcode_recommended",
-    "summary": "Transcode recommended",
-    "detail": "Alchemist determined the file should be transcoded based on the current codec and measured efficiency.",
-    "operator_guidance": null,
-    "measured": {
-      "target_codec": "av1",
-      "current_codec": "h264",
-      "bpp": "0.1200"
-    },
-    "legacy_reason": "transcode_recommended|target_codec=av1,current_codec=h264,bpp=0.1200"
-  },
-  "failure_explanation": null
-}
-```
+Fetch full job state, metadata, logs, and stats.
 
 ### `POST /api/jobs/:id/cancel`
-
-Cancels a queued or active job if the current state allows
-it.
+Cancel a queued or active job.
 
 ### `POST /api/jobs/:id/restart`
-
-Restarts a non-active job by sending it back to `queued`.
+Restart a terminal job (failed/cancelled/completed).
 
 ### `POST /api/jobs/:id/priority`
+Update job priority.
 
-Request:
-
-```json
-{
-  "priority": 100
-}
-```
-
-Response:
-
-```json
-{
-  "id": 42,
-  "priority": 100
-}
-```
+**Request:** `{"priority": 100}`
 
 ### `POST /api/jobs/batch`
+Bulk action on multiple jobs.
 
-Supported `action` values: `cancel`, `restart`, `delete`.
-
+**Request:**
 ```json
 {
-  "action": "restart",
-  "ids": [41, 42, 43]
-}
-```
-
-Response:
-
-```json
-{
-  "count": 3
+  "action": "restart|cancel|delete",
+  "ids": [1, 2, 3]
 }
 ```
 
 ### `POST /api/jobs/restart-failed`
-
-Response:
-
-```json
-{
-  "count": 2,
-  "message": "Queued 2 failed or cancelled jobs for retry."
-}
-```
+Restart all failed or cancelled jobs.
 
 ### `POST /api/jobs/clear-completed`
+Archive all completed jobs from the active queue.
 
-Archives completed jobs from the visible queue while
-preserving historical encode stats.
-
-```json
-{
-  "count": 12,
-  "message": "Cleared 12 completed jobs from the queue. Historical stats were preserved."
-}
-```
+---
 
 ## Engine
 
-### `POST /api/engine/pause`
+### `GET /api/engine/status`
+Get current operational status and limits.
 
-```json
-{
-  "status": "paused"
-}
-```
+### `POST /api/engine/pause`
+Pause the engine (suspend active jobs).
 
 ### `POST /api/engine/resume`
-
-```json
-{
-  "status": "running"
-}
-```
+Resume the engine.
 
 ### `POST /api/engine/drain`
-
-```json
-{
-  "status": "draining"
-}
-```
-
-### `POST /api/engine/stop-drain`
-
-```json
-{
-  "status": "running"
-}
-```
-
-### `GET /api/engine/status`
-
-Response fields:
-
-- `status`
-- `mode`
-- `concurrent_limit`
-- `manual_paused`
-- `scheduler_paused`
-- `draining`
-- `is_manual_override`
-
-Example:
-
-```json
-{
-  "status": "paused",
-  "manual_paused": true,
-  "scheduler_paused": false,
-  "draining": false,
-  "mode": "balanced",
-  "concurrent_limit": 2,
-  "is_manual_override": false
-}
-```
-
-### `GET /api/engine/mode`
-
-Returns current mode, whether a manual override is active,
-the current concurrent limit, CPU count, and computed mode
-limits.
+Enter drain mode (finish active jobs, don't start new ones).
 
 ### `POST /api/engine/mode`
+Switch engine mode or apply manual overrides.
 
-Request:
-
+**Request:**
 ```json
 {
-  "mode": "balanced",
+  "mode": "background|balanced|throughput",
   "concurrent_jobs_override": 2,
   "threads_override": 0
 }
 ```
 
-Response:
+---
 
-```json
-{
-  "status": "ok",
-  "mode": "balanced",
-  "concurrent_limit": 2,
-  "is_manual_override": true
-}
-```
-
-## Stats
+## Statistics
 
 ### `GET /api/stats/aggregated`
-
-```json
-{
-  "total_input_bytes": 1234567890,
-  "total_output_bytes": 678901234,
-  "total_savings_bytes": 555666656,
-  "total_time_seconds": 81234.5,
-  "total_jobs": 87,
-  "avg_vmaf": 92.4
-}
-```
+Total savings, job counts, and global efficiency.
 
 ### `GET /api/stats/daily`
-
-Returns the last 30 days of encode activity.
-
-### `GET /api/stats/detailed`
-
-Returns the most recent detailed encode stats rows.
+Encode activity history for the last 30 days.
 
 ### `GET /api/stats/savings`
+Detailed breakdown of storage savings.
 
-Returns the storage-savings summary used by the statistics
-dashboard.
-
-## Settings
-
-### `GET /api/settings/transcode`
-
-Returns the transcode settings payload currently loaded by
-the backend.
-
-### `POST /api/settings/transcode`
-
-Request:
-
-```json
-{
-  "concurrent_jobs": 2,
-  "size_reduction_threshold": 0.3,
-  "min_bpp_threshold": 0.1,
-  "min_file_size_mb": 50,
-  "output_codec": "av1",
-  "quality_profile": "balanced",
-  "threads": 0,
-  "allow_fallback": true,
-  "hdr_mode": "preserve",
-  "tonemap_algorithm": "hable",
-  "tonemap_peak": 100.0,
-  "tonemap_desat": 0.2,
-  "subtitle_mode": "copy",
-  "stream_rules": {
-    "strip_audio_by_title": ["commentary"],
-    "keep_audio_languages": ["eng"],
-    "keep_only_default_audio": false
-  }
-}
-```
+---
 
 ## System
 
 ### `GET /api/system/hardware`
-
-Returns the current detected hardware backend, supported
-codecs, backends, selection reason, probe summary, and any
-detection notes.
+Detected hardware backend and codec support matrix.
 
 ### `GET /api/system/hardware/probe-log`
-
-Returns the per-encoder probe log with success/failure
-status, selected-flag metadata, summary text, and stderr
-excerpts.
+Full logs from the startup hardware probe.
 
 ### `GET /api/system/resources`
+Live telemetry: CPU, Memory, GPU utilization, and uptime.
 
-Returns live resource data:
+---
 
-- `cpu_percent`
-- `memory_used_mb`
-- `memory_total_mb`
-- `memory_percent`
-- `uptime_seconds`
-- `active_jobs`
-- `concurrent_limit`
-- `cpu_count`
-- `gpu_utilization`
-- `gpu_memory_percent`
-
-## Server-Sent Events
+## Events (SSE)
 
 ### `GET /api/events`
+Real-time event stream. 
 
-Internal event types are `JobStateChanged`, `Progress`,
-`Decision`, and `Log`. The SSE stream exposed to clients
-emits lower-case event names:
-
-- `status`
-- `progress`
-- `decision`
-- `log`
-
-Additional config/system events may also appear, including
-`config_updated`, `scan_started`, `scan_completed`,
-`engine_status_changed`, and `hardware_state_changed`.
-
-Example:
-
-```text
-event: progress
-data: {"job_id":42,"percentage":61.4,"time":"00:11:32"}
-```
-
-`decision` events include the legacy `reason` plus an
-optional structured `explanation` object with the same shape
-used by the jobs API.
+**Emitted Events:**
+- `status`: Job state changes.
+- `progress`: Real-time encode statistics.
+- `decision`: Skip/Transcode logic results.
+- `log`: Engine and job logs.
+- `config_updated`: Configuration hot-reload notification.
+- `scan_started` / `scan_completed`: Library scan status.
