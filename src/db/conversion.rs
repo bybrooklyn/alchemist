@@ -1,7 +1,7 @@
 use crate::error::Result;
 
-use super::types::*;
 use super::Db;
+use super::types::*;
 
 impl Db {
     pub async fn create_conversion_job(

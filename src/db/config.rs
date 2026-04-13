@@ -3,8 +3,8 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::types::*;
 use super::Db;
+use super::types::*;
 
 impl Db {
     pub async fn get_watch_dirs(&self) -> Result<Vec<WatchDir>> {

@@ -1,10 +1,10 @@
-use chrono::{DateTime, Utc};
 use crate::error::Result;
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 
 use super::timed_query;
 use super::types::*;
-use super::{hash_api_token, hash_session_token, Db};
+use super::{Db, hash_api_token, hash_session_token};
 
 impl Db {
     pub async fn clear_completed_jobs(&self) -> Result<u64> {

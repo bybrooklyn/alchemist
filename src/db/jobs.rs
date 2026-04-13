@@ -7,9 +7,9 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::Db;
 use super::timed_query;
 use super::types::*;
-use super::Db;
 
 impl Db {
     pub async fn reset_interrupted_jobs(&self) -> Result<u64> {

@@ -11,8 +11,8 @@ pub use types::*;
 
 use crate::error::{AlchemistError, Result};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::info;
