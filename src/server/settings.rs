@@ -470,36 +470,27 @@ fn normalize_notification_payload(
             }
         }
         "gotify" => {
-            if !config_map.contains_key("server_url") {
-                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
-                    config_map.insert(
-                        "server_url".to_string(),
-                        JsonValue::String(endpoint_url.clone()),
-                    );
-                }
+            if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                config_map
+                    .entry("server_url".to_string())
+                    .or_insert_with(|| JsonValue::String(endpoint_url.clone()));
             }
-            if !config_map.contains_key("app_token") {
-                if let Some(auth_token) = payload.auth_token.as_ref() {
-                    config_map.insert(
-                        "app_token".to_string(),
-                        JsonValue::String(auth_token.clone()),
-                    );
-                }
+            if let Some(auth_token) = payload.auth_token.as_ref() {
+                config_map
+                    .entry("app_token".to_string())
+                    .or_insert_with(|| JsonValue::String(auth_token.clone()));
             }
         }
         "webhook" => {
-            if !config_map.contains_key("url") {
-                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
-                    config_map.insert("url".to_string(), JsonValue::String(endpoint_url.clone()));
-                }
+            if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                config_map
+                    .entry("url".to_string())
+                    .or_insert_with(|| JsonValue::String(endpoint_url.clone()));
             }
-            if !config_map.contains_key("auth_token") {
-                if let Some(auth_token) = payload.auth_token.as_ref() {
-                    config_map.insert(
-                        "auth_token".to_string(),
-                        JsonValue::String(auth_token.clone()),
-                    );
-                }
+            if let Some(auth_token) = payload.auth_token.as_ref() {
+                config_map
+                    .entry("auth_token".to_string())
+                    .or_insert_with(|| JsonValue::String(auth_token.clone()));
             }
         }
         _ => {}
