@@ -162,7 +162,7 @@ fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
         Vec::new()
     };
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
 
     Ok(FsBrowseResponse {
         path: path.to_string_lossy().to_string(),

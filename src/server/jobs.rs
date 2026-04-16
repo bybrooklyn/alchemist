@@ -354,15 +354,15 @@ pub(crate) async fn batch_jobs_handler(
                     JobState::Queued => {
                         immediate_ids.push(job.id);
                     }
-                    JobState::Analyzing | JobState::Resuming => {
-                        if state.transcoder.cancel_job(job.id) {
-                            immediate_ids.push(job.id);
-                        }
+                    JobState::Analyzing | JobState::Resuming
+                        if state.transcoder.cancel_job(job.id) =>
+                    {
+                        immediate_ids.push(job.id);
                     }
-                    JobState::Encoding | JobState::Remuxing => {
-                        if state.transcoder.cancel_job(job.id) {
-                            active_count += 1;
-                        }
+                    JobState::Encoding | JobState::Remuxing
+                        if state.transcoder.cancel_job(job.id) =>
+                    {
+                        active_count += 1;
                     }
                     _ => {}
                 }
