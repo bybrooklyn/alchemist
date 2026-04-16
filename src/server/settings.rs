@@ -641,9 +641,8 @@ pub(crate) async fn add_notification_handler(
     }
 
     match state.db.get_notification_targets().await {
-        Ok(targets) => targets
-            .into_iter()
-            .find(|target| target.name == payload.name)
+        Ok(mut targets) => targets
+            .pop()
             .map(|target| axum::Json(notification_target_response(target)).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -654,23 +653,23 @@ pub(crate) async fn delete_notification_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let target = match state.db.get_notification_targets().await {
-        Ok(targets) => targets.into_iter().find(|target| target.id == id),
+    let target_index = match state.db.get_notification_targets().await {
+        Ok(targets) => targets.iter().position(|target| target.id == id),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let Some(target) = target else {
+    let Some(target_index) = target_index else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     let mut next_config = state.config.read().await.clone();
-    let target_config_json = target.config_json.clone();
-    let parsed_target_config_json =
-        serde_json::from_str::<JsonValue>(&target_config_json).unwrap_or(JsonValue::Null);
-    next_config.notifications.targets.retain(|candidate| {
-        !(candidate.name == target.name
-            && candidate.target_type == target.target_type
-            && candidate.config_json == parsed_target_config_json)
-    });
+    if target_index >= next_config.notifications.targets.len() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "notification settings projection is out of sync with config",
+        )
+            .into_response();
+    }
+    next_config.notifications.targets.remove(target_index);
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }
@@ -837,13 +836,8 @@ pub(crate) async fn add_schedule_handler(
     state.scheduler.trigger();
 
     match state.db.get_schedule_windows().await {
-        Ok(windows) => windows
-            .into_iter()
-            .find(|window| {
-                window.start_time == start_time
-                    && window.end_time == end_time
-                    && window.enabled == payload.enabled
-            })
+        Ok(mut windows) => windows
+            .pop()
             .map(|window| axum::Json(serde_json::json!(window)).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -854,22 +848,23 @@ pub(crate) async fn delete_schedule_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let window = match state.db.get_schedule_windows().await {
-        Ok(windows) => windows.into_iter().find(|window| window.id == id),
+    let window_index = match state.db.get_schedule_windows().await {
+        Ok(windows) => windows.iter().position(|window| window.id == id),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let Some(window) = window else {
+    let Some(window_index) = window_index else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let days_of_week: Vec<i32> = serde_json::from_str(&window.days_of_week).unwrap_or_default();
     let mut next_config = state.config.read().await.clone();
-    next_config.schedule.windows.retain(|candidate| {
-        !(candidate.start_time == window.start_time
-            && candidate.end_time == window.end_time
-            && candidate.enabled == window.enabled
-            && candidate.days_of_week == days_of_week)
-    });
+    if window_index >= next_config.schedule.windows.len() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "schedule settings projection is out of sync with config",
+        )
+            .into_response();
+    }
+    next_config.schedule.windows.remove(window_index);
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
     }

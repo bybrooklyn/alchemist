@@ -10,7 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
 #[derive(Serialize)]
 struct BlockedJob {
@@ -22,6 +26,17 @@ struct BlockedJob {
 struct BlockedJobsResponse {
     message: String,
     blocked: Vec<BlockedJob>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EnqueueJobPayload {
+    path: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct EnqueueJobResponse {
+    enqueued: bool,
+    message: String,
 }
 
 pub(crate) fn blocked_jobs_response(message: impl Into<String>, blocked: &[Job]) -> Response {
@@ -36,6 +51,166 @@ pub(crate) fn blocked_jobs_response(message: impl Into<String>, blocked: &[Job])
             .collect(),
     };
     (StatusCode::CONFLICT, axum::Json(payload)).into_response()
+}
+
+fn resolve_source_root(path: &FsPath, watch_dirs: &[crate::db::WatchDir]) -> Option<PathBuf> {
+    watch_dirs
+        .iter()
+        .map(|watch_dir| PathBuf::from(&watch_dir.path))
+        .filter(|watch_dir| path.starts_with(watch_dir))
+        .max_by_key(|watch_dir| watch_dir.components().count())
+}
+
+async fn purge_resume_sessions_for_jobs(state: &AppState, ids: &[i64]) {
+    let sessions = match state.db.get_resume_sessions_by_job_ids(ids).await {
+        Ok(sessions) => sessions,
+        Err(err) => {
+            tracing::warn!("Failed to load resume sessions for purge: {}", err);
+            return;
+        }
+    };
+
+    for session in sessions {
+        if let Err(err) = state.db.delete_resume_session(session.job_id).await {
+            tracing::warn!(
+                job_id = session.job_id,
+                "Failed to delete resume session rows: {err}"
+            );
+            continue;
+        }
+
+        let temp_dir = PathBuf::from(&session.temp_dir);
+        if temp_dir.exists() {
+            if let Err(err) = tokio::fs::remove_dir_all(&temp_dir).await {
+                tracing::warn!(
+                    job_id = session.job_id,
+                    path = %temp_dir.display(),
+                    "Failed to remove resume temp dir: {err}"
+                );
+            }
+        }
+    }
+}
+
+pub(crate) async fn enqueue_job_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<EnqueueJobPayload>,
+) -> impl IntoResponse {
+    let submitted_path = payload.path.trim();
+    if submitted_path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(EnqueueJobResponse {
+                enqueued: false,
+                message: "Path must not be empty.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let requested_path = PathBuf::from(submitted_path);
+    if !requested_path.is_absolute() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(EnqueueJobResponse {
+                enqueued: false,
+                message: "Path must be absolute.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let canonical_path = match std::fs::canonicalize(&requested_path) {
+        Ok(path) => path,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(EnqueueJobResponse {
+                    enqueued: false,
+                    message: format!("Unable to resolve path: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let metadata = match std::fs::metadata(&canonical_path) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(EnqueueJobResponse {
+                    enqueued: false,
+                    message: format!("Unable to read file metadata: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if !metadata.is_file() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(EnqueueJobResponse {
+                enqueued: false,
+                message: "Path must point to a file.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let extension = canonical_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    let supported = crate::media::scanner::Scanner::new().extensions;
+    if extension
+        .as_deref()
+        .is_none_or(|value| !supported.iter().any(|candidate| candidate == value))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(EnqueueJobResponse {
+                enqueued: false,
+                message: "File type is not supported for enqueue.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let watch_dirs = match state.db.get_watch_dirs().await {
+        Ok(watch_dirs) => watch_dirs,
+        Err(err) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        }
+    };
+
+    let discovered = crate::media::pipeline::DiscoveredMedia {
+        path: canonical_path.clone(),
+        mtime: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        source_root: resolve_source_root(&canonical_path, &watch_dirs),
+    };
+
+    match crate::media::pipeline::enqueue_discovered_with_db(state.db.as_ref(), discovered).await {
+        Ok(true) => (
+            StatusCode::OK,
+            axum::Json(EnqueueJobResponse {
+                enqueued: true,
+                message: format!("Enqueued {}.", canonical_path.display()),
+            }),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::OK,
+            axum::Json(EnqueueJobResponse {
+                enqueued: false,
+                message:
+                    "File was not enqueued because it matched existing output or dedupe rules."
+                        .to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }
 
 pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bool> {
@@ -226,7 +401,12 @@ pub(crate) async fn batch_jobs_handler(
             };
 
             match result {
-                Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
+                Ok(count) => {
+                    if payload.action == "delete" {
+                        purge_resume_sessions_for_jobs(state.as_ref(), &payload.ids).await;
+                    }
+                    axum::Json(serde_json::json!({ "count": count })).into_response()
+                }
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
             }
         }
@@ -270,8 +450,13 @@ pub(crate) async fn restart_failed_handler(
 pub(crate) async fn clear_completed_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    let completed_job_ids = match state.db.get_jobs_by_status(JobState::Completed).await {
+        Ok(jobs) => jobs.into_iter().map(|job| job.id).collect::<Vec<_>>(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     match state.db.clear_completed_jobs().await {
         Ok(count) => {
+            purge_resume_sessions_for_jobs(state.as_ref(), &completed_job_ids).await;
             let message = if count == 0 {
                 "No completed jobs were waiting to be cleared.".to_string()
             } else if count == 1 {
@@ -324,7 +509,10 @@ pub(crate) async fn delete_job_handler(
     state.transcoder.cancel_job(id);
 
     match state.db.delete_job(id).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => {
+            purge_resume_sessions_for_jobs(state.as_ref(), &[id]).await;
+            StatusCode::OK.into_response()
+        }
         Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -383,7 +571,13 @@ pub(crate) async fn get_job_detail_handler(
     // Try to get encode stats (using the subquery result or a specific query)
     // For now we'll just query the encode_stats table if completed
     let encode_stats = if job.status == JobState::Completed {
-        state.db.get_encode_stats_by_job_id(id).await.ok()
+        match state.db.get_encode_stats_by_job_id(id).await {
+            Ok(stats) => Some(stats),
+            Err(err) if is_row_not_found(&err) => None,
+            Err(err) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            }
+        }
     } else {
         None
     };
@@ -424,14 +618,18 @@ pub(crate) async fn get_job_detail_handler(
         (None, None)
     };
 
-    let encode_attempts = state
-        .db
-        .get_encode_attempts_by_job(id)
-        .await
-        .unwrap_or_default();
+    let encode_attempts = match state.db.get_encode_attempts_by_job(id).await {
+        Ok(attempts) => attempts,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
 
     let queue_position = if job.status == JobState::Queued {
-        state.db.get_queue_position(id).await.unwrap_or(None)
+        match state.db.get_queue_position(id).await {
+            Ok(position) => position,
+            Err(err) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            }
+        }
     } else {
         None
     };

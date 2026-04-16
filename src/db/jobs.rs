@@ -662,6 +662,166 @@ impl Db {
         Ok(Some((pos + 1) as u32))
     }
 
+    pub async fn get_resume_session(&self, job_id: i64) -> Result<Option<JobResumeSession>> {
+        let session = sqlx::query_as::<_, JobResumeSession>(
+            "SELECT id, job_id, strategy, plan_hash, mtime_hash, temp_dir,
+                    concat_manifest_path, segment_length_secs, status, created_at, updated_at
+             FROM job_resume_sessions
+             WHERE job_id = ?",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(session)
+    }
+
+    pub async fn get_resume_sessions_by_job_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<Vec<JobResumeSession>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT id, job_id, strategy, plan_hash, mtime_hash, temp_dir,
+                    concat_manifest_path, segment_length_secs, status, created_at, updated_at
+             FROM job_resume_sessions
+             WHERE job_id IN (",
+        );
+        let mut separated = qb.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        let sessions = qb
+            .build_query_as::<JobResumeSession>()
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(sessions)
+    }
+
+    pub async fn upsert_resume_session(
+        &self,
+        input: &UpsertJobResumeSessionInput,
+    ) -> Result<JobResumeSession> {
+        let session = sqlx::query_as::<_, JobResumeSession>(
+            "INSERT INTO job_resume_sessions
+                (job_id, strategy, plan_hash, mtime_hash, temp_dir,
+                 concat_manifest_path, segment_length_secs, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(job_id) DO UPDATE SET
+                 strategy = excluded.strategy,
+                 plan_hash = excluded.plan_hash,
+                 mtime_hash = excluded.mtime_hash,
+                 temp_dir = excluded.temp_dir,
+                 concat_manifest_path = excluded.concat_manifest_path,
+                 segment_length_secs = excluded.segment_length_secs,
+                 status = excluded.status,
+                 updated_at = CURRENT_TIMESTAMP
+             RETURNING id, job_id, strategy, plan_hash, mtime_hash, temp_dir,
+                       concat_manifest_path, segment_length_secs, status, created_at, updated_at",
+        )
+        .bind(input.job_id)
+        .bind(&input.strategy)
+        .bind(&input.plan_hash)
+        .bind(&input.mtime_hash)
+        .bind(&input.temp_dir)
+        .bind(&input.concat_manifest_path)
+        .bind(input.segment_length_secs)
+        .bind(&input.status)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(session)
+    }
+
+    pub async fn delete_resume_session(&self, job_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM job_resume_sessions WHERE job_id = ?")
+            .bind(job_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_resume_segments(&self, job_id: i64) -> Result<Vec<JobResumeSegment>> {
+        let segments = sqlx::query_as::<_, JobResumeSegment>(
+            "SELECT id, job_id, segment_index, start_secs, duration_secs,
+                    temp_path, status, attempt_count, created_at, updated_at
+             FROM job_resume_segments
+             WHERE job_id = ?
+             ORDER BY segment_index ASC",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(segments)
+    }
+
+    pub async fn upsert_resume_segment(
+        &self,
+        input: &UpsertJobResumeSegmentInput,
+    ) -> Result<JobResumeSegment> {
+        let segment = sqlx::query_as::<_, JobResumeSegment>(
+            "INSERT INTO job_resume_segments
+                (job_id, segment_index, start_secs, duration_secs, temp_path, status, attempt_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(job_id, segment_index) DO UPDATE SET
+                 start_secs = excluded.start_secs,
+                 duration_secs = excluded.duration_secs,
+                 temp_path = excluded.temp_path,
+                 status = excluded.status,
+                 attempt_count = excluded.attempt_count,
+                 updated_at = CURRENT_TIMESTAMP
+             RETURNING id, job_id, segment_index, start_secs, duration_secs,
+                       temp_path, status, attempt_count, created_at, updated_at",
+        )
+        .bind(input.job_id)
+        .bind(input.segment_index)
+        .bind(input.start_secs)
+        .bind(input.duration_secs)
+        .bind(&input.temp_path)
+        .bind(&input.status)
+        .bind(input.attempt_count)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(segment)
+    }
+
+    pub async fn set_resume_segment_status(
+        &self,
+        job_id: i64,
+        segment_index: i64,
+        status: &str,
+        attempt_count: i32,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE job_resume_segments
+             SET status = ?, attempt_count = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE job_id = ? AND segment_index = ?",
+        )
+        .bind(status)
+        .bind(attempt_count)
+        .bind(job_id)
+        .bind(segment_index)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn completed_resume_duration_secs(&self, job_id: i64) -> Result<f64> {
+        let duration = sqlx::query_scalar::<_, Option<f64>>(
+            "SELECT SUM(duration_secs)
+             FROM job_resume_segments
+             WHERE job_id = ? AND status = 'completed'",
+        )
+        .bind(job_id)
+        .fetch_one(&self.pool)
+        .await?
+        .unwrap_or(0.0);
+        Ok(duration)
+    }
+
     /// Returns all jobs in queued or failed state that need
     /// analysis. Used by the startup auto-analyzer.
     pub async fn get_jobs_for_analysis(&self) -> Result<Vec<Job>> {

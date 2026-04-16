@@ -28,6 +28,17 @@ struct SystemResources {
 }
 
 #[derive(Serialize)]
+pub(crate) struct ProcessorStatusResponse {
+    blocked_reason: Option<&'static str>,
+    message: String,
+    manual_paused: bool,
+    scheduler_paused: bool,
+    draining: bool,
+    active_jobs: i64,
+    concurrent_limit: usize,
+}
+
+#[derive(Serialize)]
 struct DuplicateGroup {
     stem: String,
     count: usize,
@@ -133,6 +144,54 @@ pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>)
 
     *cache = Some((value.clone(), Instant::now()));
     axum::Json(value).into_response()
+}
+
+pub(crate) async fn processor_status_handler(State(state): State<Arc<AppState>>) -> Response {
+    let stats = match state.db.get_job_stats().await {
+        Ok(stats) => stats,
+        Err(err) => return config_read_error_response("load processor status", &err),
+    };
+
+    let concurrent_limit = state.agent.concurrent_jobs_limit();
+    let manual_paused = state.agent.is_manual_paused();
+    let scheduler_paused = state.agent.is_scheduler_paused();
+    let draining = state.agent.is_draining();
+    let active_jobs = stats.active;
+
+    let (blocked_reason, message) = if manual_paused {
+        (
+            Some("manual_paused"),
+            "The engine is manually paused and will not start queued jobs.".to_string(),
+        )
+    } else if scheduler_paused {
+        (
+            Some("scheduled_pause"),
+            "The schedule is currently pausing the engine.".to_string(),
+        )
+    } else if draining {
+        (
+            Some("draining"),
+            "The engine is draining and will not start new queued jobs.".to_string(),
+        )
+    } else if active_jobs >= concurrent_limit as i64 {
+        (
+            Some("workers_busy"),
+            "All worker slots are currently busy.".to_string(),
+        )
+    } else {
+        (None, "Workers are available.".to_string())
+    };
+
+    axum::Json(ProcessorStatusResponse {
+        blocked_reason,
+        message,
+        manual_paused,
+        scheduler_paused,
+        draining,
+        active_jobs,
+        concurrent_limit,
+    })
+    .into_response()
 }
 
 pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppState>>) -> Response {

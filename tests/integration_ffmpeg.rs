@@ -43,6 +43,20 @@ fn ffmpeg_ready() -> bool {
     ffmpeg_available() && ffprobe_available()
 }
 
+fn ffmpeg_has_encoder(name: &str) -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .ok()
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line.contains(name))
+        })
+        .unwrap_or(false)
+}
+
 /// Get the path to test fixtures
 fn fixtures_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -66,6 +80,75 @@ fn temp_output_dir(test_name: &str) -> Result<PathBuf> {
 /// Clean up temporary directory
 fn cleanup_temp_dir(path: &Path) {
     let _ = std::fs::remove_dir_all(path);
+}
+
+#[tokio::test]
+async fn amd_vaapi_smoke_test_is_hardware_gated() -> Result<()> {
+    let Some(device_path) = std::env::var("ALCHEMIST_TEST_AMD_VAAPI_DEVICE").ok() else {
+        println!("Skipping test: ALCHEMIST_TEST_AMD_VAAPI_DEVICE not set");
+        return Ok(());
+    };
+    if !ffmpeg_available() || !ffmpeg_has_encoder("h264_vaapi") {
+        println!("Skipping test: ffmpeg or h264_vaapi encoder not available");
+        return Ok(());
+    }
+
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-vaapi_device",
+            &device_path,
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=1:d=1",
+            "-vf",
+            "format=nv12,hwupload",
+            "-c:v",
+            "h264_vaapi",
+            "-f",
+            "null",
+            "-",
+        ])
+        .status()?;
+    assert!(
+        status.success(),
+        "expected VAAPI smoke transcode to succeed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn amd_amf_smoke_test_is_hardware_gated() -> Result<()> {
+    if std::env::var("ALCHEMIST_TEST_AMD_AMF").ok().as_deref() != Some("1") {
+        println!("Skipping test: ALCHEMIST_TEST_AMD_AMF not set");
+        return Ok(());
+    }
+    if !ffmpeg_available() || !ffmpeg_has_encoder("h264_amf") {
+        println!("Skipping test: ffmpeg or h264_amf encoder not available");
+        return Ok(());
+    }
+
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=1:d=1",
+            "-c:v",
+            "h264_amf",
+            "-f",
+            "null",
+            "-",
+        ])
+        .status()?;
+    assert!(status.success(), "expected AMF smoke transcode to succeed");
+    Ok(())
 }
 
 /// Create a test database

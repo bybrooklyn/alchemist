@@ -3,15 +3,17 @@ use crate::error::Result;
 use crate::media::analyzer::FfmpegAnalyzer;
 use crate::media::executor::FfmpegExecutor;
 use crate::media::planner::BasicPlanner;
+use crate::orchestrator::AsyncExecutionObserver;
 use crate::orchestrator::Transcoder;
 use crate::system::hardware::HardwareState;
 use crate::telemetry::{TelemetryEvent, encoder_label, hardware_label, resolution_bucket};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
-use tokio::sync::RwLock;
+use std::time::{Instant, SystemTime};
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -450,6 +452,139 @@ struct FinalizeFailureContext<'a> {
     temp_output_path: &'a Path,
 }
 
+const RESUME_STRATEGY_SEGMENT_V1: &str = "segment_v1";
+const RESUME_SESSION_STATUS_ACTIVE: &str = "active";
+const RESUME_SESSION_STATUS_SEGMENTS_COMPLETE: &str = "segments_complete";
+const RESUME_SEGMENT_STATUS_PENDING: &str = "pending";
+const RESUME_SEGMENT_STATUS_ENCODING: &str = "encoding";
+const RESUME_SEGMENT_STATUS_COMPLETED: &str = "completed";
+const RESUME_SEGMENT_LENGTH_SECS: i64 = 120;
+#[cfg(test)]
+static RESUME_SEGMENT_LENGTH_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<i64>>> =
+    std::sync::OnceLock::new();
+
+fn resume_segment_length_secs() -> i64 {
+    #[cfg(test)]
+    {
+        let override_secs = RESUME_SEGMENT_LENGTH_OVERRIDE
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .ok()
+            .and_then(|guard| *guard);
+        override_secs.unwrap_or(RESUME_SEGMENT_LENGTH_SECS)
+    }
+
+    #[cfg(not(test))]
+    {
+        RESUME_SEGMENT_LENGTH_SECS
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResumeSegment {
+    segment_index: i64,
+    start_secs: f64,
+    duration_secs: f64,
+    temp_path: PathBuf,
+    status: String,
+    attempt_count: i32,
+}
+
+struct ResumeSegmentObserver {
+    job_id: i64,
+    db: Arc<crate::db::Db>,
+    event_channels: Arc<crate::db::EventChannels>,
+    segment_start_secs: f64,
+    segment_duration_secs: f64,
+    total_duration_secs: f64,
+    last_progress: Mutex<Option<(f64, Instant)>>,
+}
+
+impl ResumeSegmentObserver {
+    fn new(
+        job_id: i64,
+        db: Arc<crate::db::Db>,
+        event_channels: Arc<crate::db::EventChannels>,
+        segment_start_secs: f64,
+        segment_duration_secs: f64,
+        total_duration_secs: f64,
+    ) -> Self {
+        Self {
+            job_id,
+            db,
+            event_channels,
+            segment_start_secs,
+            segment_duration_secs,
+            total_duration_secs,
+            last_progress: Mutex::new(None),
+        }
+    }
+}
+
+impl AsyncExecutionObserver for ResumeSegmentObserver {
+    async fn on_log(&self, message: String) {
+        let _ = self.event_channels.jobs.send(crate::db::JobEvent::Log {
+            level: "info".to_string(),
+            job_id: Some(self.job_id),
+            message: message.clone(),
+        });
+        if let Err(err) = self.db.add_log("info", Some(self.job_id), &message).await {
+            tracing::warn!(
+                job_id = self.job_id,
+                "Failed to persist resume-segment log: {err}"
+            );
+        }
+    }
+
+    async fn on_progress(
+        &self,
+        progress: crate::media::ffmpeg::FFmpegProgress,
+        total_duration: f64,
+    ) {
+        let segment_total = if total_duration > 0.0 {
+            total_duration
+        } else {
+            self.segment_duration_secs
+        };
+        let segment_pct = progress.percentage(segment_total).clamp(0.0, 100.0);
+        let completed_secs =
+            self.segment_start_secs + (segment_pct / 100.0) * self.segment_duration_secs;
+        let overall_pct = if self.total_duration_secs > 0.0 {
+            (completed_secs / self.total_duration_secs * 100.0).clamp(0.0, 99.9)
+        } else {
+            0.0
+        };
+        let now = Instant::now();
+        let mut last_progress = self.last_progress.lock().await;
+        let should_persist = match *last_progress {
+            Some((last_pct, last_time)) => {
+                overall_pct >= last_pct + 0.5 || now.duration_since(last_time).as_secs() >= 2
+            }
+            None => true,
+        };
+
+        if should_persist {
+            if let Err(err) = self.db.update_job_progress(self.job_id, overall_pct).await {
+                tracing::warn!(
+                    job_id = self.job_id,
+                    "Failed to persist resume progress: {err}"
+                );
+            } else {
+                *last_progress = Some((overall_pct, now));
+            }
+        }
+
+        let _ = self
+            .event_channels
+            .jobs
+            .send(crate::db::JobEvent::Progress {
+                job_id: self.job_id,
+                percentage: overall_pct,
+                time: progress.time,
+            });
+    }
+}
+
 impl Pipeline {
     pub fn new(
         db: Arc<crate::db::Db>,
@@ -467,6 +602,433 @@ impl Pipeline {
             event_channels,
             dry_run,
         }
+    }
+
+    async fn store_job_input_metadata(&self, job_id: i64, metadata: &MediaMetadata) {
+        if let Err(err) = self.db.set_job_input_metadata(job_id, metadata).await {
+            tracing::warn!(job_id, "Failed to store input metadata: {err}");
+        }
+    }
+
+    async fn record_job_log(&self, job_id: i64, level: &str, message: &str) {
+        if let Err(err) = self.db.add_log(level, Some(job_id), message).await {
+            tracing::warn!(job_id, "Failed to record log: {err}");
+        }
+    }
+
+    async fn record_job_decision(&self, job_id: i64, action: &str, reason: &str) {
+        if let Err(err) = self.db.add_decision(job_id, action, reason).await {
+            tracing::warn!(job_id, "Failed to record decision: {err}");
+        }
+    }
+
+    async fn record_job_decision_with_explanation(
+        &self,
+        job_id: i64,
+        action: &str,
+        explanation: &crate::explanations::Explanation,
+    ) {
+        if let Err(err) = self
+            .db
+            .add_decision_with_explanation(job_id, action, explanation)
+            .await
+        {
+            tracing::warn!(job_id, "Failed to record decision explanation: {err}");
+        }
+    }
+
+    async fn record_job_failure_explanation(
+        &self,
+        job_id: i64,
+        explanation: &crate::explanations::Explanation,
+    ) {
+        if let Err(err) = self
+            .db
+            .upsert_job_failure_explanation(job_id, explanation)
+            .await
+        {
+            tracing::warn!(job_id, "Failed to record failure explanation: {err}");
+        }
+    }
+
+    async fn record_encode_attempt(&self, job_id: i64, input: crate::db::EncodeAttemptInput) {
+        if let Err(err) = self.db.insert_encode_attempt(input).await {
+            tracing::warn!(job_id, "Failed to record encode attempt: {err}");
+        }
+    }
+
+    async fn purge_resume_session_state(&self, job_id: i64) -> Result<()> {
+        let session = self.db.get_resume_session(job_id).await?;
+        self.db.delete_resume_session(job_id).await?;
+        if let Some(session) = session {
+            let temp_dir = PathBuf::from(session.temp_dir);
+            if temp_dir.exists() {
+                tokio::fs::remove_dir_all(&temp_dir).await.map_err(|err| {
+                    crate::error::AlchemistError::Io(std::io::Error::new(
+                        err.kind(),
+                        format!(
+                            "Failed to remove resume temp dir {}: {err}",
+                            temp_dir.display()
+                        ),
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn prepare_resume_session(
+        &self,
+        job: &Job,
+        plan: &TranscodePlan,
+        metadata: &MediaMetadata,
+        output_path: &Path,
+    ) -> Result<Option<(crate::db::JobResumeSession, Vec<ResumeSegment>)>> {
+        if !resumable_plan_supported(plan, metadata) {
+            if self.db.get_resume_session(job.id).await?.is_some() {
+                self.purge_resume_session_state(job.id).await?;
+            }
+            return Ok(None);
+        }
+
+        let mtime_hash = mtime_hash_from_path(Path::new(&job.input_path))?;
+        let plan_hash = plan_hash_for_resume(plan, output_path, &mtime_hash)?;
+        let temp_dir = resume_temp_dir_for(output_path, job.id);
+        let concat_manifest_path = concat_manifest_path_for(&temp_dir);
+        let existing_session = self.db.get_resume_session(job.id).await?;
+
+        if let Some(session) = &existing_session {
+            if session.strategy != RESUME_STRATEGY_SEGMENT_V1
+                || session.plan_hash != plan_hash
+                || session.mtime_hash != mtime_hash
+            {
+                self.purge_resume_session_state(job.id).await?;
+            }
+        }
+
+        tokio::fs::create_dir_all(&temp_dir).await?;
+        let session = self
+            .db
+            .upsert_resume_session(&crate::db::UpsertJobResumeSessionInput {
+                job_id: job.id,
+                strategy: RESUME_STRATEGY_SEGMENT_V1.to_string(),
+                plan_hash,
+                mtime_hash,
+                temp_dir: temp_dir.display().to_string(),
+                concat_manifest_path: concat_manifest_path.display().to_string(),
+                segment_length_secs: resume_segment_length_secs(),
+                status: RESUME_SESSION_STATUS_ACTIVE.to_string(),
+            })
+            .await?;
+
+        let existing_segments = self.db.list_resume_segments(job.id).await?;
+        let segments = enumerate_resume_segments(
+            metadata.duration_secs,
+            &temp_dir,
+            output_path,
+            &existing_segments,
+        );
+        for segment in &segments {
+            self.db
+                .upsert_resume_segment(&crate::db::UpsertJobResumeSegmentInput {
+                    job_id: job.id,
+                    segment_index: segment.segment_index,
+                    start_secs: segment.start_secs,
+                    duration_secs: segment.duration_secs,
+                    temp_path: segment.temp_path.display().to_string(),
+                    status: segment.status.clone(),
+                    attempt_count: segment.attempt_count,
+                })
+                .await?;
+        }
+
+        Ok(Some((session, segments)))
+    }
+
+    async fn encode_resume_segment(
+        &self,
+        job: &Job,
+        plan: &TranscodePlan,
+        metadata: &MediaMetadata,
+        segment: &ResumeSegment,
+    ) -> Result<()> {
+        let next_attempt = segment.attempt_count + 1;
+        self.db
+            .set_resume_segment_status(
+                job.id,
+                segment.segment_index,
+                RESUME_SEGMENT_STATUS_ENCODING,
+                next_attempt,
+            )
+            .await?;
+
+        if segment.temp_path.exists() {
+            let _ = tokio::fs::remove_file(&segment.temp_path).await;
+        }
+
+        let mut segment_plan = plan.clone();
+        segment_plan.output_path = Some(segment.temp_path.clone());
+        let hardware_info = self.hardware_state.snapshot().await;
+        let observer: Arc<dyn crate::orchestrator::ExecutionObserver> =
+            Arc::new(ResumeSegmentObserver::new(
+                job.id,
+                self.db.clone(),
+                self.event_channels.clone(),
+                segment.start_secs,
+                segment.duration_secs,
+                metadata.duration_secs,
+            ));
+
+        let result = self
+            .orchestrator
+            .transcode_media(crate::orchestrator::TranscodeRequest {
+                job_id: Some(job.id),
+                input: Path::new(&job.input_path),
+                output: &segment.temp_path,
+                hw_info: hardware_info.as_ref(),
+                dry_run: self.dry_run,
+                metadata,
+                plan: &segment_plan,
+                observer: Some(observer),
+                clip_start_seconds: Some(segment.start_secs),
+                clip_duration_seconds: Some(segment.duration_secs),
+            })
+            .await;
+
+        match result {
+            Ok(()) => {
+                self.db
+                    .set_resume_segment_status(
+                        job.id,
+                        segment.segment_index,
+                        RESUME_SEGMENT_STATUS_COMPLETED,
+                        next_attempt,
+                    )
+                    .await?;
+                let completed = self.db.completed_resume_duration_secs(job.id).await?;
+                let progress = if metadata.duration_secs > 0.0 {
+                    (completed / metadata.duration_secs * 100.0).clamp(0.0, 99.9)
+                } else {
+                    0.0
+                };
+                self.update_job_progress(job.id, progress).await;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = tokio::fs::remove_file(&segment.temp_path).await;
+                self.db
+                    .set_resume_segment_status(
+                        job.id,
+                        segment.segment_index,
+                        RESUME_SEGMENT_STATUS_PENDING,
+                        next_attempt,
+                    )
+                    .await?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn concat_resume_segments(
+        &self,
+        job_id: i64,
+        session: &crate::db::JobResumeSession,
+        segments: &[ResumeSegment],
+        temp_output_path: &Path,
+        container: &str,
+    ) -> Result<()> {
+        let manifest_path = PathBuf::from(&session.concat_manifest_path);
+        let mut manifest = String::from("ffconcat version 1.0\n");
+        for segment in segments {
+            manifest.push_str("file '");
+            manifest.push_str(&escape_ffconcat_path(&segment.temp_path));
+            manifest.push_str("'\n");
+        }
+        tokio::fs::write(&manifest_path, manifest).await?;
+
+        if temp_output_path.exists() {
+            let _ = tokio::fs::remove_file(temp_output_path).await;
+        }
+
+        let output = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+            ])
+            .arg(&manifest_path)
+            .args(["-c", "copy", "-f"])
+            .arg(ffmpeg_muxer_for_container(container))
+            .arg(temp_output_path)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if stderr.is_empty() {
+                "FFmpeg concat failed".to_string()
+            } else {
+                format!("FFmpeg concat failed: {stderr}")
+            };
+            self.record_job_log(job_id, "error", &message).await;
+            return Err(crate::error::AlchemistError::FFmpeg(message));
+        }
+
+        Ok(())
+    }
+
+    async fn build_execution_result_for_output(
+        &self,
+        job_id: i64,
+        plan: &TranscodePlan,
+        output_path: &Path,
+    ) -> ExecutionResult {
+        let encoder = plan.encoder;
+        let planned_output_codec = plan.output_codec.unwrap_or_else(|| {
+            encoder
+                .map(Encoder::output_codec)
+                .unwrap_or(plan.requested_codec)
+        });
+        let actual_probe = if !self.dry_run && output_path.exists() {
+            crate::media::analyzer::Analyzer::probe_output_details(output_path)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let actual_output_codec = actual_probe
+            .as_ref()
+            .and_then(|probe| crate::media::executor::output_codec_from_name(&probe.codec_name));
+        let actual_encoder_name = actual_probe
+            .as_ref()
+            .and_then(|probe| {
+                probe
+                    .stream_encoder_tag
+                    .clone()
+                    .or_else(|| probe.format_encoder_tag.clone())
+            })
+            .or_else(|| {
+                if plan.is_remux {
+                    Some("copy".to_string())
+                } else {
+                    encoder.map(|enc| enc.ffmpeg_encoder_name().to_string())
+                }
+            });
+        let codec_mismatch =
+            actual_output_codec.is_some_and(|actual_codec| actual_codec != planned_output_codec);
+        let encoder_mismatch = encoder.is_some_and(|enc| {
+            actual_probe
+                .as_ref()
+                .and_then(|probe| probe.stream_encoder_tag.as_deref())
+                .is_some_and(|tag| !crate::media::executor::encoder_tag_matches(enc, tag))
+        });
+
+        if let (true, Some(codec)) = (codec_mismatch, actual_output_codec) {
+            tracing::warn!(
+                "Job {}: Planned codec {} but resumable output probed as {}",
+                job_id,
+                planned_output_codec.as_str(),
+                codec.as_str()
+            );
+        }
+
+        ExecutionResult {
+            requested_codec: plan.requested_codec,
+            planned_output_codec,
+            requested_encoder: encoder,
+            used_encoder: encoder,
+            used_backend: plan.backend.or_else(|| encoder.map(Encoder::backend)),
+            fallback: plan.fallback.clone(),
+            fallback_occurred: plan.fallback.is_some() || codec_mismatch || encoder_mismatch,
+            actual_output_codec,
+            actual_encoder_name,
+        }
+    }
+
+    async fn execute_resumable_transcode(
+        &self,
+        job: &Job,
+        plan: &TranscodePlan,
+        metadata: &MediaMetadata,
+        temp_output_path: &Path,
+    ) -> Result<Option<ExecutionResult>> {
+        let Some((session, segments)) = self
+            .prepare_resume_session(job, plan, metadata, Path::new(&job.output_path))
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let pending_segments = segments
+            .iter()
+            .filter(|segment| segment.status != RESUME_SEGMENT_STATUS_COMPLETED)
+            .cloned()
+            .collect::<Vec<_>>();
+        let completed_secs = segments
+            .iter()
+            .filter(|segment| segment.status == RESUME_SEGMENT_STATUS_COMPLETED)
+            .map(|segment| segment.duration_secs)
+            .sum::<f64>();
+        if metadata.duration_secs > 0.0 && completed_secs > 0.0 {
+            let progress = (completed_secs / metadata.duration_secs * 100.0).clamp(0.0, 99.9);
+            self.update_job_progress(job.id, progress).await;
+        }
+
+        for segment in &pending_segments {
+            if self.should_stop_job(job.id).await? {
+                return Err(crate::error::AlchemistError::Cancelled);
+            }
+            self.encode_resume_segment(job, plan, metadata, segment)
+                .await?;
+        }
+
+        self.db
+            .upsert_resume_session(&crate::db::UpsertJobResumeSessionInput {
+                job_id: session.job_id,
+                strategy: session.strategy.clone(),
+                plan_hash: session.plan_hash.clone(),
+                mtime_hash: session.mtime_hash.clone(),
+                temp_dir: session.temp_dir.clone(),
+                concat_manifest_path: session.concat_manifest_path.clone(),
+                segment_length_secs: session.segment_length_secs,
+                status: RESUME_SESSION_STATUS_SEGMENTS_COMPLETE.to_string(),
+            })
+            .await?;
+
+        let completed_segments = self
+            .db
+            .list_resume_segments(job.id)
+            .await?
+            .into_iter()
+            .map(|segment| ResumeSegment {
+                segment_index: segment.segment_index,
+                start_secs: segment.start_secs,
+                duration_secs: segment.duration_secs,
+                temp_path: PathBuf::from(segment.temp_path),
+                status: segment.status,
+                attempt_count: segment.attempt_count,
+            })
+            .collect::<Vec<_>>();
+
+        self.concat_resume_segments(
+            job.id,
+            &session,
+            &completed_segments,
+            temp_output_path,
+            &plan.container,
+        )
+        .await?;
+
+        Ok(Some(
+            self.build_execution_result_for_output(job.id, plan, temp_output_path)
+                .await,
+        ))
     }
 
     pub async fn enqueue_discovered(&self, discovered: DiscoveredMedia) -> Result<()> {
@@ -574,6 +1136,116 @@ fn temp_output_path_for(path: &Path) -> PathBuf {
     parent.join(format!("{filename}.alchemist.tmp"))
 }
 
+fn resume_temp_dir_for(output_path: &Path, job_id: i64) -> PathBuf {
+    let parent = output_path.parent().unwrap_or_else(|| Path::new(""));
+    let filename = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    parent.join(format!(".{filename}.alchemist.resume-{job_id}"))
+}
+
+fn concat_manifest_path_for(temp_dir: &Path) -> PathBuf {
+    temp_dir.join("segments.ffconcat")
+}
+
+fn escape_ffconcat_path(path: &Path) -> String {
+    path.display().to_string().replace('\'', "'\\''")
+}
+
+fn ffmpeg_muxer_for_container(container: &str) -> String {
+    match container.to_ascii_lowercase().as_str() {
+        "mkv" => "matroska".to_string(),
+        "mp4" => "mp4".to_string(),
+        "mov" => "mov".to_string(),
+        "avi" => "avi".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn mtime_hash_from_path(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let duration = modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    Ok(format!(
+        "{}.{:09}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
+}
+
+fn plan_hash_for_resume(
+    plan: &TranscodePlan,
+    output_path: &Path,
+    mtime_hash: &str,
+) -> Result<String> {
+    let serialized = serde_json::to_vec(&(plan, output_path, mtime_hash)).map_err(|err| {
+        crate::error::AlchemistError::Unknown(format!("Failed to hash plan: {err}"))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(serialized);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn resumable_plan_supported(plan: &TranscodePlan, metadata: &MediaMetadata) -> bool {
+    matches!(plan.decision, TranscodeDecision::Transcode { .. })
+        && !plan.is_remux
+        && !matches!(plan.subtitles, SubtitleStreamPlan::Extract { .. })
+        && metadata.duration_secs > 0.0
+}
+
+fn enumerate_resume_segments(
+    total_duration_secs: f64,
+    temp_dir: &Path,
+    output_path: &Path,
+    existing_segments: &[crate::db::JobResumeSegment],
+) -> Vec<ResumeSegment> {
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mkv");
+    let segment_length_secs = resume_segment_length_secs();
+    let total_segments = (total_duration_secs / segment_length_secs as f64).ceil() as i64;
+    let mut by_index = HashMap::new();
+    for segment in existing_segments {
+        by_index.insert(segment.segment_index, segment);
+    }
+
+    (0..total_segments)
+        .map(|segment_index| {
+            let start_secs = segment_index as f64 * segment_length_secs as f64;
+            let duration_secs = (total_duration_secs - start_secs).min(segment_length_secs as f64);
+            let temp_path = temp_dir.join(format!("segment-{segment_index:05}.{extension}"));
+            let existing = by_index.get(&segment_index);
+            let status = match existing {
+                Some(segment)
+                    if segment.status == RESUME_SEGMENT_STATUS_COMPLETED && temp_path.exists() =>
+                {
+                    segment.status.clone()
+                }
+                Some(segment) => {
+                    if segment.status == RESUME_SEGMENT_STATUS_COMPLETED && !temp_path.exists() {
+                        RESUME_SEGMENT_STATUS_PENDING.to_string()
+                    } else {
+                        segment.status.clone()
+                    }
+                }
+                None => RESUME_SEGMENT_STATUS_PENDING.to_string(),
+            };
+            ResumeSegment {
+                segment_index,
+                start_secs,
+                duration_secs,
+                temp_path,
+                status,
+                attempt_count: existing.map(|segment| segment.attempt_count).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
 impl Pipeline {
     /// Runs only the analysis and planning phases for a job.
     /// Does not execute any encode. Used by the startup
@@ -593,25 +1265,16 @@ impl Pipeline {
         {
             Ok(a) => {
                 // Store analyzed metadata for completed job detail retrieval
-                let _ = self.db.set_job_input_metadata(job_id, &a.metadata).await;
+                self.store_job_input_metadata(job_id, &a.metadata).await;
                 a
             }
             Err(e) => {
                 let reason = format!("analysis_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
-                if let Err(e) = self.db.add_log("error", Some(job_id), &reason).await {
-                    tracing::warn!(job_id, "Failed to record log: {e}");
-                }
-                if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
-                    tracing::warn!(job_id, "Failed to record decision: {e}");
-                }
-                if let Err(e) = self
-                    .db
-                    .upsert_job_failure_explanation(job_id, &failure_explanation)
-                    .await
-                {
-                    tracing::warn!(job_id, "Failed to record failure explanation: {e}");
-                }
+                self.record_job_log(job_id, "error", &reason).await;
+                self.record_job_decision(job_id, "skip", &reason).await;
+                self.record_job_failure_explanation(job_id, &failure_explanation)
+                    .await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
@@ -642,19 +1305,10 @@ impl Pipeline {
             Err(e) => {
                 let reason = format!("planning_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
-                if let Err(e) = self.db.add_log("error", Some(job_id), &reason).await {
-                    tracing::warn!(job_id, "Failed to record log: {e}");
-                }
-                if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
-                    tracing::warn!(job_id, "Failed to record decision: {e}");
-                }
-                if let Err(e) = self
-                    .db
-                    .upsert_job_failure_explanation(job_id, &failure_explanation)
-                    .await
-                {
-                    tracing::warn!(job_id, "Failed to record failure explanation: {e}");
-                }
+                self.record_job_log(job_id, "error", &reason).await;
+                self.record_job_decision(job_id, "skip", &reason).await;
+                self.record_job_failure_explanation(job_id, &failure_explanation)
+                    .await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
@@ -671,24 +1325,18 @@ impl Pipeline {
                     "Job skipped: {}",
                     skip_code
                 );
-                if let Err(e) = self.db.add_decision(job_id, "skip", reason).await {
-                    tracing::warn!(job_id, "Failed to record decision: {e}");
-                }
+                self.record_job_decision(job_id, "skip", reason).await;
                 self.update_job_state(job_id, crate::db::JobState::Skipped)
                     .await?;
             }
             crate::media::pipeline::TranscodeDecision::Remux { reason } => {
-                if let Err(e) = self.db.add_decision(job_id, "transcode", reason).await {
-                    tracing::warn!(job_id, "Failed to record decision: {e}");
-                }
+                self.record_job_decision(job_id, "transcode", reason).await;
                 // Leave as queued — will be picked up for remux when engine starts
                 self.update_job_state(job_id, crate::db::JobState::Queued)
                     .await?;
             }
             crate::media::pipeline::TranscodeDecision::Transcode { reason } => {
-                if let Err(e) = self.db.add_decision(job_id, "transcode", reason).await {
-                    tracing::warn!(job_id, "Failed to record decision: {e}");
-                }
+                self.record_job_decision(job_id, "transcode", reason).await;
                 // Leave as queued — will be picked up for encoding when engine starts
                 self.update_job_state(job_id, crate::db::JobState::Queued)
                     .await?;
@@ -717,9 +1365,7 @@ impl Pipeline {
                 "Job {}: Output path matches input path; refusing to overwrite source.",
                 job.id
             );
-            let _ = self
-                .db
-                .add_decision(job.id, "skip", "Output path matches input path")
+            self.record_job_decision(job.id, "skip", "Output path matches input path")
                 .await;
             let _ = self
                 .update_job_state(job.id, crate::db::JobState::Skipped)
@@ -732,9 +1378,7 @@ impl Pipeline {
                 "Job {}: Output exists and replace_strategy is keep. Skipping.",
                 job.id
             );
-            let _ = self
-                .db
-                .add_decision(job.id, "skip", "Output already exists")
+            self.record_job_decision(job.id, "skip", "Output already exists")
                 .await;
             let _ = self
                 .update_job_state(job.id, crate::db::JobState::Skipped)
@@ -781,17 +1425,10 @@ impl Pipeline {
             Err(e) => {
                 let msg = format!("Probing failed: {e}");
                 tracing::error!("Job {}: {}", job.id, msg);
-                if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                    tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                }
+                self.record_job_log(job.id, "error", &msg).await;
                 let explanation = crate::explanations::failure_from_summary(&msg);
-                if let Err(e) = self
-                    .db
-                    .upsert_job_failure_explanation(job.id, &explanation)
-                    .await
-                {
-                    tracing::warn!(job_id = job.id, "Failed to record failure explanation: {e}");
-                }
+                self.record_job_failure_explanation(job.id, &explanation)
+                    .await;
                 if let Err(e) = self
                     .update_job_state(job.id, crate::db::JobState::Failed)
                     .await
@@ -843,20 +1480,10 @@ impl Pipeline {
                     Err(err) => {
                         let msg = format!("Invalid conversion job settings: {err}");
                         tracing::error!("Job {}: {}", job.id, msg);
-                        if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                            tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                        }
+                        self.record_job_log(job.id, "error", &msg).await;
                         let explanation = crate::explanations::failure_from_summary(&msg);
-                        if let Err(e) = self
-                            .db
-                            .upsert_job_failure_explanation(job.id, &explanation)
-                            .await
-                        {
-                            tracing::warn!(
-                                job_id = job.id,
-                                "Failed to record failure explanation: {e}"
-                            );
-                        }
+                        self.record_job_failure_explanation(job.id, &explanation)
+                            .await;
                         if let Err(e) = self
                             .update_job_state(job.id, crate::db::JobState::Failed)
                             .await
@@ -872,20 +1499,10 @@ impl Pipeline {
                 Err(err) => {
                     let msg = format!("Conversion planning failed: {err}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                    }
+                    self.record_job_log(job.id, "error", &msg).await;
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    if let Err(e) = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to record failure explanation: {e}"
-                        );
-                    }
+                    self.record_job_failure_explanation(job.id, &explanation)
+                        .await;
                     if let Err(e) = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await
@@ -902,20 +1519,10 @@ impl Pipeline {
                 Err(err) => {
                     let msg = format!("Failed to resolve library profile: {err}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                    }
+                    self.record_job_log(job.id, "error", &msg).await;
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    if let Err(e) = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to record failure explanation: {e}"
-                        );
-                    }
+                    self.record_job_failure_explanation(job.id, &explanation)
+                        .await;
                     if let Err(e) = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await
@@ -933,20 +1540,10 @@ impl Pipeline {
                 Err(e) => {
                     let msg = format!("Planner failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                    }
+                    self.record_job_log(job.id, "error", &msg).await;
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    if let Err(e) = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to record failure explanation: {e}"
-                        );
-                    }
+                    self.record_job_failure_explanation(job.id, &explanation)
+                        .await;
                     if let Err(e) = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await
@@ -1012,9 +1609,7 @@ impl Pipeline {
                 explanation.code,
                 explanation.summary
             );
-            if let Err(e) = self.db.add_decision(job.id, "skip", &reason).await {
-                tracing::warn!(job_id = job.id, "Failed to record decision: {e}");
-            }
+            self.record_job_decision(job.id, "skip", &reason).await;
             if let Err(e) = self
                 .update_job_state(job.id, crate::db::JobState::Skipped)
                 .await
@@ -1031,9 +1626,7 @@ impl Pipeline {
             &reason
         );
         let explanation = crate::explanations::decision_from_legacy(action, &reason);
-        let _ = self
-            .db
-            .add_decision_with_explanation(job.id, action, &explanation)
+        self.record_job_decision_with_explanation(job.id, action, &explanation)
             .await;
         let _ = self
             .event_channels
@@ -1083,34 +1676,32 @@ impl Pipeline {
         );
 
         let encode_started_at = chrono::Utc::now();
-        match executor.execute(&job, &plan, &analysis).await {
+        let execution_result = match self
+            .execute_resumable_transcode(&job, &plan, metadata, &temp_output_path)
+            .await
+        {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => executor.execute(&job, &plan, &analysis).await,
+            Err(err) => Err(err),
+        };
+        match execution_result {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
                     tracing::error!("Job {}: Encoder fallback detected and not allowed.", job.id);
                     let summary = "Encoder fallback detected and not allowed.";
                     let explanation = crate::explanations::failure_from_summary(summary);
-                    if let Err(e) = self.db.add_log("error", Some(job.id), summary).await {
-                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                    }
-                    if let Err(e) = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to record failure explanation: {e}"
-                        );
-                    }
+                    self.record_job_log(job.id, "error", summary).await;
+                    self.record_job_failure_explanation(job.id, &explanation)
+                        .await;
                     if let Err(e) = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await
                     {
                         tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
                     }
-                    if let Err(e) = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                    self.record_encode_attempt(
+                        job.id,
+                        crate::db::EncodeAttemptInput {
                             job_id: job.id,
                             attempt_number: current_attempt_number,
                             started_at: Some(encode_started_at.to_rfc3339()),
@@ -1120,11 +1711,9 @@ impl Pipeline {
                             input_size_bytes: Some(metadata.size_bytes as i64),
                             output_size_bytes: None,
                             encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
-                    }
+                        },
+                    )
+                    .await;
                     return Err(JobFailure::EncoderUnavailable);
                 }
 
@@ -1162,6 +1751,22 @@ impl Pipeline {
                     )
                     .await;
                     return Err(JobFailure::Transient);
+                }
+
+                if self
+                    .db
+                    .get_resume_session(job.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    if let Err(err) = self.purge_resume_session_state(job.id).await {
+                        tracing::warn!(
+                            job_id = job.id,
+                            "Failed to purge resume session after successful finalize: {err}"
+                        );
+                    }
                 }
 
                 Ok(())
@@ -1215,9 +1820,9 @@ impl Pipeline {
                             "Failed to update job state to cancelled: {e}"
                         );
                     }
-                    if let Err(e) = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                    self.record_encode_attempt(
+                        job.id,
+                        crate::db::EncodeAttemptInput {
                             job_id: job.id,
                             attempt_number: current_attempt_number,
                             started_at: Some(encode_started_at.to_rfc3339()),
@@ -1227,28 +1832,16 @@ impl Pipeline {
                             input_size_bytes: Some(metadata.size_bytes as i64),
                             output_size_bytes: None,
                             encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
-                    }
+                        },
+                    )
+                    .await;
                 } else {
                     let msg = format!("Transcode failed: {e}");
                     tracing::error!("Job {}: {}", job.id, msg);
-                    if let Err(e) = self.db.add_log("error", Some(job.id), &msg).await {
-                        tracing::warn!(job_id = job.id, "Failed to record log: {e}");
-                    }
+                    self.record_job_log(job.id, "error", &msg).await;
                     let explanation = crate::explanations::failure_from_summary(&msg);
-                    if let Err(e) = self
-                        .db
-                        .upsert_job_failure_explanation(job.id, &explanation)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to record failure explanation: {e}"
-                        );
-                    }
+                    self.record_job_failure_explanation(job.id, &explanation)
+                        .await;
                     if let Err(e) = self
                         .update_job_state(job.id, crate::db::JobState::Failed)
                         .await
@@ -1258,9 +1851,9 @@ impl Pipeline {
                             "Failed to update job state to failed: {e}"
                         );
                     }
-                    if let Err(e) = self
-                        .db
-                        .insert_encode_attempt(crate::db::EncodeAttemptInput {
+                    self.record_encode_attempt(
+                        job.id,
+                        crate::db::EncodeAttemptInput {
                             job_id: job.id,
                             attempt_number: current_attempt_number,
                             started_at: Some(encode_started_at.to_rfc3339()),
@@ -1270,11 +1863,9 @@ impl Pipeline {
                             input_size_bytes: Some(metadata.size_bytes as i64),
                             output_size_bytes: None,
                             encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
-                        })
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to record encode attempt: {e}");
-                    }
+                        },
+                    )
+                    .await;
                 }
                 Err(map_failure(&e))
             }
@@ -1397,9 +1988,7 @@ impl Pipeline {
                     reduction, config.transcode.size_reduction_threshold, output_size
                 )
             };
-            if let Err(e) = self.db.add_decision(job_id, "skip", &reason).await {
-                tracing::warn!(job_id, "Failed to record decision: {e}");
-            }
+            self.record_job_decision(job_id, "skip", &reason).await;
             self.update_job_state(job_id, crate::db::JobState::Skipped)
                 .await?;
             return Ok(());
@@ -1442,17 +2031,15 @@ impl Pipeline {
                             );
                             let _ = std::fs::remove_file(context.temp_output_path);
                             cleanup_temp_subtitle_output(job_id, context.plan).await;
-                            let _ = self
-                                .db
-                                .add_decision(
-                                    job_id,
-                                    "skip",
-                                    &format!(
-                                        "quality_below_threshold|metric=vmaf,score={:.1},threshold={:.1}",
-                                        s, config.quality.min_vmaf_score
-                                    ),
-                                )
-                                .await;
+                            self.record_job_decision(
+                                job_id,
+                                "skip",
+                                &format!(
+                                    "quality_below_threshold|metric=vmaf,score={:.1},threshold={:.1}",
+                                    s, config.quality.min_vmaf_score
+                                ),
+                            )
+                            .await;
                             self.update_job_state(job_id, crate::db::JobState::Skipped)
                                 .await?;
                             return Ok(());
@@ -1470,12 +2057,21 @@ impl Pipeline {
 
         let mut media_duration = context.metadata.duration_secs;
         if media_duration <= 0.0 {
-            match crate::media::analyzer::Analyzer::probe_async(input_path).await {
+            let reprobe_path = if context.temp_output_path.exists() {
+                context.temp_output_path
+            } else {
+                context.output_path
+            };
+            match crate::media::analyzer::Analyzer::probe_async(reprobe_path).await {
                 Ok(meta) => {
                     media_duration = meta.format.duration.parse::<f64>().unwrap_or(0.0);
                 }
                 Err(e) => {
-                    tracing::warn!(job_id, "Failed to reprobe output for duration: {e}");
+                    tracing::warn!(
+                        job_id,
+                        path = %reprobe_path.display(),
+                        "Failed to reprobe encoded output for duration: {e}"
+                    );
                 }
             }
         }
@@ -1555,9 +2151,9 @@ impl Pipeline {
         self.update_job_state(job_id, crate::db::JobState::Completed)
             .await?;
         self.update_job_progress(job_id, 100.0).await;
-        let _ = self
-            .db
-            .insert_encode_attempt(crate::db::EncodeAttemptInput {
+        self.record_encode_attempt(
+            job_id,
+            crate::db::EncodeAttemptInput {
                 job_id,
                 attempt_number: context.attempt_number,
                 started_at: Some(context.encode_started_at.to_rfc3339()),
@@ -1567,8 +2163,9 @@ impl Pipeline {
                 input_size_bytes: Some(input_size as i64),
                 output_size_bytes: Some(output_size as i64),
                 encode_time_seconds: Some(encode_duration),
-            })
-            .await;
+            },
+        )
+        .await;
 
         self.emit_telemetry_event(TelemetryEventParams {
             telemetry_enabled,
@@ -1631,21 +2228,12 @@ impl Pipeline {
         tracing::error!("Job {}: Finalization failed: {}", job_id, err);
 
         let message = format!("Finalization failed: {err}");
-        if let Err(e) = self.db.add_log("error", Some(job_id), &message).await {
-            tracing::warn!(job_id, "Failed to record log: {e}");
-        }
+        self.record_job_log(job_id, "error", &message).await;
         let failure_explanation = crate::explanations::failure_from_summary(&message);
-        if let Err(e) = self
-            .db
-            .upsert_job_failure_explanation(job_id, &failure_explanation)
-            .await
-        {
-            tracing::warn!(job_id, "Failed to record failure explanation: {e}");
-        }
+        self.record_job_failure_explanation(job_id, &failure_explanation)
+            .await;
         if let crate::error::AlchemistError::QualityCheckFailed(reason) = err {
-            if let Err(e) = self.db.add_decision(job_id, "reject", reason).await {
-                tracing::warn!(job_id, "Failed to record decision: {e}");
-            }
+            self.record_job_decision(job_id, "reject", reason).await;
         }
 
         if context.temp_output_path.exists() {
@@ -1682,9 +2270,9 @@ impl Pipeline {
         let _ = self
             .update_job_state(job_id, crate::db::JobState::Failed)
             .await;
-        let _ = self
-            .db
-            .insert_encode_attempt(crate::db::EncodeAttemptInput {
+        self.record_encode_attempt(
+            job_id,
+            crate::db::EncodeAttemptInput {
                 job_id,
                 attempt_number: context.attempt_number,
                 started_at: Some(context.encode_started_at.to_rfc3339()),
@@ -1694,8 +2282,9 @@ impl Pipeline {
                 input_size_bytes: Some(context.metadata.size_bytes as i64),
                 output_size_bytes: None,
                 encode_time_seconds: Some(context.start_time.elapsed().as_secs_f64()),
-            })
-            .await;
+            },
+        )
+        .await;
     }
 
     async fn emit_telemetry_event(&self, params: TelemetryEventParams<'_>) {
@@ -1779,8 +2368,30 @@ mod tests {
     use crate::Transcoder;
     use crate::db::Db;
     use crate::system::hardware::{HardwareInfo, HardwareState, Vendor};
+    use std::process::Command;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    fn ffmpeg_ready() -> bool {
+        let ffmpeg = Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        let ffprobe = Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        ffmpeg && ffprobe
+    }
+
+    fn set_test_resume_segment_length(value: Option<i64>) {
+        let lock = RESUME_SEGMENT_LENGTH_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
+        if let Ok(mut guard) = lock.lock() {
+            *guard = value;
+        }
+    }
 
     #[test]
     fn generated_output_pattern_matches_default_suffix() {
@@ -2024,6 +2635,846 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_job_skips_even_when_decision_persistence_fails() -> anyhow::Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_decision_persistence_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_decision_persistence_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        db.update_file_settings(false, "mkv", "-alchemist", "keep", None)
+            .await?;
+
+        let input = temp_root.join("movie.mkv");
+        let output = temp_root.join("movie-alchemist.mkv");
+        std::fs::write(&input, b"source")?;
+        std::fs::write(&output, b"existing-output")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        sqlx::query(
+            "CREATE TRIGGER decisions_fail_insert
+             BEFORE INSERT ON decisions
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced decision failure');
+             END;",
+        )
+        .execute(&db.pool)
+        .await?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        pipeline
+            .process_job(job.clone())
+            .await
+            .map_err(|err| anyhow::anyhow!("process_job failed: {err:?}"))?;
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing skipped job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Skipped);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_job_succeeds_when_encode_attempt_persistence_fails() -> anyhow::Result<()> {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_attempt_persistence_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_attempt_persistence_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("movie.mkv");
+        let output = temp_root.join("movie-alchemist.mkv");
+        std::fs::write(&input, b"source")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        let temp_output = temp_output_path_for(&output);
+        let ffmpeg_status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "matroska",
+            ])
+            .arg(&temp_output)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!(
+                "ffmpeg failed to generate finalize fixture"
+            ));
+        }
+
+        sqlx::query("DROP TABLE encode_attempts")
+            .execute(&db.pool)
+            .await?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(temp_output.clone()),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("medium".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Drop,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+        let metadata = MediaMetadata {
+            path: input.clone(),
+            duration_secs: 1.0,
+            codec_name: "h264".to_string(),
+            width: 16,
+            height: 16,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 6,
+            video_bitrate_bps: Some(10_000),
+            container_bitrate_bps: Some(10_000),
+            fps: 1.0,
+            container: "mkv".to_string(),
+            audio_codec: None,
+            audio_bitrate_bps: None,
+            audio_channels: None,
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+        };
+        let result = ExecutionResult {
+            requested_codec: crate::config::OutputCodec::H264,
+            planned_output_codec: crate::config::OutputCodec::H264,
+            requested_encoder: Some(Encoder::H264X264),
+            used_encoder: Some(Encoder::H264X264),
+            used_backend: Some(EncoderBackend::Cpu),
+            fallback: None,
+            fallback_occurred: false,
+            actual_output_codec: Some(crate::config::OutputCodec::H264),
+            actual_encoder_name: Some("libx264".to_string()),
+        };
+
+        pipeline
+            .finalize_job(
+                job.clone(),
+                &input,
+                FinalizeJobContext {
+                    output_path: &output,
+                    temp_output_path: &temp_output,
+                    plan: &plan,
+                    bypass_quality_gates: true,
+                    start_time: std::time::Instant::now(),
+                    encode_started_at: chrono::Utc::now(),
+                    attempt_number: 1,
+                    metadata: &metadata,
+                    execution_result: &result,
+                },
+            )
+            .await?;
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing completed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Completed);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_failure_marks_failed_when_log_persistence_fails() -> anyhow::Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_log_persistence_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_log_persistence_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("movie.mkv");
+        let output = temp_root.join("movie-alchemist.mkv");
+        std::fs::write(&input, b"source")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+        db.update_job_status(job.id, crate::db::JobState::Encoding)
+            .await?;
+
+        let temp_output = temp_output_path_for(&output);
+        std::fs::write(&temp_output, b"partial")?;
+        sqlx::query("DROP TABLE logs").execute(&db.pool).await?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let config_snapshot = config.read().await.clone();
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(temp_output.clone()),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("medium".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Drop,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+        let metadata = MediaMetadata {
+            path: input.clone(),
+            duration_secs: 12.0,
+            codec_name: "h264".to_string(),
+            width: 16,
+            height: 16,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 6,
+            video_bitrate_bps: Some(10_000),
+            container_bitrate_bps: Some(10_000),
+            fps: 1.0,
+            container: "mkv".to_string(),
+            audio_codec: None,
+            audio_bitrate_bps: None,
+            audio_channels: None,
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+        };
+        let result = ExecutionResult {
+            requested_codec: crate::config::OutputCodec::H264,
+            planned_output_codec: crate::config::OutputCodec::H264,
+            requested_encoder: Some(Encoder::H264X264),
+            used_encoder: Some(Encoder::H264X264),
+            used_backend: Some(EncoderBackend::Cpu),
+            fallback: None,
+            fallback_occurred: false,
+            actual_output_codec: Some(crate::config::OutputCodec::H264),
+            actual_encoder_name: Some("libx264".to_string()),
+        };
+
+        pipeline
+            .handle_finalize_failure(
+                job.id,
+                FinalizeFailureContext {
+                    plan: &plan,
+                    metadata: &metadata,
+                    execution_result: &result,
+                    config_snapshot: &config_snapshot,
+                    start_time: std::time::Instant::now(),
+                    encode_started_at: chrono::Utc::now(),
+                    attempt_number: 1,
+                    temp_output_path: &temp_output,
+                },
+                &crate::error::AlchemistError::Unknown("disk full".to_string()),
+            )
+            .await;
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Failed);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_job_reprobes_encoded_output_duration_for_stats() -> anyhow::Result<()> {
+        let ffmpeg_available = std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        let ffprobe_available = std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if !ffmpeg_available || !ffprobe_available {
+            return Ok(());
+        }
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_finalize_duration_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_finalize_duration_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("source.mkv");
+        let output = temp_root.join("source-alchemist.mkv");
+        std::fs::write(&input, b"source-bytes")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+        let job_id = job.id;
+        db.update_job_status(job.id, crate::db::JobState::Encoding)
+            .await?;
+
+        let temp_output = temp_output_path_for(&output);
+        let ffmpeg_status = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "matroska",
+            ])
+            .arg(&temp_output)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!("ffmpeg failed to generate test output"));
+        }
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            true,
+        );
+
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(temp_output.clone()),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("medium".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Copy,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+        let metadata = MediaMetadata {
+            path: input.clone(),
+            duration_secs: 0.0,
+            codec_name: "unknown".to_string(),
+            width: 16,
+            height: 16,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 12,
+            video_bitrate_bps: None,
+            container_bitrate_bps: None,
+            fps: 24.0,
+            container: "mkv".to_string(),
+            audio_codec: None,
+            audio_bitrate_bps: None,
+            audio_channels: None,
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+        };
+        let result = ExecutionResult {
+            requested_codec: crate::config::OutputCodec::H264,
+            planned_output_codec: crate::config::OutputCodec::H264,
+            requested_encoder: Some(Encoder::H264X264),
+            used_encoder: Some(Encoder::H264X264),
+            used_backend: Some(EncoderBackend::Cpu),
+            fallback: None,
+            fallback_occurred: false,
+            actual_output_codec: Some(crate::config::OutputCodec::H264),
+            actual_encoder_name: Some("libx264".to_string()),
+        };
+
+        pipeline
+            .finalize_job(
+                job,
+                &input,
+                FinalizeJobContext {
+                    output_path: &output,
+                    temp_output_path: &temp_output,
+                    plan: &plan,
+                    bypass_quality_gates: true,
+                    start_time: std::time::Instant::now(),
+                    encode_started_at: chrono::Utc::now(),
+                    attempt_number: 1,
+                    metadata: &metadata,
+                    execution_result: &result,
+                },
+            )
+            .await?;
+
+        let stats = db.get_encode_stats_by_job_id(job_id).await?;
+        assert!(stats.encode_speed > 0.0);
+        assert!(stats.avg_bitrate_kbps > 0.0);
+        assert!(output.exists());
+        assert!(!temp_output.exists());
+
+        db.pool.close().await;
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumable_transcode_skips_completed_segments_on_retry() -> anyhow::Result<()> {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+        set_test_resume_segment_length(Some(1));
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_resume_retry_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("alchemist_resume_retry_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let input = temp_root.join("resume-source.mkv");
+        let output = temp_root.join("resume-output.mkv");
+        let ffmpeg_status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:r=1:d=3",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&input)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!("ffmpeg failed to create resume test input"));
+        }
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        let analyzer = FfmpegAnalyzer;
+        let analysis = analyzer.analyze(&input).await?;
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "resume-test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(temp_output_path_for(&output)),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("ultrafast".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Drop,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+
+        let (_session, segments) = pipeline
+            .prepare_resume_session(&job, &plan, &analysis.metadata, &output)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resume session not created"))?;
+        pipeline
+            .encode_resume_segment(&job, &plan, &analysis.metadata, &segments[0])
+            .await?;
+        let first_segment_mtime = std::fs::metadata(&segments[0].temp_path)?.modified()?;
+
+        let temp_output = temp_output_path_for(&output);
+        let result = pipeline
+            .execute_resumable_transcode(&job, &plan, &analysis.metadata, &temp_output)
+            .await?;
+        assert!(result.is_some());
+        assert!(temp_output.exists());
+        assert_eq!(
+            std::fs::metadata(&segments[0].temp_path)?.modified()?,
+            first_segment_mtime
+        );
+
+        let segments = db.list_resume_segments(job.id).await?;
+        assert_eq!(segments.len(), 3);
+        assert!(segments.iter().all(|segment| segment.status == "completed"));
+
+        let _ = pipeline.purge_resume_session_state(job.id).await;
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        set_test_resume_segment_length(None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumable_transcode_invalidates_stale_session_when_input_changes() -> anyhow::Result<()>
+    {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+        set_test_resume_segment_length(Some(1));
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_resume_invalidate_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_resume_invalidate_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let input = temp_root.join("invalidate-source.mkv");
+        let output = temp_root.join("invalidate-output.mkv");
+        let ffmpeg_status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:r=1:d=3",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&input)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!(
+                "ffmpeg failed to create invalidation test input"
+            ));
+        }
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        let analyzer = FfmpegAnalyzer;
+        let analysis = analyzer.analyze(&input).await?;
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "resume-invalidate".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(temp_output_path_for(&output)),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("ultrafast".to_string()),
+            threads: 0,
+            audio: AudioStreamPlan::Drop,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+
+        let (session, _segments) = pipeline
+            .prepare_resume_session(&job, &plan, &analysis.metadata, &output)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resume session not created"))?;
+        let sentinel = PathBuf::from(&session.temp_dir).join("stale.txt");
+        std::fs::write(&sentinel, b"stale")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let bytes = std::fs::read(&input)?;
+        std::fs::write(&input, &bytes)?;
+
+        let (_new_session, segments) = pipeline
+            .prepare_resume_session(&job, &plan, &analysis.metadata, &output)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resume session not recreated"))?;
+
+        assert!(!sentinel.exists());
+        assert!(segments.iter().all(|segment| segment.status == "pending"));
+
+        let _ = pipeline.purge_resume_session_state(job.id).await;
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        set_test_resume_segment_length(None);
         Ok(())
     }
 }

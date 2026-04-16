@@ -94,6 +94,16 @@ export interface JobDetail {
     queue_position: number | null;
 }
 
+export interface ProcessorStatus {
+    blocked_reason: "manual_paused" | "scheduled_pause" | "draining" | "workers_busy" | null;
+    message: string;
+    manual_paused: boolean;
+    scheduler_paused: boolean;
+    draining: boolean;
+    active_jobs: number;
+    concurrent_limit: number;
+}
+
 export interface CountMessageResponse {
     count: number;
     message: string;

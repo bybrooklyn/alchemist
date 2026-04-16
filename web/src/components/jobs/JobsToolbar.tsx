@@ -1,4 +1,4 @@
-import { Search, RefreshCw, ArrowDown, ArrowUp } from "lucide-react";
+import { Search, RefreshCw, ArrowDown, ArrowUp, Plus } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { RefObject } from "react";
@@ -26,6 +26,7 @@ interface JobsToolbarProps {
     setSortDesc: (fn: boolean | ((prev: boolean) => boolean)) => void;
     refreshing: boolean;
     fetchJobs: () => Promise<void>;
+    openEnqueueDialog: () => void;
 }
 
 export function JobsToolbar({
@@ -33,7 +34,7 @@ export function JobsToolbar({
     searchInput, setSearchInput,
     compactSearchOpen, setCompactSearchOpen, compactSearchRef, compactSearchInputRef,
     sortBy, setSortBy, sortDesc, setSortDesc,
-    refreshing, fetchJobs,
+    refreshing, fetchJobs, openEnqueueDialog,
 }: JobsToolbarProps) {
     return (
         <div className="rounded-xl border border-helios-line/10 bg-helios-surface/50 px-3 py-3">
@@ -94,6 +95,13 @@ export function JobsToolbar({
                 </div>
 
                 <div className="flex items-center gap-2 sm:ml-auto">
+                    <button
+                        onClick={openEnqueueDialog}
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-helios-line/20 bg-helios-surface px-3 text-sm font-semibold text-helios-ink hover:bg-helios-surface-soft"
+                    >
+                        <Plus size={16} />
+                        <span>Add file</span>
+                    </button>
                     <button
                         onClick={() => void fetchJobs()}
                         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"

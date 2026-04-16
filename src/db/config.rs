@@ -1,10 +1,59 @@
 use crate::error::Result;
+use serde_json::Value as JsonValue;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::Db;
 use super::types::*;
+
+fn notification_config_string(config_json: &str, key: &str) -> Option<String> {
+    serde_json::from_str::<JsonValue>(config_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn notification_legacy_columns(
+    target_type: &str,
+    config_json: &str,
+) -> (String, Option<String>, Option<String>) {
+    match target_type {
+        "discord_webhook" => (
+            "discord".to_string(),
+            notification_config_string(config_json, "webhook_url"),
+            None,
+        ),
+        "discord_bot" => (
+            "discord".to_string(),
+            Some("https://discord.com".to_string()),
+            notification_config_string(config_json, "bot_token"),
+        ),
+        "gotify" => (
+            "gotify".to_string(),
+            notification_config_string(config_json, "server_url"),
+            notification_config_string(config_json, "app_token"),
+        ),
+        "webhook" => (
+            "webhook".to_string(),
+            notification_config_string(config_json, "url"),
+            notification_config_string(config_json, "auth_token"),
+        ),
+        "telegram" => (
+            "webhook".to_string(),
+            Some("https://api.telegram.org".to_string()),
+            notification_config_string(config_json, "bot_token"),
+        ),
+        "email" => ("webhook".to_string(), None, None),
+        other => (other.to_string(), None, None),
+    }
+}
 
 impl Db {
     pub async fn get_watch_dirs(&self) -> Result<Vec<WatchDir>> {
@@ -292,10 +341,20 @@ impl Db {
              FROM watch_dirs wd
              JOIN library_profiles lp ON lp.id = wd.profile_id
              WHERE wd.profile_id IS NOT NULL
-               AND (? = wd.path OR ? LIKE wd.path || '/%' OR ? LIKE wd.path || '\\%')
+               AND (
+                    ? = wd.path
+                    OR (
+                        length(?) > length(wd.path)
+                        AND (
+                            substr(?, 1, length(wd.path) + 1) = wd.path || '/'
+                            OR substr(?, 1, length(wd.path) + 1) = wd.path || '\\'
+                        )
+                    )
+               )
              ORDER BY LENGTH(wd.path) DESC
              LIMIT 1",
         )
+        .bind(path)
         .bind(path)
         .bind(path)
         .bind(path)
@@ -359,11 +418,43 @@ impl Db {
     }
 
     pub async fn get_notification_targets(&self) -> Result<Vec<NotificationTarget>> {
-        let targets = sqlx::query_as::<_, NotificationTarget>(
-            "SELECT id, name, target_type, config_json, events, enabled, created_at FROM notification_targets",
-        )
+        let flags = &self.notification_target_flags;
+        let targets = if flags.has_target_type_v2 {
+            sqlx::query_as::<_, NotificationTarget>(
+                "SELECT
+                    id,
+                    name,
+                    COALESCE(
+                        NULLIF(target_type_v2, ''),
+                        CASE target_type
+                            WHEN 'discord' THEN 'discord_webhook'
+                            WHEN 'gotify' THEN 'gotify'
+                            ELSE 'webhook'
+                        END
+                    ) AS target_type,
+                    CASE
+                        WHEN trim(config_json) != '' THEN config_json
+                        WHEN target_type = 'discord' THEN json_object('webhook_url', endpoint_url)
+                        WHEN target_type = 'gotify' THEN json_object('server_url', endpoint_url, 'app_token', COALESCE(auth_token, ''))
+                        ELSE json_object('url', endpoint_url, 'auth_token', auth_token)
+                    END AS config_json,
+                    events,
+                    enabled,
+                    created_at
+                 FROM notification_targets
+                 ORDER BY id ASC",
+            )
             .fetch_all(&self.pool)
-            .await?;
+            .await?
+        } else {
+            sqlx::query_as::<_, NotificationTarget>(
+                "SELECT id, name, target_type, config_json, events, enabled, created_at
+                 FROM notification_targets
+                 ORDER BY id ASC",
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
         Ok(targets)
     }
 
@@ -375,18 +466,42 @@ impl Db {
         events: &str,
         enabled: bool,
     ) -> Result<NotificationTarget> {
-        let row = sqlx::query_as::<_, NotificationTarget>(
-            "INSERT INTO notification_targets (name, target_type, config_json, events, enabled)
-             VALUES (?, ?, ?, ?, ?) RETURNING *",
-        )
-        .bind(name)
-        .bind(target_type)
-        .bind(config_json)
-        .bind(events)
-        .bind(enabled)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row)
+        let flags = &self.notification_target_flags;
+        if flags.has_target_type_v2 {
+            let (legacy_target_type, endpoint_url, auth_token) =
+                notification_legacy_columns(target_type, config_json);
+            let result = sqlx::query(
+                "INSERT INTO notification_targets
+                    (name, target_type, target_type_v2, endpoint_url, auth_token, config_json, events, enabled)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(name)
+            .bind(legacy_target_type)
+            .bind(target_type)
+            .bind(endpoint_url)
+            .bind(auth_token)
+            .bind(config_json)
+            .bind(events)
+            .bind(enabled)
+            .execute(&self.pool)
+            .await?;
+            self.get_notification_target_by_id(result.last_insert_rowid())
+                .await
+        } else {
+            let result = sqlx::query(
+                "INSERT INTO notification_targets (name, target_type, config_json, events, enabled)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(name)
+            .bind(target_type)
+            .bind(config_json)
+            .bind(events)
+            .bind(enabled)
+            .execute(&self.pool)
+            .await?;
+            self.get_notification_target_by_id(result.last_insert_rowid())
+                .await
+        }
     }
 
     pub async fn delete_notification_target(&self, id: i64) -> Result<()> {
@@ -406,30 +521,97 @@ impl Db {
         &self,
         targets: &[crate::config::NotificationTargetConfig],
     ) -> Result<()> {
+        let flags = &self.notification_target_flags;
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM notification_targets")
             .execute(&mut *tx)
             .await?;
         for target in targets {
-            sqlx::query(
-                "INSERT INTO notification_targets (name, target_type, config_json, events, enabled) VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&target.name)
-            .bind(&target.target_type)
-            .bind(target.config_json.to_string())
-            .bind(serde_json::to_string(&target.events).unwrap_or_else(|_| "[]".to_string()))
-            .bind(target.enabled)
-            .execute(&mut *tx)
-            .await?;
+            let config_json = target.config_json.to_string();
+            let events = serde_json::to_string(&target.events).unwrap_or_else(|_| "[]".to_string());
+            if flags.has_target_type_v2 {
+                let (legacy_target_type, endpoint_url, auth_token) =
+                    notification_legacy_columns(&target.target_type, &config_json);
+                sqlx::query(
+                    "INSERT INTO notification_targets
+                        (name, target_type, target_type_v2, endpoint_url, auth_token, config_json, events, enabled)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&target.name)
+                .bind(legacy_target_type)
+                .bind(&target.target_type)
+                .bind(endpoint_url)
+                .bind(auth_token)
+                .bind(&config_json)
+                .bind(&events)
+                .bind(target.enabled)
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                sqlx::query(
+                    "INSERT INTO notification_targets (name, target_type, config_json, events, enabled) VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(&target.name)
+                .bind(&target.target_type)
+                .bind(&config_json)
+                .bind(&events)
+                .bind(target.enabled)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
     }
 
+    async fn get_notification_target_by_id(&self, id: i64) -> Result<NotificationTarget> {
+        let flags = &self.notification_target_flags;
+        let row = if flags.has_target_type_v2 {
+            sqlx::query_as::<_, NotificationTarget>(
+                "SELECT
+                    id,
+                    name,
+                    COALESCE(
+                        NULLIF(target_type_v2, ''),
+                        CASE target_type
+                            WHEN 'discord' THEN 'discord_webhook'
+                            WHEN 'gotify' THEN 'gotify'
+                            ELSE 'webhook'
+                        END
+                    ) AS target_type,
+                    CASE
+                        WHEN trim(config_json) != '' THEN config_json
+                        WHEN target_type = 'discord' THEN json_object('webhook_url', endpoint_url)
+                        WHEN target_type = 'gotify' THEN json_object('server_url', endpoint_url, 'app_token', COALESCE(auth_token, ''))
+                        ELSE json_object('url', endpoint_url, 'auth_token', auth_token)
+                    END AS config_json,
+                    events,
+                    enabled,
+                    created_at
+                 FROM notification_targets
+                 WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, NotificationTarget>(
+                "SELECT id, name, target_type, config_json, events, enabled, created_at
+                 FROM notification_targets
+                 WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?
+        };
+        Ok(row)
+    }
+
     pub async fn get_schedule_windows(&self) -> Result<Vec<ScheduleWindow>> {
-        let windows = sqlx::query_as::<_, ScheduleWindow>("SELECT * FROM schedule_windows")
-            .fetch_all(&self.pool)
-            .await?;
+        let windows =
+            sqlx::query_as::<_, ScheduleWindow>("SELECT * FROM schedule_windows ORDER BY id ASC")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(windows)
     }
 
@@ -579,6 +761,104 @@ impl Db {
             .bind(key)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db_path(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("{prefix}_{}.db", rand::random::<u64>()));
+        path
+    }
+
+    fn sample_profile(name: &str) -> NewLibraryProfile {
+        NewLibraryProfile {
+            name: name.to_string(),
+            preset: "balanced".to_string(),
+            codec: "av1".to_string(),
+            quality_profile: "balanced".to_string(),
+            hdr_mode: "preserve".to_string(),
+            audio_mode: "copy".to_string(),
+            crf_override: None,
+            notes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_lookup_treats_percent_and_underscore_as_literals() -> anyhow::Result<()> {
+        let db_path = temp_db_path("alchemist_profile_lookup_literals");
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let underscore_profile = db.create_profile(sample_profile("underscore")).await?;
+        let percent_profile = db.create_profile(sample_profile("percent")).await?;
+
+        let underscore_watch = db.add_watch_dir("/media/TV_4K", true).await?;
+        db.assign_profile_to_watch_dir(underscore_watch.id, Some(underscore_profile))
+            .await?;
+
+        let percent_watch = db.add_watch_dir("/media/Movies%20", true).await?;
+        db.assign_profile_to_watch_dir(percent_watch.id, Some(percent_profile))
+            .await?;
+
+        assert_eq!(
+            db.get_profile_for_path("/media/TV_4K/show/file.mkv")
+                .await?
+                .map(|profile| profile.name),
+            Some("underscore".to_string())
+        );
+        assert_eq!(
+            db.get_profile_for_path("/media/TVA4K/show/file.mkv")
+                .await?
+                .map(|profile| profile.name),
+            None
+        );
+        assert_eq!(
+            db.get_profile_for_path("/media/Movies%20/title/file.mkv")
+                .await?
+                .map(|profile| profile.name),
+            Some("percent".to_string())
+        );
+        assert_eq!(
+            db.get_profile_for_path("/media/MoviesABCD/title/file.mkv")
+                .await?
+                .map(|profile| profile.name),
+            None
+        );
+
+        db.pool.close().await;
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_lookup_prefers_longest_literal_matching_watch_dir() -> anyhow::Result<()> {
+        let db_path = temp_db_path("alchemist_profile_lookup_longest");
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let base_profile = db.create_profile(sample_profile("base")).await?;
+        let nested_profile = db.create_profile(sample_profile("nested")).await?;
+
+        let base_watch = db.add_watch_dir("/media", true).await?;
+        db.assign_profile_to_watch_dir(base_watch.id, Some(base_profile))
+            .await?;
+
+        let nested_watch = db.add_watch_dir("/media/TV_4K", true).await?;
+        db.assign_profile_to_watch_dir(nested_watch.id, Some(nested_profile))
+            .await?;
+
+        assert_eq!(
+            db.get_profile_for_path("/media/TV_4K/show/file.mkv")
+                .await?
+                .map(|profile| profile.name),
+            Some("nested".to_string())
+        );
+
+        db.pool.close().await;
+        let _ = std::fs::remove_file(db_path);
         Ok(())
     }
 }

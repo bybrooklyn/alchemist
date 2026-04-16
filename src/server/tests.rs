@@ -548,6 +548,69 @@ async fn engine_status_endpoint_reports_draining_state()
 }
 
 #[tokio::test]
+async fn processor_status_endpoint_reports_blocking_reason_precedence()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (_job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Encoding).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/processor/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["blocked_reason"], "workers_busy");
+
+    state.agent.drain();
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/processor/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["blocked_reason"], "draining");
+
+    state.agent.set_scheduler_paused(true);
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/processor/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["blocked_reason"], "scheduled_pause");
+
+    state.agent.pause();
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/processor/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["blocked_reason"], "manual_paused");
+
+    cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_only_api_token_allows_observability_only_routes()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -1160,6 +1223,35 @@ async fn public_clients_can_reach_login_after_setup()
 }
 
 #[tokio::test]
+async fn login_returns_internal_error_when_user_lookup_fails()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    state.db.pool.close().await;
+
+    let mut request = remote_request(
+        Method::POST,
+        "/api/auth/login",
+        Body::from(
+            json!({
+                "username": "tester",
+                "password": "not-important"
+            })
+            .to_string(),
+        ),
+    );
+    request.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+
+    let response = app.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn settings_bundle_requires_auth_after_setup()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -1358,6 +1450,93 @@ async fn settings_bundle_put_projects_extended_settings_to_db()
     );
     assert_eq!(persisted.files.output_suffix, "-custom");
     assert_eq!(persisted.scanner.extra_watch_dirs.len(), 1);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_notification_removes_only_one_duplicate_target()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let duplicate_target = crate::config::NotificationTargetConfig {
+        name: "Discord".to_string(),
+        target_type: "discord_webhook".to_string(),
+        config_json: serde_json::json!({
+            "webhook_url": "https://discord.com/api/webhooks/test"
+        }),
+        endpoint_url: None,
+        auth_token: None,
+        events: vec!["encode.completed".to_string()],
+        enabled: true,
+    };
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.notifications.targets = vec![duplicate_target.clone(), duplicate_target.clone()];
+    })
+    .await?;
+    let projected = state.config.read().await.clone();
+    crate::settings::project_config_to_db(state.db.as_ref(), &projected).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let targets = state.db.get_notification_targets().await?;
+    assert_eq!(targets.len(), 2);
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::DELETE,
+            &format!("/api/settings/notifications/{}", targets[0].id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let persisted = crate::config::Config::load(config_path.as_path())?;
+    assert_eq!(persisted.notifications.targets.len(), 1);
+
+    let stored_targets = state.db.get_notification_targets().await?;
+    assert_eq!(stored_targets.len(), 1);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_schedule_removes_only_one_duplicate_window()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let duplicate_window = crate::config::ScheduleWindowConfig {
+        start_time: "22:00".to_string(),
+        end_time: "06:00".to_string(),
+        days_of_week: vec![1, 2, 3],
+        enabled: true,
+    };
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.schedule.windows = vec![duplicate_window.clone(), duplicate_window.clone()];
+    })
+    .await?;
+    let projected = state.config.read().await.clone();
+    crate::settings::project_config_to_db(state.db.as_ref(), &projected).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let windows = state.db.get_schedule_windows().await?;
+    assert_eq!(windows.len(), 2);
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::DELETE,
+            &format!("/api/settings/schedule/{}", windows[0].id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let persisted = crate::config::Config::load(config_path.as_path())?;
+    assert_eq!(persisted.schedule.windows.len(), 1);
+
+    let stored_windows = state.db.get_schedule_windows().await?;
+    assert_eq!(stored_windows.len(), 1);
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())
@@ -1612,6 +1791,219 @@ async fn job_detail_route_falls_back_to_legacy_failure_summary()
     );
 
     cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn job_detail_route_returns_internal_error_when_encode_attempts_query_fails()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Queued).await?;
+
+    sqlx::query("DROP TABLE encode_attempts")
+        .execute(&state.db.pool)
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/jobs/{}/details", job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn enqueue_job_endpoint_accepts_supported_absolute_files()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let input_path = temp_path("alchemist_enqueue_input", "mkv");
+    std::fs::write(&input_path, b"test")?;
+    let canonical_input = std::fs::canonicalize(&input_path)?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/enqueue",
+            &token,
+            json!({ "path": input_path.to_string_lossy() }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["enqueued"], true);
+    assert!(
+        state
+            .db
+            .get_job_by_input_path(canonical_input.to_string_lossy().as_ref())
+            .await?
+            .is_some()
+    );
+
+    cleanup_paths(&[input_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn enqueue_job_endpoint_rejects_relative_paths_and_unsupported_extensions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(_state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/enqueue",
+            &token,
+            json!({ "path": "relative/movie.mkv" }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let unsupported = temp_path("alchemist_enqueue_unsupported", "txt");
+    std::fs::write(&unsupported, b"test")?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/enqueue",
+            &token,
+            json!({ "path": unsupported.to_string_lossy() }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    cleanup_paths(&[unsupported, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn enqueue_job_endpoint_returns_noop_for_generated_output_paths()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(_state.db.as_ref()).await?;
+
+    let generated_dir = temp_path("alchemist_enqueue_generated_dir", "dir");
+    std::fs::create_dir_all(&generated_dir)?;
+    let generated = generated_dir.join("movie-alchemist.mkv");
+    std::fs::write(&generated, b"test")?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/enqueue",
+            &token,
+            json!({ "path": generated.to_string_lossy() }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["enqueued"], false);
+
+    cleanup_paths(&[generated_dir, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_job_endpoint_purges_resume_session_temp_dir()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Failed).await?;
+
+    let resume_dir = temp_path("alchemist_resume_delete", "dir");
+    std::fs::create_dir_all(&resume_dir)?;
+    std::fs::write(resume_dir.join("segment-00000.mkv"), b"segment")?;
+    state
+        .db
+        .upsert_resume_session(&crate::db::UpsertJobResumeSessionInput {
+            job_id: job.id,
+            strategy: "segment_v1".to_string(),
+            plan_hash: "plan".to_string(),
+            mtime_hash: "mtime".to_string(),
+            temp_dir: resume_dir.to_string_lossy().to_string(),
+            concat_manifest_path: resume_dir
+                .join("segments.ffconcat")
+                .to_string_lossy()
+                .to_string(),
+            segment_length_secs: 120,
+            status: "active".to_string(),
+        })
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/jobs/{}/delete", job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(state.db.get_resume_session(job.id).await?.is_none());
+    assert!(!resume_dir.exists());
+
+    cleanup_paths(&[resume_dir, input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn clear_completed_purges_resume_sessions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Completed).await?;
+
+    let resume_dir = temp_path("alchemist_resume_clear_completed", "dir");
+    std::fs::create_dir_all(&resume_dir)?;
+    std::fs::write(resume_dir.join("segment-00000.mkv"), b"segment")?;
+    state
+        .db
+        .upsert_resume_session(&crate::db::UpsertJobResumeSessionInput {
+            job_id: job.id,
+            strategy: "segment_v1".to_string(),
+            plan_hash: "plan".to_string(),
+            mtime_hash: "mtime".to_string(),
+            temp_dir: resume_dir.to_string_lossy().to_string(),
+            concat_manifest_path: resume_dir
+                .join("segments.ffconcat")
+                .to_string_lossy()
+                .to_string(),
+            segment_length_secs: 120,
+            status: "segments_complete".to_string(),
+        })
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/jobs/clear-completed",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(state.db.get_resume_session(job.id).await?.is_none());
+    assert!(!resume_dir.exists());
+
+    cleanup_paths(&[resume_dir, input_path, output_path, config_path, db_path]);
     Ok(())
 }
 

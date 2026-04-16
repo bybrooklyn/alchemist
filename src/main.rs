@@ -321,6 +321,11 @@ async fn run() -> Result<()> {
         Ok(count) if count > 0 => {
             warn!("{} interrupted jobs reset to queued", count);
             for job in interrupted_jobs {
+                let has_resume_session =
+                    db.get_resume_session(job.id).await.ok().flatten().is_some();
+                if has_resume_session {
+                    continue;
+                }
                 let temp_path = orphaned_temp_output_path(&job.output_path);
                 if std::fs::metadata(&temp_path).is_ok() {
                     match std::fs::remove_file(&temp_path) {

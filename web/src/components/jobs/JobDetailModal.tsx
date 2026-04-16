@@ -2,9 +2,10 @@ import { X, Clock, Info, Activity, Database, Zap, Maximize2, AlertCircle, Refres
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import type React from "react";
-import type { JobDetail, EncodeStats, ExplanationView, LogEntry, ConfirmConfig, Job } from "./types";
+import { apiJson } from "../../lib/api";
+import type { JobDetail, EncodeStats, ExplanationView, LogEntry, ConfirmConfig, Job, ProcessorStatus } from "./types";
 import { formatBytes, formatDuration, logLevelClass, isJobActive } from "./types";
 
 function cn(...inputs: ClassValue[]) {
@@ -34,6 +35,32 @@ export function JobDetailModal({
     completedEncodeStats, focusedEmptyState,
     openConfirm, handleAction, handlePriority, getStatusBadge,
 }: JobDetailModalProps) {
+    const [processorStatus, setProcessorStatus] = useState<ProcessorStatus | null>(null);
+
+    useEffect(() => {
+        if (!focusedJob || focusedJob.job.status !== "queued") {
+            setProcessorStatus(null);
+            return;
+        }
+
+        let cancelled = false;
+        void apiJson<ProcessorStatus>("/api/processor/status")
+            .then((status) => {
+                if (!cancelled) {
+                    setProcessorStatus(status);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setProcessorStatus(null);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [focusedJob]);
+
     return (
         <AnimatePresence>
             {focusedJob && (
@@ -265,6 +292,11 @@ export function JobDetailModal({
                                             {focusedJob.job.status === "queued" && focusedJob.queue_position != null && (
                                                 <p className="text-xs text-helios-slate mt-1">
                                                     Queue position: <span className="font-semibold text-helios-ink">#{focusedJob.queue_position}</span>
+                                                </p>
+                                            )}
+                                            {focusedJob.job.status === "queued" && processorStatus?.blocked_reason && (
+                                                <p className="text-xs text-helios-slate mt-1">
+                                                    Blocked: <span className="font-semibold text-helios-ink">{processorStatus.message}</span>
                                                 </p>
                                             )}
                                         </div>

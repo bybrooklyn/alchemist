@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, warn};
 
 type NotificationResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+const DAILY_SUMMARY_LAST_SUCCESS_KEY: &str = "notifications.daily_summary.last_success_date";
 
 #[derive(Clone)]
 pub struct NotificationManager {
@@ -231,9 +232,15 @@ impl NotificationManager {
         });
 
         tokio::spawn(async move {
+            let start = tokio::time::Instant::now()
+                + delay_until_next_minute_boundary(chrono::Local::now());
+            let mut interval = tokio::time::interval_at(start, Duration::from_secs(60));
             loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                if let Err(err) = summary_manager.maybe_send_daily_summary().await {
+                interval.tick().await;
+                if let Err(err) = summary_manager
+                    .maybe_send_daily_summary_at(chrono::Local::now())
+                    .await
+                {
                     error!("Daily summary notification error: {}", err);
                 }
             }
@@ -301,9 +308,11 @@ impl NotificationManager {
         Ok(())
     }
 
-    async fn maybe_send_daily_summary(&self) -> NotificationResult<()> {
+    async fn maybe_send_daily_summary_at(
+        &self,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> NotificationResult<()> {
         let config = self.config.read().await.clone();
-        let now = chrono::Local::now();
         let parts = config
             .notifications
             .daily_summary_time_local
@@ -314,43 +323,100 @@ impl NotificationManager {
         }
         let hour = parts[0].parse::<u32>().unwrap_or(9);
         let minute = parts[1].parse::<u32>().unwrap_or(0);
-        if now.hour() != hour || now.minute() != minute {
+        let Some(scheduled_at) = now
+            .with_hour(hour)
+            .and_then(|value| value.with_minute(minute))
+            .and_then(|value| value.with_second(0))
+            .and_then(|value| value.with_nanosecond(0))
+        else {
+            return Ok(());
+        };
+        if now < scheduled_at {
             return Ok(());
         }
 
         let summary_key = now.format("%Y-%m-%d").to_string();
-        {
-            let mut last_sent = self.daily_summary_last_sent.lock().await;
-            if last_sent.as_deref() == Some(summary_key.as_str()) {
-                return Ok(());
-            }
-            // Mark sent before releasing lock to prevent duplicate sends
-            // if the scheduler fires twice in the same minute.
-            *last_sent = Some(summary_key.clone());
+        if self.daily_summary_already_sent(&summary_key).await? {
+            return Ok(());
         }
 
-        let summary = self.db.get_daily_summary_stats().await?;
         let targets = self.db.get_notification_targets().await?;
+        let mut eligible_targets = Vec::new();
         for target in targets {
             if !target.enabled {
                 continue;
             }
-            let allowed: Vec<String> = serde_json::from_str(&target.events).unwrap_or_default();
+            let allowed: Vec<String> = match serde_json::from_str(&target.events) {
+                Ok(events) => events,
+                Err(err) => {
+                    warn!(
+                        "Failed to parse events for notification target '{}': {}",
+                        target.name, err
+                    );
+                    Vec::new()
+                }
+            };
             let normalized_allowed = crate::config::normalize_notification_events(&allowed);
-            if !normalized_allowed
+            if normalized_allowed
                 .iter()
                 .any(|event| event == crate::config::NOTIFICATION_EVENT_DAILY_SUMMARY)
             {
-                continue;
+                eligible_targets.push(target);
             }
+        }
+
+        if eligible_targets.is_empty() {
+            self.mark_daily_summary_sent(&summary_key).await?;
+            return Ok(());
+        }
+
+        let summary = self.db.get_daily_summary_stats().await?;
+        let mut delivered = 0usize;
+        for target in eligible_targets {
             if let Err(err) = self.send_daily_summary_target(&target, &summary).await {
                 error!(
                     "Failed to send daily summary to target '{}': {}",
                     target.name, err
                 );
+                continue;
+            }
+            delivered += 1;
+        }
+
+        if delivered > 0 {
+            self.mark_daily_summary_sent(&summary_key).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn daily_summary_already_sent(&self, summary_key: &str) -> NotificationResult<bool> {
+        {
+            let last_sent = self.daily_summary_last_sent.lock().await;
+            if last_sent.as_deref() == Some(summary_key) {
+                return Ok(true);
             }
         }
 
+        let persisted = self
+            .db
+            .get_preference(DAILY_SUMMARY_LAST_SUCCESS_KEY)
+            .await?;
+        if persisted.as_deref() == Some(summary_key) {
+            let mut last_sent = self.daily_summary_last_sent.lock().await;
+            *last_sent = Some(summary_key.to_string());
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    async fn mark_daily_summary_sent(&self, summary_key: &str) -> NotificationResult<()> {
+        self.db
+            .set_preference(DAILY_SUMMARY_LAST_SUCCESS_KEY, summary_key)
+            .await?;
+        let mut last_sent = self.daily_summary_last_sent.lock().await;
+        *last_sent = Some(summary_key.to_string());
         Ok(())
     }
 
@@ -851,6 +917,17 @@ impl NotificationManager {
     }
 }
 
+fn delay_until_next_minute_boundary(now: chrono::DateTime<chrono::Local>) -> Duration {
+    let remaining_seconds = 60_u64.saturating_sub(now.second() as u64).max(1);
+    let mut delay = Duration::from_secs(remaining_seconds);
+    if now.nanosecond() > 0 {
+        delay = delay
+            .checked_sub(Duration::from_nanos(now.nanosecond() as u64))
+            .unwrap_or_else(|| Duration::from_millis(1));
+    }
+    delay
+}
+
 async fn _unused_ensure_public_endpoint(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let url = Url::parse(raw)?;
     let host = match url.host_str() {
@@ -912,8 +989,37 @@ fn is_private_ip(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
     use crate::db::JobState;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    fn scheduled_test_time(hour: u32, minute: u32) -> chrono::DateTime<chrono::Local> {
+        chrono::Local::now()
+            .with_hour(hour)
+            .and_then(|value| value.with_minute(minute))
+            .and_then(|value| value.with_second(0))
+            .and_then(|value| value.with_nanosecond(0))
+            .unwrap_or_else(chrono::Local::now)
+    }
+
+    async fn add_daily_summary_webhook_target(
+        db: &Db,
+        addr: std::net::SocketAddr,
+    ) -> NotificationResult<()> {
+        let config_json = serde_json::json!({ "url": format!("http://{}", addr) }).to_string();
+        db.add_notification_target(
+            "daily-summary",
+            "webhook",
+            &config_json,
+            "[\"daily.summary\"]",
+            true,
+        )
+        .await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_webhook_errors_on_non_success()
@@ -1058,6 +1164,156 @@ mod tests {
         );
 
         drop(manager);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn daily_summary_retries_after_failed_delivery_and_marks_success()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_notifications_daily_retry_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let mut test_config = crate::config::Config::default();
+        test_config.notifications.allow_local_notifications = true;
+        test_config.notifications.daily_summary_time_local = "09:00".to_string();
+        let config = Arc::new(RwLock::new(test_config));
+        let manager = NotificationManager::new(db.clone(), config);
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let addr = listener.local_addr()?;
+        add_daily_summary_webhook_target(&db, addr).await?;
+
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_count_task = request_count.clone();
+        let listener_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let index = request_count_task.fetch_add(1, Ordering::SeqCst);
+                let response = if index == 0 {
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                };
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let first_now = scheduled_test_time(9, 5);
+        manager.maybe_send_daily_summary_at(first_now).await?;
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            db.get_preference(DAILY_SUMMARY_LAST_SUCCESS_KEY).await?,
+            None
+        );
+
+        manager
+            .maybe_send_daily_summary_at(first_now + chrono::Duration::minutes(1))
+            .await?;
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            db.get_preference(DAILY_SUMMARY_LAST_SUCCESS_KEY).await?,
+            Some(first_now.format("%Y-%m-%d").to_string())
+        );
+
+        listener_task.abort();
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn daily_summary_is_restart_safe_after_successful_delivery()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!(
+            "alchemist_notifications_daily_restart_{}.db",
+            token
+        ));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let mut test_config = crate::config::Config::default();
+        test_config.notifications.allow_local_notifications = true;
+        test_config.notifications.daily_summary_time_local = "09:00".to_string();
+        let config = Arc::new(RwLock::new(test_config));
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let addr = listener.local_addr()?;
+        add_daily_summary_webhook_target(&db, addr).await?;
+
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_count_task = request_count.clone();
+        let listener_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                request_count_task.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let first_now = scheduled_test_time(9, 2);
+        let manager = NotificationManager::new(db.clone(), config.clone());
+        manager.maybe_send_daily_summary_at(first_now).await?;
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+        let restarted_manager = NotificationManager::new(db.clone(), config.clone());
+        restarted_manager
+            .maybe_send_daily_summary_at(first_now + chrono::Duration::minutes(10))
+            .await?;
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+        listener_task.abort();
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn daily_summary_marks_day_sent_when_no_targets_are_eligible()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!(
+            "alchemist_notifications_daily_no_targets_{}.db",
+            token
+        ));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let mut test_config = crate::config::Config::default();
+        test_config.notifications.daily_summary_time_local = "09:00".to_string();
+        let config = Arc::new(RwLock::new(test_config));
+        let manager = NotificationManager::new(db.clone(), config);
+
+        let now = scheduled_test_time(9, 1);
+        manager.maybe_send_daily_summary_at(now).await?;
+        assert_eq!(
+            db.get_preference(DAILY_SUMMARY_LAST_SUCCESS_KEY).await?,
+            Some(now.format("%Y-%m-%d").to_string())
+        );
+
         let _ = std::fs::remove_file(db_path);
         Ok(())
     }
