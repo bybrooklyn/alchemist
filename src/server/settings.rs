@@ -461,14 +461,12 @@ fn normalize_notification_payload(
         unreachable!("notification config_json should always be an object here");
     };
     match payload.target_type.as_str() {
-        "discord_webhook" | "discord" => {
-            if !config_map.contains_key("webhook_url") {
-                if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
-                    config_map.insert(
-                        "webhook_url".to_string(),
-                        JsonValue::String(endpoint_url.clone()),
-                    );
-                }
+        "discord_webhook" | "discord" if !config_map.contains_key("webhook_url") => {
+            if let Some(endpoint_url) = payload.endpoint_url.as_ref() {
+                config_map.insert(
+                    "webhook_url".to_string(),
+                    JsonValue::String(endpoint_url.clone()),
+                );
             }
         }
         "gotify" => {
