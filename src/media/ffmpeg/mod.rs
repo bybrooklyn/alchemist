@@ -627,10 +627,11 @@ impl FFmpegProgressState {
                         }
                     }
                     "speed" => self.current.speed = value.to_string(),
-                    "progress" if matches!(value, "continue" | "end") => {
-                        if self.current.time_seconds > 0.0 || self.current.frame > 0 {
-                            return Some(self.current.clone());
-                        }
+                    "progress"
+                        if matches!(value, "continue" | "end")
+                            && (self.current.time_seconds > 0.0 || self.current.frame > 0) =>
+                    {
+                        return Some(self.current.clone());
                     }
                     _ => {}
                 }

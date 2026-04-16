@@ -490,36 +490,34 @@ impl NotificationTargetConfig {
 
         match self.target_type.as_str() {
             "discord_webhook" => {
-                if !config_map.contains_key("webhook_url") {
-                    if let Some(endpoint_url) = self.endpoint_url.clone() {
-                        config_map
-                            .insert("webhook_url".to_string(), JsonValue::String(endpoint_url));
-                    }
+                if let Some(endpoint_url) = self.endpoint_url.clone() {
+                    config_map
+                        .entry("webhook_url".to_string())
+                        .or_insert_with(|| JsonValue::String(endpoint_url));
                 }
             }
             "gotify" => {
-                if !config_map.contains_key("server_url") {
-                    if let Some(endpoint_url) = self.endpoint_url.clone() {
-                        config_map
-                            .insert("server_url".to_string(), JsonValue::String(endpoint_url));
-                    }
+                if let Some(endpoint_url) = self.endpoint_url.clone() {
+                    config_map
+                        .entry("server_url".to_string())
+                        .or_insert_with(|| JsonValue::String(endpoint_url));
                 }
-                if !config_map.contains_key("app_token") {
-                    if let Some(auth_token) = self.auth_token.clone() {
-                        config_map.insert("app_token".to_string(), JsonValue::String(auth_token));
-                    }
+                if let Some(auth_token) = self.auth_token.clone() {
+                    config_map
+                        .entry("app_token".to_string())
+                        .or_insert_with(|| JsonValue::String(auth_token));
                 }
             }
             "webhook" => {
-                if !config_map.contains_key("url") {
-                    if let Some(endpoint_url) = self.endpoint_url.clone() {
-                        config_map.insert("url".to_string(), JsonValue::String(endpoint_url));
-                    }
+                if let Some(endpoint_url) = self.endpoint_url.clone() {
+                    config_map
+                        .entry("url".to_string())
+                        .or_insert_with(|| JsonValue::String(endpoint_url));
                 }
-                if !config_map.contains_key("auth_token") {
-                    if let Some(auth_token) = self.auth_token.clone() {
-                        config_map.insert("auth_token".to_string(), JsonValue::String(auth_token));
-                    }
+                if let Some(auth_token) = self.auth_token.clone() {
+                    config_map
+                        .entry("auth_token".to_string())
+                        .or_insert_with(|| JsonValue::String(auth_token));
                 }
             }
             _ => {}
