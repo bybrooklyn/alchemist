@@ -49,6 +49,12 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
     let notifications = db.get_notification_targets().await?;
     assert_eq!(notifications.len(), 1);
     assert_eq!(notifications[0].target_type, "discord_webhook");
+    let notification_config: serde_json::Value =
+        serde_json::from_str(&notifications[0].config_json)?;
+    assert_eq!(
+        notification_config["webhook_url"].as_str(),
+        Some("https://discord.invalid/webhook")
+    );
 
     let schedule_windows = db.get_schedule_windows().await?;
     assert_eq!(schedule_windows.len(), 1);
@@ -101,7 +107,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "8");
+    assert_eq!(schema_version, "9");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")
@@ -152,6 +158,45 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
     .await?
     .get("count");
     assert_eq!(job_failure_explanations_exists, 1);
+
+    let notification_columns = sqlx::query("PRAGMA table_info(notification_targets)")
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(
+        notification_columns
+            .iter()
+            .any(|name| name == "endpoint_url")
+    );
+    assert!(notification_columns.iter().any(|name| name == "auth_token"));
+    assert!(
+        notification_columns
+            .iter()
+            .any(|name| name == "target_type_v2")
+    );
+    assert!(
+        notification_columns
+            .iter()
+            .any(|name| name == "config_json")
+    );
+
+    let resume_sessions_exists: i64 = sqlx::query(
+        "SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name = 'job_resume_sessions'",
+    )
+    .fetch_one(&pool)
+    .await?
+    .get("count");
+    assert_eq!(resume_sessions_exists, 1);
+
+    let resume_segments_exists: i64 = sqlx::query(
+        "SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name = 'job_resume_segments'",
+    )
+    .fetch_one(&pool)
+    .await?
+    .get("count");
+    assert_eq!(resume_segments_exists, 1);
 
     pool.close().await;
     drop(db);

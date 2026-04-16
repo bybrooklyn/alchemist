@@ -19,6 +19,17 @@ const completedJob: JobFixture = {
   vmaf_score: 95.4,
 };
 
+const queuedJob: JobFixture = {
+  id: 44,
+  input_path: "/media/queued-blocked.mkv",
+  output_path: "/output/queued-blocked-av1.mkv",
+  status: "queued",
+  priority: 0,
+  progress: 0,
+  created_at: "2025-01-01T00:00:00Z",
+  updated_at: "2025-01-02T00:00:00Z",
+};
+
 const completedDetail: JobDetailFixture = {
   job: completedJob,
   metadata: {
@@ -182,4 +193,58 @@ test("failed job detail prefers structured failure explanation", async ({ page }
   await expect(page.getByText("Structured failure summary")).toBeVisible();
   await expect(page.getByText("Structured failure detail from the backend.")).toBeVisible();
   await expect(page.getByText("Structured failure guidance from the backend.")).toBeVisible();
+});
+
+test("queued job detail shows the processor blocked reason", async ({ page }) => {
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [queuedJob]);
+  });
+  await mockJobDetails(page, {
+    44: {
+      job: queuedJob,
+      job_logs: [],
+      queue_position: 3,
+    },
+  });
+  await page.route("**/api/processor/status", async (route) => {
+    await fulfillJson(route, 200, {
+      blocked_reason: "workers_busy",
+      message: "All worker slots are currently busy.",
+      manual_paused: false,
+      scheduler_paused: false,
+      draining: false,
+      active_jobs: 1,
+      concurrent_limit: 1,
+    });
+  });
+
+  await page.goto("/jobs");
+  await page.getByTitle("/media/queued-blocked.mkv").click();
+
+  await expect(page.getByText("Queue position:")).toBeVisible();
+  await expect(page.getByText("Blocked:")).toBeVisible();
+  await expect(page.getByText("All worker slots are currently busy.")).toBeVisible();
+});
+
+test("add file submits the enqueue request and surfaces the response", async ({ page }) => {
+  let postedPath = "";
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, []);
+  });
+  await page.route("**/api/jobs/enqueue", async (route) => {
+    const body = route.request().postDataJSON() as { path: string };
+    postedPath = body.path;
+    await fulfillJson(route, 200, {
+      enqueued: true,
+      message: `Enqueued ${body.path}.`,
+    });
+  });
+
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "Add file" }).click();
+  await page.getByPlaceholder("/Volumes/Media/Movies/example.mkv").fill("/media/manual-add.mkv");
+  await page.getByRole("dialog").getByRole("button", { name: "Add File", exact: true }).click();
+
+  await expect.poll(() => postedPath).toBe("/media/manual-add.mkv");
+  await expect(page.getByText("Enqueued /media/manual-add.mkv.").first()).toBeVisible();
 });

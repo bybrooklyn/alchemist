@@ -59,37 +59,37 @@ documentation, or iteration.
   - remux-only opportunities
   - wasteful audio layouts
   - commentary/descriptive-track cleanup candidates
+- Direct actions now exist for queueing remux recommendations and opening duplicate candidates in the shared job-detail flow
+
+### Engine Lifecycle + Planner Docs
+- Runtime drain/restart controls exist in the product surface
+- Backend and Playwright lifecycle coverage now exists for the current behavior
+- Planner and engine lifecycle docs are in-repo and should now be kept in sync with shipped semantics rather than treated as missing work
+
+### Jobs UI Refactor / In Flight
+- `JobManager` has been decomposed into focused jobs subcomponents and controller hooks
+- SSE ownership is now centered in a dedicated hook and job-detail controller flow
+- Treat the current jobs UI surface as shipping product that still needs stabilization and regression coverage, not as a future refactor candidate
 
 ---
 
 ## Active Priorities
 
-### Engine Lifecycle Controls
-- Finish and harden restart/shutdown semantics from the About/header surface
-- Restart must reset the engine loop without re-execing the process
-- Shutdown must cancel active jobs and exit cleanly
-- Add final backend and Playwright coverage for lifecycle transitions
+### `0.3.1` RC Stability Follow-Through
+- Keep the current in-flight backend/frontend/test delta focused on reliability, upgrade safety, and release hardening
+- Expand regression coverage for resume/restart/cancel flows, job-detail refresh semantics, settings projection, and intelligence actions
+- Keep release docs, changelog entries, and support wording aligned with what the RC actually ships
 
-### Planner and Lifecycle Documentation
-- Document planner heuristics and stable skip/transcode/remux decision boundaries
-- Document hardware fallback rules and backend selection semantics
-- Document pause, drain, restart, cancel, and shutdown semantics from actual behavior
-
-### Per-File Encode History
-- Show full attempt history in job detail, grouped by canonical file identity
-- Include outcome, encode stats, and failure reason where available
-- Make retries, reruns, and settings-driven requeues legible
-
-### Behavior-Preserving Refactor Pass
-- Decompose `web/src/components/JobManager.tsx` without changing current behavior
-- Extract shared formatting logic
-- Clarify SSE vs polling ownership
-- Add regression coverage before deeper structural cleanup
+### Per-File Encode History Follow-Through
+- Attempt history now exists in job detail, but it is still job-scoped rather than grouped by canonical file identity
+- Next hardening pass should make retries, reruns, and settings-driven requeues legible across a file’s full history
+- Include outcome, encode stats, and failure reason where available without regressing the existing job-detail flow
 
 ### AMD AV1 Validation
 - Validate Linux VAAPI and Windows AMF AV1 paths on real hardware
 - Confirm encoder selection, fallback behavior, and defaults
 - Keep support claims conservative until validation is real
+- Deferred from the current `0.3.1-rc.5` automated-stability pass; do not broaden support claims before this work is complete
 
 ---
 

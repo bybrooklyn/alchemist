@@ -239,6 +239,58 @@ pub struct ConversionJob {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct JobResumeSession {
+    pub id: i64,
+    pub job_id: i64,
+    pub strategy: String,
+    pub plan_hash: String,
+    pub mtime_hash: String,
+    pub temp_dir: String,
+    pub concat_manifest_path: String,
+    pub segment_length_secs: i64,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+pub struct JobResumeSegment {
+    pub id: i64,
+    pub job_id: i64,
+    pub segment_index: i64,
+    pub start_secs: f64,
+    pub duration_secs: f64,
+    pub temp_path: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpsertJobResumeSessionInput {
+    pub job_id: i64,
+    pub strategy: String,
+    pub plan_hash: String,
+    pub mtime_hash: String,
+    pub temp_dir: String,
+    pub concat_manifest_path: String,
+    pub segment_length_secs: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpsertJobResumeSegmentInput {
+    pub job_id: i64,
+    pub segment_index: i64,
+    pub start_secs: f64,
+    pub duration_secs: f64,
+    pub temp_path: String,
+    pub status: String,
+    pub attempt_count: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct ScheduleWindow {
     pub id: i64,
     pub start_time: String,

@@ -341,6 +341,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         // Canonical job list endpoint.
         .route("/api/jobs", get(jobs_table_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
+        .route("/api/jobs/enqueue", post(enqueue_job_handler))
         .route("/api/jobs/batch", post(batch_jobs_handler))
         .route("/api/logs/history", get(logs_history_handler))
         .route("/api/logs", delete(clear_logs_handler))
@@ -376,6 +377,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(get_engine_mode_handler).post(set_engine_mode_handler),
         )
         .route("/api/engine/status", get(engine_status_handler))
+        .route("/api/processor/status", get(processor_status_handler))
         .route(
             "/api/settings/transcode",
             get(get_transcode_settings_handler).post(update_transcode_settings_handler),

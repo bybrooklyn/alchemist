@@ -15,6 +15,7 @@ use chrono::Utc;
 use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::error;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct LoginPayload {
@@ -32,11 +33,13 @@ pub(crate) async fn login_handler(
     }
 
     let mut is_valid = true;
-    let user_result = state
-        .db
-        .get_user_by_username(&payload.username)
-        .await
-        .unwrap_or(None);
+    let user_result = match state.db.get_user_by_username(&payload.username).await {
+        Ok(user) => user,
+        Err(err) => {
+            error!("Login lookup failed for '{}': {}", payload.username, err);
+            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        }
+    };
 
     // A valid argon2 static hash of a random string used to simulate work and equalize timing
     const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHN0cmluZzEyMzQ1Ng$1tJ2tA109qj15m3u5+kS/sX5X1UoZ6/H9b/30tX9N/g";

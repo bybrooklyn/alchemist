@@ -16,6 +16,7 @@ interface SystemSettingsPayload {
 }
 
 interface EngineStatus {
+    status: "running" | "paused" | "draining";
     mode: "background" | "balanced" | "throughput";
     concurrent_limit: number;
     is_manual_override: boolean;
@@ -41,6 +42,7 @@ export default function SystemSettings() {
     const [engineStatus, setEngineStatus] =
         useState<EngineStatus | null>(null);
     const [modeLoading, setModeLoading] = useState(false);
+    const [engineActionLoading, setEngineActionLoading] = useState(false);
 
     useEffect(() => {
         void fetchSettings();
@@ -129,6 +131,32 @@ export default function SystemSettings() {
         }
     };
 
+    const handleEngineAction = async (action: "pause" | "resume") => {
+        setEngineActionLoading(true);
+        try {
+            await apiAction(`/api/engine/${action === "pause" ? "pause" : "resume"}`, {
+                method: "POST",
+            });
+            const updatedStatus = await apiJson<EngineStatus>("/api/engine/status");
+            setEngineStatus(updatedStatus);
+            showToast({
+                kind: "success",
+                title: "Engine",
+                message: action === "pause" ? "Engine paused." : "Engine resumed.",
+            });
+        } catch (err) {
+            showToast({
+                kind: "error",
+                title: "Engine",
+                message: isApiError(err)
+                    ? err.message
+                    : "Failed to update engine state.",
+            });
+        } finally {
+            setEngineActionLoading(false);
+        }
+    };
+
     if (loading) {
         return <div className="p-8 text-helios-slate animate-pulse">Loading system settings...</div>;
     }
@@ -209,6 +237,25 @@ export default function SystemSettings() {
                                 Change mode to reset.
                             </p>
                         )}
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-helios-slate">
+                                Engine State
+                            </p>
+                            <p className="mt-1 text-sm text-helios-ink capitalize">
+                                {engineStatus.status}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void handleEngineAction(engineStatus.status === "paused" ? "resume" : "pause")}
+                            disabled={engineActionLoading || engineStatus.status === "draining"}
+                            className="rounded-lg border border-helios-line/20 bg-helios-surface px-4 py-2 text-sm font-semibold text-helios-ink transition-colors hover:bg-helios-surface-soft disabled:opacity-50"
+                        >
+                            {engineStatus.status === "paused" ? "Start" : "Pause"}
+                        </button>
                     </div>
                 </div>
             )}

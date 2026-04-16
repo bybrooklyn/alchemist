@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1-rc.5] - 2026-04-16
+
+### Reliability & Stability
+
+- **Segment-based encode resume** — interrupted encode jobs now persist resume sessions and completed segments so restart and recovery flows can continue without discarding all completed work.
+- **Notification target compatibility hardening** — notification target reads/writes now preserve the additive migration path, tolerate legacy shapes, and avoid duplicate-delete projection bugs in settings management.
+- **Daily summary reliability** — summary delivery now retries safely after transient failures and avoids duplicate sends across restart boundaries by persisting the last successful day.
+- **Job-detail correctness** — completed-job detail loading now fails closed on database errors instead of returning partial `200 OK` payloads, and encode stat duration fallback uses the encoded output rather than the source file.
+- **Auth and settings safety** — login now returns server errors for real database failures, and duplicate notification/schedule rows no longer disappear together from a single delete action.
+
+### Jobs & UX
+
+- **Manual enqueue flow** — the jobs UI now supports enqueueing a single absolute file path through the same backend dedupe and output rules used by library scans.
+- **Queued-job visibility** — job detail now exposes queue position and processor blocked reasons so operators can see why a queued job is not starting.
+- **Attempt-history surfacing** — job detail now shows encode attempt history directly in the modal, including outcome, timing, and captured failure summary.
+- **Jobs UI follow-through** — the `JobManager` refactor now ships with dedicated controller/dialog helpers and tighter SSE reconciliation so filtered tables and open detail modals stay aligned with backend truth.
+- **Intelligence actions** — remux recommendations and duplicate candidates are now actionable directly from the Intelligence page.
+
 ## [0.3.1-rc.3] - 2026-04-12
 
 ### New Features

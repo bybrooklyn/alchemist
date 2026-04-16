@@ -135,6 +135,8 @@ pub struct FFmpegCommandBuilder<'a> {
     metadata: &'a crate::media::pipeline::MediaMetadata,
     plan: &'a TranscodePlan,
     hw_info: Option<&'a HardwareInfo>,
+    clip_start_seconds: Option<f64>,
+    clip_duration_seconds: Option<f64>,
 }
 
 impl<'a> FFmpegCommandBuilder<'a> {
@@ -150,11 +152,23 @@ impl<'a> FFmpegCommandBuilder<'a> {
             metadata,
             plan,
             hw_info: None,
+            clip_start_seconds: None,
+            clip_duration_seconds: None,
         }
     }
 
     pub fn with_hardware(mut self, hw_info: Option<&'a HardwareInfo>) -> Self {
         self.hw_info = hw_info;
+        self
+    }
+
+    pub fn with_clip(
+        mut self,
+        clip_start_seconds: Option<f64>,
+        clip_duration_seconds: Option<f64>,
+    ) -> Self {
+        self.clip_start_seconds = clip_start_seconds;
+        self.clip_duration_seconds = clip_duration_seconds;
         self
     }
 
@@ -189,13 +203,22 @@ impl<'a> FFmpegCommandBuilder<'a> {
             "-nostats".to_string(),
             "-progress".to_string(),
             "pipe:2".to_string(),
-            "-i".to_string(),
-            self.input.display().to_string(),
-            "-map_metadata".to_string(),
-            "0".to_string(),
-            "-map".to_string(),
-            "0:v:0".to_string(),
         ];
+
+        args.push("-i".to_string());
+        args.push(self.input.display().to_string());
+        if let Some(clip_start_seconds) = self.clip_start_seconds {
+            args.push("-ss".to_string());
+            args.push(format!("{clip_start_seconds:.3}"));
+        }
+        if let Some(clip_duration_seconds) = self.clip_duration_seconds {
+            args.push("-t".to_string());
+            args.push(format!("{clip_duration_seconds:.3}"));
+        }
+        args.push("-map_metadata".to_string());
+        args.push("0".to_string());
+        args.push("-map".to_string());
+        args.push("0:v:0".to_string());
 
         if !matches!(self.plan.audio, AudioStreamPlan::Drop) {
             match &self.plan.audio_stream_indices {
@@ -1040,6 +1063,30 @@ mod tests {
     }
 
     #[test]
+    fn vaapi_cq_mode_sets_inverted_global_quality() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::HevcVaapi);
+        plan.rate_control = Some(RateControl::Cq { value: 23 });
+        let mut info = hw_info("/dev/dri/renderD128");
+        info.vendor = crate::system::hardware::Vendor::Amd;
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        )
+        .with_hardware(Some(&info));
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build vaapi cq args: {err}"));
+        let quality_index = args
+            .iter()
+            .position(|arg| arg == "-global_quality")
+            .unwrap_or_else(|| panic!("missing -global_quality"));
+        assert_eq!(args.get(quality_index + 1).map(String::as_str), Some("77"));
+    }
+
+    #[test]
     fn command_args_cover_videotoolbox_backend() {
         let metadata = metadata();
         let plan = plan_for(Encoder::HevcVideotoolbox);
@@ -1146,6 +1193,42 @@ mod tests {
             .build_args()
             .unwrap_or_else(|err| panic!("failed to build amf args: {err}"));
         assert!(args.contains(&"hevc_amf".to_string()));
+    }
+
+    #[test]
+    fn amf_cq_mode_sets_cqp_flags() {
+        let metadata = metadata();
+        let mut plan = plan_for(Encoder::HevcAmf);
+        plan.rate_control = Some(RateControl::Cq { value: 19 });
+        let builder = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        );
+        let args = builder
+            .build_args()
+            .unwrap_or_else(|err| panic!("failed to build amf cq args: {err}"));
+        assert!(args.windows(2).any(|window| window == ["-rc", "cqp"]));
+        assert!(args.windows(2).any(|window| window == ["-qp_i", "19"]));
+        assert!(args.windows(2).any(|window| window == ["-qp_p", "19"]));
+    }
+
+    #[test]
+    fn clip_window_adds_trim_arguments() {
+        let metadata = metadata();
+        let plan = plan_for(Encoder::H264X264);
+        let args = FFmpegCommandBuilder::new(
+            Path::new("/tmp/in.mkv"),
+            Path::new("/tmp/out.mkv"),
+            &metadata,
+            &plan,
+        )
+        .with_clip(Some(12.5), Some(8.0))
+        .build_args()
+        .unwrap_or_else(|err| panic!("failed to build clipped args: {err}"));
+        assert!(args.windows(2).any(|window| window == ["-ss", "12.500"]));
+        assert!(args.windows(2).any(|window| window == ["-t", "8.000"]));
     }
 
     #[test]

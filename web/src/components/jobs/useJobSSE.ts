@@ -6,10 +6,19 @@ interface UseJobSSEOptions {
     setJobs: Dispatch<SetStateAction<Job[]>>;
     setFocusedJob: Dispatch<SetStateAction<JobDetail | null>>;
     fetchJobsRef: MutableRefObject<() => Promise<void>>;
+    focusedJobIdRef: MutableRefObject<number | null>;
+    refreshFocusedJobRef: MutableRefObject<() => Promise<void>>;
     encodeStartTimes: MutableRefObject<Map<number, number>>;
 }
 
-export function useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTimes }: UseJobSSEOptions): void {
+export function useJobSSE({
+    setJobs,
+    setFocusedJob,
+    fetchJobsRef,
+    focusedJobIdRef,
+    refreshFocusedJobRef,
+    encodeStartTimes,
+}: UseJobSSEOptions): void {
     useEffect(() => {
         let eventSource: EventSource | null = null;
         let cancelled = false;
@@ -49,8 +58,21 @@ export function useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTim
                         prev.map((job) => job.id === job_id ? { ...job, status } : job)
                     );
                     setFocusedJob((prev) =>
-                        prev?.job.id === job_id ? { ...prev, job: { ...prev.job, status } } : prev
+                        prev?.job.id === job_id
+                            ? {
+                                ...prev,
+                                queue_position: status === "queued" ? prev.queue_position : null,
+                                job: {
+                                    ...prev.job,
+                                    status,
+                                },
+                            }
+                            : prev
                     );
+                    void fetchJobsRef.current();
+                    if (focusedJobIdRef.current === job_id) {
+                        void refreshFocusedJobRef.current();
+                    }
                 } catch {
                     /* ignore malformed */
                 }
@@ -65,13 +87,31 @@ export function useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTim
                     setJobs((prev) =>
                         prev.map((job) => job.id === job_id ? { ...job, progress: percentage } : job)
                     );
+                    setFocusedJob((prev) =>
+                        prev?.job.id === job_id
+                            ? { ...prev, job: { ...prev.job, progress: percentage } }
+                            : prev
+                    );
                 } catch {
                     /* ignore malformed */
                 }
             });
 
-            eventSource.addEventListener("decision", () => {
+            eventSource.addEventListener("decision", (e) => {
+                try {
+                    const payload = JSON.parse(e.data) as { job_id?: number };
+                    if (payload.job_id != null && focusedJobIdRef.current === payload.job_id) {
+                        void refreshFocusedJobRef.current();
+                    }
+                } catch {
+                    /* ignore malformed */
+                }
                 void fetchJobsRef.current();
+            });
+
+            eventSource.addEventListener("lagged", () => {
+                void fetchJobsRef.current();
+                void refreshFocusedJobRef.current();
             });
 
             eventSource.onerror = () => {

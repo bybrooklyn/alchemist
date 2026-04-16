@@ -29,6 +29,8 @@ pub struct TranscodeRequest<'a> {
     pub metadata: &'a crate::media::pipeline::MediaMetadata,
     pub plan: &'a TranscodePlan,
     pub observer: Option<Arc<dyn ExecutionObserver>>,
+    pub clip_start_seconds: Option<f64>,
+    pub clip_duration_seconds: Option<f64>,
 }
 
 #[allow(async_fn_in_trait)]
@@ -187,6 +189,7 @@ impl Transcoder {
             request.plan,
         )
         .with_hardware(request.hw_info)
+        .with_clip(request.clip_start_seconds, request.clip_duration_seconds)
         .build()?;
 
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

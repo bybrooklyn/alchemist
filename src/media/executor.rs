@@ -154,6 +154,8 @@ impl Executor for FfmpegExecutor {
                 metadata: &analysis.metadata,
                 plan,
                 observer: Some(observer.clone()),
+                clip_start_seconds: None,
+                clip_duration_seconds: None,
             })
             .await?;
 
@@ -171,6 +173,8 @@ impl Executor for FfmpegExecutor {
                     metadata: &analysis.metadata,
                     plan,
                     observer: Some(observer),
+                    clip_start_seconds: None,
+                    clip_duration_seconds: None,
                 })
                 .await?;
         }
@@ -251,7 +255,7 @@ impl Executor for FfmpegExecutor {
     }
 }
 
-fn output_codec_from_name(codec: &str) -> Option<crate::config::OutputCodec> {
+pub(crate) fn output_codec_from_name(codec: &str) -> Option<crate::config::OutputCodec> {
     if codec.eq_ignore_ascii_case("av1") {
         Some(crate::config::OutputCodec::Av1)
     } else if codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265") {
@@ -263,7 +267,10 @@ fn output_codec_from_name(codec: &str) -> Option<crate::config::OutputCodec> {
     }
 }
 
-fn encoder_tag_matches(requested: crate::media::pipeline::Encoder, encoder_tag: &str) -> bool {
+pub(crate) fn encoder_tag_matches(
+    requested: crate::media::pipeline::Encoder,
+    encoder_tag: &str,
+) -> bool {
     let tag = encoder_tag.to_ascii_lowercase();
     let expected_markers: &[&str] = match requested {
         crate::media::pipeline::Encoder::Av1Qsv

@@ -30,15 +30,15 @@ Then complete the release-candidate preflight:
 
 Promote to stable only after the RC burn-in is complete and the same automated preflight is still green.
 
-1. Run `just bump 0.3.0`.
+1. Run `just bump 0.3.1`.
 2. Update `CHANGELOG.md` and `docs/docs/changelog.md` for the stable cut.
 3. Run `just release-check`.
 4. Re-run the manual smoke checklist against the final release artifacts:
    - Docker fresh install
    - Packaged binary first-run
-   - Upgrade from the most recent `0.2.x` or `0.3.0-rc.x`
+   - Upgrade from the most recent `0.2.x` or `0.3.1-rc.x`
    - Encode, skip, failure, and notification verification
 5. Re-run the Windows contributor verification checklist if Windows parity changed after the last RC.
 6. Confirm release notes, docs, and hardware-support wording match the tested release state.
 7. Merge the stable release commit to `main`.
-8. Create the annotated tag `v0.3.0` on the exact merged commit.
+8. Create the annotated tag `v0.3.1` on the exact merged commit.

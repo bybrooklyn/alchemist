@@ -5,55 +5,16 @@ import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { withErrorBoundary } from "./ErrorBoundary";
-import type { Job, JobDetail, TabType, SortField, ConfirmConfig, CountMessageResponse } from "./jobs/types";
-import { SORT_OPTIONS, isJobActive, jobDetailEmptyState } from "./jobs/types";
-import { normalizeDecisionExplanation, normalizeFailureExplanation } from "./jobs/JobExplanations";
+import type { Job, TabType, SortField, CountMessageResponse } from "./jobs/types";
+import { isJobActive } from "./jobs/types";
 import { useJobSSE } from "./jobs/useJobSSE";
 import { JobsToolbar } from "./jobs/JobsToolbar";
 import { JobsTable } from "./jobs/JobsTable";
 import { JobDetailModal } from "./jobs/JobDetailModal";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
-
-function focusableElements(root: HTMLElement): HTMLElement[] {
-    const selector = [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => !element.hasAttribute("disabled")
-    );
-}
-
-function getStatusBadge(status: string) {
-    const styles: Record<string, string> = {
-        queued: "bg-helios-slate/10 text-helios-slate border-helios-slate/20",
-        analyzing: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-        encoding: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-        remuxing: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-        completed: "bg-green-500/10 text-green-500 border-green-500/20",
-        failed: "bg-red-500/10 text-red-500 border-red-500/20",
-        cancelled: "bg-red-500/10 text-red-500 border-red-500/20",
-        skipped: "bg-gray-500/10 text-gray-500 border-gray-500/20",
-        archived: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
-        resuming: "bg-helios-solar/10 text-helios-solar border-helios-solar/20 animate-pulse",
-    };
-    return (
-        <span className={cn("px-2.5 py-1 rounded-md text-xs font-medium border capitalize", styles[status] || styles.queued)}>
-            {status}
-        </span>
-    );
-}
+import { EnqueuePathDialog } from "./jobs/EnqueuePathDialog";
+import { getStatusBadge } from "./jobs/jobStatusBadge";
+import { useJobDetailController } from "./jobs/useJobDetailController";
 
 function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
@@ -67,18 +28,17 @@ function JobManager() {
     const [sortBy, setSortBy] = useState<SortField>("updated_at");
     const [sortDesc, setSortDesc] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [focusedJob, setFocusedJob] = useState<JobDetail | null>(null);
-    const [detailLoading, setDetailLoading] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
     const [menuJobId, setMenuJobId] = useState<number | null>(null);
+    const [enqueueDialogOpen, setEnqueueDialogOpen] = useState(false);
+    const [enqueuePath, setEnqueuePath] = useState("");
+    const [enqueueSubmitting, setEnqueueSubmitting] = useState(false);
     const menuRef = useRef<HTMLDivElement | null>(null);
-    const detailDialogRef = useRef<HTMLDivElement | null>(null);
-    const detailLastFocusedRef = useRef<HTMLElement | null>(null);
     const compactSearchRef = useRef<HTMLDivElement | null>(null);
     const compactSearchInputRef = useRef<HTMLInputElement | null>(null);
-    const confirmOpenRef = useRef(false);
     const encodeStartTimes = useRef<Map<number, number>>(new Map());
-    const [confirmState, setConfirmState] = useState<ConfirmConfig | null>(null);
+    const focusedJobIdRef = useRef<number | null>(null);
+    const refreshFocusedJobRef = useRef<() => Promise<void>>(async () => undefined);
     const [tick, setTick] = useState(0);
 
     useEffect(() => {
@@ -233,7 +193,51 @@ function JobManager() {
         };
     }, []);
 
-    useJobSSE({ setJobs, setFocusedJob, fetchJobsRef, encodeStartTimes });
+    const {
+        focusedJob,
+        setFocusedJob,
+        detailLoading,
+        confirmState,
+        detailDialogRef,
+        openJobDetails,
+        handleAction,
+        handlePriority,
+        openConfirm,
+        setConfirmState,
+        closeJobDetails,
+        focusedDecision,
+        focusedFailure,
+        focusedJobLogs,
+        shouldShowFfmpegOutput,
+        completedEncodeStats,
+        focusedEmptyState,
+    } = useJobDetailController({
+        onRefresh: async () => {
+            await fetchJobs();
+        },
+    });
+
+    useEffect(() => {
+        focusedJobIdRef.current = focusedJob?.job.id ?? null;
+    }, [focusedJob?.job.id]);
+
+    useEffect(() => {
+        refreshFocusedJobRef.current = async () => {
+            const jobId = focusedJobIdRef.current;
+            if (jobId !== null) {
+                await openJobDetails(jobId);
+            }
+        };
+    }, [openJobDetails]);
+
+    useJobSSE({
+        setJobs,
+        setFocusedJob,
+        fetchJobsRef,
+        focusedJobIdRef,
+        refreshFocusedJobRef,
+        encodeStartTimes,
+    });
 
     useEffect(() => {
         const encodingJobIds = new Set<number>();
@@ -267,76 +271,6 @@ function JobManager() {
         document.addEventListener("mousedown", handleClick);
         return () => document.removeEventListener("mousedown", handleClick);
     }, [menuJobId]);
-
-    useEffect(() => {
-        confirmOpenRef.current = confirmState !== null;
-    }, [confirmState]);
-
-    useEffect(() => {
-        if (!focusedJob) {
-            return;
-        }
-
-        detailLastFocusedRef.current = document.activeElement as HTMLElement | null;
-
-        const root = detailDialogRef.current;
-        if (root) {
-            const focusables = focusableElements(root);
-            if (focusables.length > 0) {
-                focusables[0].focus();
-            } else {
-                root.focus();
-            }
-        }
-
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (!focusedJob || confirmOpenRef.current) {
-                return;
-            }
-
-            if (event.key === "Escape") {
-                event.preventDefault();
-                setFocusedJob(null);
-                return;
-            }
-
-            if (event.key !== "Tab") {
-                return;
-            }
-
-            const dialogRoot = detailDialogRef.current;
-            if (!dialogRoot) {
-                return;
-            }
-
-            const focusables = focusableElements(dialogRoot);
-            if (focusables.length === 0) {
-                event.preventDefault();
-                dialogRoot.focus();
-                return;
-            }
-
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const current = document.activeElement as HTMLElement | null;
-
-            if (event.shiftKey && current === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && current === last) {
-                event.preventDefault();
-                first.focus();
-            }
-        };
-
-        document.addEventListener("keydown", onKeyDown);
-        return () => {
-            document.removeEventListener("keydown", onKeyDown);
-            if (detailLastFocusedRef.current) {
-                detailLastFocusedRef.current.focus();
-            }
-        };
-    }, [focusedJob]);
 
     const toggleSelect = (id: number) => {
         const newSet = new Set(selected);
@@ -407,95 +341,30 @@ function JobManager() {
         }
     };
 
-    const fetchJobDetails = async (id: number) => {
+    const handleEnqueuePath = async () => {
         setActionError(null);
-        setDetailLoading(true);
+        setEnqueueSubmitting(true);
         try {
-            const data = await apiJson<JobDetail>(`/api/jobs/${id}/details`);
-            setFocusedJob(data);
-        } catch (e) {
-            const message = isApiError(e) ? e.message : "Failed to fetch job details";
+            const payload = await apiJson<{ enqueued: boolean; message: string }>("/api/jobs/enqueue", {
+                method: "POST",
+                body: JSON.stringify({ path: enqueuePath }),
+            });
+            showToast({
+                kind: payload.enqueued ? "success" : "info",
+                title: "Jobs",
+                message: payload.message,
+            });
+            setEnqueueDialogOpen(false);
+            setEnqueuePath("");
+            await fetchJobs();
+        } catch (error) {
+            const message = isApiError(error) ? error.message : "Failed to enqueue file";
             setActionError(message);
             showToast({ kind: "error", title: "Jobs", message });
         } finally {
-            setDetailLoading(false);
+            setEnqueueSubmitting(false);
         }
     };
-
-    const handleAction = async (id: number, action: "cancel" | "restart" | "delete") => {
-        setActionError(null);
-        try {
-            await apiAction(`/api/jobs/${id}/${action}`, { method: "POST" });
-            if (action === "delete") {
-                setFocusedJob((current) => (current?.job.id === id ? null : current));
-            } else if (focusedJob?.job.id === id) {
-                await fetchJobDetails(id);
-            }
-            await fetchJobs();
-            showToast({
-                kind: "success",
-                title: "Jobs",
-                message: `Job ${action} request completed.`,
-            });
-        } catch (e) {
-            const message = formatJobActionError(e, `Job ${action} failed`);
-            setActionError(message);
-            showToast({ kind: "error", title: "Jobs", message });
-        }
-    };
-
-    const handlePriority = async (job: Job, priority: number, label: string) => {
-        setActionError(null);
-        try {
-            await apiAction(`/api/jobs/${job.id}/priority`, {
-                method: "POST",
-                body: JSON.stringify({ priority }),
-            });
-            if (focusedJob?.job.id === job.id) {
-                setFocusedJob({
-                    ...focusedJob,
-                    job: {
-                        ...focusedJob.job,
-                        priority,
-                    },
-                });
-            }
-            await fetchJobs();
-            showToast({ kind: "success", title: "Jobs", message: `${label} for job #${job.id}.` });
-        } catch (e) {
-            const message = formatJobActionError(e, "Failed to update priority");
-            setActionError(message);
-            showToast({ kind: "error", title: "Jobs", message });
-        }
-    };
-
-    const openConfirm = (config: ConfirmConfig) => {
-        setConfirmState(config);
-    };
-
-    const focusedDecision = focusedJob
-        ? normalizeDecisionExplanation(
-            focusedJob.decision_explanation ?? focusedJob.job.decision_explanation,
-            focusedJob.job.decision_reason,
-        )
-        : null;
-    const focusedFailure = focusedJob
-        ? normalizeFailureExplanation(
-            focusedJob.failure_explanation,
-            focusedJob.job_failure_summary,
-            focusedJob.job_logs,
-        )
-        : null;
-    const focusedJobLogs = focusedJob?.job_logs ?? [];
-    const shouldShowFfmpegOutput = focusedJob
-        ? ["failed", "completed", "skipped"].includes(focusedJob.job.status) && focusedJobLogs.length > 0
-        : false;
-    const completedEncodeStats = focusedJob?.job.status === "completed"
-        ? focusedJob.encode_stats
-        : null;
-    const focusedEmptyState = focusedJob
-        ? jobDetailEmptyState(focusedJob.job.status)
-        : null;
 
     return (
         <div className="space-y-6 relative">
@@ -530,6 +399,7 @@ function JobManager() {
                 setSortDesc={setSortDesc}
                 refreshing={refreshing}
                 fetchJobs={fetchJobs}
+                openEnqueueDialog={() => setEnqueueDialogOpen(true)}
             />
 
             {actionError && (
@@ -613,7 +483,7 @@ function JobManager() {
                 menuRef={menuRef}
                 toggleSelect={toggleSelect}
                 toggleSelectAll={toggleSelectAll}
-                fetchJobDetails={fetchJobDetails}
+                fetchJobDetails={openJobDetails}
                 setMenuJobId={setMenuJobId}
                 openConfirm={openConfirm}
                 handleAction={handleAction}
@@ -646,7 +516,7 @@ function JobManager() {
                     focusedJob={focusedJob}
                     detailDialogRef={detailDialogRef}
                     detailLoading={detailLoading}
-                    onClose={() => setFocusedJob(null)}
+                    onClose={closeJobDetails}
                     focusedDecision={focusedDecision}
                     focusedFailure={focusedFailure}
                     focusedJobLogs={focusedJobLogs}
@@ -659,6 +529,22 @@ function JobManager() {
                     getStatusBadge={getStatusBadge}
                 />,
                 document.body
+            )}
+
+            {typeof document !== "undefined" && createPortal(
+                <EnqueuePathDialog
+                    open={enqueueDialogOpen}
+                    path={enqueuePath}
+                    submitting={enqueueSubmitting}
+                    onPathChange={setEnqueuePath}
+                    onClose={() => {
+                        if (!enqueueSubmitting) {
+                            setEnqueueDialogOpen(false);
+                        }
+                    }}
+                    onSubmit={handleEnqueuePath}
+                />,
+                document.body,
             )}
 
             <ConfirmDialog

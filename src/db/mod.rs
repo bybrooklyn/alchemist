@@ -44,9 +44,15 @@ pub(crate) struct WatchDirSchemaFlags {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct NotificationTargetSchemaFlags {
+    has_target_type_v2: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct Db {
     pub(crate) pool: SqlitePool,
     pub(crate) watch_dir_flags: std::sync::Arc<WatchDirSchemaFlags>,
+    pub(crate) notification_target_flags: std::sync::Arc<NotificationTargetSchemaFlags>,
 }
 
 impl Db {
@@ -102,9 +108,28 @@ impl Db {
             has_profile_id: check("profile_id").await,
         };
 
+        let notification_check = |column: &str| {
+            let pool = pool.clone();
+            let column = column.to_string();
+            async move {
+                let row = sqlx::query(
+                    "SELECT name FROM pragma_table_info('notification_targets') WHERE name = ?",
+                )
+                .bind(&column)
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None);
+                row.is_some()
+            }
+        };
+        let notification_target_flags = NotificationTargetSchemaFlags {
+            has_target_type_v2: notification_check("target_type_v2").await,
+        };
+
         Ok(Self {
             pool,
             watch_dir_flags: std::sync::Arc::new(watch_dir_flags),
+            notification_target_flags: std::sync::Arc::new(notification_target_flags),
         })
     }
 }
