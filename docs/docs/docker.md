@@ -1,6 +1,11 @@
 ---
-title: Docker
-description: Docker Compose configuration, volumes, environment variables, and updates.
+title: Run Alchemist on Docker — Self-Hosted Transcoding Container
+description: Docker Compose configuration, volumes, environment variables, and updates for Alchemist. Works on standard Docker, Unraid, Synology, TrueNAS, and Proxmox hosts.
+keywords:
+  - docker transcoding
+  - docker ffmpeg automation
+  - alchemist docker
+  - self-hosted transcoder docker
 ---
 
 ## Recommended Compose file
@@ -46,7 +51,10 @@ at the host level.
 ## Hardware acceleration
 
 See [GPU Passthrough](/gpu-passthrough) for vendor-specific
-Docker configuration.
+Docker configuration. If a GPU is present but Alchemist falls
+back to CPU, the
+[Troubleshooting](/troubleshooting#cpu-fallback-despite-gpu)
+page walks through the common causes.
 
 ## Updating
 
@@ -64,3 +72,14 @@ image: ghcr.io/bybrooklyn/alchemist:nightly
 ```
 
 Published on every push to `main` that passes Rust checks.
+
+## See also
+
+- [GPU Passthrough](/gpu-passthrough) — NVIDIA, Intel, AMD
+  device setup in Docker.
+- [First Run](/first-run) — setup wizard after the container
+  is up.
+- [Alchemist for Jellyfin](/jellyfin) — pointing Alchemist
+  at a Jellyfin library.
+- [Troubleshooting](/troubleshooting) — CPU fallback,
+  permissions, missing encoders.

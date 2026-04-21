@@ -19,7 +19,7 @@ use http_body_util::BodyExt;
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -157,6 +157,33 @@ fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<B
     }
 }
 
+fn auth_multipart_request(
+    method: Method,
+    uri: &str,
+    token: &str,
+    boundary: &str,
+    content_length: Option<u64>,
+    body: Vec<u8>,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, format!("alchemist_session={token}"))
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+
+    if let Some(length) = content_length {
+        builder = builder.header(header::CONTENT_LENGTH, length.to_string());
+    }
+
+    match builder.body(Body::from(body)) {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build auth multipart request: {err}"),
+    }
+}
+
 fn bearer_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
     match Request::builder()
         .method(method)
@@ -281,6 +308,50 @@ fn sample_transcode_payload() -> TranscodeSettingsPayload {
         subtitle_mode: crate::config::SubtitleMode::Copy,
         stream_rules: crate::config::StreamRules::default(),
     }
+}
+
+fn sample_media_analysis(path: &Path) -> crate::media::pipeline::MediaAnalysis {
+    crate::media::pipeline::MediaAnalysis {
+        metadata: crate::media::pipeline::MediaMetadata {
+            path: path.to_path_buf(),
+            duration_secs: 60.0,
+            codec_name: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 1_024,
+            video_bitrate_bps: Some(4_000_000),
+            container_bitrate_bps: Some(4_200_000),
+            fps: 23.976,
+            container: "mkv".to_string(),
+            audio_codec: Some("aac".to_string()),
+            audio_bitrate_bps: Some(192_000),
+            audio_channels: Some(2),
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: crate::media::pipeline::DynamicRange::Sdr,
+        },
+        warnings: Vec::new(),
+        confidence: crate::media::pipeline::AnalysisConfidence::High,
+    }
+}
+
+async fn count_conversion_jobs_in_db(
+    path: &Path,
+) -> std::result::Result<i64, Box<dyn std::error::Error>> {
+    use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
+
+    let mut connection =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(path)).await?;
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversion_jobs")
+        .fetch_one(&mut connection)
+        .await?;
+    Ok(count)
 }
 
 #[test]
@@ -1362,6 +1433,8 @@ async fn system_settings_round_trip_watch_enabled()
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_text(response).await;
     assert!(body.contains("\"watch_enabled\":true"));
+    assert!(body.contains("\"conversion_upload_limit_gb\":8"));
+    assert!(body.contains("\"conversion_download_retention_hours\":1"));
 
     let response = app
         .clone()
@@ -1371,6 +1444,8 @@ async fn system_settings_round_trip_watch_enabled()
             &token,
             json!({
                 "monitoring_poll_interval": 2.0,
+                "conversion_upload_limit_gb": 12,
+                "conversion_download_retention_hours": 6,
                 "enable_telemetry": false,
                 "watch_enabled": false
             }),
@@ -1380,8 +1455,420 @@ async fn system_settings_round_trip_watch_enabled()
 
     let persisted = crate::config::Config::load(config_path.as_path())?;
     assert!(!persisted.scanner.watch_enabled);
+    assert_eq!(persisted.system.conversion_upload_limit_gb, 12);
+    assert_eq!(persisted.system.conversion_download_retention_hours, 6);
 
     cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_upload_rejects_oversized_requests_without_persisting_jobs()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.system.conversion_upload_limit_gb = 1;
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let boundary = "alchemist-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.mkv\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(b"tiny");
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = app
+        .clone()
+        .oneshot(auth_multipart_request(
+            Method::POST,
+            "/api/conversion/uploads",
+            &token,
+            boundary,
+            Some(1024_u64 * 1024 * 1024 + 1),
+            body,
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(count_conversion_jobs_in_db(db_path.as_path()).await?, 0);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_cleanup_skips_active_linked_jobs()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let upload_path = temp_path("alchemist_conversion_upload_active", "mkv");
+    let output_path = temp_path("alchemist_conversion_output_active", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let analysis = sample_media_analysis(upload_path.as_path());
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2000-01-01 00:00:00",
+        )
+        .await?;
+    state
+        .db
+        .enqueue_job(
+            upload_path.as_path(),
+            output_path.as_path(),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let linked_job = state
+        .db
+        .get_job_by_input_path(&upload_path.to_string_lossy())
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing linked job"))?;
+    state
+        .db
+        .update_conversion_job_start(
+            conversion_job.id,
+            &output_path.to_string_lossy(),
+            linked_job.id,
+        )
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/conversion/jobs/{}", conversion_job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .db
+            .get_conversion_job(conversion_job.id)
+            .await?
+            .is_some()
+    );
+    assert!(upload_path.exists());
+
+    cleanup_paths(&[upload_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_cleanup_preserves_completed_jobs_until_downloaded()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let upload_path = temp_path("alchemist_conversion_upload_completed", "mkv");
+    let output_path = temp_path("alchemist_conversion_output_completed", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+    std::fs::write(&output_path, b"encoded")?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let analysis = sample_media_analysis(upload_path.as_path());
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2000-01-01 00:00:00",
+        )
+        .await?;
+    state
+        .db
+        .enqueue_job(
+            upload_path.as_path(),
+            output_path.as_path(),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let linked_job = state
+        .db
+        .get_job_by_input_path(&upload_path.to_string_lossy())
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing linked job"))?;
+    state
+        .db
+        .update_conversion_job_start(
+            conversion_job.id,
+            &output_path.to_string_lossy(),
+            linked_job.id,
+        )
+        .await?;
+    state
+        .db
+        .update_job_status(linked_job.id, JobState::Completed)
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/conversion/jobs/{}", conversion_job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .db
+            .get_conversion_job(conversion_job.id)
+            .await?
+            .is_some()
+    );
+    assert!(output_path.exists());
+
+    cleanup_paths(&[upload_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_cleanup_removes_downloaded_jobs_after_retention()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let upload_path = temp_path("alchemist_conversion_upload_downloaded", "mkv");
+    let output_path = temp_path("alchemist_conversion_output_downloaded", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+    std::fs::write(&output_path, b"encoded")?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let analysis = sample_media_analysis(upload_path.as_path());
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2000-01-01 00:00:00",
+        )
+        .await?;
+    state
+        .db
+        .enqueue_job(
+            upload_path.as_path(),
+            output_path.as_path(),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let linked_job = state
+        .db
+        .get_job_by_input_path(&upload_path.to_string_lossy())
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing linked job"))?;
+    state
+        .db
+        .update_conversion_job_start(
+            conversion_job.id,
+            &output_path.to_string_lossy(),
+            linked_job.id,
+        )
+        .await?;
+    state
+        .db
+        .update_job_status(linked_job.id, JobState::Completed)
+        .await?;
+    state
+        .db
+        .mark_conversion_job_downloaded(conversion_job.id, "2000-01-01 00:00:00")
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/conversion/jobs/{}", conversion_job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        state
+            .db
+            .get_conversion_job(conversion_job.id)
+            .await?
+            .is_none()
+    );
+    assert!(!upload_path.exists());
+    assert!(!output_path.exists());
+
+    cleanup_paths(&[upload_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_preview_returns_500_when_persistence_fails()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
+
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let upload_path = temp_path("alchemist_conversion_preview_lock", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let analysis = sample_media_analysis(upload_path.as_path());
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2999-01-01 00:00:00",
+        )
+        .await?;
+
+    let mut lock_connection =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&db_path)).await?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut lock_connection)
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/conversion/preview",
+            &token,
+            json!({
+                "conversion_job_id": conversion_job.id,
+                "settings": settings
+            }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    sqlx::query("ROLLBACK")
+        .execute(&mut lock_connection)
+        .await?;
+
+    let persisted = state
+        .db
+        .get_conversion_job(conversion_job.id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing conversion job"))?;
+    assert_eq!(persisted.status, "uploaded");
+
+    cleanup_paths(&[upload_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_download_marks_downloaded_only_after_full_stream()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.system.conversion_download_retention_hours = 2;
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let upload_path = temp_path("alchemist_conversion_upload_stream", "mkv");
+    let output_path = temp_path("alchemist_conversion_output_stream", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+    std::fs::write(&output_path, vec![b'x'; 32 * 1024])?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let analysis = sample_media_analysis(upload_path.as_path());
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2999-01-01 00:00:00",
+        )
+        .await?;
+    state
+        .db
+        .enqueue_job(
+            upload_path.as_path(),
+            output_path.as_path(),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let linked_job = state
+        .db
+        .get_job_by_input_path(&upload_path.to_string_lossy())
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing linked job"))?;
+    state
+        .db
+        .update_conversion_job_start(
+            conversion_job.id,
+            &output_path.to_string_lossy(),
+            linked_job.id,
+        )
+        .await?;
+    state
+        .db
+        .update_job_status(linked_job.id, JobState::Completed)
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/conversion/jobs/{}/download", conversion_job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut interrupted_body = response.into_body();
+    let frame = tokio::time::timeout(
+        tokio::time::Duration::from_secs(2),
+        interrupted_body.frame(),
+    )
+    .await?;
+    assert!(frame.is_some());
+    drop(interrupted_body);
+
+    let interrupted = state
+        .db
+        .get_conversion_job(conversion_job.id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing conversion job"))?;
+    assert!(interrupted.downloaded_at.is_none());
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/conversion/jobs/{}/download", conversion_job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let downloaded = to_bytes(response.into_body(), usize::MAX).await?;
+    assert_eq!(downloaded.len(), 32 * 1024);
+
+    let completed = state
+        .db
+        .get_conversion_job(conversion_job.id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("missing conversion job"))?;
+    assert!(completed.downloaded_at.is_some());
+    assert_eq!(completed.status, "downloaded");
+
+    cleanup_paths(&[upload_path, output_path, config_path, db_path]);
     Ok(())
 }
 

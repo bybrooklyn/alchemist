@@ -191,6 +191,8 @@ pub(crate) async fn update_hardware_settings_handler(
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SystemSettingsPayload {
     monitoring_poll_interval: f64,
+    conversion_upload_limit_gb: u32,
+    conversion_download_retention_hours: u32,
     enable_telemetry: bool,
     #[serde(default)]
     watch_enabled: bool,
@@ -202,6 +204,8 @@ pub(crate) async fn get_system_settings_handler(
     let config = state.config.read().await;
     axum::Json(SystemSettingsPayload {
         monitoring_poll_interval: config.system.monitoring_poll_interval,
+        conversion_upload_limit_gb: config.system.conversion_upload_limit_gb,
+        conversion_download_retention_hours: config.system.conversion_download_retention_hours,
         enable_telemetry: config.system.enable_telemetry,
         watch_enabled: config.scanner.watch_enabled,
     })
@@ -218,9 +222,26 @@ pub(crate) async fn update_system_settings_handler(
         )
             .into_response();
     }
+    if payload.conversion_upload_limit_gb == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "conversion_upload_limit_gb must be >= 1",
+        )
+            .into_response();
+    }
+    if !(1..=24).contains(&payload.conversion_download_retention_hours) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "conversion_download_retention_hours must be between 1 and 24",
+        )
+            .into_response();
+    }
 
     let mut next_config = state.config.read().await.clone();
     next_config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
+    next_config.system.conversion_upload_limit_gb = payload.conversion_upload_limit_gb;
+    next_config.system.conversion_download_retention_hours =
+        payload.conversion_download_retention_hours;
     next_config.system.enable_telemetry = payload.enable_telemetry;
     next_config.scanner.watch_enabled = payload.watch_enabled;
 

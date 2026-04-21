@@ -7,11 +7,15 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::IntoResponse,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use tokio::fs;
+use tokio::{fs, io::AsyncWriteExt};
 use tokio_util::io::ReaderStream;
+use tracing::warn;
+
+const DRAFT_RETENTION_HOURS: i64 = 24;
 
 #[derive(Serialize)]
 pub(crate) struct ConversionUploadResponse {
@@ -49,28 +53,101 @@ fn outputs_root() -> PathBuf {
     conversion_root().join("outputs")
 }
 
+fn sqlite_timestamp_now() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn sqlite_timestamp_after_hours(hours: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::hours(hours))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+fn upload_limit_bytes(limit_gb: u32) -> u64 {
+    u64::from(limit_gb) * 1024 * 1024 * 1024
+}
+
+fn request_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+async fn remove_file_if_exists(path: &FsPath) -> std::io::Result<()> {
+    match fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+async fn remove_dir_if_exists(path: &FsPath) -> std::io::Result<()> {
+    match fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+async fn cleanup_upload_path(path: &FsPath) {
+    let _ = remove_file_if_exists(path).await;
+    if let Some(parent) = path.parent() {
+        let _ = remove_dir_if_exists(parent).await;
+    }
+}
+
+fn managed_artifact_parent(path: &FsPath) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let uploads_root = uploads_root();
+    let outputs_root = outputs_root();
+    if (parent.starts_with(&uploads_root) && parent != uploads_root.as_path())
+        || (parent.starts_with(&outputs_root) && parent != outputs_root.as_path())
+    {
+        return Some(parent.to_path_buf());
+    }
+    None
+}
+
 async fn cleanup_expired_jobs(state: &AppState) {
-    let now = chrono::Utc::now().to_rfc3339();
-    let expired = match state.db.get_expired_conversion_jobs(&now).await {
+    let now = sqlite_timestamp_now();
+    let expired = match state.db.get_conversion_jobs_ready_for_cleanup(&now).await {
         Ok(expired) => expired,
         Err(_) => return,
     };
 
     for job in expired {
-        let _ = remove_conversion_artifacts(&job).await;
-        let _ = state.db.delete_conversion_job(job.id).await;
+        if let Err(err) = remove_conversion_artifacts(&job).await {
+            warn!(
+                "Failed to remove expired conversion artifacts for {}: {}",
+                job.id, err
+            );
+            continue;
+        }
+        if let Err(err) = state.db.delete_conversion_job(job.id).await {
+            warn!(
+                "Failed to delete expired conversion job {}: {}",
+                job.id, err
+            );
+        }
     }
 }
 
 async fn remove_conversion_artifacts(job: &crate::db::ConversionJob) -> std::io::Result<()> {
     let upload_path = FsPath::new(&job.upload_path);
     if upload_path.exists() {
-        let _ = fs::remove_file(upload_path).await;
+        remove_file_if_exists(upload_path).await?;
+        if let Some(parent) = managed_artifact_parent(upload_path) {
+            remove_dir_if_exists(&parent).await?;
+        }
     }
     if let Some(output_path) = &job.output_path {
         let output_path = FsPath::new(output_path);
         if output_path.exists() {
-            let _ = fs::remove_file(output_path).await;
+            remove_file_if_exists(output_path).await?;
+            if let Some(parent) = managed_artifact_parent(output_path) {
+                remove_dir_if_exists(&parent).await?;
+            }
         }
     }
     Ok(())
@@ -78,9 +155,26 @@ async fn remove_conversion_artifacts(job: &crate::db::ConversionJob) -> std::io:
 
 pub(crate) async fn upload_conversion_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     cleanup_expired_jobs(state.as_ref()).await;
+
+    let upload_limit_gb = state.config.read().await.system.conversion_upload_limit_gb;
+    let upload_limit = upload_limit_bytes(upload_limit_gb);
+    if request_content_length(&headers).is_some_and(|value| value > upload_limit) {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("Upload exceeds configured limit of {} GiB", upload_limit_gb),
+        )
+            .into_response();
+    }
+
+    let mut field = match multipart.next_field().await {
+        Ok(Some(field)) => field,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "missing upload file").into_response(),
+        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+    };
 
     let upload_id = uuid::Uuid::new_v4().to_string();
     let upload_dir = uploads_root().join(&upload_id);
@@ -88,36 +182,77 @@ pub(crate) async fn upload_conversion_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
     }
 
-    let field = match multipart.next_field().await {
-        Ok(Some(field)) => field,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "missing upload file").into_response(),
-        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+    let file_name = field
+        .file_name()
+        .map(sanitize_filename)
+        .unwrap_or_else(|| "input.bin".to_string());
+    let stored_path = upload_dir.join(file_name);
+    let mut output_file = match fs::File::create(&stored_path).await {
+        Ok(file) => file,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     };
-    let stored_path: PathBuf = {
-        let file_name = field
-            .file_name()
-            .map(sanitize_filename)
-            .unwrap_or_else(|| "input.bin".to_string());
-        let path = upload_dir.join(file_name);
-        match field.bytes().await {
-            Ok(bytes) => {
-                if let Err(err) = fs::write(&path, bytes).await {
+    let mut written_bytes = 0_u64;
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                written_bytes = written_bytes.saturating_add(chunk.len() as u64);
+                if written_bytes > upload_limit {
+                    let _ = output_file.flush().await;
+                    drop(output_file);
+                    cleanup_upload_path(&stored_path).await;
+                    return (
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("Upload exceeds configured limit of {} GiB", upload_limit_gb),
+                    )
+                        .into_response();
+                }
+
+                if let Err(err) = output_file.write_all(&chunk).await {
+                    drop(output_file);
+                    cleanup_upload_path(&stored_path).await;
                     return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
                 }
-                path
             }
-            Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+            Ok(None) => break,
+            Err(err) => {
+                drop(output_file);
+                cleanup_upload_path(&stored_path).await;
+                return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+            }
         }
-    };
+    }
+    if let Err(err) = output_file.flush().await {
+        drop(output_file);
+        cleanup_upload_path(&stored_path).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+    }
+    drop(output_file);
 
     let analyzer = crate::media::analyzer::FfmpegAnalyzer;
     let analysis = match analyzer.analyze(&stored_path).await {
         Ok(analysis) => analysis,
-        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+        Err(err) => {
+            cleanup_upload_path(&stored_path).await;
+            return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        }
     };
 
     let settings = ConversionSettings::default();
-    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339();
+    let settings_json = match serde_json::to_string(&settings) {
+        Ok(value) => value,
+        Err(err) => {
+            cleanup_upload_path(&stored_path).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        }
+    };
+    let probe_json = match serde_json::to_string(&analysis) {
+        Ok(value) => value,
+        Err(err) => {
+            cleanup_upload_path(&stored_path).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        }
+    };
+    let expires_at = sqlite_timestamp_after_hours(DRAFT_RETENTION_HOURS);
     let conversion_job = match state
         .db
         .create_conversion_job(
@@ -127,14 +262,17 @@ pub(crate) async fn upload_conversion_handler(
             } else {
                 "transcode"
             },
-            &serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string()),
-            Some(&serde_json::to_string(&analysis).unwrap_or_else(|_| "{}".to_string())),
+            &settings_json,
+            Some(&probe_json),
             &expires_at,
         )
         .await
     {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            cleanup_upload_path(&stored_path).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        }
     };
 
     axum::Json(ConversionUploadResponse {
@@ -181,51 +319,48 @@ pub(crate) async fn preview_conversion_handler(
         hw_info,
     ) {
         Ok(preview) => {
-            let _ = state
-                .db
-                .update_conversion_job_probe(
-                    job.id,
-                    &serde_json::to_string(&analysis).unwrap_or_else(|_| "{}".to_string()),
-                )
-                .await;
-            let _ = state
-                .db
-                .update_conversion_job_status(
-                    job.id,
-                    if preview.normalized_settings.remux_only {
-                        "draft_remux"
-                    } else {
-                        "draft_transcode"
-                    },
-                )
-                .await;
-            let _ = sqlx_update_conversion_settings(
+            if let Err(err) = persist_conversion_preview(
                 state.as_ref(),
                 job.id,
+                &analysis,
                 &preview.normalized_settings,
             )
-            .await;
+            .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            }
             axum::Json(preview).into_response()
         }
         Err(err) => (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
     }
 }
 
-async fn sqlx_update_conversion_settings(
+async fn persist_conversion_preview(
     state: &AppState,
     id: i64,
+    analysis: &crate::media::pipeline::MediaAnalysis,
     settings: &ConversionSettings,
 ) -> crate::error::Result<()> {
+    let settings_json = serde_json::to_string(settings)
+        .map_err(|err| crate::error::AlchemistError::Unknown(err.to_string()))?;
+    let probe_json = serde_json::to_string(analysis)
+        .map_err(|err| crate::error::AlchemistError::Unknown(err.to_string()))?;
     state
         .db
-        .update_conversion_job_settings(
+        .persist_conversion_job_preview(
             id,
-            &serde_json::to_string(settings).unwrap_or_else(|_| "{}".to_string()),
+            &settings_json,
             if settings.remux_only {
                 "remux"
             } else {
                 "transcode"
             },
+            if settings.remux_only {
+                "draft_remux"
+            } else {
+                "draft_transcode"
+            },
+            &probe_json,
         )
         .await
 }
@@ -366,9 +501,32 @@ pub(crate) async fn download_conversion_job_handler(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("output.bin");
-    let _ = state.db.mark_conversion_job_downloaded(id).await;
-
-    let stream = ReaderStream::new(file);
+    let retention_hours = state
+        .config
+        .read()
+        .await
+        .system
+        .conversion_download_retention_hours;
+    let expires_at = sqlite_timestamp_after_hours(i64::from(retention_hours));
+    let stream = futures::stream::unfold(
+        Some((ReaderStream::new(file), state.db.clone(), id, expires_at)),
+        |state| async move {
+            let (mut reader, db, job_id, expires_at) = state?;
+            match reader.next().await {
+                Some(Ok(chunk)) => Some((Ok(chunk), Some((reader, db, job_id, expires_at)))),
+                Some(Err(err)) => Some((Err(err), None)),
+                None => {
+                    if let Err(err) = db.mark_conversion_job_downloaded(job_id, &expires_at).await {
+                        warn!(
+                            "Failed to mark conversion job {} as downloaded after full stream: {}",
+                            job_id, err
+                        );
+                    }
+                    None
+                }
+            }
+        },
+    );
     let body = Body::from_stream(stream);
     let mut headers = HeaderMap::new();
     headers.insert(

@@ -1,7 +1,13 @@
 ---
-title: Alchemist Overview
-description: What Alchemist is, what it does, and where to start.
+title: Alchemist — Self-Hosted Video Transcoding Automation
+description: Alchemist is a self-hosted, GPLv3 transcoding pipeline that scans your media library and encodes only what's worth encoding, using NVENC, Intel Quick Sync, VAAPI, AMF, or Apple VideoToolbox.
 slug: /
+keywords:
+  - self-hosted video transcoding
+  - ffmpeg automation
+  - jellyfin transcoding
+  - av1 transcoding
+  - open source transcoding
 ---
 
 Alchemist scans your media library, analyzes every file, and
@@ -48,6 +54,9 @@ For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup
 | Get it running | [Installation](/installation) |
 | Docker setup | [Docker](/docker) |
 | Get your GPU working | [Hardware](/hardware) |
+| Using Jellyfin | [Alchemist for Jellyfin](/jellyfin) |
+| Comparing to Tdarr or FileFlows | [Alchemist vs Tdarr](/alternatives/tdarr) · [Alchemist vs FileFlows](/alternatives/fileflows) |
+| Why it's GPLv3 | [Open Source](/open-source) |
 | Automate with tokens | [API](/api) |
 | Understand skip decisions | [Skip Decisions](/skip-decisions) |
 | Tune per-library behavior | [Profiles](/profiles) |

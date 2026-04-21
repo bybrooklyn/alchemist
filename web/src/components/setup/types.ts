@@ -62,6 +62,8 @@ export interface SetupSettings {
     system: {
         enable_telemetry: boolean;
         monitoring_poll_interval: number;
+        conversion_upload_limit_gb: number;
+        conversion_download_retention_hours: number;
     };
 }
 

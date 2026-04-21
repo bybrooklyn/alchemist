@@ -55,11 +55,13 @@ totals. Fills in as jobs complete.
 
 Experimental single-file workflow:
 
-- Upload a file
+- Upload a file (bounded by `conversion_upload_limit_gb`, default 8 GiB)
 - Probe streams and metadata
 - Configure transcode or remux settings
 - Preview the generated FFmpeg command
 - Queue the job and download the result when complete
+
+Uploads and generated outputs are removed automatically by a cleanup sweep that runs on every upload. The retention window after a successful download is governed by `conversion_download_retention_hours` (default 1 hour).
 
 ## Settings tabs
 
@@ -75,4 +77,5 @@ Experimental single-file workflow:
 | API Tokens | Named bearer tokens with `read_only` and `full_access` classes |
 | Schedule | Time windows |
 | Runtime | Engine mode, concurrent jobs override, Library Doctor |
+| System | Monitoring poll interval, manual conversion upload limit and post-download retention, telemetry toggle, watch-folder switch |
 | Appearance | Color theme (35+ themes) |

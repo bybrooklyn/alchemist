@@ -1,6 +1,10 @@
 ---
-title: Apple VideoToolbox
-description: Apple VideoToolbox setup on macOS.
+title: Apple VideoToolbox Setup (macOS, Apple Silicon)
+description: Configure Apple VideoToolbox for Alchemist on macOS. Native binary installs recommended — Docker on macOS has limited VideoToolbox access.
+keywords:
+  - apple videotoolbox
+  - apple silicon transcoding
+  - macos ffmpeg hardware encoding
 ---
 
 Apple VideoToolbox is the native macOS hardware encode path.

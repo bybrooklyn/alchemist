@@ -1,6 +1,11 @@
 ---
-title: Planner Heuristics
-description: How Alchemist decides whether to transcode, skip, or remux a file.
+title: Planner — How Alchemist Decides Transcode, Remux, or Skip
+description: The planner evaluates every file deterministically — BPP thresholds, resolution and confidence multipliers, codec and target multipliers — and produces a transcode, remux, or skip decision.
+keywords:
+  - transcoding planner
+  - bpp threshold
+  - skip decision logic
+  - remux vs transcode
 ---
 
 The planner runs once per job during the analysis phase and produces one of three decisions:

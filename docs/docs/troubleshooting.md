@@ -1,6 +1,11 @@
 ---
-title: Troubleshooting
-description: Common failure modes and how to isolate them.
+title: Troubleshooting — GPU Detection, Queue, Skip Decisions
+description: Fix common Alchemist issues — NVENC or VAAPI not detected, CPU fallback despite a GPU, jobs stuck in Queued, unexpected skips, and missing VMAF scores.
+keywords:
+  - nvenc not detected docker
+  - vaapi not working
+  - gpu not detected ffmpeg
+  - jobs stuck queued
 ---
 
 ## No hardware encoder detected
@@ -11,8 +16,11 @@ log shows the exact FFmpeg encoder test that failed.
 Then verify the platform path:
 
 - NVIDIA: confirm `nvidia-container-toolkit` and `nvidia-smi`
+  — full walkthrough in
+  [NVENC not detected](/troubleshooting/nvenc-not-detected)
 - Intel/AMD on Linux: confirm `/dev/dri` passthrough and
-  container group access
+  container group access — full walkthrough in
+  [VAAPI not detected](/troubleshooting/vaapi-not-detected)
 - Apple: confirm `ffmpeg -encoders | grep videotoolbox`
 
 ## Jobs stuck in Queued
@@ -68,3 +76,24 @@ FFmpeg build.
 
 GitHub Issues:
 [https://github.com/bybrooklyn/alchemist/issues](https://github.com/bybrooklyn/alchemist/issues)
+
+## Detailed troubleshooting pages
+
+- [NVENC not detected](/troubleshooting/nvenc-not-detected) —
+  NVIDIA driver, container toolkit, FFmpeg NVENC, probe log.
+- [VAAPI not detected](/troubleshooting/vaapi-not-detected) —
+  Intel / AMD on Linux — `/dev/dri`, `vainfo`, render group,
+  `LIBVA_DRIVER_NAME`.
+- [Jellyfin direct-play failing](/troubleshooting/jellyfin-direct-play-failing) —
+  why Jellyfin still transcodes after Alchemist processed
+  the file.
+
+## Related pages
+
+- [Hardware Acceleration](/hardware) — vendor-specific setup.
+- [GPU Passthrough](/gpu-passthrough) — Docker device and
+  group configuration.
+- [Skip Decisions](/skip-decisions) — why a file wasn't
+  transcoded.
+- [Engine Modes](/engine-modes) — concurrency limits and
+  draining behavior.

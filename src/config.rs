@@ -673,6 +673,10 @@ impl Default for QualityConfig {
 pub struct SystemConfig {
     #[serde(default = "default_poll_interval")]
     pub monitoring_poll_interval: f64,
+    #[serde(default = "default_conversion_upload_limit_gb")]
+    pub conversion_upload_limit_gb: u32,
+    #[serde(default = "default_conversion_download_retention_hours")]
+    pub conversion_download_retention_hours: u32,
     #[serde(default = "default_telemetry")]
     pub enable_telemetry: bool,
     #[serde(default = "default_log_retention_days")]
@@ -699,6 +703,14 @@ fn default_telemetry() -> bool {
     false
 }
 
+fn default_conversion_upload_limit_gb() -> u32 {
+    8
+}
+
+fn default_conversion_download_retention_hours() -> u32 {
+    1
+}
+
 fn default_poll_interval() -> f64 {
     2.0
 }
@@ -711,6 +723,8 @@ impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             monitoring_poll_interval: default_poll_interval(),
+            conversion_upload_limit_gb: default_conversion_upload_limit_gb(),
+            conversion_download_retention_hours: default_conversion_download_retention_hours(),
             enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
             engine_mode: EngineMode::default(),
@@ -827,6 +841,8 @@ impl Default for Config {
             quality: QualityConfig::default(),
             system: SystemConfig {
                 monitoring_poll_interval: default_poll_interval(),
+                conversion_upload_limit_gb: default_conversion_upload_limit_gb(),
+                conversion_download_retention_hours: default_conversion_download_retention_hours(),
                 enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
                 engine_mode: EngineMode::default(),
@@ -861,6 +877,17 @@ impl Config {
             anyhow::bail!(
                 "monitoring_poll_interval must be between 0.5 and 10.0 seconds, got {}",
                 self.system.monitoring_poll_interval
+            );
+        }
+
+        if self.system.conversion_upload_limit_gb == 0 {
+            anyhow::bail!("conversion_upload_limit_gb must be >= 1");
+        }
+
+        if !(1..=24).contains(&self.system.conversion_download_retention_hours) {
+            anyhow::bail!(
+                "conversion_download_retention_hours must be between 1 and 24, got {}",
+                self.system.conversion_download_retention_hours
             );
         }
 

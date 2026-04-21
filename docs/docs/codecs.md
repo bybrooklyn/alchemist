@@ -1,6 +1,11 @@
 ---
-title: Codecs
-description: AV1, HEVC, H.264, and the BPP model Alchemist uses.
+title: Codecs — AV1, HEVC, H.264, and the BPP Model
+description: Choosing between AV1, HEVC, and H.264 as a transcoding target. Hardware support per vendor, and how Alchemist uses bits-per-pixel (BPP) instead of raw bitrate.
+keywords:
+  - av1 vs hevc
+  - hevc vs h264
+  - bits per pixel
+  - transcoding codec choice
 ---
 
 Alchemist targets three video codecs: AV1, HEVC, and H.264.

@@ -1,6 +1,11 @@
 ---
-title: Intel QSV / VAAPI
-description: Intel iGPU setup for VAAPI and QSV.
+title: Intel Quick Sync and VAAPI Setup
+description: Configure Intel Quick Sync (QSV) and VAAPI for Alchemist. Driver install, /dev/dri passthrough, and Intel Arc notes. AV1 on 12th-generation and newer.
+keywords:
+  - intel quick sync
+  - qsv ffmpeg
+  - intel vaapi
+  - intel arc transcoding
 ---
 
 Alchemist tries Intel VAAPI first and QSV second. That

@@ -94,6 +94,8 @@ requires at least one day in every window.
 | Field | Type | Default | Description |
 |------|------|---------|-------------|
 | `monitoring_poll_interval` | float | `2.0` | Poll interval for system monitoring and dashboard resource refresh |
+| `conversion_upload_limit_gb` | int | `8` | Maximum allowed upload size for the Convert workflow, in GiB. Must be >= 1. Uploads above this size are rejected before the file is written to disk |
+| `conversion_download_retention_hours` | int | `1` | Hours to retain a completed Convert output after the user downloads it, before the cleanup pass removes the upload and output. Must be between 1 and 24 |
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
@@ -144,6 +146,8 @@ revert_on_low_quality = true
 
 [system]
 monitoring_poll_interval = 2.0
+conversion_upload_limit_gb = 8
+conversion_download_retention_hours = 1
 enable_telemetry = false
 log_retention_days = 30
 engine_mode = "balanced"

@@ -11,6 +11,8 @@ import LibraryDoctor from "./LibraryDoctor";
 
 interface SystemSettingsPayload {
     monitoring_poll_interval: number;
+    conversion_upload_limit_gb: number;
+    conversion_download_retention_hours: number;
     enable_telemetry: boolean;
     watch_enabled: boolean;
 }
@@ -43,6 +45,13 @@ export default function SystemSettings() {
         useState<EngineStatus | null>(null);
     const [modeLoading, setModeLoading] = useState(false);
     const [engineActionLoading, setEngineActionLoading] = useState(false);
+
+    const updateSettings = <K extends keyof SystemSettingsPayload>(
+        key: K,
+        value: SystemSettingsPayload[K],
+    ) => {
+        setSettings((current) => current ? { ...current, [key]: value } : current);
+    };
 
     useEffect(() => {
         void fetchSettings();
@@ -293,7 +302,7 @@ export default function SystemSettings() {
                         max="10"
                         step="0.5"
                         value={settings.monitoring_poll_interval}
-                        onChange={(e) => setSettings({ ...settings, monitoring_poll_interval: parseFloat(e.target.value) })}
+                        onChange={(e) => updateSettings("monitoring_poll_interval", parseFloat(e.target.value))}
                         className="flex-1 h-2 bg-helios-surface-soft rounded-lg appearance-none cursor-pointer accent-helios-solar"
                     />
                     <span className="font-mono bg-helios-surface-soft border border-helios-line/30 rounded px-3 py-1 text-helios-ink w-20 text-center font-bold">
@@ -303,6 +312,62 @@ export default function SystemSettings() {
                 <p className="text-xs text-helios-slate ml-1 pt-1">
                     Determine how frequently the dashboard updates system stats. Lower values update faster but use slightly more CPU. Default is 2.0s.
                 </p>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 p-4">
+                <div>
+                    <h4 className="text-sm font-semibold text-helios-ink">Manual Conversion</h4>
+                    <p className="mt-1 text-xs text-helios-slate">
+                        Bound upload size and control how long successfully downloaded conversion outputs are kept before automatic cleanup.
+                    </p>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                    <label className="space-y-2">
+                        <span className="text-xs font-medium text-helios-slate">
+                            Upload Limit (GiB)
+                        </span>
+                        <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={settings.conversion_upload_limit_gb}
+                            onChange={(e) => {
+                                const next = Number.parseInt(e.target.value, 10);
+                                if (!Number.isNaN(next)) {
+                                    updateSettings("conversion_upload_limit_gb", next);
+                                }
+                            }}
+                            className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-3 py-2 text-sm text-helios-ink"
+                        />
+                        <p className="text-xs text-helios-slate">
+                            Requests above this size are rejected before the server accepts the upload.
+                        </p>
+                    </label>
+
+                    <label className="space-y-2">
+                        <span className="text-xs font-medium text-helios-slate">
+                            Post-Download Retention (hours)
+                        </span>
+                        <input
+                            type="number"
+                            min="1"
+                            max="24"
+                            step="1"
+                            value={settings.conversion_download_retention_hours}
+                            onChange={(e) => {
+                                const next = Number.parseInt(e.target.value, 10);
+                                if (!Number.isNaN(next)) {
+                                    updateSettings("conversion_download_retention_hours", next);
+                                }
+                            }}
+                            className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-3 py-2 text-sm text-helios-ink"
+                        />
+                        <p className="text-xs text-helios-slate">
+                            Completed conversion files are kept until download, then cleaned up after this window.
+                        </p>
+                    </label>
+                </div>
             </div>
 
             <div className="pt-4 border-t border-helios-line/10">
@@ -317,7 +382,7 @@ export default function SystemSettings() {
                         <input
                             type="checkbox"
                             checked={settings.watch_enabled}
-                            onChange={(e) => setSettings({ ...settings, watch_enabled: e.target.checked })}
+                            onChange={(e) => updateSettings("watch_enabled", e.target.checked)}
                             className="sr-only peer"
                         />
                         <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-helios-ink after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-helios-ink after:border-helios-line/30 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
@@ -340,7 +405,7 @@ export default function SystemSettings() {
                             aria-label="Anonymous Telemetry"
                             checked={false}
                             disabled={TELEMETRY_TEMPORARILY_DISABLED}
-                            onChange={(e) => setSettings({ ...settings, enable_telemetry: e.target.checked })}
+                            onChange={(e) => updateSettings("enable_telemetry", e.target.checked)}
                             className="sr-only peer"
                         />
                         <div className="w-11 h-6 rounded-full bg-helios-line/20 peer-focus:outline-none after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-helios-line/30 after:bg-helios-ink after:content-[''] after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-helios-ink peer-checked:bg-helios-solar rtl:peer-checked:after:-translate-x-full peer-disabled:cursor-not-allowed peer-disabled:opacity-60"></div>

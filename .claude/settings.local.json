@@ -37,7 +37,13 @@
       "Bash(grep -rn \"from_alchemist_event\\\\|AlchemistEvent.*JobEvent\\\\|JobEvent.*AlchemistEvent\" /Users/brooklyn/data/alchemist/src/ --include=*.rs)",
       "Bash(grep -l AlchemistEvent /Users/brooklyn/data/alchemist/src/*.rs /Users/brooklyn/data/alchemist/src/**/*.rs)",
       "Bash(/tmp/audit_report.txt:*)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(gh run:*)",
+      "Bash(git rm:*)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python3 -c \"from PIL import Image, ImageDraw, ImageFont; print\\('pil ok'\\)\")",
+      "Bash(just bump *)"
     ]
   }
 }

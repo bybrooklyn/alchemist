@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-04-21
+
+Consolidates the 0.3.1-rc.1 through 0.3.1-rc.5 release candidates and the
+post-rc.5 audit remediation work.
+
+### Reliability & Stability
+
+- Segment-based encode resume: interrupted jobs persist resume sessions and completed segments so restart continues without discarding work.
+- Notification target reads/writes preserve the additive migration path, tolerate legacy shapes, and avoid duplicate-delete projection bugs.
+- Daily summary delivery retries safely after transient failures and avoids duplicate sends across restart by persisting the last successful day.
+- Completed-job detail fails closed on database errors instead of returning partial `200 OK`; encode stat duration fallback uses encoded output, not source.
+- Login now returns server errors for real database failures; duplicate notification/schedule rows no longer disappear together from a single delete.
+
+### Jobs & UX
+
+- Manual enqueue: the jobs UI supports enqueueing a single absolute file path through the same backend dedupe and output rules as library scans.
+- Queued-job visibility: job detail exposes queue position and processor blocked reasons.
+- Attempt-history surfacing: job detail shows encode attempt history with outcome, timing, and captured failure summary.
+- `JobManager` refactor ships with dedicated controller/dialog helpers and tighter SSE reconciliation so filtered tables and open modals stay aligned with backend truth.
+- Intelligence actions: remux recommendations and duplicate candidates are actionable directly from the Intelligence page.
+
+### Conversion Workflow
+
+- Single-file upload/convert workflow with configurable upload size cap (`conversion_upload_limit_gb`, default 8 GB).
+- Converted-download retention is configurable (`conversion_download_retention_hours`, default 1, range 1-24).
+
+### Security & Audit Remediation
+
+- Backend database layer split from a single `db.rs` into the `src/db/` submodule (config, conversion, events, jobs, mod, stats, system, types) to reduce the blast radius of schema or query changes.
+- Additional audit findings addressed across `src/server/` handlers — see `audit.md` for item-by-item remediation notes.
+- Satisfy newer GitHub clippy lints and CI clippy strictness (`-D clippy::unwrap_used`, `-D clippy::expect_used`).
+
+### Documentation
+
+- Full docs SEO overhaul: frontmatter (title/description/keywords), JSON-LD SoftwareApplication schema, sitemap, robots.txt, and OG social card.
+- New pages: Alchemist for Jellyfin, Open Source, AV1 transcoding, Migrating from Tdarr, and alternatives hub with Alchemist vs Tdarr / Alchemist vs FileFlows comparisons.
+- New troubleshooting subpages: NVENC not detected, VAAPI not detected, Jellyfin direct-play failing.
+- Updated configuration-reference, database-schema, architecture, and web-interface docs to match the current codebase.
+
+### Internal
+
+- `CLAUDE.md` updated for the `db/` module split.
+
 ## [0.3.1-rc.5] - 2026-04-16
 
 ### Reliability & Stability
