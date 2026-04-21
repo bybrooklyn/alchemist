@@ -1,5 +1,5 @@
 ---
-title: Apple VideoToolbox Setup (macOS, Apple Silicon)
+title: Apple
 description: Configure Apple VideoToolbox for Alchemist on macOS. Native binary installs recommended — Docker on macOS has limited VideoToolbox access.
 keywords:
   - apple videotoolbox

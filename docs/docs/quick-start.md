@@ -1,5 +1,5 @@
 ---
-title: Quick Start — Start the Engine, Watch the Queue
+title: Quick Start
 description: The essentials for getting Alchemist processing a media library — start the engine, monitor jobs, confirm hardware selection, and read skip reasons.
 keywords:
   - alchemist quick start

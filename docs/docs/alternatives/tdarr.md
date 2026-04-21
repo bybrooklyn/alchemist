@@ -1,5 +1,5 @@
 ---
-title: Alchemist vs Tdarr — Open-Source Transcoding Compared
+title: Alchemist vs Tdarr
 description: How Alchemist compares to Tdarr for self-hosted video transcoding automation. Licensing, deployment model, hardware support, and when each tool is the better fit.
 keywords:
   - tdarr alternative

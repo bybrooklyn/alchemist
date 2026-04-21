@@ -1,5 +1,5 @@
 ---
-title: Install Alchemist — Docker, Binary, or Source
+title: Install
 description: Install Alchemist on Linux, macOS, or Windows. Docker Compose is the recommended path; native binaries and source builds are also supported.
 keywords:
   - install alchemist

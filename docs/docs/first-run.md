@@ -1,5 +1,5 @@
 ---
-title: First Run — Setup Wizard and Your First Scan
+title: First Run
 description: Walk through the Alchemist setup wizard — create the admin account, pick library directories, choose a target codec, and start your first scan.
 keywords:
   - alchemist setup

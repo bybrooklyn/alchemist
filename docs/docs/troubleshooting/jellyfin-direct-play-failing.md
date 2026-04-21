@@ -1,5 +1,5 @@
 ---
-title: Jellyfin Direct Play Failing — After Pre-Transcoding with Alchemist
+title: Jellyfin Direct Play Fails
 description: Jellyfin still transcodes on the fly after Alchemist processed the file. How to diagnose direct-play failures — codec, container, audio, subtitles, bitrate, and client profile.
 keywords:
   - jellyfin direct play not working

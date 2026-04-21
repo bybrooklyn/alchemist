@@ -1,5 +1,5 @@
 ---
-title: Alchemist is Open Source — GPLv3, No Paid Tier
+title: Open Source
 description: Alchemist is licensed under GPLv3. There is no commercial tier, no paywalled features, and no telemetry on by default. Source, issues, and releases are on GitHub.
 keywords:
   - open source transcoding

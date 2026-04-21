@@ -1,5 +1,5 @@
 ---
-title: AV1 Transcoding — Hardware and Software Encoding in Alchemist
+title: AV1
 description: How Alchemist encodes AV1. Hardware paths (av1_nvenc, av1_qsv, av1_vaapi, av1_amf, av1_videotoolbox), CPU fallback (SVT-AV1, libaom), and when AV1 is the right target codec.
 keywords:
   - av1 transcoding
