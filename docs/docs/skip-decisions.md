@@ -1,5 +1,5 @@
 ---
-title: Skip Decisions — Why Alchemist Skipped a File
+title: Skip Decisions
 description: Every skipped file in Alchemist records a structured explanation — BPP below threshold, already target codec, below minimum file size, insufficient predicted savings, incomplete metadata, or no suitable encoder.
 keywords:
   - alchemist skipped file

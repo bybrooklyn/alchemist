@@ -1,5 +1,5 @@
 ---
-title: Troubleshooting — GPU Detection, Queue, Skip Decisions
+title: Troubleshooting
 description: Fix common Alchemist issues — NVENC or VAAPI not detected, CPU fallback despite a GPU, jobs stuck in Queued, unexpected skips, and missing VMAF scores.
 keywords:
   - nvenc not detected docker

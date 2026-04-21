@@ -1,5 +1,5 @@
 ---
-title: Intel Quick Sync and VAAPI Setup
+title: Intel
 description: Configure Intel Quick Sync (QSV) and VAAPI for Alchemist. Driver install, /dev/dri passthrough, and Intel Arc notes. AV1 on 12th-generation and newer.
 keywords:
   - intel quick sync

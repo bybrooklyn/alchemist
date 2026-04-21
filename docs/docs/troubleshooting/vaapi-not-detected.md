@@ -1,5 +1,5 @@
 ---
-title: VAAPI Not Detected — Intel and AMD Linux Troubleshooting
+title: VAAPI Not Detected
 description: Fix "VAAPI not detected" in Alchemist on Linux. Verify /dev/dri passthrough, vainfo output, the render group, LIBVA_DRIVER_NAME, and the startup probe log.
 keywords:
   - vaapi not detected

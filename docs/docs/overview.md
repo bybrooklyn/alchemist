@@ -1,5 +1,5 @@
 ---
-title: Alchemist — Self-Hosted Video Transcoding Automation
+title: Alchemist
 description: Alchemist is a self-hosted, GPLv3 transcoding pipeline that scans your media library and encodes only what's worth encoding, using NVENC, Intel Quick Sync, VAAPI, AMF, or Apple VideoToolbox.
 slug: /
 keywords:

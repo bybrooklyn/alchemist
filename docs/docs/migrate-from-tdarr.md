@@ -1,5 +1,5 @@
 ---
-title: Migrating from Tdarr to Alchemist — Step-by-Step Guide
+title: Migrate from Tdarr
 description: Practical steps for moving a working Tdarr setup to Alchemist. Install side-by-side, dry-run against the same library, re-express flows as profiles and stream rules, then cut over.
 keywords:
   - migrate from tdarr

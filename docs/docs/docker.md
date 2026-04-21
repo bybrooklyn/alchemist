@@ -1,5 +1,5 @@
 ---
-title: Run Alchemist on Docker — Self-Hosted Transcoding Container
+title: Docker
 description: Docker Compose configuration, volumes, environment variables, and updates for Alchemist. Works on standard Docker, Unraid, Synology, TrueNAS, and Proxmox hosts.
 keywords:
   - docker transcoding

@@ -1,5 +1,5 @@
 ---
-title: Alchemist vs FileFlows — Fully Open-Source Alternative
+title: Alchemist vs FileFlows
 description: Comparing Alchemist and FileFlows for self-hosted video transcoding. Licensing, deployment, config model, and when each is the right choice.
 keywords:
   - fileflows alternative

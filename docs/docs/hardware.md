@@ -1,5 +1,5 @@
 ---
-title: Hardware Acceleration — NVENC, Quick Sync, VAAPI, AMF, VideoToolbox
+title: Hardware Acceleration
 description: How Alchemist detects and selects GPU encoders. Per-vendor setup for NVIDIA NVENC, Intel Quick Sync / VAAPI, AMD VAAPI and AMF, and Apple VideoToolbox, with CPU fallback.
 keywords:
   - nvenc

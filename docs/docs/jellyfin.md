@@ -1,5 +1,5 @@
 ---
-title: Alchemist for Jellyfin — Pre-Transcode Your Library
+title: Jellyfin
 description: Use Alchemist to pre-transcode a Jellyfin media library to AV1, HEVC, or H.264. Reduces on-the-fly transcoding load, keeps originals safe, and runs entirely self-hosted.
 keywords:
   - jellyfin transcoding

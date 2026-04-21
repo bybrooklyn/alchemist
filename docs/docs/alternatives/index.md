@@ -1,5 +1,5 @@
 ---
-title: Alchemist Alternatives — Compared to Tdarr and FileFlows
+title: Alternatives
 description: Side-by-side comparisons between Alchemist and other self-hosted transcoding tools. Honest, narrow comparisons focused on licensing, deployment shape, and config model.
 keywords:
   - self-hosted transcoder comparison

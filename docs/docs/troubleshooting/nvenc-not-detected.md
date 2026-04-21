@@ -1,5 +1,5 @@
 ---
-title: NVENC Not Detected — NVIDIA GPU Troubleshooting
+title: NVENC Not Detected
 description: Fix "NVENC not detected" in Alchemist. Verify the NVIDIA driver, nvidia-container-toolkit, FFmpeg NVENC support, and the startup probe log that records why a backend failed.
 keywords:
   - nvenc not detected
