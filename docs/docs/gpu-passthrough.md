@@ -1,6 +1,11 @@
 ---
-title: GPU Passthrough
-description: Docker GPU passthrough for NVIDIA, Intel, and AMD.
+title: Docker GPU Passthrough — NVIDIA, Intel, and AMD
+description: Pass NVIDIA GPUs (via nvidia-container-toolkit), Intel iGPUs, and AMD GPUs (via /dev/dri) into the Alchemist Docker container for NVENC, QSV, and VAAPI.
+keywords:
+  - docker gpu passthrough
+  - nvidia container toolkit
+  - /dev/dri docker
+  - vaapi docker
 ---
 
 Use `ghcr.io/bybrooklyn/alchemist:latest`. Alchemist does

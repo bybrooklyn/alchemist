@@ -85,9 +85,22 @@ without changing the mode.
 - `health.rs`: Library Doctor checks
 - `ffmpeg/`: encoder-specific FFmpeg builders
 
+### `src/db/`
+
+SQLite access layer, migration runner, and typed projections.
+Split into focused submodules — no ORM, direct `sqlx` usage:
+
+- `mod.rs`: connection pool, migrations, shared setup
+- `types.rs`: row structs shared across modules
+- `jobs.rs`: queue mutations, lifecycle, archival, health-check sweeps
+- `conversion.rs`: Convert-workflow upload/output tracking and cleanup queries
+- `stats.rs`: aggregates, savings history, daily rollups
+- `config.rs`: persisted settings projections
+- `system.rs`: watch dirs, library profiles, schema/version info
+- `events.rs`: typed broadcast channel plumbing
+
 ### Other core files
 
-- `src/db.rs`: SQLite access layer and projections
 - `src/config.rs`: TOML config structs, defaults, validation
 - `src/orchestrator.rs`: FFmpeg subprocess control and cancellation
 

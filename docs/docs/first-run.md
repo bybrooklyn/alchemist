@@ -1,6 +1,10 @@
 ---
-title: First Run & Setup Wizard
-description: Getting through the setup wizard and starting your first scan.
+title: First Run — Setup Wizard and Your First Scan
+description: Walk through the Alchemist setup wizard — create the admin account, pick library directories, choose a target codec, and start your first scan.
+keywords:
+  - alchemist setup
+  - alchemist first run
+  - setup wizard
 ---
 
 When you first open Alchemist at `http://localhost:3000`
@@ -50,3 +54,12 @@ To fully reset and re-run the wizard:
 ```bash
 just db-reset-all
 ```
+
+## Next
+
+- [Quick Start](/quick-start) — start the engine and watch
+  the first jobs run.
+- [Alchemist for Jellyfin](/jellyfin) — if this library
+  feeds a Jellyfin server.
+- [Hardware Acceleration](/hardware) — confirm your GPU is
+  the active backend.

@@ -26,6 +26,32 @@ const config: Config = {
     },
   },
 
+  headTags: [
+    {
+      tagName: 'script',
+      attributes: {
+        type: 'application/ld+json',
+      },
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'SoftwareApplication',
+        name: 'Alchemist',
+        description:
+          'Self-hosted video transcoding automation. Scans your media library, analyzes every file, and encodes only what is worth encoding using NVENC, Intel Quick Sync, VAAPI, AMD AMF, or Apple VideoToolbox. GPLv3.',
+        applicationCategory: 'MultimediaApplication',
+        operatingSystem: 'Linux, macOS, Windows',
+        url,
+        license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+        offers: {
+          '@type': 'Offer',
+          price: '0',
+          priceCurrency: 'USD',
+        },
+        sameAs: ['https://github.com/bybrooklyn/alchemist'],
+      }),
+    },
+  ],
+
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],

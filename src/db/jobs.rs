@@ -949,6 +949,7 @@ impl Db {
                         j.created_at, j.updated_at, j.input_metadata_json
                  FROM jobs j
                  WHERE j.status = 'completed'
+                   AND j.archived = 0
                    AND (
                         j.last_health_check IS NULL
                         OR j.last_health_check < datetime('now', '-7 days')
@@ -1185,6 +1186,35 @@ mod tests {
                 .status,
             JobState::Completed
         );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_jobs_needing_health_check_excludes_archived_rows()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_health_check_jobs_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let input = Path::new("health-input.mkv");
+        let output = Path::new("health-output.mkv");
+        let _ = db
+            .enqueue_job(input, output, SystemTime::UNIX_EPOCH)
+            .await?;
+
+        let job = db
+            .get_job_by_input_path("health-input.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing health job"))?;
+        db.update_job_status(job.id, JobState::Completed).await?;
+        db.batch_delete_jobs(&[job.id]).await?;
+
+        let jobs = db.get_jobs_needing_health_check().await?;
+        assert!(jobs.is_empty());
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

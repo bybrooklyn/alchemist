@@ -27,6 +27,7 @@ Database location:
 | `archived` | BOOLEAN | Archived flag for cleared completed jobs |
 | `health_issues` | TEXT | Serialized health issues from Library Doctor |
 | `last_health_check` | TEXT | Last library health check timestamp |
+| `input_metadata_json` | TEXT | Serialized input probe metadata captured at enqueue time so completed jobs do not require live re-probing |
 
 ## `encode_stats`
 
@@ -174,6 +175,91 @@ Database location:
 | `completed_at` | TEXT | Scan completion timestamp |
 | `files_checked` | INTEGER | Files examined in the run |
 | `issues_found` | INTEGER | Issues found in the run |
+
+## `conversion_jobs`
+
+Tracks uploads from the Convert workflow and their generated outputs. Cleanup runs on every upload and is driven by `expires_at`, the linked `jobs` row state, and `downloaded_at`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `upload_path` | TEXT | Absolute path to the staged upload |
+| `output_path` | TEXT | Absolute path to the generated output, set once the job completes |
+| `mode` | TEXT | Workflow mode (e.g. `transcode`, `remux`) |
+| `settings_json` | TEXT | Serialized conversion settings chosen in the UI |
+| `probe_json` | TEXT | Cached FFprobe output for the upload |
+| `linked_job_id` | INTEGER | Foreign key to `jobs.id` once the upload has been enqueued; nulled on job delete |
+| `status` | TEXT | Current state (`uploaded`, `queued`, `running`, `completed`, `downloaded`, `failed`, `cancelled`) |
+| `expires_at` | TEXT | Absolute timestamp after which the cleanup sweep may remove artifacts |
+| `downloaded_at` | TEXT | Download timestamp; cleanup extends `expires_at` by `conversion_download_retention_hours` once this is set |
+| `created_at` | TEXT | Insert timestamp |
+| `updated_at` | TEXT | Last update timestamp |
+
+## `api_tokens`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `name` | TEXT | Human-readable token label |
+| `token_hash` | TEXT | Hashed token value; the plaintext is shown once at issue |
+| `access_level` | TEXT | `read_only` or `full_access` |
+| `created_at` | DATETIME | Insert timestamp |
+| `last_used_at` | DATETIME | Updated on each successful authenticated request |
+| `revoked_at` | DATETIME | Non-null once the token is revoked |
+
+## `encode_attempts`
+
+Per-attempt encode history. A job may have multiple rows if it was retried.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `job_id` | INTEGER | Foreign key to `jobs.id`, cascades on delete |
+| `attempt_number` | INTEGER | 1-based attempt index |
+| `started_at` | TEXT | Attempt start timestamp |
+| `finished_at` | TEXT | Attempt finish timestamp |
+| `outcome` | TEXT | `completed`, `failed`, or `cancelled` |
+| `failure_code` | TEXT | Stable structured failure code for failed attempts |
+| `failure_summary` | TEXT | Legacy failure summary string |
+| `input_size_bytes` | INTEGER | Input size at attempt time |
+| `output_size_bytes` | INTEGER | Output size at attempt time |
+| `encode_time_seconds` | REAL | Wall-clock encode duration |
+| `created_at` | TEXT | Insert timestamp |
+
+## `job_resume_sessions`
+
+Tracks resumable segmented encodes so long-running jobs can pick up after restarts.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `job_id` | INTEGER | Unique foreign key to `jobs.id`, cascades on delete |
+| `strategy` | TEXT | Resume strategy identifier |
+| `plan_hash` | TEXT | Hash of the encode plan; invalidates the session if plan changes |
+| `mtime_hash` | TEXT | Input mtime fingerprint; invalidates on source change |
+| `temp_dir` | TEXT | Per-job temporary directory for segment outputs |
+| `concat_manifest_path` | TEXT | FFmpeg concat manifest path |
+| `segment_length_secs` | INTEGER | Segment duration in seconds |
+| `status` | TEXT | `active`, `completed`, or `abandoned` |
+| `created_at` | DATETIME | Insert timestamp |
+| `updated_at` | DATETIME | Last update timestamp |
+
+## `job_resume_segments`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `job_id` | INTEGER | Foreign key to `jobs.id`, cascades on delete |
+| `segment_index` | INTEGER | Segment order within the job |
+| `start_secs` | REAL | Segment start offset in seconds |
+| `duration_secs` | REAL | Segment duration in seconds |
+| `temp_path` | TEXT | Path to the encoded segment on disk |
+| `status` | TEXT | Segment state (`pending`, `in_progress`, `completed`, `failed`) |
+| `attempt_count` | INTEGER | Retry count for this segment |
+| `created_at` | DATETIME | Insert timestamp |
+| `updated_at` | DATETIME | Last update timestamp |
+
+`(job_id, segment_index)` is unique.
 
 ## `schema_info`
 

@@ -3,12 +3,32 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   docsSidebar: [
     'overview',
+    'open-source',
     {
       type: 'category',
       label: 'Get Started',
       collapsible: false,
       collapsed: false,
       items: ['installation', 'first-run', 'quick-start', 'docker'],
+    },
+    {
+      type: 'category',
+      label: 'Use Cases',
+      collapsible: false,
+      collapsed: false,
+      items: ['jellyfin', 'av1'],
+    },
+    {
+      type: 'category',
+      label: 'Comparisons',
+      collapsible: false,
+      collapsed: false,
+      items: [
+        'alternatives/index',
+        'alternatives/tdarr',
+        'alternatives/fileflows',
+        'migrate-from-tdarr',
+      ],
     },
     {
       type: 'category',
@@ -55,6 +75,9 @@ const sidebars: SidebarsConfig = {
         'database-schema',
         'architecture',
         'troubleshooting',
+        'troubleshooting/nvenc-not-detected',
+        'troubleshooting/vaapi-not-detected',
+        'troubleshooting/jellyfin-direct-play-failing',
         'faq',
         'changelog',
       ],

@@ -1,6 +1,9 @@
 ---
-title: Quick Start
-description: The essentials for getting Alchemist processing your library.
+title: Quick Start — Start the Engine, Watch the Queue
+description: The essentials for getting Alchemist processing a media library — start the engine, monitor jobs, confirm hardware selection, and read skip reasons.
+keywords:
+  - alchemist quick start
+  - automatic transcoding
 ---
 
 Assumes you've completed the setup wizard. If not, see
@@ -42,3 +45,13 @@ recovered, compression ratios, and a savings chart.
 | Boost priority | Jobs → ⋯ → Boost |
 | Trigger manual scan | Settings → Library → Scan |
 | Change engine mode | Settings → Runtime |
+
+## See also
+
+- [Alchemist for Jellyfin](/jellyfin) — pre-transcoding a
+  Jellyfin library.
+- [Profiles](/profiles) — per-library targets.
+- [Scheduling](/scheduling) — restrict encoding to off-peak
+  windows.
+- [Troubleshooting](/troubleshooting) — queue stuck, GPU
+  not detected, unexpected skips.

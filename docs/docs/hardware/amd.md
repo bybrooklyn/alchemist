@@ -1,6 +1,10 @@
 ---
-title: AMD VAAPI / AMF
-description: AMD GPU setup for Linux VAAPI and Windows AMF.
+title: AMD VAAPI and AMF Setup
+description: Configure AMD GPUs for Alchemist — VAAPI on Linux (radeonsi driver), AMF on Windows. HEVC and H.264 are the validated paths; AV1 remains driver-dependent.
+keywords:
+  - amd vaapi
+  - amd amf windows
+  - radeonsi ffmpeg
 ---
 
 AMD uses VAAPI on Linux and AMF on Windows. Set

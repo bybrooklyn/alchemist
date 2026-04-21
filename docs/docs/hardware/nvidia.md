@@ -1,6 +1,11 @@
 ---
-title: NVIDIA NVENC
-description: NVIDIA NVENC setup for Docker and binary installs.
+title: NVIDIA NVENC Setup — Docker and Binary
+description: Configure NVIDIA NVENC for Alchemist. Supported NVENC generations (Pascal through Ada), nvidia-container-toolkit setup, and AV1 NVENC on RTX 30/40.
+keywords:
+  - nvenc
+  - nvenc docker
+  - av1 nvenc rtx 40
+  - hevc nvenc
 ---
 
 Alchemist uses NVENC when NVIDIA is available and selected.

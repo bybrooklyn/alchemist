@@ -86,6 +86,33 @@ impl Db {
         Ok(())
     }
 
+    pub async fn persist_conversion_job_preview(
+        &self,
+        id: i64,
+        settings_json: &str,
+        mode: &str,
+        status: &str,
+        probe_json: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversion_jobs
+             SET settings_json = ?,
+                 mode = ?,
+                 status = ?,
+                 probe_json = ?,
+                 updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(settings_json)
+        .bind(mode)
+        .bind(status)
+        .bind(probe_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_conversion_job_start(
         &self,
         id: i64,
@@ -118,12 +145,16 @@ impl Db {
         Ok(())
     }
 
-    pub async fn mark_conversion_job_downloaded(&self, id: i64) -> Result<()> {
+    pub async fn mark_conversion_job_downloaded(&self, id: i64, expires_at: &str) -> Result<()> {
         sqlx::query(
             "UPDATE conversion_jobs
-             SET downloaded_at = datetime('now'), status = 'downloaded', updated_at = datetime('now')
+             SET downloaded_at = datetime('now'),
+                 expires_at = ?,
+                 status = 'downloaded',
+                 updated_at = datetime('now')
              WHERE id = ?",
         )
+        .bind(expires_at)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -138,12 +169,44 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_expired_conversion_jobs(&self, now: &str) -> Result<Vec<ConversionJob>> {
+    pub async fn get_conversion_jobs_ready_for_cleanup(
+        &self,
+        now: &str,
+    ) -> Result<Vec<ConversionJob>> {
         let rows = sqlx::query_as::<_, ConversionJob>(
-            "SELECT id, upload_path, output_path, mode, settings_json, probe_json, linked_job_id, status, expires_at, downloaded_at, created_at, updated_at
-             FROM conversion_jobs
-             WHERE expires_at <= ?",
+            "SELECT cj.id, cj.upload_path, cj.output_path, cj.mode, cj.settings_json, cj.probe_json,
+                    cj.linked_job_id, cj.status, cj.expires_at, cj.downloaded_at, cj.created_at,
+                    cj.updated_at
+             FROM conversion_jobs cj
+             LEFT JOIN jobs j ON j.id = cj.linked_job_id
+             WHERE (
+                    cj.linked_job_id IS NULL
+                    AND datetime(cj.expires_at) <= datetime(?)
+                   )
+                OR (
+                    cj.linked_job_id IS NOT NULL
+                    AND j.id IS NULL
+                    AND datetime(cj.expires_at) <= datetime(?)
+                   )
+                OR (
+                    j.archived = 1
+                    AND datetime(cj.expires_at) <= datetime(?)
+                   )
+                OR (
+                    j.status IN ('failed', 'cancelled', 'skipped')
+                    AND j.archived = 0
+                    AND datetime(j.updated_at) <= datetime(?, '-24 hours')
+                   )
+                OR (
+                    j.status = 'completed'
+                    AND cj.downloaded_at IS NOT NULL
+                    AND datetime(cj.expires_at) <= datetime(?)
+                   )",
         )
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .bind(now)
         .bind(now)
         .fetch_all(&self.pool)
         .await?;

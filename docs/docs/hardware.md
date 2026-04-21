@@ -1,6 +1,13 @@
 ---
-title: Hardware Acceleration
-description: GPU detection, vendor selection, and fallback behavior.
+title: Hardware Acceleration — NVENC, Quick Sync, VAAPI, AMF, VideoToolbox
+description: How Alchemist detects and selects GPU encoders. Per-vendor setup for NVIDIA NVENC, Intel Quick Sync / VAAPI, AMD VAAPI and AMF, and Apple VideoToolbox, with CPU fallback.
+keywords:
+  - nvenc
+  - quick sync
+  - vaapi
+  - amd amf
+  - videotoolbox
+  - gpu accelerated transcoding
 ---
 
 Alchemist detects hardware automatically at startup,
@@ -57,3 +64,8 @@ backends such as VAAPI and QSV.
 - [AMD (VAAPI / AMF)](/hardware/amd)
 - [Apple (VideoToolbox)](/hardware/apple)
 - [CPU Encoding](/hardware/cpu)
+
+For Docker GPU passthrough (driver toolkit, `/dev/dri`, group
+permissions), see [GPU Passthrough](/gpu-passthrough). If your
+GPU isn't detected after setup, start with
+[Troubleshooting](/troubleshooting).

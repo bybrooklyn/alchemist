@@ -1,6 +1,10 @@
 ---
-title: Installation
-description: Install Alchemist via Docker, binary, or from source.
+title: Install Alchemist — Docker, Binary, or Source
+description: Install Alchemist on Linux, macOS, or Windows. Docker Compose is the recommended path; native binaries and source builds are also supported.
+keywords:
+  - install alchemist
+  - self-hosted transcoder install
+  - alchemist docker install
 ---
 
 Alchemist ships as a single binary with the web UI embedded.
@@ -132,3 +136,12 @@ docker pull ghcr.io/bybrooklyn/alchemist:nightly
 
 Nightly builds publish on every push to `main` after Rust
 checks pass. Use `:latest` for stable releases.
+
+## See also
+
+- [First Run](/first-run) — setup wizard.
+- [Hardware Acceleration](/hardware) — NVENC, Quick Sync,
+  VAAPI, AMF, VideoToolbox.
+- [Alchemist for Jellyfin](/jellyfin).
+- [Alchemist vs Tdarr](/alternatives/tdarr) ·
+  [Alchemist vs FileFlows](/alternatives/fileflows).

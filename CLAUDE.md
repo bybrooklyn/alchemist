@@ -74,7 +74,7 @@ The backend is structured around a central `AppState` (holding SQLite pool, conf
   - `sse.rs` — Server-Sent Events stream
   - `middleware.rs` — Rate limiting and auth middleware
   - `wizard.rs` — First-run setup API endpoints
-- **`db.rs`** (~2400 LOC) — SQLite connection pool, all queries, migration runner. Direct sqlx usage; no ORM.
+- **`db/`** (~4000 LOC across submodules) — SQLite connection pool, migration runner, and all queries. Direct sqlx usage; no ORM. Split into `mod.rs`, `types.rs` (row structs), `jobs.rs`, `conversion.rs`, `stats.rs`, `config.rs`, `system.rs`, `events.rs`.
 - **`config.rs`** (~850 LOC) — TOML config structs for all user-facing settings.
 - **`media/`** — The core pipeline:
   - `scanner.rs` — File discovery (glob patterns, exclusion rules)

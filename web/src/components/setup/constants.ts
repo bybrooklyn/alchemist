@@ -78,6 +78,8 @@ export const DEFAULT_SETTINGS: SetupSettings = {
     system: {
         enable_telemetry: false,
         monitoring_poll_interval: 2,
+        conversion_upload_limit_gb: 8,
+        conversion_download_retention_hours: 1,
     },
 };
 
