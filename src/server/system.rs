@@ -1,17 +1,24 @@
 //! System information, hardware info, resources, health handlers.
 
-use super::{AppState, config_read_error_response};
+use super::{AppState, api_error_response, config_read_error_response};
 use crate::media::pipeline::{Planner as _, TranscodeDecision};
+use async_compression::tokio::bufread::GzipEncoder;
 use axum::{
+    body::Body,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use futures::StreamExt;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::error;
+
+const INTELLIGENCE_CACHE_TTL: Duration = Duration::from_secs(30);
+const MAX_INTELLIGENCE_JOBS: i64 = 500;
 
 #[derive(Serialize)]
 struct SystemResources {
@@ -198,11 +205,24 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
     use std::collections::HashMap;
     use std::path::Path;
 
+    {
+        let guard = state.library_intelligence_cache.lock().await;
+        if let Some((payload, cached_at)) = guard.as_ref() {
+            if cached_at.elapsed() < INTELLIGENCE_CACHE_TTL {
+                return axum::Json(payload.clone()).into_response();
+            }
+        }
+    }
+
     let duplicate_candidates = match state.db.get_duplicate_candidates().await {
         Ok(candidates) => candidates,
         Err(err) => {
             error!("Failed to fetch duplicate candidates: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_DUPLICATES_FAILED",
+                err.to_string(),
+            );
         }
     };
 
@@ -247,13 +267,22 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
         ..RecommendationCounts::default()
     };
 
-    let jobs = match state.db.get_all_jobs().await {
+    let jobs = match state
+        .db
+        .get_jobs_for_intelligence(MAX_INTELLIGENCE_JOBS)
+        .await
+    {
         Ok(jobs) => jobs,
         Err(err) => {
             error!("Failed to fetch jobs for intelligence recommendations: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_INTELLIGENCE_JOBS_FAILED",
+                err.to_string(),
+            );
         }
     };
+
     let config_snapshot = state.config.read().await.clone();
     let hw_snapshot = state.hardware_state.snapshot().await;
     let planner = crate::media::planner::BasicPlanner::new(
@@ -262,10 +291,6 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
     );
 
     for job in jobs {
-        if job.status == crate::db::JobState::Cancelled {
-            continue;
-        }
-
         // Use stored metadata only — no live ffprobe spawning per job.
         let metadata = match job.input_metadata() {
             Some(m) => m,
@@ -277,11 +302,21 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
             confidence: crate::media::pipeline::AnalysisConfidence::High,
         };
 
-        let profile: Option<crate::db::LibraryProfile> = state
-            .db
-            .get_profile_for_path(&job.input_path)
-            .await
-            .unwrap_or_default();
+        let profile: Option<crate::db::LibraryProfile> =
+            match state.db.get_profile_for_path(&job.input_path).await {
+                Ok(p) => p,
+                Err(err) => {
+                    error!(
+                        "Failed to fetch profile for intelligence recommendation at {}: {}",
+                        job.input_path, err
+                    );
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "GET_PROFILE_FAILED",
+                        err.to_string(),
+                    );
+                }
+            };
 
         if let Ok(plan) = planner
             .plan(
@@ -344,13 +379,128 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
             .then(a.path.cmp(&b.path))
     });
 
-    axum::Json(LibraryIntelligenceResponse {
+    let value = serde_json::json!(LibraryIntelligenceResponse {
         duplicate_groups,
         total_duplicates,
         recommendation_counts,
         recommendations,
-    })
-    .into_response()
+    });
+
+    {
+        let mut guard = state.library_intelligence_cache.lock().await;
+        *guard = Some((value.clone(), Instant::now()));
+    }
+    axum::Json(value).into_response()
+}
+
+pub(crate) async fn reanalyze_library_root_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let mut root_paths: Vec<String> = config.scanner.directories.clone();
+    drop(config);
+
+    if let Ok(watch_dirs) = state.db.get_watch_dirs().await {
+        for wd in watch_dirs {
+            root_paths.push(wd.path);
+        }
+    }
+
+    let mut total_reanalyzed = 0;
+    for root in root_paths {
+        let jobs = match state.db.get_jobs_under_root_path(&root).await {
+            Ok(jobs) => jobs,
+            Err(_) => continue,
+        };
+
+        let ids: Vec<i64> = jobs
+            .into_iter()
+            .filter(|j| !j.is_active())
+            .map(|j| j.id)
+            .collect();
+
+        if let Ok(count) = state.db.batch_reanalyze_jobs(&ids).await {
+            total_reanalyzed += count;
+        }
+    }
+
+    axum::Json(serde_json::json!({ "count": total_reanalyzed })).into_response()
+}
+
+struct SnapshotCleanup {
+    path: std::path::PathBuf,
+}
+
+impl Drop for SnapshotCleanup {
+    fn drop(&mut self) {
+        if self.path.exists() {
+            if let Err(err) = std::fs::remove_file(&self.path) {
+                if err.kind() != ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        "Failed to remove backup snapshot during drop cleanup: {err}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn backup_database_handler(State(state): State<Arc<AppState>>) -> Response {
+    let mut snapshot_path = crate::runtime::temp_dir();
+    let token: u64 = rand::random();
+    snapshot_path.push(format!("alchemist-backup-{}.db", token));
+
+    if let Err(err) = state.db.create_online_backup(&snapshot_path).await {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "BACKUP_FAILED",
+            format!("Database backup failed: {err}"),
+        );
+    }
+
+    let file = match tokio::fs::File::open(&snapshot_path).await {
+        Ok(file) => file,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "OPEN_BACKUP_FAILED",
+                format!("Failed to open backup snapshot: {err}"),
+            );
+        }
+    };
+
+    let reader = tokio::io::BufReader::new(file);
+    let reader_stream = tokio_util::io::ReaderStream::new(reader);
+    let cleanup = Arc::new(SnapshotCleanup {
+        path: snapshot_path.clone(),
+    });
+
+    let stream = futures::stream::unfold(Some((reader_stream, cleanup)), |state| async move {
+        let (mut reader, cleanup) = state?;
+        match reader.next().await {
+            Some(Ok(chunk)) => Some((Ok::<_, std::io::Error>(chunk), Some((reader, cleanup)))),
+            Some(Err(err)) => Some((Err(err), None)),
+            None => None,
+        }
+    });
+
+    let body_reader = tokio_util::io::StreamReader::new(stream);
+    let gzip_stream = GzipEncoder::new(body_reader);
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(gzip_stream));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/x-sqlite3"),
+    );
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"alchemist.db.gz\""),
+    );
+
+    (headers, body).into_response()
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools

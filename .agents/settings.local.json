@@ -48,12 +48,7 @@
       "Bash(rm -f ~/.gnupg/public-keys.d/.#lk* ~/.gnupg/public-keys.d/pubring.db.lock)",
       "Bash(gpgconf --kill all)",
       "Bash(grep -E '\\\\.\\(DS_Store|swp|swo\\)$|Thumbs\\\\.db|\\\\.log$')",
-      "Bash(git check-ignore *)",
-      "Bash(codex --help)",
-      "Bash(gemini --help)",
-      "Bash(codex exec *)",
-      "Bash(codex review *)",
-      "Bash(just rust-build *)"
+      "Bash(git check-ignore *)"
     ]
   }
 }

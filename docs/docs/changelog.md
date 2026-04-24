@@ -14,6 +14,7 @@ post-rc.5 audit remediation work.
 - Notification target reads/writes preserve the additive migration path, tolerate legacy shapes, and avoid duplicate-delete projection bugs.
 - Daily summary delivery retries safely after transient failures and avoids duplicate sends across restart by persisting the last successful day.
 - Completed-job detail fails closed on database errors instead of returning partial `200 OK`; encode stat duration fallback uses encoded output, not source.
+- One-click SQLite backup: runtime settings can now download a consistent gzip-compressed database snapshot via SQLite's online backup path.
 - Login now returns server errors for real database failures; duplicate notification/schedule rows no longer disappear together from a single delete.
 
 ### Jobs & UX
@@ -21,8 +22,14 @@ post-rc.5 audit remediation work.
 - Manual enqueue: the jobs UI supports enqueueing a single absolute file path through the same backend dedupe and output rules as library scans.
 - Queued-job visibility: job detail exposes queue position and processor blocked reasons.
 - Attempt-history surfacing: job detail shows encode attempt history with outcome, timing, and captured failure summary.
+- File-history grouping: attempt history is now grouped into distinct runs so retries, reruns, and requeues remain legible in the detail modal.
 - `JobManager` refactor ships with dedicated controller/dialog helpers and tighter SSE reconciliation so filtered tables and open modals stay aligned with backend truth.
 - Intelligence actions: remux recommendations and duplicate candidates are actionable directly from the Intelligence page.
+- Shift-range selection: holding `Shift` while clicking job checkboxes selects the full range between the anchor row and the clicked row.
+
+### Notifications
+
+- Native `ntfy` target support: configure server URL, topic, and optional access token directly from notification settings instead of routing through a generic webhook.
 
 ### Conversion Workflow
 

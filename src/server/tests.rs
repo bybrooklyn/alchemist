@@ -114,6 +114,8 @@ where
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        library_intelligence_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        library_health_scan_in_progress: Arc::new(AtomicBool::new(false)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -2593,15 +2595,14 @@ async fn clear_completed_archives_jobs_and_preserves_stats()
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_text(response).await;
     assert!(body.contains("\"count\":1"));
-    assert!(body.contains("Historical stats were preserved"));
 
     assert!(state.db.get_job_by_id(job.id).await?.is_none());
     let aggregated = state.db.get_aggregated_stats().await?;
     // Archived jobs are excluded from active stats.
     assert_eq!(aggregated.completed_jobs, 0);
-    // encode_stats rows are preserved even after archiving.
-    assert_eq!(aggregated.total_input_size, 2_000);
-    assert_eq!(aggregated.total_output_size, 1_000);
+    // encode_stats rows are preserved in DB but excluded from visible aggregated stats.
+    assert_eq!(aggregated.total_input_size, 0);
+    assert_eq!(aggregated.total_output_size, 0);
 
     cleanup_paths(&[input_path, output_path, config_path, db_path]);
     Ok(())

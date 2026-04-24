@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -765,6 +766,8 @@ async fn run() -> Result<()> {
             "Boot sequence completed in {} ms",
             boot_start.elapsed().as_millis()
         );
+        let library_intelligence_cache = Arc::new(tokio::sync::Mutex::new(None));
+        let library_health_scan_in_progress = Arc::new(AtomicBool::new(false));
         let server_result = alchemist::server::run_server(alchemist::server::RunServerArgs {
             db,
             config,
@@ -780,6 +783,8 @@ async fn run() -> Result<()> {
             notification_manager: notification_manager.clone(),
             file_watcher,
             library_scanner,
+            library_intelligence_cache,
+            library_health_scan_in_progress,
         })
         .await;
 

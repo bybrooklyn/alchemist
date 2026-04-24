@@ -383,6 +383,20 @@ pub struct NotificationsConfig {
     pub notify_on_complete: bool,
     #[serde(default)]
     pub notify_on_failure: bool,
+    #[serde(default)]
+    pub quiet_hours_enabled: bool,
+    #[serde(default = "default_quiet_hours_start")]
+    pub quiet_hours_start_local: String,
+    #[serde(default = "default_quiet_hours_end")]
+    pub quiet_hours_end_local: String,
+}
+
+fn default_quiet_hours_start() -> String {
+    "22:00".to_string()
+}
+
+fn default_quiet_hours_end() -> String {
+    "08:00".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -412,6 +426,9 @@ impl Default for NotificationsConfig {
             discord_webhook: None,
             notify_on_complete: false,
             notify_on_failure: false,
+            quiet_hours_enabled: false,
+            quiet_hours_start_local: default_quiet_hours_start(),
+            quiet_hours_end_local: default_quiet_hours_end(),
         }
     }
 }
@@ -682,6 +699,8 @@ pub struct SystemConfig {
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: Option<u32>,
     #[serde(default)]
+    pub metrics_enabled: bool,
+    #[serde(default)]
     pub engine_mode: EngineMode,
     /// Enable HSTS header (only enable if running behind HTTPS)
     #[serde(default)]
@@ -727,6 +746,7 @@ impl Default for SystemConfig {
             conversion_download_retention_hours: default_conversion_download_retention_hours(),
             enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
+            metrics_enabled: false,
             engine_mode: EngineMode::default(),
             https_only: false,
             trusted_proxies: Vec::new(),
@@ -845,6 +865,7 @@ impl Default for Config {
                 conversion_download_retention_hours: default_conversion_download_retention_hours(),
                 enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
+                metrics_enabled: false,
                 engine_mode: EngineMode::default(),
                 https_only: false,
                 trusted_proxies: Vec::new(),
