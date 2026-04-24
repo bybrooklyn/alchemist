@@ -391,7 +391,7 @@ mod tests {
         let logs = db.get_logs(10, 0).await?;
         assert_eq!(logs[0].message, "ffmpeg line");
 
-        let Some(updated) = db.get_job(job.id).await? else {
+        let Some(updated) = db.get_job_by_id(job.id).await? else {
             panic!("expected updated job");
         };
         assert!((updated.progress - 20.0).abs() < 0.01);

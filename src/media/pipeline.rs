@@ -347,6 +347,9 @@ pub enum FilterStep {
         height: u32,
     },
     StripHdrMetadata,
+    Custom {
+        filter: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1272,7 +1275,6 @@ impl Pipeline {
                 let reason = format!("analysis_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
                 self.record_job_log(job_id, "error", &reason).await;
-                self.record_job_decision(job_id, "skip", &reason).await;
                 self.record_job_failure_explanation(job_id, &failure_explanation)
                     .await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
@@ -1288,8 +1290,14 @@ impl Pipeline {
         let profile = match self.db.get_profile_for_path(&job.input_path).await {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Failed to fetch profile for {}: {}", job.input_path, e);
-                None
+                let reason = format!("profile_lookup_failed|error={e}");
+                let failure_explanation = crate::explanations::failure_from_summary(&reason);
+                self.record_job_log(job_id, "error", &reason).await;
+                self.record_job_failure_explanation(job_id, &failure_explanation)
+                    .await;
+                self.update_job_state(job_id, crate::db::JobState::Failed)
+                    .await?;
+                return Ok(());
             }
         };
 
@@ -1306,7 +1314,6 @@ impl Pipeline {
                 let reason = format!("planning_failed|error={e}");
                 let failure_explanation = crate::explanations::failure_from_summary(&reason);
                 self.record_job_log(job_id, "error", &reason).await;
-                self.record_job_decision(job_id, "skip", &reason).await;
                 self.record_job_failure_explanation(job_id, &failure_explanation)
                     .await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
@@ -1466,12 +1473,24 @@ impl Pipeline {
 
         let config_snapshot = self.config.read().await.clone();
         let hw_info = self.hardware_state.snapshot().await;
-        let conversion_job = self
-            .db
-            .get_conversion_job_by_linked_job_id(job.id)
-            .await
-            .ok()
-            .flatten();
+        let conversion_job = match self.db.get_conversion_job_by_linked_job_id(job.id).await {
+            Ok(conversion_job) => conversion_job,
+            Err(err) => {
+                let msg = format!("Failed to load linked conversion job: {err}");
+                tracing::error!("Job {}: {}", job.id, msg);
+                self.record_job_log(job.id, "error", &msg).await;
+                let explanation = crate::explanations::failure_from_summary(&msg);
+                self.record_job_failure_explanation(job.id, &explanation)
+                    .await;
+                if let Err(e) = self
+                    .update_job_state(job.id, crate::db::JobState::Failed)
+                    .await
+                {
+                    tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
+                }
+                return Err(JobFailure::Transient);
+            }
+        };
         let bypass_quality_gates = conversion_job.is_some();
         let mut plan = if let Some(conversion_job) = conversion_job.as_ref() {
             let settings: crate::conversion::ConversionSettings =
@@ -2720,6 +2739,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn analyze_job_only_marks_job_failed_without_decision_on_profile_lookup_failure()
+    -> anyhow::Result<()> {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_analyze_profile_failure_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_analyze_profile_failure_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let input = temp_root.join("movie.mkv");
+        let output = temp_root.join("movie-alchemist.mkv");
+        let ffmpeg_status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&input)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!(
+                "ffmpeg failed to create analyze-only test input"
+            ));
+        }
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+        sqlx::query("DROP TABLE watch_dirs")
+            .execute(&db.pool)
+            .await?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let pipeline = Pipeline::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        );
+
+        pipeline.analyze_job_only(job.clone()).await?;
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Failed);
+        assert!(db.get_job_decision(job.id).await?.is_none());
+        assert!(db.get_job_failure_explanation(job.id).await?.is_some());
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn finalize_job_succeeds_when_encode_attempt_persistence_fails() -> anyhow::Result<()> {
         if !ffmpeg_ready() {
             return Ok(());
@@ -3475,6 +3590,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);
         set_test_resume_segment_length(None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concat_resume_segments_behavior() -> anyhow::Result<()> {
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_pipeline_test_concat_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+        let db_path = temp_root.join("test.db");
+        let db_path_str = db_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid db path"))?;
+        let pipeline = Pipeline::new(
+            Arc::new(crate::db::Db::new(db_path_str).await?),
+            Arc::new(crate::orchestrator::Transcoder::new()),
+            Arc::new(tokio::sync::RwLock::new(crate::config::Config::default())),
+            crate::system::hardware::HardwareState::default(),
+            Arc::new(crate::db::EventChannels::default()),
+            false,
+        );
+
+        let temp_dir = temp_root.join("resume_temp");
+        std::fs::create_dir_all(&temp_dir)?;
+        let manifest_path = temp_dir.join("segments.ffconcat");
+        let temp_output = temp_root.join("output.mkv");
+
+        let temp_dir_str = temp_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?
+            .to_string();
+        let manifest_path_str = manifest_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid manifest path"))?
+            .to_string();
+
+        let session = crate::db::JobResumeSession {
+            id: 1,
+            job_id: 1,
+            strategy: "segment".to_string(),
+            plan_hash: "hash".to_string(),
+            mtime_hash: "mtime".to_string(),
+            temp_dir: temp_dir_str,
+            concat_manifest_path: manifest_path_str,
+            segment_length_secs: 10,
+            status: "active".to_string(),
+            created_at: chrono::Utc::now().to_string(),
+            updated_at: chrono::Utc::now().to_string(),
+        };
+
+        let segment_path = temp_dir.join("00000.mkv");
+        std::fs::write(&segment_path, b"dummy")?;
+
+        let segments = vec![ResumeSegment {
+            segment_index: 0,
+            start_secs: 0.0,
+            duration_secs: 10.0,
+            temp_path: segment_path,
+            status: "complete".to_string(),
+            attempt_count: 1,
+        }];
+
+        // This will fail because FFmpeg isn't actually running and the segment is a dummy,
+        // but we can verify the manifest content before it tries to run.
+        let result = pipeline
+            .concat_resume_segments(1, &session, &segments, &temp_output, "mkv")
+            .await;
+        assert!(result.is_err()); // Expected failure since dummy segment isn't a real MKV
+
+        let manifest_content = std::fs::read_to_string(&manifest_path)?;
+        assert!(manifest_content.contains("ffconcat version 1.0"));
+        assert!(manifest_content.contains("file '"));
+
+        // Test path escaping
+        let path_with_quotes = temp_dir.join("it's a file.mkv");
+        let escaped = escape_ffconcat_path(&path_with_quotes);
+        assert!(escaped.contains("'\\''"));
+
+        let _ = std::fs::remove_dir_all(temp_root);
         Ok(())
     }
 }
