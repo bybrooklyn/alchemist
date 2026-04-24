@@ -492,6 +492,7 @@ fn render_filtergraph(input: &Path, filters: &[FilterStep]) -> Option<String> {
                 "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
                     .to_string()
             }
+            FilterStep::Custom { filter } => filter.clone(),
         })
         .collect::<Vec<_>>()
         .join(",");

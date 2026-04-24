@@ -1,6 +1,6 @@
 ---
 title: Notifications
-description: Configure Discord, Gotify, Telegram, email, and webhook alerts.
+description: Configure Discord, Gotify, ntfy, Telegram, email, and webhook alerts.
 ---
 
 Configure notification targets in **Settings → Notifications**.
@@ -24,10 +24,17 @@ webhooks.
 Enter your Gotify server URL and app token. Gotify supports
 the same event filtering model as the other providers.
 
+### ntfy
+
+Enter your ntfy server URL and topic. For private instances,
+you can also provide an access token. Alchemist sends the
+same human-readable event summaries it uses for Discord and
+Gotify, with ntfy priority mapped from the event type.
+
 ### Generic webhook
 
 Alchemist sends a JSON POST to any URL you configure.
-Works with Home Assistant, ntfy, Apprise, and custom scripts.
+Works with Home Assistant, Apprise, and custom scripts.
 
 ### Telegram
 

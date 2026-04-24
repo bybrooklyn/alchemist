@@ -327,6 +327,13 @@ impl Db {
         sqlx::query("DELETE FROM users").execute(&self.pool).await?;
         Ok(())
     }
+    pub async fn create_online_backup(&self, path: &std::path::Path) -> Result<()> {
+        let path_str = path.to_string_lossy();
+        sqlx::query(&format!("VACUUM INTO '{}'", path_str))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -378,9 +385,9 @@ mod tests {
         let aggregated = db.get_aggregated_stats().await?;
         // Archived jobs are excluded from active stats.
         assert_eq!(aggregated.completed_jobs, 0);
-        // encode_stats rows are preserved even after archiving.
-        assert_eq!(aggregated.total_input_size, 2_000);
-        assert_eq!(aggregated.total_output_size, 1_000);
+        // encode_stats rows are preserved in DB but excluded from visible aggregated stats.
+        assert_eq!(aggregated.total_input_size, 0);
+        assert_eq!(aggregated.total_output_size, 0);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

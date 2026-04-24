@@ -594,3 +594,33 @@ pub(crate) async fn assign_watch_dir_profile_handler(
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     }
 }
+
+pub(crate) async fn reanalyze_watch_dir_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let watch_dir = match state.db.get_watch_dirs().await {
+        Ok(dirs) => dirs.into_iter().find(|d| d.id == id),
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    let Some(watch_dir) = watch_dir else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let jobs = match state.db.get_jobs_under_root_path(&watch_dir.path).await {
+        Ok(jobs) => jobs,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    let ids: Vec<i64> = jobs
+        .into_iter()
+        .filter(|j| !j.is_active())
+        .map(|j| j.id)
+        .collect();
+
+    match state.db.batch_reanalyze_jobs(&ids).await {
+        Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+}

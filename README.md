@@ -162,6 +162,17 @@ alchemist plan /path/to/media --json
 - API automation can use bearer tokens created in **Settings → API Tokens**.
 - Read-only tokens are limited to observability and monitoring routes.
 
+## Backups
+
+Alchemist stores all state in a single SQLite database. You can download a
+consistent, gzip-compressed snapshot at any time:
+
+- UI: **Settings → Runtime → Backup database**
+- API: `POST /api/system/backup` (requires a full-access token)
+
+The snapshot is produced via SQLite's online backup path, so it is safe to run
+while encodes are in flight.
+
 ## Supported Platforms
 
 | Platform | Status |

@@ -53,6 +53,17 @@ const completedJob: JobFixture = {
   vmaf_score: 95.4,
 };
 
+const encodingJob: JobFixture = {
+  id: 5,
+  input_path: "/media/encoding.mkv",
+  output_path: "/output/encoding-av1.mkv",
+  status: "encoding",
+  priority: 2,
+  progress: 42,
+  created_at: "2025-01-01T00:00:00Z",
+  updated_at: "2025-01-04T00:00:00Z",
+};
+
 const failedDetail: JobDetailFixture = {
   job: failedJob,
   metadata: {
@@ -118,6 +129,33 @@ const completedDetail: JobDetailFixture = {
       id: 10,
       level: "info",
       message: "Transcode completed successfully",
+      created_at: "2025-01-04T00:00:02Z",
+    },
+  ],
+};
+
+const encodingDetail: JobDetailFixture = {
+  job: encodingJob,
+  metadata: {
+    duration_secs: 600,
+    codec_name: "h264",
+    width: 1920,
+    height: 1080,
+    bit_depth: 8,
+    size_bytes: 1_500_000_000,
+    video_bitrate_bps: 7_000_000,
+    container_bitrate_bps: 7_200_000,
+    fps: 24,
+    container: "mkv",
+    audio_codec: "aac",
+    audio_channels: 2,
+    dynamic_range: "sdr",
+  },
+  job_logs: [
+    {
+      id: 20,
+      level: "info",
+      message: "frame=123 fps=24",
       created_at: "2025-01-04T00:00:02Z",
     },
   ],
@@ -269,6 +307,110 @@ test("detail modal delete action removes the job and closes the modal", async ({
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByTitle("/media/completed.mkv")).toHaveCount(0);
+});
+
+test("detail modal retry action refreshes the modal and table state", async ({ page }) => {
+  let jobs = [failedJob];
+  let currentDetail: JobDetailFixture = failedDetail;
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, jobs);
+  });
+  await page.route("**/api/jobs/2/details", async (route) => {
+    await fulfillJson(route, 200, currentDetail);
+  });
+  await page.route("**/api/jobs/2/restart", async (route) => {
+    jobs = [{ ...failedJob, status: "queued", progress: 0, updated_at: "2025-01-05T00:00:00Z" }];
+    currentDetail = {
+      job: jobs[0],
+      job_logs: [],
+      queue_position: 2,
+    };
+    await fulfillJson(route, 200, { status: "ok" });
+  });
+  await page.route("**/api/processor/status", async (route) => {
+    await fulfillJson(route, 200, {
+      blocked_reason: "workers_busy",
+      message: "All worker slots are currently busy.",
+      manual_paused: false,
+      scheduler_paused: false,
+      draining: false,
+      active_jobs: 1,
+      concurrent_limit: 1,
+    });
+  });
+
+  await page.goto("/jobs");
+  const failedRow = page.locator("tbody tr").filter({ has: page.getByTitle("/media/failed.mkv") });
+  await failedRow.getByTitle("/media/failed.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("Failure Reason")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry Job" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Retry Job" }).click();
+  await page
+    .getByRole("dialog", { name: "Retry job" })
+    .getByRole("button", { name: "Retry" })
+    .click();
+
+  await expect(failedRow.getByText("queued")).toBeVisible();
+  await expect(page.getByText("Waiting in queue")).toBeVisible();
+  await expect(page.getByText("Queue position:")).toBeVisible();
+  await expect(page.getByText("All worker slots are currently busy.")).toBeVisible();
+  await expect(page.getByText("Failure Reason")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry Job" })).toHaveCount(0);
+});
+
+test("detail modal cancel action refreshes the modal and table state", async ({ page }) => {
+  let jobs = [encodingJob];
+  let currentDetail: JobDetailFixture = encodingDetail;
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, jobs);
+  });
+  await page.route("**/api/jobs/5/details", async (route) => {
+    await fulfillJson(route, 200, currentDetail);
+  });
+  await page.route("**/api/jobs/5/cancel", async (route) => {
+    jobs = [{ ...encodingJob, status: "cancelled", progress: 42, updated_at: "2025-01-05T00:00:00Z" }];
+    currentDetail = {
+      job: jobs[0],
+      metadata: encodingDetail.metadata,
+      job_logs: [
+        ...(encodingDetail.job_logs ?? []),
+        {
+          id: 21,
+          level: "error",
+          message: "Job cancelled by operator",
+          created_at: "2025-01-05T00:00:00Z",
+        },
+      ],
+      job_failure_summary: "Job cancelled by operator",
+    };
+    await fulfillJson(route, 200, { status: "ok" });
+  });
+
+  await page.goto("/jobs");
+  const encodingRow = page.locator("tbody tr").filter({ has: page.getByTitle("/media/encoding.mkv") });
+  await encodingRow.getByTitle("/media/encoding.mkv").click();
+
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop / Cancel" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Stop / Cancel" }).click();
+  await page
+    .getByRole("dialog", { name: "Cancel job" })
+    .getByRole("button", { name: "Cancel" })
+    .last()
+    .click();
+
+  await expect(encodingRow.getByText("cancelled")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop / Cancel" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry Job" })).toBeVisible();
+  await expect(page.getByText("Failure Reason")).toHaveCount(0);
+  await expect(page.getByText(/Show FFmpeg output \(2 lines\)/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Delete$/ }).last()).toBeVisible();
 });
 
 test("queued job with no metadata shows waiting for analysis placeholder", async ({ page }) => {

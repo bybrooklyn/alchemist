@@ -1,0 +1,987 @@
+▗ ▗   ▖ ▖  Claude Code v2.1.117
+           Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/data/alchemist
+
+❯ /ultraplan 
+  ⎿  Usage: /ultraplan <prompt>, or include "ultraplan" anywhere
+     in your prompt
+
+     Remote plan mode with rich web editing experience.
+     Runs in Claude Code on the web. When the plan is ready,
+     you can execute it in the web session or send it back here.
+     You can continue to work while the plan is generated remotely.
+
+     Terms: https://code.claude.com/docs/en/claude-code-on-the-web
+
+❯ create a skill for interacting with other ai agent models, ask me a couple    
+  questions like what softwares, how to call/address them and manage them and   
+  ask me whatever else you think will be needed                                 
+
+⏺ User answered Claude's questions:
+  ⎿  · Which AI agents/models should this skill interact with? → OpenAI (Codex 
+     CLI / GPT), Google Gemini (gemini CLI)
+     · How should you invoke the other agents? → Shell CLI (codex, gemini, etc.)
+     · What's the main use case for delegating to another agent? → Parallel task
+      delegation, Second opinion / code review, Benchmark / compare outputs, 
+     Specific strengths (e.g. Gemini long context)
+     · How should results from the other agent come back? → Inline in my 
+     response
+
+⏺ Bash(which codex gemini 2>&1; echo "---"; codex --help 2>&1 | head -40; echo
+      "==="; gemini --help 2>&1 | head -40)
+  ⎿  /opt/homebrew/bin/codex
+     /Users/brooklyn/.nvm/versions/node/v24.10.0/bin/gemini
+     ---
+     … +76 lines (ctrl+o to expand)
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ Bash(codex exec --help 2>&1 | head -50; echo "==="; codex review --help 2>&1 |
+       head -30)
+  ⎿  Run Codex non-interactively
+
+     Usage: codex exec [OPTIONS] [PROMPT]
+     … +39 lines (ctrl+o to expand)
+
+⏺ User answered Claude's questions:
+  ⎿  · What should the skill be named / how should you trigger it? → /duo ... i 
+     want you to be able to use this skill without my permission and to just use
+      it.
+     · For codex (which can edit files), what sandbox default should the skill 
+     use? → workspace-write
+     · Background vs foreground for long-running calls? → Default foreground, 
+     background if I say "in parallel"
+
+⏺ I'll create the skill globally at ~/.claude/skills/duo/ since it's not
+  Alchemist-specific.
+
+⏺ Write(~/.claude/skills/duo/SKILL.md)
+  ⎿  Wrote 144 lines to ../../.claude/skills/duo/SKILL.md
+       2 name: duo
+         ir CLIs. Use proactively (without asking) for second opinions on
+         across models, or routing to a model better suited to the task (
+         r on /duo, phrases like "ask codex", "ask gemini", "get a second
+         en the user says a task should run "in parallel" with another ag
+       4 ---.
+       6 # /duo — talk to other AI agents
+       8 You have two other agents available as shell CLIs on this machin
+       9 e:
+      10 - **codex** (OpenAI) — `/opt/homebrew/bin/codex`
+     … +181 lines (ctrl+o to expand)
+
+⏺ Now saving a feedback memory so I use this skill autonomously in future
+  sessions without re-asking.
+
+  Wrote 1 memory (ctrl+o to expand)
+
+⏺ Updating the memory index so the new feedback memory is discoverable in future
+   sessions.
+
+  Recalled 1 memory, wrote 1 memory (ctrl+o to expand)
+
+⏺ Skill created at ~/.claude/skills/duo/SKILL.md and is live (see the skills
+  list above — /duo is now registered).
+
+  Summary of what's in it:
+  - Delegates to codex exec (OpenAI) and gemini -p (Google) via their CLIs, both
+   already authenticated on this machine.
+  - Codex defaults to -s workspace-write; drops to read-only for review-only
+  tasks. Also documents codex review --base master / --uncommitted / --commit 
+  <sha>.
+  - Foreground by default; switches to run_in_background: true when you say "in
+  parallel" or when a multi-minute task should run async.
+  - Output returned inline with clear attribution (### Codex / ### Gemini) when
+  benchmarking.
+  - Triggers proactively on "ask codex/gemini", "second opinion", "what does gpt
+   think", "in parallel with another agent", etc.
+
+  I also saved a feedback memory granting standing authorization to use /duo
+  without re-asking, so it persists across sessions.
+
+✻ Churned for 2m 25s
+
+❯ okay lets do some parallel work on working on alchemist, read backlog.md and  
+  get to working on all of them.                                                
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ I'll scope "all of them" to the Active Priorities (skipping AMD AV1 which
+  needs real hardware and the vague "0.3.1 RC stability" umbrella). Let me set
+  up task tracking and get oriented.
+
+⏺ Now let me explore the three subsystems I'll touch in parallel.
+
+  Searched for 1 pattern, read 4 files, listed 1 directory (ctrl+o to expand)
+⏺ Good — I have a clear picture. Let me tackle POL-1 first (smallest,
+  frontend-only), then OP-1 and INT-3 in sequence. Marking POL-1 in progress.
+
+  Searched for 3 patterns, listed 1 directory (ctrl+o to expand)
+
+⏺ E2E tests use plain .check() — compatible. Implementing POL-1 now.
+
+⏺ Update(web/src/components/JobManager.tsx)
+  ⎿  Added 1 line
+      39      const encodeStartTimes = useRef<Map<number, number>>(new Ma
+          p());
+      40      const focusedJobIdRef = useRef<number | null>(null);
+      41      const refreshFocusedJobRef = useRef<() => Promise<void>>(as
+          ync () => undefined);
+      42 +    const lastSelectedIndexRef = useRef<number | null>(null);  
+      43      const [tick, setTick] = useState(0);
+      44  
+      45      useEffect(() => {
+
+⏺ Update(web/src/components/JobManager.tsx)
+  ⎿  Added 30 lines, removed 5 lines
+      273          return () => document.removeEventListener("mousedown",
+            handleClick);
+      274      }, [menuJobId]);
+      275  
+      276 -    const toggleSelect = (id: number) => {                    
+      277 -        const newSet = new Set(selected);                     
+      278 -        if (newSet.has(id)) newSet.delete(id);                
+      279 -        else newSet.add(id);                                  
+      280 -        setSelected(newSet);                                  
+      276 +    const handleSelect = (index: number, shiftKey: boolean) =>
+          + {                                                            
+      277 +        const job = jobs[index];                              
+      278 +        if (!job) return;                                     
+      279 +                                                              
+      280 +        const anchor = lastSelectedIndexRef.current;          
+      281 +        if (shiftKey && anchor !== null && anchor !== index) {
+      282 +            const shouldSelect = !selected.has(job.id);       
+      283 +            const start = Math.min(anchor, index);            
+      284 +            const end = Math.max(anchor, index);              
+      285 +            const newSet = new Set(selected);                 
+      286 +            for (let i = start; i <= end; i++) {              
+      287 +                const rowJob = jobs[i];                       
+      288 +                if (!rowJob) continue;                        
+      289 +                if (shouldSelect) newSet.add(rowJob.id);      
+      290 +                else newSet.delete(rowJob.id);                
+      291 +            }                                                 
+      292 +            setSelected(newSet);                              
+      293 +        } else {                                              
+      294 +            const newSet = new Set(selected);                 
+      295 +            if (newSet.has(job.id)) newSet.delete(job.id);    
+      296 +            else newSet.add(job.id);                          
+      297 +            setSelected(newSet);                              
+      298 +        }                                                     
+      299 +                                                              
+      300 +        lastSelectedIndexRef.current = index;                 
+      301      };
+      302  
+      303      const toggleSelectAll = () => {
+     ...
+      306          } else {
+      307              setSelected(new Set(jobs.map(j => j.id)));
+      308          }
+      309 +        lastSelectedIndexRef.current = null;                  
+      310      };
+      311  
+      312 +    useEffect(() => {                                         
+      313 +        lastSelectedIndexRef.current = null;                  
+      314 +    }, [activeTab, debouncedSearch, sortBy, sortDesc, page]); 
+      315 +                                                              
+      316      const selectedJobs = jobs.filter((job) => selected.has(job
+           .id));
+      317      const hasSelectedActiveJobs = selectedJobs.some(isJobActiv
+           e);
+      318      const activeCount = jobs.filter((job) => isJobActive(job))
+           .length;
+
+⏺ Update(web/src/components/JobManager.tsx)
+  ⎿  Added 1 line, removed 1 line
+      507                  encodeStartTimes={encodeStartTimes}
+      508                  menuJobId={menuJobId}
+      509                  menuRef={menuRef}
+      510 -                toggleSelect={toggleSelect}                   
+      510 +                handleSelect={handleSelect}                   
+      511                  toggleSelectAll={toggleSelectAll}
+      512                  fetchJobDetails={openJobDetails}
+      513                  setMenuJobId={setMenuJobId}
+
+⏺ Now the JobsTable itself:
+
+⏺ Update(web/src/components/jobs/JobsTable.tsx)
+  ⎿  Added 1 line, removed 1 line
+      20      encodeStartTimes: MutableRefObject<Map<number, number>>;
+      21      menuJobId: number | null;
+      22      menuRef: RefObject<HTMLDivElement | null>;
+      23 -    toggleSelect: (id: number) => void;                        
+      23 +    handleSelect: (index: number, shiftKey: boolean) => void;  
+      24      toggleSelectAll: () => void;
+      25      fetchJobDetails: (id: number) => Promise<void>;
+      26      setMenuJobId: (id: number | null) => void;
+
+⏺ Update(web/src/components/jobs/JobsTable.tsx)
+  ⎿  Added 1 line, removed 1 line
+      46  
+      47  export function JobsTable({
+      48      jobs, loading, selected, focusedJobId, tick, encodeStartTim
+          es,
+      49 -    menuJobId, menuRef, toggleSelect, toggleSelectAll,         
+      49 +    menuJobId, menuRef, handleSelect, toggleSelectAll,         
+      50      fetchJobDetails, setMenuJobId, openConfirm, handleAction, h
+          andlePriority,
+      51      getStatusBadge,
+      52  }: JobsTableProps) {
+
+⏺ Update(web/src/components/jobs/JobsTable.tsx)
+  ⎿  Added 5 lines, removed 2 lines
+      85                              </td>
+      86                          </tr>
+      87                      ) : (
+      88 -                        jobs.map((job) => (                    
+      88 +                        jobs.map((job, index) => (             
+      89                              <tr
+      90                                  key={job.id}
+      91                                  onClick={() => void fetchJobDet
+          ails(job.id)}
+     ...
+       98                                  <td className="px-6 py-4" onCl
+           ick={(e) => e.stopPropagation()}>
+       99                                      <input type="checkbox"
+      100                                          checked={selected.has(
+           job.id)}
+      101 -                                        onChange={() => toggle
+          -Select(job.id)}                                               
+      101 +                                        onChange={(e) => {    
+      102 +                                            const native = e.n
+          +ativeEvent as MouseEvent;                                     
+      103 +                                            handleSelect(index
+          +, native.shiftKey === true);                                  
+      104 +                                        }}                    
+      105                                          className="rounded bor
+           der-helios-line/30 bg-helios-surface-soft accent-helios-solar"
+      106                                      />
+      107                                  </td>
+
+⏺ Bash(just check-web 2>&1 | tail -40)
+  ⎿    ✓  43 [auth] › tests/library-intake.spec.ts:32:1 › library intake sh
+     ows unified folder list with no Library Directories or Watch Folders h
+     eadings (271ms)
+     … +59 lines (ctrl+o to expand)
+  ⎿  (timeout 3m)
+
+⏺ Frontend checks all pass (80 e2e tests green including the checkbox flows).
+  Marking POL-1 done and starting OP-1.
+
+⏺ Now OP-1 — SQLite online backup. Let me scope the pieces.
+
+  Searched for 7 patterns, read 8 files (ctrl+o to expand)
+
+⏺ Update(Cargo.toml)
+  ⎿  Added 1 line
+      47  sha2 = "0.10"
+      48  trait-variant = "0.1.2"
+      49  tokio-util = { version = "0.7", features = ["io"] }
+      50 +async-compression = { version = "0.4", features = ["tokio", "gz
+         +ip"] }                                                         
+      51  lettre = { version = "0.11", default-features = false, features
+           = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+      52  
+      53  [dev-dependencies]
+
+⏺ Now the backup handler. Reading imports in system.rs:
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ Now adding the backup handler to system.rs. Insert just before the
+  #[cfg(test)] block:
+
+⏺ Update(src/server/system.rs)
+  ⎿  Added 7 lines, removed 2 lines
+       3  use super::{AppState, config_read_error_response};
+       4  use crate::media::pipeline::{Planner as _, TranscodeDecision};
+       5  use axum::{
+       6 +    body::Body,                                                
+       7      extract::State,
+       7 -    http::StatusCode,                                          
+       8 +    http::{HeaderMap, HeaderValue, StatusCode, header},        
+       9      response::{IntoResponse, Response},
+      10  };
+      11 +use async_compression::tokio::bufread::GzipEncoder;            
+      12 +use futures::StreamExt;                                        
+      13  use serde::Serialize;
+      14  use std::process::{Command, Stdio};
+      15  use std::sync::Arc;
+      16  use std::time::{Duration, Instant};
+      14 -use tracing::error;                                            
+      17 +use tokio::io::BufReader;                                      
+      18 +use tokio_util::io::ReaderStream;                              
+      19 +use tracing::{error, warn};                                    
+      20  
+      21  #[derive(Serialize)]
+      22  struct SystemResources {
+
+⏺ Update(src/server/system.rs)
+  ⎿  Added 88 lines
+      527      )
+      528  }
+      529  
+      530 +pub(crate) async fn backup_database_handler(State(state): Stat
+          +e<Arc<AppState>>) -> Response {                               
+      531 +    let temp_dir = crate::runtime::temp_dir();                
+      532 +    if let Err(err) = tokio::fs::create_dir_all(&temp_dir).awa
+          +it {                                                          
+      533 +        error!("Failed to create temp dir for database backup:
+          + {err}");                                                     
+      534 +        return (                                              
+      535 +            StatusCode::INTERNAL_SERVER_ERROR,                
+      536 +            "Failed to prepare backup staging area",          
+      537 +        )                                                     
+      538 +            .into_response();                                 
+      539 +    }                                                         
+      540 +                                                              
+      541 +    // Use a simple hex UUID so the literal embedded in VACUUM
+          + INTO cannot break out.                                       
+      542 +    let snapshot_id = uuid::Uuid::new_v4().simple().to_string(
+          +);                                                            
+      543 +    let snapshot_path = temp_dir.join(format!("alchemist-backu
+          +p-{snapshot_id}.db"));                                        
+      544 +    let snapshot_path_literal = snapshot_path.to_string_lossy(
+          +).replace('\'', "''");                                        
+      545 +                                                              
+      546 +    // VACUUM INTO is SQLite's supported online-snapshot path:
+          + it acquires a brief                                          
+      547 +    // lock, writes a consistent copy, and works under WAL wit
+          +h concurrent writers.                                         
+      548 +    let vacuum_sql = format!("VACUUM INTO '{snapshot_path_lite
+          +ral}'");                                                      
+      549 +    if let Err(err) = sqlx::query(&vacuum_sql).execute(&state.
+          +db.pool).await {                                              
+      550 +        error!("SQLite VACUUM INTO failed: {err}");           
+      551 +        let _ = tokio::fs::remove_file(&snapshot_path).await; 
+      552 +        return (                                              
+      553 +            StatusCode::INTERNAL_SERVER_ERROR,                
+      554 +            format!("Failed to create database snapshot: {err}
+          +"),                                                           
+      555 +        )                                                     
+      556 +            .into_response();                                 
+      557 +    }                                                         
+      558 +                                                              
+      559 +    let file = match tokio::fs::File::open(&snapshot_path).awa
+          +it {                                                          
+      560 +        Ok(f) => f,                                           
+      561 +        Err(err) => {                                         
+      562 +            error!("Failed to open snapshot {snapshot_path:?}:
+          + {err}");                                                     
+      563 +            let _ = tokio::fs::remove_file(&snapshot_path).awa
+          +it;                                                           
+      564 +            return (                                          
+      565 +                StatusCode::INTERNAL_SERVER_ERROR,            
+      566 +                "Failed to open database snapshot",           
+      567 +            )                                                 
+      568 +                .into_response();                             
+      569 +        }                                                     
+      570 +    };                                                        
+      571 +                                                              
+      572 +    let encoder = GzipEncoder::new(BufReader::new(file));     
+      573 +    let reader_stream = ReaderStream::new(encoder);           
+      574 +                                                              
+      575 +    let stream = futures::stream::unfold(                     
+      576 +        Some((reader_stream, snapshot_path.clone())),         
+      577 +        |state| async move {                                  
+      578 +            let (mut reader, path) = state?;                  
+      579 +            match reader.next().await {                       
+      580 +                Some(Ok(chunk)) => Some((Ok(chunk), Some((read
+          +er, path)))),                                                 
+      581 +                Some(Err(err)) => {                           
+      582 +                    if let Err(cleanup_err) = tokio::fs::remov
+          +e_file(&path).await {                                         
+      583 +                        warn!(                                
+      584 +                            "Failed to remove backup snapshot 
+          +{path:?} after stream error: {cleanup_err}"                   
+      585 +                        );                                    
+      586 +                    }                                         
+      587 +                    Some((Err(err), None))                    
+      588 +                }                                             
+      589 +                None => {                                     
+      590 +                    if let Err(cleanup_err) = tokio::fs::remov
+          +e_file(&path).await {                                         
+      591 +                        warn!(                                
+      592 +                            "Failed to remove backup snapshot 
+          +{path:?} after completion: {cleanup_err}"                     
+      593 +                        );                                    
+      594 +                    }                                         
+      595 +                    None                                      
+      596 +                }                                             
+      597 +            }                                                 
+      598 +        },                                                    
+      599 +    );                                                        
+      600 +                                                              
+      601 +    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S")
+          +;                                                             
+      602 +    let filename = format!("alchemist-backup-{timestamp}.db.gz
+          +");                                                           
+      603 +                                                              
+      604 +    let mut headers = HeaderMap::new();                       
+      605 +    headers.insert(                                           
+      606 +        header::CONTENT_TYPE,                                 
+      607 +        HeaderValue::from_static("application/gzip"),         
+      608 +    );                                                        
+      609 +    headers.insert(                                           
+      610 +        header::CONTENT_DISPOSITION,                          
+      611 +        HeaderValue::from_str(&format!("attachment; filename=\
+          +"{filename}\""))                                              
+      612 +            .unwrap_or_else(|_| HeaderValue::from_static("atta
+          +chment")),                                                    
+      613 +    );                                                        
+      614 +                                                              
+      615 +    (headers, Body::from_stream(stream)).into_response()      
+      616 +}                                                             
+      617 +                                                              
+      618  #[cfg(test)]
+      619  mod tests {
+      620      use super::*;
+
+⏺ Now register the route:
+
+⏺ Update(src/server/mod.rs)
+  ⎿  Added 1 line
+      474              "/api/system/hardware/probe-log",
+      475              get(get_hardware_probe_log_handler),
+      476          )
+      477 +        .route("/api/system/backup", post(backup_database_hand
+          +ler))                                                         
+      478          .route(
+      479              "/api/library/intelligence",
+      480              get(library_intelligence_handler),
+
+⏺ Bash(just rust-build 2>&1 | tail -40)  ⎿     Compiling rayon v1.11.0
+        Compiling fuzzy-matcher v0.3.7
+        Compiling hyper-rustls v0.27.7
+     … +23 lines (ctrl+o to expand)
+  ⎿  (timeout 5m)
+
+⏺ Backend compiles. Running clippy to match CI standards:
+
+⏺ Bash(cargo clippy --all-targets -- -D clippy::unwrap_used -D
+      clippy::expect_used 2>&1 | tail -30)
+  ⎿     Compiling crc32fast v1.5.0
+         Checking adler2 v2.0.1
+         Checking simd-adler32 v0.3.9
+     … +8 lines (ctrl+o to expand)
+  ⎿  (timeout 5m)
+
+⏺ Now the UI. Adding a "Backup database" section to SystemSettings:
+
+⏺ Update(web/src/components/SystemSettings.tsx)
+  ⎿  Added 1 line, removed 1 line
+      1  import { useState, useEffect } from "react";
+      2 -import { Activity, Save } from "lucide-react";                  
+      2 +import { Activity, Download, Save } from "lucide-react";        
+      3  import { apiAction, apiJson, isApiError } from "../lib/api";
+      4  import {
+      5      TELEMETRY_TEMPORARILY_DISABLED,
+
+⏺ Update(web/src/components/SystemSettings.tsx)
+  ⎿  Added 1 line
+      45          useState<EngineStatus | null>(null);
+      46      const [modeLoading, setModeLoading] = useState(false);
+      47      const [engineActionLoading, setEngineActionLoading] = useSt
+          ate(false);
+      48 +    const [backupLoading, setBackupLoading] = useState(false); 
+      49  
+      50      const updateSettings = <K extends keyof SystemSettingsPaylo
+          ad>(
+      51          key: K,
+
+⏺ Update(web/src/components/SystemSettings.tsx)
+  ⎿  Added 35 lines
+      141          }
+      142      };
+      143  
+      144 +    const handleBackup = async () => {                        
+      145 +        setBackupLoading(true);                               
+      146 +        try {                                                 
+      147 +            const response = await fetch("/api/system/backup",
+          + {                                                            
+      148 +                method: "POST",                               
+      149 +                credentials: "include",                       
+      150 +            });                                               
+      151 +            if (!response.ok) {                               
+      152 +                const text = await response.text();           
+      153 +                throw new Error(text || `Backup failed (${resp
+          +onse.status})`);                                              
+      154 +            }                                                 
+      155 +            const blob = await response.blob();               
+      156 +            const url = URL.createObjectURL(blob);            
+      157 +            const link = document.createElement("a");         
+      158 +            link.href = url;                                  
+      159 +            const disposition = response.headers.get("content-
+          +disposition") ?? "";                                          
+      160 +            const match = disposition.match(/filename="([^"]+)
+          +"/);                                                          
+      161 +            link.download = match ? match[1] : "alchemist-back
+          +up.db.gz";                                                    
+      162 +            document.body.appendChild(link);                  
+      163 +            link.click();                                     
+      164 +            link.remove();                                    
+      165 +            URL.revokeObjectURL(url);                         
+      166 +            showToast({                                       
+      167 +                kind: "success",                              
+      168 +                title: "Backup",                              
+      169 +                message: "Database snapshot downloaded.",     
+      170 +            });                                               
+      171 +        } catch (err) {                                       
+      172 +            const message = err instanceof Error ? err.message
+          + : "Failed to back up database.";                             
+      173 +            showToast({ kind: "error", title: "Backup", messag
+          +e });                                                         
+      174 +        } finally {                                           
+      175 +            setBackupLoading(false);                          
+      176 +        }                                                     
+      177 +    };                                                        
+      178 +                                                              
+      179      const handleEngineAction = async (action: "pause" | "resum
+           e") => {
+      180          setEngineActionLoading(true);
+      181          try {
+
+⏺ Now insert the Backup section into the render tree, right before
+  LibraryDoctor:
+
+⏺ Update(web/src/components/SystemSettings.tsx)
+  ⎿  Added 24 lines
+      460                  </button>
+      461              </div>
+      462  
+      463 +            <div className="pt-4 border-t border-helios-line/1
+          +0">                                                           
+      464 +                <div className="flex items-start justify-betwe
+          +en gap-4">                                                    
+      465 +                    <div>                                     
+      466 +                        <h4 className="text-sm font-semibold t
+          +ext-helios-ink">                                              
+      467 +                            Database Backup                   
+      468 +                        </h4>                                 
+      469 +                        <p className="mt-1 text-xs text-helios
+          +-slate max-w-md">                                             
+      470 +                            Download a consistent snapshot of 
+          +the Alchemist database as a                                   
+      471 +                            gzip-compressed file. Safe to run 
+          +while jobs are active — uses                                  
+      472 +                            SQLite&rsquo;s online backup path.
+      473 +                        </p>                                  
+      474 +                    </div>                                    
+      475 +                    <button                                   
+      476 +                        type="button"                         
+      477 +                        onClick={() => void handleBackup()}   
+      478 +                        disabled={backupLoading}              
+      479 +                        className="flex items-center gap-2 rou
+          +nded-lg border border-helios-line/20 bg-helios-surface px-4 py
+          +-2 text-sm font-semibold text-helios-ink transition-colors hov
+          +er:bg-helios-surface-soft disabled:opacity-50"                
+      480 +                    >                                         
+      481 +                        <Download size={16} />                
+      482 +                        {backupLoading ? "Preparing..." : "Bac
+          +kup database"}                                                
+      483 +                    </button>                                 
+      484 +                </div>                                        
+      485 +            </div>                                            
+      486 +                                                              
+      487              <div className="border-t border-helios-line/10 pt-
+           6">
+      488                  <LibraryDoctor />
+      489              </div>
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+⏺ Update(README.md)
+  ⎿  Added 11 lines
+      162  - API automation can use bearer tokens created in **Settings →
+            API Tokens**.
+      163  - Read-only tokens are limited to observability and monitoring
+            routes.
+      164  
+      165 +## Backups                                                    
+      166 +                                                              
+      167 +Alchemist stores all state in a single SQLite database. You ca
+          +n download a                                                  
+      168 +consistent, gzip-compressed snapshot at any time:             
+      169 +                                                              
+      170 +- UI: **Settings → Runtime → Backup database**                
+      171 +- API: `POST /api/system/backup` (requires a full-access token
+          +)                                                             
+      172 +                                                              
+      173 +The snapshot is produced via SQLite's online backup path, so i
+          +t is safe to run                                              
+      174 +while encodes are in flight.                                  
+      175 +                                                              
+      176  ## Supported Platforms
+      177  
+      178  | Platform | Status |
+
+⏺ Now verify everything still builds:
+
+⏺ Bash(just check-web 2>&1 | tail -20)
+  ⎿    ✓  63 [auth] › tests/settings-nonok.spec.ts:222:1 › watch folder add
+      submits recursive mode by default (215ms)
+       ✓  64 [auth] › tests/settings-nonok.spec.ts:275:1 › watch folder rem
+     … +28 lines (ctrl+o to expand)
+  ⎿  (timeout 5m)
+
+⏺ OP-1 done. Moving to INT-3 (ntfy).
+
+  Searched for 2 patterns, read 3 files (ctrl+o to expand)
+
+⏺ Adding the config validation for ntfy:
+
+⏺ Update(src/config.rs)
+  ⎿  Added 8 lines
+      577                      anyhow::bail!("gotify target requires conf
+           ig_json.app_token");
+      578                  }
+      579              }
+      580 +            "ntfy" => {                                       
+      581 +                if config_json_string(&self.config_json, "serv
+          +er_url").is_none() {                                          
+      582 +                    anyhow::bail!("ntfy target requires config
+          +_json.server_url");                                           
+      583 +                }                                             
+      584 +                if config_json_string(&self.config_json, "topi
+          +c").is_none() {                                               
+      585 +                    anyhow::bail!("ntfy target requires config
+          +_json.topic");                                                
+      586 +                }                                             
+      587 +            }                                                 
+      588              "webhook" => {
+      589                  if config_json_string(&self.config_json, "url"
+           ).is_none() {
+      590                      anyhow::bail!("webhook target requires con
+           fig_json.url");
+
+⏺ Now settings.rs — normalize payload and SSRF validation:
+
+⏺ Update(src/server/settings.rs)
+  ⎿  Added 12 lines
+      502                      .or_insert_with(|| JsonValue::String(auth_
+           token.clone()));
+      503              }
+      504          }
+      505 +        "ntfy" => {                                           
+      506 +            if let Some(endpoint_url) = payload.endpoint_url.a
+          +s_ref() {                                                     
+      507 +                config_map                                    
+      508 +                    .entry("server_url".to_string())          
+      509 +                    .or_insert_with(|| JsonValue::String(endpo
+          +int_url.clone()));                                            
+      510 +            }                                                 
+      511 +            if let Some(auth_token) = payload.auth_token.as_re
+          +f() {                                                         
+      512 +                config_map                                    
+      513 +                    .entry("access_token".to_string())        
+      514 +                    .or_insert_with(|| JsonValue::String(auth_
+          +token.clone()));                                              
+      515 +            }                                                 
+      516 +        }                                                     
+      517          "webhook" => {
+      518              if let Some(endpoint_url) = payload.endpoint_url.a
+           s_ref() {
+      519                  config_map
+
+⏺ Update(src/server/settings.rs)
+  ⎿  Added 5 lines
+      580              .get("server_url")
+      581              .and_then(JsonValue::as_str)
+      582              .map(str::to_string),
+      583 +        "ntfy" => target                                      
+      584 +            .config_json                                      
+      585 +            .get("server_url")                                
+      586 +            .and_then(JsonValue::as_str)                      
+      587 +            .map(str::to_string),                             
+      588          "webhook" => target
+      589              .config_json
+      590              .get("url")
+
+⏺ Now notifications.rs — config struct, endpoint mapping, send method,
+  dispatchers:
+
+⏺ Update(src/notifications.rs)
+  ⎿  Added 8 lines
+      43  }
+      44  
+      45  #[derive(Debug, Deserialize)]
+      46 +struct NtfyConfig {                                            
+      47 +    server_url: String,                                        
+      48 +    topic: String,                                             
+      49 +    #[serde(default)]                                          
+      50 +    access_token: Option<String>,                              
+      51 +}                                                              
+      52 +                                                               
+      53 +#[derive(Debug, Deserialize)]                                  
+      54  struct WebhookConfig {
+      55      url: String,
+      56      auth_token: Option<String>,
+
+⏺ Update(src/notifications.rs)
+  ⎿  Added 1 line
+      87          "gotify" => Ok(Some(
+      88              parse_target_config::<GotifyConfig>(target)?.server
+          _url,
+      89          )),
+      90 +        "ntfy" => Ok(Some(parse_target_config::<NtfyConfig>(tar
+         +get)?.server_url)),                                            
+      91          "webhook" => Ok(Some(parse_target_config::<WebhookConfi
+          g>(target)?.url)),
+      92          "discord_bot" => Ok(Some("https://discord.com".to_strin
+          g())),
+      93          "telegram" => Ok(Some("https://api.telegram.org".to_str
+          ing())),
+
+⏺ Now add the dispatch arm in send():
+⏺ Update(src/notifications.rs)
+  ⎿  Added 11 lines
+      493                  )
+      494                  .await
+      495              }
+      496 +            "ntfy" => {                                       
+      497 +                self.send_ntfy_with_client(                   
+      498 +                    &client,                                  
+      499 +                    target,                                   
+      500 +                    event,                                    
+      501 +                    event_key,                                
+      502 +                    decision_explanation.as_ref(),            
+      503 +                    failure_explanation.as_ref(),             
+      504 +                )                                             
+      505 +                .await                                        
+      506 +            }                                                 
+      507              "webhook" => {
+      508                  self.send_webhook_with_client(
+      509                      &client,
+
+⏺ Now the send_ntfy_with_client method. Adding right after the gotify
+  implementation:
+
+⏺ Update(src/notifications.rs)
+  ⎿  Added 37 lines
+      712          Ok(())
+      713      }
+      714  
+      715 +    async fn send_ntfy_with_client(                           
+      716 +        &self,                                                
+      717 +        client: &Client,                                      
+      718 +        target: &NotificationTarget,                          
+      719 +        event: &NotifiableEvent,                              
+      720 +        event_key: &str,                                      
+      721 +        decision_explanation: Option<&Explanation>,           
+      722 +        failure_explanation: Option<&Explanation>,            
+      723 +    ) -> NotificationResult<()> {                             
+      724 +        let config = parse_target_config::<NtfyConfig>(target)
+          +?;                                                            
+      725 +        let message = self.message_for_event(event, decision_e
+          +xplanation, failure_explanation);                             
+      726 +                                                              
+      727 +        let priority = match event_key {                      
+      728 +            "encode.failed" => "5",                           
+      729 +            "daily.summary" => "4",                           
+      730 +            "encode.completed" | "scan.completed" | "engine.id
+          +le" => "3",                                                   
+      731 +            _ => "3",                                         
+      732 +        };                                                    
+      733 +                                                              
+      734 +        let url = format!(                                    
+      735 +            "{}/{}",                                          
+      736 +            config.server_url.trim_end_matches('/'),          
+      737 +            config.topic.trim_matches('/')                    
+      738 +        );                                                    
+      739 +        let mut req = client                                  
+      740 +            .post(url)                                        
+      741 +            .header("Content-Type", "text/plain; charset=utf-8
+          +")                                                            
+      742 +            .header("Title", "Alchemist")                     
+      743 +            .header("Priority", priority)                     
+      744 +            .body(message);                                   
+      745 +        if let Some(token) = &config.access_token {           
+      746 +            req = req.bearer_auth(token);                     
+      747 +        }                                                     
+      748 +        req.send().await?.error_for_status()?;                
+      749 +        Ok(())                                                
+      750 +    }                                                         
+      751 +                                                              
+      752      async fn send_webhook_with_client(
+      753          &self,
+      754          client: &Client,
+
+⏺ Now daily summary dispatch for ntfy:
+
+⏺ Update(src/notifications.rs)
+  ⎿  Added 18 lines
+      904                      .await?
+      905                      .error_for_status()?;
+      906              }
+      907 +            "ntfy" => {                                       
+      908 +                let config = parse_target_config::<NtfyConfig>
+          +(target)?;                                                    
+      909 +                let url = format!(                            
+      910 +                    "{}/{}",                                  
+      911 +                    config.server_url.trim_end_matches('/'),  
+      912 +                    config.topic.trim_matches('/')            
+      913 +                );                                            
+      914 +                let mut req = client                          
+      915 +                    .post(url)                                
+      916 +                    .header("Content-Type", "text/plain; chars
+          +et=utf-8")                                                    
+      917 +                    .header("Title", "Alchemist Daily Summary"
+          +)                                                             
+      918 +                    .header("Priority", "4")                  
+      919 +                    .body(message);                           
+      920 +                if let Some(token) = config.access_token {    
+      921 +                    req = req.bearer_auth(token);             
+      922 +                }                                             
+      923 +                req.send().await?.error_for_status()?;        
+      924 +            }                                                 
+      925              "webhook" => {
+      926                  let config = parse_target_config::<WebhookConf
+           ig>(target)?;
+      927                  let mut req = client.post(config.url).json(&js
+           on!({
+
+⏺ Bash(cargo check --lib 2>&1 | tail -20)
+  ⎿     Compiling alchemist v0.3.1 (/Users/brooklyn/data/alchemist)
+         Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.62
+     s
+  ⎿  (timeout 3m)
+
+⏺ Backend clean. Now the frontend. Finding the notification form:
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+⏺ Now extending the frontend with ntfy support:
+
+⏺ Update(web/src/components/NotificationSettings.tsx)
+  ⎿  Added 1 line
+       8      | "discord_webhook"
+       9      | "discord_bot"
+      10      | "gotify"
+      11 +    | "ntfy"                                                   
+      12      | "webhook"
+      13      | "telegram"
+      14      | "email";
+
+⏺ Update(web/src/components/NotificationSettings.tsx)
+  ⎿  Added 1 line
+      43      { value: "discord_webhook", label: "Discord Webhook" },
+      44      { value: "discord_bot", label: "Discord Bot" },
+      45      { value: "gotify", label: "Gotify" },
+      46 +    { value: "ntfy", label: "ntfy" },                          
+      47      { value: "webhook", label: "Generic Webhook" },
+      48      { value: "telegram", label: "Telegram" },
+      49      { value: "email", label: "Email" },
+
+⏺ Update(web/src/components/NotificationSettings.tsx)
+  ⎿  Added 2 lines
+      68              return `channel ${String(config.channel_id ?? "")}`
+          ;
+      69          case "gotify":
+      70              return String(config.server_url ?? "");
+      71 +        case "ntfy":                                           
+      72 +            return `${String(config.server_url ?? "")}/${String
+         +(config.topic ?? "")}`;                                        
+      73          case "webhook":
+      74              return String(config.url ?? "");
+      75          case "telegram":
+
+⏺ Update(web/src/components/NotificationSettings.tsx)
+  ⎿  Added 2 lines
+      114              return { bot_token: "", channel_id: "" };
+      115          case "gotify":
+      116              return { server_url: "", app_token: "" };
+      117 +        case "ntfy":                                          
+      118 +            return { server_url: "", topic: "", access_token: 
+          +"" };                                                         
+      119          case "webhook":
+      120              return { url: "", auth_token: "" };
+      121          case "telegram":
+
+⏺ Now the ntfy form block in render, right after the gotify block:
+
+⏺ Update(web/src/components/NotificationSettings.tsx)
+  ⎿  Added 23 lines
+      391                          </div>
+      392                      )}
+      393  
+      394 +                    {draftType === "ntfy" && (                
+      395 +                        <div className="grid grid-cols-1 sm:gr
+          +id-cols-2 gap-4">                                             
+      396 +                            <TextField                        
+      397 +                                label="Server URL"            
+      398 +                                value={String(draftConfig.serv
+          +er_url ?? "")}                                                
+      399 +                                onChange={(value) => setConfig
+          +Field("server_url", value)}                                   
+      400 +                                placeholder="https://ntfy.sh" 
+      401 +                            />                                
+      402 +                            <TextField                        
+      403 +                                label="Topic"                 
+      404 +                                value={String(draftConfig.topi
+          +c ?? "")}                                                     
+      405 +                                onChange={(value) => setConfig
+          +Field("topic", value)}                                        
+      406 +                                placeholder="my-alchemist-aler
+          +ts"                                                           
+      407 +                            />                                
+      408 +                            <TextField                        
+      409 +                                label="Access Token (Optional)
+          +"                                                             
+      410 +                                value={String(draftConfig.acce
+          +ss_token ?? "")}                                              
+      411 +                                onChange={(value) => setConfig
+          +Field("access_token", value)}                                 
+      412 +                                placeholder="For private ntfy 
+          +servers"                                                      
+      413 +                            />                                
+      414 +                        </div>                                
+      415 +                    )}                                        
+      416 +                                                              
+      417                      {draftType === "webhook" && (
+      418                          <div className="grid grid-cols-1 sm:gr
+           id-cols-2 gap-4">
+      419                              <TextField
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(just check-web 2>&1 | tail -10)
+  ⎿    ✓  73 [auth] › tests/settings-success.spec.ts:175:1 › schedule windo
+     ws can be added and removed (502ms)
+       ✓  74 [auth] › tests/settings-success.spec.ts:215:1 › watch folders
+     … +13 lines (ctrl+o to expand)
+  ⎿  (timeout 5m)
+
+⏺ Bash(cargo clippy --all-targets -- -D clippy::unwrap_used -D
+      clippy::expect_used 2>&1 | tail -15)
+  ⎿     Compiling alchemist v0.3.1 (/Users/brooklyn/data/alchemist)
+         Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.02
+     s
+  ⎿  (timeout 5m)
+
+⏺ Bash(just test-filter notification 2>&1 | tail -15)
+  ⎿  Running in the background (↓ to manage)
+  ⎿  (timeout 3m)
+
+⏺ Background command "Run notification tests" completed (exit code 0)
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+⏺ Bash(cargo test --lib notifications 2>&1 | tail -30)
+  ⎿      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.3
+     7s
+          Running unittests src/lib.rs (target/debug/deps/alchemist-65b2036
+     … +15 lines (ctrl+o to expand)
+
+⏺ INT-3 compiles and existing tests pass. Marking complete.
+  Searched for 1 pattern, read 4 files (ctrl+o to expand)
+
+⏺ Your account does not have access to Claude Code. Please run /login.
+
+✻ Cooked for 6h 44m 24s
+
+❯ continue                                                                      
+
+⏺ Your account does not have access to Claude Code. Please run /login.
+
+✻ Churned for 2m 19s
+
+❯ /login                                                                        
+  ⎿  Login interrupted

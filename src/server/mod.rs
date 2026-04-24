@@ -64,6 +64,23 @@ fn load_static_asset(path: &str) -> Option<Vec<u8>> {
     fs::read(full_path).ok()
 }
 
+pub(crate) fn api_error_response(
+    status: StatusCode,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        axum::Json(serde_json::json!({
+            "error": {
+                "code": code.into(),
+                "message": message.into(),
+            }
+        })),
+    )
+        .into_response()
+}
+
 pub struct AppState {
     pub db: Arc<Db>,
     pub config: Arc<RwLock<Config>>,
@@ -83,6 +100,9 @@ pub struct AppState {
     pub hardware_state: HardwareState,
     pub hardware_probe_log: Arc<tokio::sync::RwLock<HardwareProbeLog>>,
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
+    pub library_intelligence_cache:
+        Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
+    pub library_health_scan_in_progress: Arc<AtomicBool>,
     pub(crate) login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) sse_connections: Arc<std::sync::atomic::AtomicUsize>,
@@ -107,6 +127,9 @@ pub struct RunServerArgs {
     pub notification_manager: Arc<crate::notifications::NotificationManager>,
     pub file_watcher: Arc<crate::system::watcher::FileWatcher>,
     pub library_scanner: Arc<crate::system::scanner::LibraryScanner>,
+    pub library_intelligence_cache:
+        Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
+    pub library_health_scan_in_progress: Arc<AtomicBool>,
 }
 
 pub async fn run_server(args: RunServerArgs) -> Result<()> {
@@ -125,6 +148,8 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         notification_manager,
         file_watcher,
         library_scanner,
+        library_intelligence_cache,
+        library_health_scan_in_progress,
     } = args;
     #[cfg(not(feature = "embed-web"))]
     {
@@ -193,6 +218,8 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         hardware_state,
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        library_intelligence_cache,
+        library_health_scan_in_progress,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -347,6 +374,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/logs", delete(clear_logs_handler))
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
+        .route("/api/jobs/clear-history", post(clear_history_handler))
         .route("/api/jobs/:id/cancel", post(cancel_job_handler))
         .route("/api/jobs/:id/priority", post(update_job_priority_handler))
         .route("/api/jobs/:id/restart", post(restart_job_handler))
@@ -412,6 +440,10 @@ fn app_router(state: Arc<AppState>) -> Router {
             delete(remove_watch_dir_handler),
         )
         .route(
+            "/api/settings/watch-dirs/:id/reanalyze",
+            post(reanalyze_watch_dir_handler),
+        )
+        .route(
             "/api/watch-dirs/:id/profile",
             axum::routing::patch(assign_watch_dir_profile_handler),
         )
@@ -470,6 +502,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/update", get(get_system_update_handler))
         .route("/api/system/hardware", get(get_hardware_info_handler))
+        .route("/api/system/backup", post(backup_database_handler))
         .route(
             "/api/system/hardware/probe-log",
             get(get_hardware_probe_log_handler),
@@ -477,6 +510,10 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/library/intelligence",
             get(library_intelligence_handler),
+        )
+        .route(
+            "/api/library/reanalyze",
+            post(reanalyze_library_root_handler),
         )
         .route("/api/library/health", get(library_health_handler))
         .route(
@@ -495,6 +532,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/fs/recommendations", get(fs_recommendations_handler))
         .route("/api/fs/preview", post(fs_preview_handler))
         .route("/api/telemetry/payload", get(telemetry_payload_handler))
+        .route("/metrics", get(metrics_handler))
         // Setup Routes
         .route("/api/setup/status", get(setup_status_handler))
         .route("/api/setup/complete", post(setup_complete_handler))

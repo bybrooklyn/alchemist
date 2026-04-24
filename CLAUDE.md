@@ -6,7 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Alchemist is a self-hosted media transcoding pipeline. It scans a media library, analyzes video files for transcoding opportunities, and intelligently encodes them using hardware acceleration (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox) with CPU fallback. It includes a web UI for configuration and monitoring.
 
-**Stack:** Rust (Axum + SQLite/sqlx + tokio) backend, Astro 5 + React 18 + TypeScript frontend.
+**Stack:** Rust (Axum + SQLite/sqlx + tokio) backend, Astro 6 + React 18 + TypeScript frontend.
+
+## Session Discipline
+
+At the start of every prompt in this repository, read:
+
+- `CHANGELOG.md`
+- `VERSION`
+
+Treat those files as required orientation context before making plans, edits, or release-related claims.
 
 ## Commands
 
