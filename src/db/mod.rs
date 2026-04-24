@@ -2,6 +2,7 @@ mod config;
 mod conversion;
 mod events;
 mod jobs;
+mod probe_cache;
 mod stats;
 mod system;
 mod types;

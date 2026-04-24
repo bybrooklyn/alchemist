@@ -37,8 +37,41 @@ Create a new API token. The plaintext value is only returned once.
 }
 ```
 
+`access_level` supports:
+
+- `read_only` — observability GET/HEAD endpoints only
+- `arr_webhook` — only `POST /api/webhooks/arr`
+- `full_access` — all authenticated API routes
+
 ### `DELETE /api/settings/api-tokens/:id`
 Revoke a token.
+
+---
+
+## ARR webhook ingress
+
+### `POST /api/webhooks/arr`
+Accepts Sonarr/Radarr webhook payloads with `eventType=Download`, resolves a
+media path, applies optional `system.arr_path_translations`, then reuses the
+standard enqueue-by-path pipeline (same dedupe/output guards as manual enqueue).
+
+Webhook setup:
+
+1. Create an API token with `access_level: "arr_webhook"`.
+2. In Sonarr/Radarr add a **Webhook** notification pointing to:
+   `http://<alchemist-host>:3000/api/webhooks/arr`
+3. Add header: `Authorization: Bearer <token>`.
+4. Ensure the payload includes import path fields (`episodeFile`, `movieFile`,
+   `importedEpisodeFiles`, or `importedMovieFiles`).
+
+Container path mapping (if Arr sees different mount paths than Alchemist):
+
+```toml
+[system]
+arr_path_translations = [
+  { from = "/container/media", to = "/mnt/media" }
+]
+```
 
 ---
 

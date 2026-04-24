@@ -5,7 +5,7 @@ info:
   description: >
     Hand-maintained API contract for Alchemist. Authentication may use the
     alchemist_session cookie or a bearer token. Bearer tokens support
-    read_only and full_access classes.
+    read_only, arr_webhook, and full_access classes.
 servers:
   - url: /
 components:
@@ -28,7 +28,7 @@ components:
           type: string
         access_level:
           type: string
-          enum: [read_only, full_access]
+          enum: [read_only, arr_webhook, full_access]
         created_at:
           type: string
           format: date-time
@@ -91,10 +91,29 @@ paths:
                   type: string
                 access_level:
                   type: string
-                  enum: [read_only, full_access]
+                  enum: [read_only, arr_webhook, full_access]
       responses:
         "200":
           description: Token created; plaintext token shown once
+  /api/webhooks/arr:
+    post:
+      summary: Receive Sonarr/Radarr Download webhook payloads and enqueue media
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook accepted and enqueue attempted
+        "202":
+          description: Non-Download event ignored
+        "400":
+          description: Download payload missing a resolvable file path
   /api/settings/api-tokens/{id}:
     delete:
       summary: Revoke an API token

@@ -1,7 +1,7 @@
 //! Configuration get/set, validation handlers.
 
 use super::{
-    AppState, config_read_error_response, config_save_error_to_response,
+    AppState, api_error_response, config_read_error_response, config_save_error_to_response,
     config_write_blocked_response, hardware_error_response, has_path_separator,
     normalize_optional_directory, normalize_optional_path, normalize_schedule_time,
     refresh_file_watcher, replace_runtime_hardware, save_config_or_response,
@@ -75,7 +75,7 @@ pub(crate) async fn update_transcode_settings_handler(
     axum::Json(payload): axum::Json<TranscodeSettingsPayload>,
 ) -> impl IntoResponse {
     if let Err(msg) = validate_transcode_payload(&payload) {
-        return (StatusCode::BAD_REQUEST, msg).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "TRANSCODE_SETTINGS_INVALID", msg);
     }
 
     let mut next_config = state.config.read().await.clone();
@@ -95,7 +95,11 @@ pub(crate) async fn update_transcode_settings_handler(
     next_config.transcode.stream_rules = payload.stream_rules.clone();
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "TRANSCODE_SETTINGS_INVALID",
+            e.to_string(),
+        );
     }
 
     if let Err(response) = save_config_or_response(&state, &next_config).await {
@@ -160,11 +164,21 @@ pub(crate) async fn update_hardware_settings_handler(
     next_config.hardware.device_path =
         match normalize_optional_path(payload.device_path.as_deref(), "device_path") {
             Ok(path) => path,
-            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+            Err(msg) => {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "HARDWARE_SETTINGS_INVALID",
+                    msg,
+                );
+            }
         };
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "HARDWARE_SETTINGS_INVALID",
+            e.to_string(),
+        );
     }
 
     let (hardware_info, probe_log) =
@@ -216,25 +230,25 @@ pub(crate) async fn update_system_settings_handler(
     axum::Json(payload): axum::Json<SystemSettingsPayload>,
 ) -> impl IntoResponse {
     if payload.monitoring_poll_interval < 0.5 || payload.monitoring_poll_interval > 10.0 {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SYSTEM_SETTINGS_INVALID",
             "monitoring_poll_interval must be between 0.5 and 10.0 seconds",
-        )
-            .into_response();
+        );
     }
     if payload.conversion_upload_limit_gb == 0 {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SYSTEM_SETTINGS_INVALID",
             "conversion_upload_limit_gb must be >= 1",
-        )
-            .into_response();
+        );
     }
     if !(1..=24).contains(&payload.conversion_download_retention_hours) {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SYSTEM_SETTINGS_INVALID",
             "conversion_download_retention_hours must be between 1 and 24",
-        )
-            .into_response();
+        );
     }
 
     let mut next_config = state.config.read().await.clone();
@@ -246,7 +260,11 @@ pub(crate) async fn update_system_settings_handler(
     next_config.scanner.watch_enabled = payload.watch_enabled;
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SYSTEM_SETTINGS_INVALID",
+            e.to_string(),
+        );
     }
 
     if let Err(response) = save_config_or_response(&state, &next_config).await {
@@ -260,7 +278,7 @@ pub(crate) async fn update_system_settings_handler(
 
     refresh_file_watcher(&state).await;
 
-    (StatusCode::OK, "Settings updated").into_response()
+    StatusCode::OK.into_response()
 }
 
 // Settings bundle
@@ -277,7 +295,11 @@ pub(crate) async fn update_settings_bundle_handler(
     axum::Json(payload): axum::Json<Config>,
 ) -> impl IntoResponse {
     if let Err(err) = payload.validate() {
-        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SETTINGS_BUNDLE_INVALID",
+            err.to_string(),
+        );
     }
 
     let (hardware_info, probe_log) =
@@ -328,7 +350,11 @@ pub(crate) async fn set_setting_preference_handler(
 ) -> impl IntoResponse {
     let key = payload.key.trim();
     if key.is_empty() {
-        return (StatusCode::BAD_REQUEST, "key must not be empty").into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SETTING_PREFERENCE_KEY_INVALID",
+            "key must not be empty",
+        );
     }
 
     match state.db.set_preference(key, payload.value.as_str()).await {
@@ -337,7 +363,11 @@ pub(crate) async fn set_setting_preference_handler(
             value: payload.value,
         })
         .into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SETTING_PREFERENCE_SET_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -348,7 +378,11 @@ pub(crate) async fn get_setting_preference_handler(
     match state.db.get_preference(key.as_str()).await {
         Ok(Some(value)) => axum::Json(SettingPreferenceResponse { key, value }).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SETTING_PREFERENCE_READ_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -376,11 +410,21 @@ pub(crate) async fn update_settings_config_handler(
 ) -> impl IntoResponse {
     let config = match crate::settings::parse_raw_config(&payload.raw_toml) {
         Ok(config) => config,
-        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "RAW_CONFIG_INVALID",
+                err.to_string(),
+            );
+        }
     };
 
     if let Err(err) = config.validate() {
-        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "RAW_CONFIG_INVALID",
+            err.to_string(),
+        );
     }
 
     let (hardware_info, probe_log) =
@@ -462,12 +506,22 @@ pub(crate) struct NotificationTargetResponse {
 #[derive(Serialize)]
 pub(crate) struct NotificationsSettingsResponse {
     daily_summary_time_local: String,
+    quiet_hours_enabled: bool,
+    quiet_hours_start_local: String,
+    quiet_hours_end_local: String,
     targets: Vec<NotificationTargetResponse>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct UpdateNotificationsSettingsPayload {
-    daily_summary_time_local: String,
+    #[serde(default)]
+    daily_summary_time_local: Option<String>,
+    #[serde(default)]
+    quiet_hours_enabled: Option<bool>,
+    #[serde(default)]
+    quiet_hours_start_local: Option<String>,
+    #[serde(default)]
+    quiet_hours_end_local: Option<String>,
 }
 
 fn normalize_notification_payload(
@@ -588,15 +642,12 @@ pub(crate) async fn get_notifications_handler(
 ) -> impl IntoResponse {
     match state.db.get_notification_targets().await {
         Ok(t) => {
-            let daily_summary_time_local = state
-                .config
-                .read()
-                .await
-                .notifications
-                .daily_summary_time_local
-                .clone();
+            let notifications = state.config.read().await.notifications.clone();
             axum::Json(NotificationsSettingsResponse {
-                daily_summary_time_local,
+                daily_summary_time_local: notifications.daily_summary_time_local,
+                quiet_hours_enabled: notifications.quiet_hours_enabled,
+                quiet_hours_start_local: notifications.quiet_hours_start_local,
+                quiet_hours_end_local: notifications.quiet_hours_end_local,
                 targets: t
                     .into_iter()
                     .map(notification_target_response)
@@ -604,7 +655,11 @@ pub(crate) async fn get_notifications_handler(
             })
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "NOTIFICATIONS_LIST_FAILED",
+            format!("Failed to load notification targets: {e}"),
+        ),
     }
 }
 
@@ -613,9 +668,45 @@ pub(crate) async fn update_notifications_settings_handler(
     axum::Json(payload): axum::Json<UpdateNotificationsSettingsPayload>,
 ) -> impl IntoResponse {
     let mut next_config = state.config.read().await.clone();
-    next_config.notifications.daily_summary_time_local = payload.daily_summary_time_local;
+    if let Some(daily_summary_time_local) = payload.daily_summary_time_local.as_ref() {
+        let Some(normalized) = normalize_schedule_time(daily_summary_time_local) else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "NOTIFICATIONS_SETTINGS_INVALID",
+                "daily_summary_time_local must be HH:MM",
+            );
+        };
+        next_config.notifications.daily_summary_time_local = normalized;
+    }
+    if let Some(quiet_hours_enabled) = payload.quiet_hours_enabled {
+        next_config.notifications.quiet_hours_enabled = quiet_hours_enabled;
+    }
+    if let Some(quiet_hours_start_local) = payload.quiet_hours_start_local.as_ref() {
+        let Some(normalized) = normalize_schedule_time(quiet_hours_start_local) else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "NOTIFICATIONS_SETTINGS_INVALID",
+                "quiet_hours_start_local must be HH:MM",
+            );
+        };
+        next_config.notifications.quiet_hours_start_local = normalized;
+    }
+    if let Some(quiet_hours_end_local) = payload.quiet_hours_end_local.as_ref() {
+        let Some(normalized) = normalize_schedule_time(quiet_hours_end_local) else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "NOTIFICATIONS_SETTINGS_INVALID",
+                "quiet_hours_end_local must be HH:MM",
+            );
+        };
+        next_config.notifications.quiet_hours_end_local = normalized;
+    }
     if let Err(err) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "NOTIFICATIONS_SETTINGS_INVALID",
+            err.to_string(),
+        );
     }
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
@@ -633,14 +724,18 @@ pub(crate) async fn add_notification_handler(
 ) -> impl IntoResponse {
     let target = normalize_notification_payload(&payload);
     if let Err(msg) = validate_notification_target(&state, &target).await {
-        return (StatusCode::BAD_REQUEST, msg).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "NOTIFICATION_TARGET_INVALID", msg);
     }
 
     let mut next_config = state.config.read().await.clone();
     next_config.notifications.targets.push(target);
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "NOTIFICATION_TARGET_INVALID",
+            e.to_string(),
+        );
     }
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
@@ -655,7 +750,11 @@ pub(crate) async fn add_notification_handler(
             .pop()
             .map(|target| axum::Json(notification_target_response(target)).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "NOTIFICATIONS_LIST_FAILED",
+            format!("Failed to load notification targets: {e}"),
+        ),
     }
 }
 
@@ -665,19 +764,29 @@ pub(crate) async fn delete_notification_handler(
 ) -> impl IntoResponse {
     let target_index = match state.db.get_notification_targets().await {
         Ok(targets) => targets.iter().position(|target| target.id == id),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NOTIFICATIONS_LIST_FAILED",
+                format!("Failed to load notification targets: {e}"),
+            );
+        }
     };
     let Some(target_index) = target_index else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "NOTIFICATION_TARGET_NOT_FOUND",
+            "Notification target not found",
+        );
     };
 
     let mut next_config = state.config.read().await.clone();
     if target_index >= next_config.notifications.targets.len() {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "NOTIFICATION_CONFIG_OUT_OF_SYNC",
             "notification settings projection is out of sync with config",
-        )
-            .into_response();
+        );
     }
     next_config.notifications.targets.remove(target_index);
     if let Err(response) = save_config_or_response(&state, &next_config).await {
@@ -696,7 +805,7 @@ pub(crate) async fn test_notification_handler(
 ) -> impl IntoResponse {
     let target_config = normalize_notification_payload(&payload);
     if let Err(msg) = validate_notification_target(&state, &target_config).await {
-        return (StatusCode::BAD_REQUEST, msg).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "NOTIFICATION_TARGET_INVALID", msg);
     }
 
     let target = crate::db::NotificationTarget {
@@ -711,7 +820,11 @@ pub(crate) async fn test_notification_handler(
 
     match state.notification_manager.send_test(&target).await {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "NOTIFICATION_TEST_FAILED",
+            format!("Test notification failed: {e}"),
+        ),
     }
 }
 
@@ -734,7 +847,11 @@ pub(crate) async fn list_api_tokens_handler(
 ) -> impl IntoResponse {
     match state.db.list_api_tokens().await {
         Ok(tokens) => axum::Json(tokens).into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "API_TOKENS_LIST_FAILED",
+            format!("Failed to list API tokens: {err}"),
+        ),
     }
 }
 
@@ -743,7 +860,11 @@ pub(crate) async fn create_api_token_handler(
     axum::Json(payload): axum::Json<CreateApiTokenPayload>,
 ) -> impl IntoResponse {
     if payload.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "token name must not be empty").into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "API_TOKEN_NAME_INVALID",
+            "token name must not be empty",
+        );
     }
 
     let plaintext_token = format!(
@@ -765,7 +886,11 @@ pub(crate) async fn create_api_token_handler(
             plaintext_token,
         })
         .into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "API_TOKEN_CREATE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -776,7 +901,11 @@ pub(crate) async fn revoke_api_token_handler(
     match state.db.revoke_api_token(id).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(err) if super::is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "API_TOKEN_REVOKE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -785,7 +914,11 @@ pub(crate) async fn revoke_api_token_handler(
 pub(crate) async fn get_schedule_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_schedule_windows().await {
         Ok(w) => axum::Json(serde_json::json!(w)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SCHEDULE_LIST_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -804,22 +937,32 @@ pub(crate) async fn add_schedule_handler(
     if payload.days_of_week.is_empty()
         || payload.days_of_week.iter().any(|day| *day < 0 || *day > 6)
     {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SCHEDULE_INVALID",
             "days_of_week must include values 0-6",
-        )
-            .into_response();
+        );
     }
 
     let start_time = match normalize_schedule_time(&payload.start_time) {
         Some(value) => value,
         None => {
-            return (StatusCode::BAD_REQUEST, "start_time must be HH:MM").into_response();
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "SCHEDULE_INVALID",
+                "start_time must be HH:MM",
+            );
         }
     };
     let end_time = match normalize_schedule_time(&payload.end_time) {
         Some(value) => value,
-        None => return (StatusCode::BAD_REQUEST, "end_time must be HH:MM").into_response(),
+        None => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "SCHEDULE_INVALID",
+                "end_time must be HH:MM",
+            );
+        }
     };
 
     let mut next_config = state.config.read().await.clone();
@@ -834,7 +977,7 @@ pub(crate) async fn add_schedule_handler(
         });
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "SCHEDULE_INVALID", e.to_string());
     }
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;
@@ -850,7 +993,11 @@ pub(crate) async fn add_schedule_handler(
             .pop()
             .map(|window| axum::Json(serde_json::json!(window)).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SCHEDULE_LIST_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -860,7 +1007,13 @@ pub(crate) async fn delete_schedule_handler(
 ) -> impl IntoResponse {
     let window_index = match state.db.get_schedule_windows().await {
         Ok(windows) => windows.iter().position(|window| window.id == id),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SCHEDULE_LIST_FAILED",
+                e.to_string(),
+            );
+        }
     };
     let Some(window_index) = window_index else {
         return StatusCode::NOT_FOUND.into_response();
@@ -868,11 +1021,11 @@ pub(crate) async fn delete_schedule_handler(
 
     let mut next_config = state.config.read().await.clone();
     if window_index >= next_config.schedule.windows.len() {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "SCHEDULE_CONFIG_OUT_OF_SYNC",
             "schedule settings projection is out of sync with config",
-        )
-            .into_response();
+        );
     }
     next_config.schedule.windows.remove(window_index);
     if let Err(response) = save_config_or_response(&state, &next_config).await {
@@ -918,17 +1071,19 @@ pub(crate) async fn update_file_settings_handler(
     axum::Json(payload): axum::Json<UpdateFileSettingsPayload>,
 ) -> impl IntoResponse {
     if has_path_separator(&payload.output_extension) || has_path_separator(&payload.output_suffix) {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "FILE_SETTINGS_INVALID",
             "output_extension and output_suffix must not contain path separators",
-        )
-            .into_response();
+        );
     }
 
     let output_root =
         match normalize_optional_directory(payload.output_root.as_deref(), "output_root") {
             Ok(value) => value,
-            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+            Err(msg) => {
+                return api_error_response(StatusCode::BAD_REQUEST, "FILE_SETTINGS_INVALID", msg);
+            }
         };
 
     let mut next_config = state.config.read().await.clone();
@@ -939,7 +1094,11 @@ pub(crate) async fn update_file_settings_handler(
     next_config.files.output_root = output_root.clone();
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "FILE_SETTINGS_INVALID",
+            e.to_string(),
+        );
     }
     if let Err(response) = save_config_or_response(&state, &next_config).await {
         return *response;

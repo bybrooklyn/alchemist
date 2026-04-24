@@ -29,6 +29,14 @@ function bodyMessage(body: unknown): string | null {
         if (typeof known.message === "string" && known.message.trim().length > 0) {
             return known.message;
         }
+        if (
+            known.error &&
+            typeof known.error === "object" &&
+            typeof (known.error as { message?: unknown }).message === "string" &&
+            (known.error as { message: string }).message.trim().length > 0
+        ) {
+            return (known.error as { message: string }).message;
+        }
         if (typeof known.error === "string" && known.error.trim().length > 0) {
             return known.error;
         }

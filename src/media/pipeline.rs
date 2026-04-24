@@ -1263,7 +1263,7 @@ impl Pipeline {
         // Run ffprobe analysis
         let analyzer = crate::media::analyzer::FfmpegAnalyzer;
         let analysis = match analyzer
-            .analyze(std::path::Path::new(&job.input_path))
+            .analyze_with_cache(&self.db, std::path::Path::new(&job.input_path))
             .await
         {
             Ok(a) => {
@@ -1427,7 +1427,7 @@ impl Pipeline {
 
         let analyzer = FfmpegAnalyzer;
         let analyze_start = std::time::Instant::now();
-        let analysis = match analyzer.analyze(&file_path).await {
+        let analysis = match analyzer.analyze_with_cache(&self.db, &file_path).await {
             Ok(m) => m,
             Err(e) => {
                 let msg = format!("Probing failed: {e}");

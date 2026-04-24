@@ -596,6 +596,7 @@ pub struct Session {
 pub enum ApiTokenAccessLevel {
     ReadOnly,
     FullAccess,
+    ArrWebhook,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]

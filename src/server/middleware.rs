@@ -1,12 +1,12 @@
 //! Authentication, rate limiting, and security middleware.
 
-use super::AppState;
+use super::{AppState, api_error_response};
 use crate::db::ApiTokenAccessLevel;
 use axum::{
     extract::{ConnectInfo, Request, State},
     http::{HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -90,11 +90,11 @@ pub(crate) async fn auth_middleware(
         };
 
         if !allowed {
-            return (
+            return api_error_response(
                 StatusCode::FORBIDDEN,
+                "SETUP_ACCESS_FORBIDDEN",
                 "Alchemist setup is only available from the local network",
-            )
-                .into_response();
+            );
         }
     }
 
@@ -143,13 +143,27 @@ pub(crate) async fn auth_middleware(
                         if read_only_api_token_allows(&method, path) {
                             return next.run(req).await;
                         }
-                        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+                        return api_error_response(
+                            StatusCode::FORBIDDEN,
+                            "API_TOKEN_FORBIDDEN",
+                            "Forbidden",
+                        );
+                    }
+                    ApiTokenAccessLevel::ArrWebhook => {
+                        if arr_webhook_api_token_allows(&method, path) {
+                            return next.run(req).await;
+                        }
+                        return api_error_response(
+                            StatusCode::FORBIDDEN,
+                            "API_TOKEN_FORBIDDEN",
+                            "Forbidden",
+                        );
                     }
                 }
             }
         }
 
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        return api_error_response(StatusCode::UNAUTHORIZED, "AUTH_REQUIRED", "Unauthorized");
     }
 
     // 2. Static Assets / Frontend Pages
@@ -217,6 +231,10 @@ fn read_only_api_token_allows(method: &Method, path: &str) -> bool {
     false
 }
 
+fn arr_webhook_api_token_allows(method: &Method, path: &str) -> bool {
+    *method == Method::POST && path == "/api/webhooks/arr"
+}
+
 pub(crate) async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -228,7 +246,11 @@ pub(crate) async fn rate_limit_middleware(
 
     let ip = request_ip(&req, &state.trusted_proxies).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     if !allow_global_request(&state, ip).await {
-        return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "RATE_LIMIT_EXCEEDED",
+            "Too many requests",
+        );
     }
     next.run(req).await
 }

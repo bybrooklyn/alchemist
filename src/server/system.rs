@@ -141,11 +141,11 @@ pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>)
         Ok(value) => value,
         Err(err) => {
             error!("Failed to serialize system resource payload: {}", err);
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "SYSTEM_RESOURCES_SERIALIZE_FAILED",
                 "Failed to serialize system resource payload",
-            )
-                .into_response();
+            );
         }
     };
 
@@ -620,11 +620,11 @@ pub(crate) async fn get_system_update_handler() -> impl IntoResponse {
             release_url: None,
         })
         .into_response(),
-        Err(err) => (
+        Err(err) => api_error_response(
             StatusCode::BAD_GATEWAY,
+            "SYSTEM_UPDATE_CHECK_FAILED",
             format!("Failed to check for updates: {err}"),
-        )
-            .into_response(),
+        ),
     }
 }
 
@@ -695,11 +695,11 @@ pub(crate) async fn get_hardware_info_handler(
 ) -> impl IntoResponse {
     match state.hardware_state.snapshot().await {
         Some(info) => axum::Json(info).into_response(),
-        None => (
+        None => api_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
+            "HARDWARE_STATE_UNAVAILABLE",
             "Hardware state unavailable",
-        )
-            .into_response(),
+        ),
     }
 }
 
@@ -794,7 +794,11 @@ struct TelemetryPayload {
 pub(crate) async fn telemetry_payload_handler(State(state): State<Arc<AppState>>) -> Response {
     let config = state.config.read().await;
     if !config.system.enable_telemetry {
-        return (StatusCode::FORBIDDEN, "Telemetry disabled").into_response();
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "TELEMETRY_DISABLED",
+            "Telemetry disabled",
+        );
     }
 
     let (cpu_count, memory_total_mb) = {

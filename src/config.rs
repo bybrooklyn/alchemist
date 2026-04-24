@@ -712,6 +712,14 @@ pub struct SystemConfig {
     /// the previous behaviour (trust all RFC-1918 private addresses).
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    #[serde(default)]
+    pub arr_path_translations: Vec<ArrPathTranslation>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ArrPathTranslation {
+    pub from: String,
+    pub to: String,
 }
 
 fn default_true() -> bool {
@@ -750,6 +758,7 @@ impl Default for SystemConfig {
             engine_mode: EngineMode::default(),
             https_only: false,
             trusted_proxies: Vec::new(),
+            arr_path_translations: Vec::new(),
         }
     }
 }
@@ -869,6 +878,7 @@ impl Default for Config {
                 engine_mode: EngineMode::default(),
                 https_only: false,
                 trusted_proxies: Vec::new(),
+                arr_path_translations: Vec::new(),
             },
         }
     }
@@ -910,6 +920,17 @@ impl Config {
                 "conversion_download_retention_hours must be between 1 and 24, got {}",
                 self.system.conversion_download_retention_hours
             );
+        }
+        for translation in &self.system.arr_path_translations {
+            if translation.from.trim().is_empty() {
+                anyhow::bail!("system.arr_path_translations[].from must not be empty");
+            }
+            if translation.to.trim().is_empty() {
+                anyhow::bail!("system.arr_path_translations[].to must not be empty");
+            }
+            if translation.from.contains('\0') || translation.to.contains('\0') {
+                anyhow::bail!("system.arr_path_translations entries must not contain null bytes");
+            }
         }
 
         // Validate thresholds
@@ -976,6 +997,11 @@ impl Config {
         }
 
         validate_schedule_time(&self.notifications.daily_summary_time_local)?;
+        let quiet_start = schedule_time_minutes(&self.notifications.quiet_hours_start_local)?;
+        let quiet_end = schedule_time_minutes(&self.notifications.quiet_hours_end_local)?;
+        if self.notifications.quiet_hours_enabled && quiet_start == quiet_end {
+            anyhow::bail!("quiet hours start and end must differ when quiet hours are enabled");
+        }
         for target in &self.notifications.targets {
             target.validate()?;
         }
@@ -1075,6 +1101,19 @@ impl Config {
         if self.notifications.daily_summary_time_local.is_empty() {
             self.notifications.daily_summary_time_local = default_daily_summary_time_local();
         }
+        self.notifications.quiet_hours_start_local = self
+            .notifications
+            .quiet_hours_start_local
+            .trim()
+            .to_string();
+        if self.notifications.quiet_hours_start_local.is_empty() {
+            self.notifications.quiet_hours_start_local = default_quiet_hours_start();
+        }
+        self.notifications.quiet_hours_end_local =
+            self.notifications.quiet_hours_end_local.trim().to_string();
+        if self.notifications.quiet_hours_end_local.is_empty() {
+            self.notifications.quiet_hours_end_local = default_quiet_hours_end();
+        }
     }
 
     pub(crate) fn canonicalize_for_save(&mut self) {
@@ -1092,6 +1131,19 @@ impl Config {
         if self.notifications.daily_summary_time_local.is_empty() {
             self.notifications.daily_summary_time_local = default_daily_summary_time_local();
         }
+        self.notifications.quiet_hours_start_local = self
+            .notifications
+            .quiet_hours_start_local
+            .trim()
+            .to_string();
+        if self.notifications.quiet_hours_start_local.is_empty() {
+            self.notifications.quiet_hours_start_local = default_quiet_hours_start();
+        }
+        self.notifications.quiet_hours_end_local =
+            self.notifications.quiet_hours_end_local.trim().to_string();
+        if self.notifications.quiet_hours_end_local.is_empty() {
+            self.notifications.quiet_hours_end_local = default_quiet_hours_end();
+        }
         for target in &mut self.notifications.targets {
             target.canonicalize_for_save();
         }
@@ -1101,6 +1153,11 @@ impl Config {
 }
 
 fn validate_schedule_time(value: &str) -> Result<()> {
+    schedule_time_minutes(value)?;
+    Ok(())
+}
+
+fn schedule_time_minutes(value: &str) -> Result<u32> {
     let trimmed = value.trim();
     let parts: Vec<&str> = trimmed.split(':').collect();
     if parts.len() != 2 {
@@ -1111,7 +1168,7 @@ fn validate_schedule_time(value: &str) -> Result<()> {
     if hour > 23 || minute > 59 {
         anyhow::bail!("schedule time must be HH:MM");
     }
-    Ok(())
+    Ok(hour * 60 + minute)
 }
 
 #[cfg(test)]
@@ -1176,6 +1233,35 @@ mod tests {
         config.canonicalize_for_save();
         assert!(config.notifications.webhook_url.is_none());
         assert!(!config.notifications.notify_on_complete);
+    }
+
+    #[test]
+    fn validate_rejects_equal_quiet_hours_when_enabled() {
+        let mut config = Config::default();
+        config.notifications.quiet_hours_enabled = true;
+        config.notifications.quiet_hours_start_local = "22:00".to_string();
+        config.notifications.quiet_hours_end_local = "22:00".to_string();
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .map(|err| err.to_string())
+                .unwrap_or_default()
+                .contains("quiet hours start and end must differ")
+        );
+    }
+
+    #[test]
+    fn canonicalize_applies_quiet_hours_defaults_when_blank() {
+        let mut config = Config::default();
+        config.notifications.quiet_hours_start_local = " ".to_string();
+        config.notifications.quiet_hours_end_local = "".to_string();
+
+        config.canonicalize_for_save();
+        assert_eq!(config.notifications.quiet_hours_start_local, "22:00");
+        assert_eq!(config.notifications.quiet_hours_end_local, "08:00");
     }
 
     #[test]

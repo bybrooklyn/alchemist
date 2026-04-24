@@ -5,9 +5,24 @@ use crate::media::pipeline::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 use tokio::process::Command;
+use tokio::sync::OnceCell;
 
 const FFPROBE_TIMEOUT_SECS: u64 = 30;
+const FFPROBE_ANALYZE_ARGS: &[&str] = &[
+    "-v",
+    "quiet",
+    "-analyzeduration",
+    "1M",
+    "-probesize",
+    "1M",
+    "-print_format",
+    "json",
+    "-show_entries",
+    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
+];
+static FFPROBE_VERSION_MARKER: OnceCell<String> = OnceCell::const_new();
 
 async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output> {
     match tokio::time::timeout(
@@ -33,6 +48,47 @@ async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output>
             path.display()
         ))),
     }
+}
+
+#[derive(Debug, Clone)]
+struct ProbeCacheKey {
+    input_path: String,
+    mtime_ns: i64,
+    size_bytes: i64,
+    probe_version: String,
+}
+
+async fn ffprobe_version_marker() -> String {
+    FFPROBE_VERSION_MARKER
+        .get_or_init(|| async {
+            match Command::new("ffprobe").arg("-version").output().await {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout
+                        .lines()
+                        .next()
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .unwrap_or_else(|| "ffprobe:unknown".to_string())
+                }
+                _ => "ffprobe:unknown".to_string(),
+            }
+        })
+        .await
+        .clone()
+}
+
+fn file_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+        .unwrap_or(0)
+}
+
+fn file_size_i64(metadata: &std::fs::Metadata) -> i64 {
+    i64::try_from(metadata.len()).unwrap_or(i64::MAX)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,22 +149,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
     async fn analyze(&self, path: &Path) -> Result<MediaAnalysis> {
         let path = path.to_path_buf();
 
-        let output = run_ffprobe(
-            &[
-                "-v",
-                "quiet",
-                "-analyzeduration",
-                "1M",
-                "-probesize",
-                "1M",
-                "-print_format",
-                "json",
-                "-show_entries",
-                "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
-            ],
-            &path,
-        )
-        .await?;
+        let output = run_ffprobe(FFPROBE_ANALYZE_ARGS, &path).await?;
 
         tokio::task::spawn_blocking(move || {
             let metadata: FfprobeMetadata =
@@ -279,6 +320,96 @@ impl AnalyzerTrait for FfmpegAnalyzer {
         })
         .await
         .map_err(|e| AlchemistError::Analyzer(format!("spawn_blocking failed: {}", e)))?
+    }
+}
+
+impl FfmpegAnalyzer {
+    async fn probe_cache_key_for_path(path: &Path) -> Result<ProbeCacheKey> {
+        let fs_metadata = tokio::fs::metadata(path).await.map_err(|err| {
+            AlchemistError::Analyzer(format!(
+                "Failed to stat input for probe cache key ({}): {}",
+                path.display(),
+                err
+            ))
+        })?;
+        let probe_version = ffprobe_version_marker().await;
+        Ok(ProbeCacheKey {
+            input_path: path.to_string_lossy().to_string(),
+            mtime_ns: file_mtime_ns(&fs_metadata),
+            size_bytes: file_size_i64(&fs_metadata),
+            probe_version,
+        })
+    }
+
+    pub async fn analyze_with_cache(
+        &self,
+        db: &crate::db::Db,
+        path: &Path,
+    ) -> Result<MediaAnalysis> {
+        let cache_key = Self::probe_cache_key_for_path(path).await?;
+        let cached_json = match db
+            .get_media_probe_cache(
+                &cache_key.input_path,
+                cache_key.mtime_ns,
+                cache_key.size_bytes,
+                &cache_key.probe_version,
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    input_path = %cache_key.input_path,
+                    "Media probe cache lookup failed; reprobe fallback: {err}"
+                );
+                None
+            }
+        };
+
+        if let Some(json) = cached_json {
+            match serde_json::from_str::<MediaAnalysis>(&json) {
+                Ok(analysis) => {
+                    tracing::debug!(input_path = %cache_key.input_path, "Media probe cache hit");
+                    return Ok(analysis);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        input_path = %cache_key.input_path,
+                        "Media probe cache decode failed; reprobe fallback: {err}"
+                    );
+                }
+            }
+        }
+
+        let analysis = self.analyze(path).await?;
+
+        match serde_json::to_string(&analysis) {
+            Ok(serialized) => {
+                if let Err(err) = db
+                    .upsert_media_probe_cache(
+                        &cache_key.input_path,
+                        cache_key.mtime_ns,
+                        cache_key.size_bytes,
+                        &cache_key.probe_version,
+                        &serialized,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        input_path = %cache_key.input_path,
+                        "Media probe cache write failed: {err}"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    input_path = %cache_key.input_path,
+                    "Media probe cache serialization failed: {err}"
+                );
+            }
+        }
+
+        Ok(analysis)
     }
 }
 

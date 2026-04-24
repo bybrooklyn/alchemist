@@ -1,18 +1,101 @@
 # Planning
 
-Last updated: 2026-04-23
+Last updated: 2026-04-24
 
 ## Current Status
 
-- `MIG-3`: in progress
+- `MIG-3`: shipped (v1)
   - v1 JSON error schema helper landed for initial endpoint set
-- `INT-3`: already present in current tree
+  - 2026-04-24: high-traffic auth, middleware, settings, system, jobs, and ARR webhook paths use structured API errors
+- `INT-3`: shipped
   - ntfy target exists in backend + settings UI
-- `AUTO-2`: in progress
-  - v1 global quiet-hours suppression landed
-- `IMPR-1`: not started
-- `PERF-1`: not started
-- `INT-1`: not started
+- `AUTO-2`: shipped (v1)
+  - v1 global quiet-hours suppression landed in backend dispatch
+  - 2026-04-24: settings API + UI exposure completed with validation, normalization, and coverage
+- `IMPR-1`: shipped (v1)
+  - Astro content collection scaffolding added for quality help content
+- `PERF-1`: shipped (v1)
+  - additive `media_probe_cache` schema + analyzer read/write path exist in current tree
+- `INT-1`: shipped
+  - added `POST /api/webhooks/arr` ingestion endpoint
+  - added dedicated API token access level/scope `arr_webhook`
+  - added `system.arr_path_translations` mapping in webhook ingest path resolution
+  - ingress reuses existing enqueue-by-submitted-path flow for dedupe/output safety
+  - added auth/scope + parsing + translation + enqueue integration tests
+
+## Execution Log (2026-04-24)
+
+### Setup sidebar visibility fix (completed)
+
+- During setup, sidebar now shows the full tool list (including **Intelligence** and **Convert**) in the same grayed/disabled style.
+- Change made in `web/src/components/SetupSidebar.astro` by extending the static nav item list to include the missing entries.
+- Regression coverage added in `web-e2e/tests/setup-recovery.spec.ts` to assert the full disabled setup navigation.
+- Verification command run: `just check-web` (pass, 83 Playwright tests).
+
+### Queue kickoff started
+
+- Parallel kickoff started for:
+  - `sync-planning-baseline`
+  - `advance-mig3-error-schema`
+  - `finish-auto2-quiet-hours`
+- Implementation detail:
+  - `MIG-3`: `src/server/settings.rs` now moving notification/settings failure paths to structured API errors.
+  - `AUTO-2`: notifications settings payload/response include `quiet_hours_enabled`, `quiet_hours_start_local`, `quiet_hours_end_local`; completed follow-through added config validation (`quiet hours start/end must differ` when enabled), quiet-hours canonicalization defaults/trim behavior in config migration/save path, notifications API endpoint regression tests for get/put normalization + rejection, and UI save/load hardening in `NotificationSettings.tsx` (save state + post-save re-fetch to align with persisted server values).
+  - `AUTO-2` advanced buffering/per-target policies are intentionally deferred.
+
+### `advance-mig3-error-schema` completion notes
+
+- Completed remaining high-traffic MIG-3 error-shape conversions in:
+  - `src/server/auth.rs`
+  - `src/server/middleware.rs`
+  - `src/server/system.rs`
+  - `src/server/settings.rs`
+- Replaced plain `(StatusCode, "message")` / `(StatusCode, err.to_string())` error returns with `api_error_response(status, code, message)` and stable machine codes (auth, rate-limit, schedule, file-settings, API token, and preference/config validation/save/read surfaces).
+- Preserved status codes and user-facing message text where possible; only response shape changed to the structured `{ error: { code, message } }` contract.
+
+### `implement-int1-arr-webhook` completion notes
+
+- Wired `src/server/webhooks.rs` into router/middleware:
+  - Added module registration + route: `POST /api/webhooks/arr`
+  - Added ARR-only API token authorization branch in auth middleware
+- Token model work:
+  - Added `arr_webhook` access level projection in API token read/create paths
+  - Stored as additive scope (`access_scope='arr_webhook'`) while preserving legacy `read_only` / `full_access` storage semantics
+- Path handling:
+  - Webhook payload path resolution supports imported file arrays, direct file paths, and relative-path joins via series/movie roots
+  - `system.arr_path_translations` longest-prefix mapping is applied before enqueue
+- Queue integration:
+  - Reused `enqueue_job_from_submitted_path` directly (no duplicate enqueue rules)
+  - Webhook responses now return structured API errors for rejected/failed enqueue attempts
+- Test coverage added in `src/server/tests.rs`:
+  - ARR token scope auth behavior
+  - payload-without-path structured error
+  - translation + enqueue + dedupe behavior (same path webhook repeated)
+
+### `implement-perf1-probe-cache` progress notes
+
+- Added additive migration `migrations/20260424160000_media_probe_cache.sql`.
+- Added DB helpers in `src/db/probe_cache.rs` for lookup/update and read-through writes.
+- Analyzer integration uses `(input_path, mtime_ns, size_bytes, ffprobe version)` as the cache key and falls back to live ffprobe on lookup/decode/write failures.
+- Added focused DB helper regression coverage for cache key behavior and overwrite semantics.
+- Updated v0.2.5 upgrade coverage to assert schema version 12 plus `api_tokens.access_scope` and `media_probe_cache`.
+
+### `implement-impr1-content-collections` progress notes
+
+- Added `web/src/content.config.ts` with a typed `help` collection.
+- Added first content entry at `web/src/content/help/quality-vmaf.md`.
+- Added `/help/quality` Astro page that renders quality help from the content collection.
+- Linked Quality settings VMAF copy to the new help page.
+
+### Verification checkpoint
+
+- `just check-rust` passed.
+- `just check-web` passed.
+- `just test` passed.
+- Version bumped to `0.3.2-rc.1` with `just bump 0.3.2-rc.1`.
+- `CHANGELOG.md` and `docs/docs/changelog.md` now include `0.3.2-rc.1` release notes.
+- `just release-check` passed after updating web/docs PostCSS overrides and lockfiles to avoid the `postcss <8.5.10` audit advisory.
+- Remaining RC gates are manual: smoke checklist, Windows contributor verification, and AMD AV1 real-hardware validation / conservative support wording.
 
 ## Scope
 

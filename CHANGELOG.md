@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2-rc.1] - 2026-04-24
+
+### Integrations & Automation
+
+- ARR webhook ingress: Sonarr/Radarr Download webhooks can now enqueue imported media through `POST /api/webhooks/arr`.
+- ARR-only API tokens: new `arr_webhook` token scope limits webhook credentials to the ARR ingress route.
+- ARR path translations: optional `system.arr_path_translations` maps container paths to Alchemist-visible host paths before enqueue.
+- Quiet hours for notifications: notification settings now expose local start/end quiet-hour controls and suppress non-failure events during the window.
+
+### Performance & Reliability
+
+- FFprobe result cache: analyzer results are cached by input path, mtime, size, and ffprobe version to avoid repeated probes for unchanged media.
+- Database migration coverage now verifies schema version 12, ARR token scope storage, and the `media_probe_cache` table against the v0.2.5 upgrade fixture.
+
+### API & Security
+
+- API error schema v1: high-traffic auth, middleware, settings, system, jobs, and ARR webhook paths now return structured `{ error: { code, message } }` responses.
+- API-token docs and OpenAPI now include the `arr_webhook` access level.
+
+### UX & Documentation
+
+- Setup sidebar now shows the full disabled app navigation during first-run setup, including Intelligence and Convert.
+- Astro content collections now back the first help-content surface, with Quality settings linking to a VMAF quality-gate help page.
+- Configuration, database schema, web-interface, and API docs were updated for ARR webhooks, quiet hours, and probe caching.
+
 ## [0.3.1] - 2026-04-21
 
 Consolidates the 0.3.1-rc.1 through 0.3.1-rc.5 release candidates and the
