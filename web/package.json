@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "astro sync && tsc -p tsconfig.json --noEmit",
     "check": "astro check",
     "build": "astro build",
     "preview": "astro preview",
