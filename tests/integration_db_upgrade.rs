@@ -107,7 +107,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "9");
+    assert_eq!(schema_version, "10");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")

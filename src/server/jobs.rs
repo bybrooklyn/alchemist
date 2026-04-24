@@ -1,11 +1,11 @@
 //! Job CRUD, batch operations, queue control handlers.
 
-use super::{AppState, is_row_not_found};
+use super::{AppState, api_error_response, is_row_not_found};
 use crate::db::{Job, JobState};
 use crate::error::Result;
 use crate::explanations::Explanation;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -214,28 +214,46 @@ pub(crate) async fn enqueue_job_handler(
 }
 
 pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bool> {
-    state.transcoder.add_cancel_request(job.id).await;
     match job.status {
         JobState::Queued => {
-            state
+            state.transcoder.add_cancel_request(job.id).await;
+            if let Err(err) = state
                 .db
                 .update_job_status(job.id, JobState::Cancelled)
-                .await?;
+                .await
+            {
+                state.transcoder.remove_cancel_request(job.id).await;
+                return Err(err);
+            }
             state.transcoder.remove_cancel_request(job.id).await;
             Ok(true)
         }
         JobState::Analyzing | JobState::Resuming => {
+            state.transcoder.add_cancel_request(job.id).await;
             if !state.transcoder.cancel_job(job.id) {
+                state.transcoder.remove_cancel_request(job.id).await;
                 return Ok(false);
             }
-            state
+            if let Err(err) = state
                 .db
                 .update_job_status(job.id, JobState::Cancelled)
-                .await?;
+                .await
+            {
+                state.transcoder.remove_cancel_request(job.id).await;
+                return Err(err);
+            }
             state.transcoder.remove_cancel_request(job.id).await;
             Ok(true)
         }
-        JobState::Encoding | JobState::Remuxing => Ok(state.transcoder.cancel_job(job.id)),
+        JobState::Encoding | JobState::Remuxing => {
+            state.transcoder.add_cancel_request(job.id).await;
+            if state.transcoder.cancel_job(job.id) {
+                Ok(true)
+            } else {
+                state.transcoder.remove_cancel_request(job.id).await;
+                Ok(false)
+            }
+        }
         _ => Ok(false),
     }
 }
@@ -305,7 +323,11 @@ pub(crate) async fn jobs_table_handler(
             let explanations = match state.db.get_job_decision_explanations(&job_ids).await {
                 Ok(explanations) => explanations,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "GET_EXPLANATIONS_FAILED",
+                        e.to_string(),
+                    );
                 }
             };
 
@@ -319,7 +341,11 @@ pub(crate) async fn jobs_table_handler(
 
             axum::Json(payload).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_JOBS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -340,11 +366,6 @@ pub(crate) async fn batch_jobs_handler(
 
     match payload.action.as_str() {
         "cancel" => {
-            // Add all cancel requests first (in-memory, cheap).
-            for job in &jobs {
-                state.transcoder.add_cancel_request(job.id).await;
-            }
-
             // Collect IDs that can be immediately set to Cancelled in the DB.
             let mut immediate_ids: Vec<i64> = Vec::new();
             let mut active_count: u64 = 0;
@@ -352,27 +373,40 @@ pub(crate) async fn batch_jobs_handler(
             for job in &jobs {
                 match job.status {
                     JobState::Queued => {
+                        state.transcoder.add_cancel_request(job.id).await;
                         immediate_ids.push(job.id);
                     }
-                    JobState::Analyzing | JobState::Resuming
-                        if state.transcoder.cancel_job(job.id) =>
-                    {
-                        immediate_ids.push(job.id);
+                    JobState::Analyzing | JobState::Resuming => {
+                        state.transcoder.add_cancel_request(job.id).await;
+                        if state.transcoder.cancel_job(job.id) {
+                            immediate_ids.push(job.id);
+                        } else {
+                            state.transcoder.remove_cancel_request(job.id).await;
+                        }
                     }
-                    JobState::Encoding | JobState::Remuxing
-                        if state.transcoder.cancel_job(job.id) =>
-                    {
-                        active_count += 1;
+                    JobState::Encoding | JobState::Remuxing => {
+                        state.transcoder.add_cancel_request(job.id).await;
+                        if state.transcoder.cancel_job(job.id) {
+                            active_count += 1;
+                        } else {
+                            state.transcoder.remove_cancel_request(job.id).await;
+                        }
                     }
                     _ => {}
                 }
             }
 
             // Single batch DB update instead of N individual queries.
+            let mut immediate_count = 0_u64;
             if !immediate_ids.is_empty() {
                 match state.db.batch_cancel_jobs(&immediate_ids).await {
-                    Ok(_) => {}
+                    Ok(count) => {
+                        immediate_count = count;
+                    }
                     Err(e) => {
+                        for id in &immediate_ids {
+                            state.transcoder.remove_cancel_request(*id).await;
+                        }
                         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                     }
                 }
@@ -382,7 +416,7 @@ pub(crate) async fn batch_jobs_handler(
                 }
             }
 
-            let count = immediate_ids.len() as u64 + active_count;
+            let count = immediate_count + active_count;
             axum::Json(serde_json::json!({ "count": count })).into_response()
         }
         "delete" | "restart" => {
@@ -395,6 +429,9 @@ pub(crate) async fn batch_jobs_handler(
             }
 
             let result = if payload.action == "delete" {
+                for id in &payload.ids {
+                    state.transcoder.remove_cancel_request(*id).await;
+                }
                 state.db.batch_delete_jobs(&payload.ids).await
             } else {
                 state.db.batch_restart_jobs(&payload.ids).await
@@ -506,7 +543,7 @@ pub(crate) async fn delete_job_handler(
         return blocked_jobs_response("delete is blocked while the job is active", &[job]);
     }
 
-    state.transcoder.cancel_job(id);
+    state.transcoder.remove_cancel_request(id).await;
 
     match state.db.delete_job(id).await {
         Ok(_) => {
@@ -537,6 +574,64 @@ pub(crate) async fn update_job_priority_handler(
 }
 
 #[derive(Serialize)]
+pub(crate) struct EncodeHistoryRun {
+    run_number: usize,
+    current: bool,
+    outcome: String,
+    started_at: Option<String>,
+    finished_at: String,
+    failure_summary: Option<String>,
+    input_size_bytes: Option<i64>,
+    output_size_bytes: Option<i64>,
+    encode_time_seconds: Option<f64>,
+    attempts: Vec<crate::db::EncodeAttempt>,
+}
+
+fn group_encode_attempts_by_run(attempts: &[crate::db::EncodeAttempt]) -> Vec<EncodeHistoryRun> {
+    let mut grouped_attempts: Vec<Vec<crate::db::EncodeAttempt>> = Vec::new();
+    let mut current_group: Vec<crate::db::EncodeAttempt> = Vec::new();
+    let mut last_attempt_number: Option<i32> = None;
+
+    for attempt in attempts {
+        if let Some(previous_attempt_number) = last_attempt_number {
+            if attempt.attempt_number <= previous_attempt_number && !current_group.is_empty() {
+                grouped_attempts.push(std::mem::take(&mut current_group));
+            }
+        }
+
+        current_group.push(attempt.clone());
+        last_attempt_number = Some(attempt.attempt_number);
+    }
+
+    if !current_group.is_empty() {
+        grouped_attempts.push(current_group);
+    }
+
+    let run_count = grouped_attempts.len();
+    grouped_attempts
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, attempts)| {
+            let final_attempt = attempts.last()?;
+            let first_attempt = attempts.first()?;
+            let run_number = index + 1;
+            Some(EncodeHistoryRun {
+                run_number,
+                current: run_number == run_count,
+                outcome: final_attempt.outcome.clone(),
+                started_at: first_attempt.started_at.clone(),
+                finished_at: final_attempt.finished_at.clone(),
+                failure_summary: final_attempt.failure_summary.clone(),
+                input_size_bytes: final_attempt.input_size_bytes,
+                output_size_bytes: final_attempt.output_size_bytes,
+                encode_time_seconds: final_attempt.encode_time_seconds,
+                attempts,
+            })
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
 pub(crate) struct JobResponse {
     #[serde(flatten)]
     job: Job,
@@ -549,6 +644,7 @@ pub(crate) struct JobDetailResponse {
     metadata: Option<crate::media::pipeline::MediaMetadata>,
     encode_stats: Option<crate::db::DetailedEncodeStats>,
     encode_attempts: Vec<crate::db::EncodeAttempt>,
+    encode_history_runs: Vec<EncodeHistoryRun>,
     job_logs: Vec<crate::db::LogEntry>,
     job_failure_summary: Option<String>,
     decision_explanation: Option<Explanation>,
@@ -622,6 +718,7 @@ pub(crate) async fn get_job_detail_handler(
         Ok(attempts) => attempts,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     };
+    let encode_history_runs = group_encode_attempts_by_run(&encode_attempts);
 
     let queue_position = if job.status == JobState::Queued {
         match state.db.get_queue_position(id).await {
@@ -639,6 +736,7 @@ pub(crate) async fn get_job_detail_handler(
         metadata,
         encode_stats,
         encode_attempts,
+        encode_history_runs,
         job_logs,
         job_failure_summary,
         decision_explanation,
@@ -741,35 +839,33 @@ pub(crate) async fn set_engine_mode_handler(
         sys.cpus().len()
     };
 
+    if matches!(payload.concurrent_jobs_override, Some(0)) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "concurrent_jobs_override must be > 0",
+        )
+            .into_response();
+    }
+
+    let mut next_config = state.config.read().await.clone();
+    next_config.system.engine_mode = payload.mode;
+    if let Some(threads) = payload.threads_override {
+        next_config.transcode.threads = threads;
+    }
+    if let Err(e) = super::save_config_or_response(&state, &next_config).await {
+        return *e;
+    }
+    {
+        let mut config = state.config.write().await;
+        *config = next_config;
+    }
+
     if let Some(override_jobs) = payload.concurrent_jobs_override {
-        if override_jobs == 0 {
-            return (
-                StatusCode::BAD_REQUEST,
-                "concurrent_jobs_override must be > 0",
-            )
-                .into_response();
-        }
         state.agent.set_manual_override(true);
         state.agent.set_concurrent_jobs(override_jobs).await;
         *state.agent.engine_mode.write().await = payload.mode;
     } else {
         state.agent.apply_mode(payload.mode, cpu_count).await;
-    }
-
-    // Apply thread override to config if provided
-    if let Some(threads) = payload.threads_override {
-        let mut config = state.config.write().await;
-        config.transcode.threads = threads;
-    }
-
-    // Persist mode to config
-    {
-        let mut config = state.config.write().await;
-        config.system.engine_mode = payload.mode;
-    }
-    let config = state.config.read().await;
-    if let Err(e) = super::save_config_or_response(&state, &config).await {
-        return *e;
     }
 
     axum::Json(serde_json::json!({
@@ -806,6 +902,32 @@ pub(crate) async fn logs_history_handler(
 pub(crate) async fn clear_logs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.clear_logs().await {
         Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ClearHistoryParams {
+    status: Option<String>,
+    archived: Option<bool>,
+}
+
+pub(crate) async fn clear_history_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ClearHistoryParams>,
+) -> impl IntoResponse {
+    let statuses = params.status.map(|s| {
+        s.split(',')
+            .filter_map(|part| part.parse::<JobState>().ok())
+            .collect::<Vec<_>>()
+    });
+
+    match state
+        .db
+        .purge_jobs_by_filter(statuses, params.archived)
+        .await
+    {
+        Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

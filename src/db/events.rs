@@ -52,3 +52,16 @@ pub struct EventChannels {
     pub config: tokio::sync::broadcast::Sender<ConfigEvent>, // 50 capacity - rare
     pub system: tokio::sync::broadcast::Sender<SystemEvent>, // 100 capacity - medium
 }
+
+impl Default for EventChannels {
+    fn default() -> Self {
+        let (jobs, _) = tokio::sync::broadcast::channel(1000);
+        let (config, _) = tokio::sync::broadcast::channel(50);
+        let (system, _) = tokio::sync::broadcast::channel(100);
+        Self {
+            jobs,
+            config,
+            system,
+        }
+    }
+}

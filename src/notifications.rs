@@ -43,6 +43,14 @@ struct GotifyConfig {
 }
 
 #[derive(Debug, Deserialize)]
+struct NtfyConfig {
+    server_url: String,
+    topic: String,
+    #[serde(default)]
+    access_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebhookConfig {
     url: String,
     auth_token: Option<String>,
@@ -79,6 +87,7 @@ fn endpoint_url_for_target(target: &NotificationTarget) -> NotificationResult<Op
         "gotify" => Ok(Some(
             parse_target_config::<GotifyConfig>(target)?.server_url,
         )),
+        "ntfy" => Ok(Some(parse_target_config::<NtfyConfig>(target)?.server_url)),
         "webhook" => Ok(Some(parse_target_config::<WebhookConfig>(target)?.url)),
         "discord_bot" => Ok(Some("https://discord.com".to_string())),
         "telegram" => Ok(Some("https://api.telegram.org".to_string())),
@@ -115,6 +124,46 @@ fn event_key(event: &NotifiableEvent) -> Option<&'static str> {
         NotifiableEvent::ScanCompleted => Some(crate::config::NOTIFICATION_EVENT_SCAN_COMPLETED),
         NotifiableEvent::EngineIdle => Some(crate::config::NOTIFICATION_EVENT_ENGINE_IDLE),
     }
+}
+
+fn minutes_since_midnight(time_value: &str) -> Option<u32> {
+    let mut parts = time_value.trim().split(':');
+    let hour = parts.next()?.parse::<u32>().ok()?;
+    let minute = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(hour * 60 + minute)
+}
+
+fn quiet_hours_active(
+    notifications: &crate::config::NotificationsConfig,
+    now: chrono::DateTime<chrono::Local>,
+) -> bool {
+    if !notifications.quiet_hours_enabled {
+        return false;
+    }
+
+    let Some(start) = minutes_since_midnight(&notifications.quiet_hours_start_local) else {
+        return false;
+    };
+    let Some(end) = minutes_since_midnight(&notifications.quiet_hours_end_local) else {
+        return false;
+    };
+    if start == end {
+        return false;
+    }
+
+    let current = now.hour() * 60 + now.minute();
+    if start < end {
+        current >= start && current < end
+    } else {
+        current >= start || current < end
+    }
+}
+
+fn quiet_hours_suppress_event(event_key: &str) -> bool {
+    event_key != crate::config::NOTIFICATION_EVENT_ENCODE_FAILED
 }
 
 impl NotificationManager {
@@ -272,6 +321,15 @@ impl NotificationManager {
             Some(event_key) => event_key,
             None => return Ok(()),
         };
+
+        let suppress_for_quiet_hours = {
+            let config = self.config.read().await.clone();
+            quiet_hours_active(&config.notifications, chrono::Local::now())
+                && quiet_hours_suppress_event(event_key)
+        };
+        if suppress_for_quiet_hours {
+            return Ok(());
+        }
 
         for target in targets {
             if !target.enabled {
@@ -484,6 +542,17 @@ impl NotificationManager {
                 )
                 .await
             }
+            "ntfy" => {
+                self.send_ntfy_with_client(
+                    &client,
+                    target,
+                    event,
+                    event_key,
+                    decision_explanation.as_ref(),
+                    failure_explanation.as_ref(),
+                )
+                .await
+            }
             "webhook" => {
                 self.send_webhook_with_client(
                     &client,
@@ -551,7 +620,7 @@ impl NotificationManager {
         match event {
             NotifiableEvent::JobStateChanged { job_id, status } => self.notification_message(
                 *job_id,
-                &status.to_string(),
+                status.as_ref(),
                 decision_explanation,
                 failure_explanation,
             ),
@@ -689,6 +758,43 @@ impl NotificationManager {
             .send()
             .await?
             .error_for_status()?;
+        Ok(())
+    }
+
+    async fn send_ntfy_with_client(
+        &self,
+        client: &Client,
+        target: &NotificationTarget,
+        event: &NotifiableEvent,
+        event_key: &str,
+        decision_explanation: Option<&Explanation>,
+        failure_explanation: Option<&Explanation>,
+    ) -> NotificationResult<()> {
+        let config = parse_target_config::<NtfyConfig>(target)?;
+        let message = self.message_for_event(event, decision_explanation, failure_explanation);
+
+        let priority = match event_key {
+            "encode.failed" => "5",
+            "daily.summary" => "4",
+            "encode.completed" | "scan.completed" | "engine.idle" => "3",
+            _ => "3",
+        };
+
+        let url = format!(
+            "{}/{}",
+            config.server_url.trim_end_matches('/'),
+            config.topic.trim_matches('/')
+        );
+        let mut req = client
+            .post(url)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .header("Title", "Alchemist")
+            .header("Priority", priority)
+            .body(message);
+        if let Some(token) = &config.access_token {
+            req = req.bearer_auth(token);
+        }
+        req.send().await?.error_for_status()?;
         Ok(())
     }
 
@@ -846,6 +952,24 @@ impl NotificationManager {
                     .send()
                     .await?
                     .error_for_status()?;
+            }
+            "ntfy" => {
+                let config = parse_target_config::<NtfyConfig>(target)?;
+                let url = format!(
+                    "{}/{}",
+                    config.server_url.trim_end_matches('/'),
+                    config.topic.trim_matches('/')
+                );
+                let mut req = client
+                    .post(url)
+                    .header("Content-Type", "text/plain; charset=utf-8")
+                    .header("Title", "Alchemist Daily Summary")
+                    .header("Priority", "4")
+                    .body(message);
+                if let Some(token) = config.access_token {
+                    req = req.bearer_auth(token);
+                }
+                req.send().await?.error_for_status()?;
             }
             "webhook" => {
                 let config = parse_target_config::<WebhookConfig>(target)?;
@@ -1019,6 +1143,37 @@ mod tests {
         )
         .await?;
         Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_detect_overnight_window() {
+        let mut config = crate::config::Config::default();
+        config.notifications.quiet_hours_enabled = true;
+        config.notifications.quiet_hours_start_local = "22:00".to_string();
+        config.notifications.quiet_hours_end_local = "08:00".to_string();
+
+        assert!(quiet_hours_active(
+            &config.notifications,
+            scheduled_test_time(23, 30)
+        ));
+        assert!(quiet_hours_active(
+            &config.notifications,
+            scheduled_test_time(7, 45)
+        ));
+        assert!(!quiet_hours_active(
+            &config.notifications,
+            scheduled_test_time(12, 0)
+        ));
+    }
+
+    #[test]
+    fn quiet_hours_do_not_suppress_failures() {
+        assert!(!quiet_hours_suppress_event(
+            crate::config::NOTIFICATION_EVENT_ENCODE_FAILED
+        ));
+        assert!(quiet_hours_suppress_event(
+            crate::config::NOTIFICATION_EVENT_ENCODE_COMPLETED
+        ));
     }
 
     #[tokio::test]

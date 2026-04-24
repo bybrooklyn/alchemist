@@ -6,6 +6,26 @@ use super::timed_query;
 use super::types::*;
 
 impl Db {
+    pub async fn get_status_counts(&self) -> Result<Vec<(String, i64)>> {
+        let pool = &self.pool;
+        timed_query("get_status_counts", || async {
+            let rows = sqlx::query(
+                "SELECT status, COUNT(*) as count
+                 FROM jobs
+                 WHERE archived = 0
+                 GROUP BY status",
+            )
+            .fetch_all(pool)
+            .await?;
+
+            Ok(rows
+                .into_iter()
+                .map(|row| (row.get("status"), row.get("count")))
+                .collect())
+        })
+        .await
+    }
+
     pub async fn get_stats(&self) -> Result<serde_json::Value> {
         let pool = &self.pool;
         timed_query("get_stats", || async {
@@ -87,7 +107,7 @@ impl Db {
         Ok(())
     }
 
-    /// Get all encode attempts for a job, ordered by attempt_number
+    /// Get all encode attempts for a job in insertion order so reruns stay chronological.
     pub async fn get_encode_attempts_by_job(&self, job_id: i64) -> Result<Vec<EncodeAttempt>> {
         let attempts = sqlx::query_as::<_, EncodeAttempt>(
             "SELECT id, job_id, attempt_number, started_at, finished_at, outcome,
@@ -95,7 +115,7 @@ impl Db {
                     encode_time_seconds, created_at
              FROM encode_attempts
              WHERE job_id = ?
-             ORDER BY attempt_number ASC",
+             ORDER BY created_at ASC, id ASC",
         )
         .bind(job_id)
         .fetch_all(&self.pool)
@@ -133,11 +153,13 @@ impl Db {
                 "SELECT
                     (SELECT COUNT(*) FROM jobs WHERE archived = 0) as total_jobs,
                     (SELECT COUNT(*) FROM jobs WHERE status = 'completed' AND archived = 0) as completed_jobs,
-                    COALESCE(SUM(input_size_bytes), 0) as total_input_size,
-                    COALESCE(SUM(output_size_bytes), 0) as total_output_size,
-                    AVG(vmaf_score) as avg_vmaf,
-                    COALESCE(SUM(encode_time_seconds), 0.0) as total_encode_time
-                 FROM encode_stats",
+                    COALESCE(SUM(e.input_size_bytes), 0) as total_input_size,
+                    COALESCE(SUM(e.output_size_bytes), 0) as total_output_size,
+                    AVG(e.vmaf_score) as avg_vmaf,
+                    COALESCE(SUM(e.encode_time_seconds), 0.0) as total_encode_time
+                 FROM encode_stats e
+                 JOIN jobs j ON e.job_id = j.id
+                 WHERE j.archived = 0",
             )
             .fetch_one(pool)
             .await?;
@@ -418,5 +440,98 @@ impl Db {
                 .collect())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::time::SystemTime;
+
+    #[tokio::test]
+    async fn get_aggregated_stats_excludes_archived_jobs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_stats_archived_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        // 1. Enqueue two jobs
+        let input1 = Path::new("/tmp/stats1.mkv");
+        let input2 = Path::new("/tmp/stats2.mkv");
+        db.enqueue_job(input1, Path::new("/tmp/out1.mkv"), SystemTime::UNIX_EPOCH)
+            .await?;
+        db.enqueue_job(input2, Path::new("/tmp/out2.mkv"), SystemTime::UNIX_EPOCH)
+            .await?;
+
+        let input1_str = input1
+            .to_str()
+            .ok_or_else(|| std::io::Error::other("invalid path1"))?;
+        let input2_str = input2
+            .to_str()
+            .ok_or_else(|| std::io::Error::other("invalid path2"))?;
+
+        let job1 = db
+            .get_job_by_input_path(input1_str)
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing job1"))?;
+        let job2 = db
+            .get_job_by_input_path(input2_str)
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing job2"))?;
+
+        // 2. Mark both as completed with stats
+        db.update_job_status(job1.id, JobState::Completed).await?;
+        db.update_job_status(job2.id, JobState::Completed).await?;
+
+        db.save_encode_stats(EncodeStatsInput {
+            job_id: job1.id,
+            input_size: 1000,
+            output_size: 600,
+            compression_ratio: 0.6,
+            encode_time: 10.0,
+            encode_speed: 1.0,
+            avg_bitrate: 1000.0,
+            vmaf_score: Some(90.0),
+            output_codec: Some("hevc".into()),
+        })
+        .await?;
+
+        db.save_encode_stats(EncodeStatsInput {
+            job_id: job2.id,
+            input_size: 1000,
+            output_size: 400,
+            compression_ratio: 0.4,
+            encode_time: 10.0,
+            encode_speed: 1.0,
+            avg_bitrate: 1000.0,
+            vmaf_score: Some(80.0),
+            output_codec: Some("hevc".into()),
+        })
+        .await?;
+
+        // 3. Verify aggregated stats include both
+        let stats = db.get_aggregated_stats().await?;
+        assert_eq!(stats.completed_jobs, 2);
+        assert_eq!(stats.total_input_size, 2000);
+        assert_eq!(stats.total_output_size, 1000);
+
+        // 4. Archive job1 and verify stats only include job2
+        sqlx::query("UPDATE jobs SET archived = 1 WHERE id = ?")
+            .bind(job1.id)
+            .execute(&db.pool)
+            .await?;
+
+        let stats = db.get_aggregated_stats().await?;
+        assert_eq!(stats.completed_jobs, 1);
+        assert_eq!(stats.total_input_size, 1000);
+        assert_eq!(stats.total_output_size, 400);
+        assert_eq!(stats.avg_vmaf, Some(80.0));
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

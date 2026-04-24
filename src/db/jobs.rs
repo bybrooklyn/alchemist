@@ -247,8 +247,8 @@ impl Db {
                 std::collections::HashMap::new();
             for row in &all_rows {
                 let filename = Path::new(&row.input_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
                 if !filename.is_empty() {
                     *filename_counts.entry(filename).or_insert(0) += 1;
@@ -259,8 +259,8 @@ impl Db {
                 .into_iter()
                 .filter(|row| {
                     let filename = Path::new(&row.input_path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
+                        .file_stem()
+                        .map(|n| n.to_string_lossy().to_lowercase())
                         .unwrap_or_default();
                     filename_counts.get(&filename).copied().unwrap_or(0) > 1
                 })
@@ -443,7 +443,7 @@ impl Db {
     }
 
     /// Get job by ID
-    pub async fn get_job(&self, id: i64) -> Result<Option<Job>> {
+    pub async fn get_job_by_id(&self, id: i64) -> Result<Option<Job>> {
         let job = sqlx::query_as::<_, Job>(
             "SELECT j.id, j.input_path, j.output_path, j.status,
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
@@ -608,8 +608,116 @@ impl Db {
         Ok(result.rows_affected())
     }
 
-    pub async fn get_job_by_id(&self, id: i64) -> Result<Option<Job>> {
-        let job = sqlx::query_as::<_, Job>(
+    pub async fn batch_reanalyze_jobs(&self, ids: &[i64]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        let mut delete_qb =
+            sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM decisions WHERE job_id IN (");
+        let mut delete_ids = delete_qb.separated(", ");
+        for id in ids {
+            delete_ids.push_bind(id);
+        }
+        delete_ids.push_unseparated(")");
+        delete_qb.build().execute(&mut *tx).await?;
+
+        let mut delete_resume_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "DELETE FROM job_resume_sessions WHERE job_id IN (",
+        );
+        let mut delete_resume_ids = delete_resume_qb.separated(", ");
+        for id in ids {
+            delete_resume_ids.push_bind(id);
+        }
+        delete_resume_ids.push_unseparated(")");
+        delete_resume_qb.build().execute(&mut *tx).await?;
+
+        let mut delete_stats_qb =
+            sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM encode_stats WHERE job_id IN (");
+        let mut delete_stats_ids = delete_stats_qb.separated(", ");
+        for id in ids {
+            delete_stats_ids.push_bind(id);
+        }
+        delete_stats_ids.push_unseparated(")");
+        delete_stats_qb.build().execute(&mut *tx).await?;
+
+        let mut update_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "UPDATE jobs
+             SET status = 'queued',
+                 progress = 0.0,
+                 attempt_count = 0,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE archived = 0
+               AND id IN (",
+        );
+        let mut update_ids = update_qb.separated(", ");
+        for id in ids {
+            update_ids.push_bind(id);
+        }
+        update_ids.push_unseparated(")");
+
+        let result = update_qb.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn purge_jobs_by_filter(
+        &self,
+        statuses: Option<Vec<JobState>>,
+        archived: Option<bool>,
+    ) -> Result<u64> {
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM jobs WHERE 1=1");
+
+        if let Some(st) = statuses {
+            if !st.is_empty() {
+                qb.push(" AND status IN (");
+                let mut sep = qb.separated(", ");
+                for s in st {
+                    sep.push_bind(s);
+                }
+                qb.push(")");
+            }
+        }
+
+        if let Some(a) = archived {
+            qb.push(" AND archived = ");
+            qb.push_bind(a);
+        }
+
+        let result = qb.build().execute(&self.pool).await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn get_jobs_for_intelligence(&self, limit: i64) -> Result<Vec<Job>> {
+        let pool = &self.pool;
+        timed_query("get_jobs_for_intelligence", || async move {
+            let jobs = sqlx::query_as::<_, Job>(
+                "SELECT j.id, j.input_path, j.output_path, j.status,
+                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
+                        COALESCE(j.priority, 0) as priority,
+                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
+                        COALESCE(j.attempt_count, 0) as attempt_count,
+                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
+                        j.created_at, j.updated_at, j.input_metadata_json
+                 FROM jobs j
+                 WHERE j.archived = 0
+                   AND j.status != 'cancelled'
+                   AND j.input_metadata_json IS NOT NULL
+                 ORDER BY j.updated_at DESC
+                 LIMIT ?",
+            )
+            .bind(limit.max(1))
+            .fetch_all(pool)
+            .await?;
+            Ok(jobs)
+        })
+        .await
+    }
+
+    pub async fn get_jobs_under_root_path(&self, root_path: &str) -> Result<Vec<Job>> {
+        let jobs = sqlx::query_as::<_, Job>(
             "SELECT j.id, j.input_path, j.output_path, j.status,
                     (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                     COALESCE(j.priority, 0) as priority,
@@ -618,13 +726,29 @@ impl Db {
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
                     j.created_at, j.updated_at, j.input_metadata_json
              FROM jobs j
-             WHERE j.id = ? AND j.archived = 0",
+             WHERE j.archived = 0
+               AND (
+                    j.input_path = ?
+                    OR (
+                        length(j.input_path) > length(?)
+                        AND (
+                            substr(j.input_path, 1, length(?) + 1) = ? || '/'
+                            OR substr(j.input_path, 1, length(?) + 1) = ? || '\\'
+                        )
+                    )
+               )
+             ORDER BY j.updated_at DESC",
         )
-        .bind(id)
-        .fetch_optional(&self.pool)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .fetch_all(&self.pool)
         .await?;
 
-        Ok(job)
+        Ok(jobs)
     }
 
     /// Returns the 1-based position of a queued job in the priority queue,
