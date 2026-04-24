@@ -1,7 +1,7 @@
 //! Authentication handlers: login, logout, session management.
 
-use super::AppState;
 use super::middleware::{allow_login_attempt, get_cookie_value};
+use super::{AppState, api_error_response};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordVerifier},
@@ -29,7 +29,11 @@ pub(crate) async fn login_handler(
     axum::Json(payload): axum::Json<LoginPayload>,
 ) -> impl IntoResponse {
     if !allow_login_attempt(&state, addr.ip()).await {
-        return (StatusCode::TOO_MANY_REQUESTS, "Too many requests").into_response();
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "AUTH_RATE_LIMITED",
+            "Too many requests",
+        );
     }
 
     let mut is_valid = true;
@@ -37,7 +41,11 @@ pub(crate) async fn login_handler(
         Ok(user) => user,
         Err(err) => {
             error!("Login lookup failed for '{}': {}", payload.username, err);
-            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_LOOKUP_FAILED",
+                err.to_string(),
+            );
         }
     };
 
@@ -46,11 +54,11 @@ pub(crate) async fn login_handler(
     let dummy_hash = match PasswordHash::new(DUMMY_HASH) {
         Ok(hash) => hash,
         Err(_) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_FALLBACK_HASH_INVALID",
                 "Authentication fallback hash is invalid",
-            )
-                .into_response();
+            );
         }
     };
 
@@ -73,7 +81,11 @@ pub(crate) async fn login_handler(
     }
 
     let Some(user) = user_result.filter(|_| is_valid) else {
-        return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
+        return api_error_response(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_INVALID_CREDENTIALS",
+            "Invalid credentials",
+        );
     };
 
     // Create session
@@ -86,11 +98,11 @@ pub(crate) async fn login_handler(
     let expires_at = Utc::now() + chrono::Duration::days(30);
 
     if let Err(e) = state.db.create_session(user.id, &token, expires_at).await {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "AUTH_SESSION_CREATE_FAILED",
             format!("Failed to create session: {}", e),
-        )
-            .into_response();
+        );
     }
 
     let cookie = build_session_cookie(&token);

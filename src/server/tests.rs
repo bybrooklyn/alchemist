@@ -198,6 +198,24 @@ fn bearer_request(method: Method, uri: &str, token: &str, body: Body) -> Request
     }
 }
 
+fn bearer_json_request(
+    method: Method,
+    uri: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> Request<Body> {
+    match Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+    {
+        Ok(request) => request,
+        Err(err) => panic!("failed to build bearer json request: {err}"),
+    }
+}
+
 fn auth_json_request(
     method: Method,
     uri: &str,
@@ -882,6 +900,149 @@ async fn read_only_api_token_cannot_access_settings_config()
     drop(state);
     let _ = std::fs::remove_file(config_path);
     let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn arr_webhook_api_token_scope_is_limited_to_arr_webhook_route()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_api_token(
+        state.db.as_ref(),
+        crate::db::ApiTokenAccessLevel::ArrWebhook,
+    )
+    .await?;
+
+    let webhook_response = app
+        .clone()
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/webhooks/arr",
+            &token,
+            json!({
+                "eventType": "Test"
+            }),
+        ))
+        .await?;
+    assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+    let blocked_response = app
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(blocked_response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn arr_webhook_endpoint_translates_path_and_reuses_enqueue_rules()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let host_root = temp_path("alchemist_arr_webhook_root", "dir");
+    let host_series_dir = host_root.join("Show");
+    std::fs::create_dir_all(&host_series_dir)?;
+    let host_file = host_series_dir.join("Episode 01.mkv");
+    std::fs::write(&host_file, b"test")?;
+    let canonical_host_file = std::fs::canonicalize(&host_file)?;
+
+    let container_root = "/container/media/library";
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.system.arr_path_translations = vec![crate::config::ArrPathTranslation {
+            from: container_root.to_string(),
+            to: host_root.to_string_lossy().to_string(),
+        }];
+    })
+    .await?;
+    let token = create_api_token(
+        state.db.as_ref(),
+        crate::db::ApiTokenAccessLevel::ArrWebhook,
+    )
+    .await?;
+
+    let payload = json!({
+        "eventType": "Download",
+        "series": { "path": container_root },
+        "episodeFile": { "relativePath": "Show/Episode 01.mkv" }
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/webhooks/arr",
+            &token,
+            payload.clone(),
+        ))
+        .await?;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_json: serde_json::Value = serde_json::from_str(&body_text(first_response).await)?;
+    assert_eq!(first_json["enqueued"], true);
+    let resolved_path = first_json["resolved_path"]
+        .as_str()
+        .ok_or("missing resolved_path")?;
+    assert_eq!(
+        std::fs::canonicalize(PathBuf::from(resolved_path))?,
+        canonical_host_file
+    );
+
+    assert!(
+        state
+            .db
+            .get_job_by_input_path(canonical_host_file.to_string_lossy().as_ref())
+            .await?
+            .is_some()
+    );
+
+    let second_response = app
+        .clone()
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/webhooks/arr",
+            &token,
+            payload,
+        ))
+        .await?;
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_json: serde_json::Value = serde_json::from_str(&body_text(second_response).await)?;
+    assert_eq!(second_json["enqueued"], false);
+
+    cleanup_paths(&[host_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn arr_webhook_endpoint_returns_structured_error_when_payload_has_no_path()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_api_token(
+        state.db.as_ref(),
+        crate::db::ApiTokenAccessLevel::ArrWebhook,
+    )
+    .await?;
+
+    let response = app
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/webhooks/arr",
+            &token,
+            json!({
+                "eventType": "Download"
+            }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some("ARR_WEBHOOK_PATH_MISSING")
+    );
+
+    cleanup_paths(&[config_path, db_path]);
     Ok(())
 }
 
@@ -1939,6 +2100,95 @@ async fn settings_bundle_put_projects_extended_settings_to_db()
     );
     assert_eq!(persisted.files.output_suffix, "-custom");
     assert_eq!(persisted.scanner.extra_watch_dirs.len(), 1);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn notifications_settings_get_includes_quiet_hours_fields()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.notifications.daily_summary_time_local = "07:30".to_string();
+        config.notifications.quiet_hours_enabled = true;
+        config.notifications.quiet_hours_start_local = "21:15".to_string();
+        config.notifications.quiet_hours_end_local = "06:45".to_string();
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/settings/notifications",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["daily_summary_time_local"], "07:30");
+    assert_eq!(payload["quiet_hours_enabled"], true);
+    assert_eq!(payload["quiet_hours_start_local"], "21:15");
+    assert_eq!(payload["quiet_hours_end_local"], "06:45");
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn notifications_settings_put_normalizes_quiet_hours_and_rejects_equal_window()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let put_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::PUT,
+            "/api/settings/notifications",
+            &token,
+            json!({
+                "daily_summary_time_local": "7:5",
+                "quiet_hours_enabled": true,
+                "quiet_hours_start_local": "22:5",
+                "quiet_hours_end_local": "6:3"
+            }),
+        ))
+        .await?;
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let get_response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/settings/notifications",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_str(&body_text(get_response).await)?;
+    assert_eq!(payload["daily_summary_time_local"], "07:05");
+    assert_eq!(payload["quiet_hours_start_local"], "22:05");
+    assert_eq!(payload["quiet_hours_end_local"], "06:03");
+
+    let invalid_response = app
+        .oneshot(auth_json_request(
+            Method::PUT,
+            "/api/settings/notifications",
+            &token,
+            json!({
+                "quiet_hours_enabled": true,
+                "quiet_hours_start_local": "10:00",
+                "quiet_hours_end_local": "10:00"
+            }),
+        ))
+        .await?;
+    assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+    let invalid_body = body_text(invalid_response).await;
+    assert!(invalid_body.contains("quiet hours start and end must differ"));
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())

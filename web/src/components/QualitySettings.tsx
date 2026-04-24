@@ -76,7 +76,9 @@ export default function QualitySettings() {
             <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/60 p-4 flex items-center justify-between">
                 <div>
                     <p className="text-xs font-medium text-helios-slate">Enable VMAF</p>
-                    <p className="text-xs text-helios-slate mt-1">Compute a quality score after encoding.</p>
+                    <p className="text-xs text-helios-slate mt-1">
+                        Compute a quality score after encoding. <a href="/help/quality" className="text-helios-solar hover:underline">Learn how quality gates work.</a>
+                    </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                     <input

@@ -1,0 +1,57 @@
+---
+import { getCollection, render } from "astro:content";
+import Layout from "../../layouts/Layout.astro";
+import Sidebar from "../../components/Sidebar.astro";
+import HeaderActions from "../../components/HeaderActions.tsx";
+
+const entries = (await getCollection("help"))
+    .filter((entry) => entry.data.area === "quality")
+    .sort((a, b) => a.data.order - b.data.order);
+const renderedEntries = await Promise.all(
+    entries.map(async (entry) => ({
+        entry,
+        rendered: await render(entry),
+    }))
+);
+---
+
+<Layout title="Alchemist | Quality Help">
+    <div class="app-shell">
+        <Sidebar />
+        <main class="app-main overflow-y-auto">
+            <div class="flex items-center justify-end px-6 py-3 border-b border-helios-line/20">
+                <HeaderActions client:load />
+            </div>
+            <div class="max-w-4xl mx-auto p-6 space-y-6">
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-helios-solar font-bold">
+                        Help
+                    </p>
+                    <h1 class="text-3xl font-bold text-helios-ink mt-2">
+                        Quality Settings
+                    </h1>
+                    <p class="text-sm text-helios-slate mt-3">
+                        Build-time help content backed by Astro content collections.
+                    </p>
+                </div>
+
+                {renderedEntries.map(({ entry, rendered }) => {
+                    const { Content } = rendered;
+                    return (
+                        <article class="rounded-xl border border-helios-line/20 bg-helios-surface p-6 shadow-sm">
+                            <h2 class="text-xl font-bold text-helios-ink">
+                                {entry.data.title}
+                            </h2>
+                            <p class="text-sm text-helios-slate mt-2">
+                                {entry.data.summary}
+                            </p>
+                            <div class="prose prose-invert max-w-none mt-5 text-helios-slate">
+                                <Content />
+                            </div>
+                        </article>
+                    );
+                })}
+            </div>
+        </main>
+    </div>
+</Layout>

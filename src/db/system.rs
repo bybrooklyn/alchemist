@@ -147,7 +147,12 @@ impl Db {
 
     pub async fn list_api_tokens(&self) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
-            "SELECT id, name, access_level, created_at, last_used_at, revoked_at
+            "SELECT id, name,
+                    CASE
+                        WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                        ELSE access_level
+                    END AS access_level,
+                    created_at, last_used_at, revoked_at
              FROM api_tokens
              ORDER BY created_at DESC",
         )
@@ -162,15 +167,26 @@ impl Db {
         token: &str,
         access_level: ApiTokenAccessLevel,
     ) -> Result<ApiToken> {
+        let (stored_access_level, access_scope) = match access_level {
+            ApiTokenAccessLevel::ReadOnly => ("read_only", None),
+            ApiTokenAccessLevel::FullAccess => ("full_access", None),
+            ApiTokenAccessLevel::ArrWebhook => ("read_only", Some("arr_webhook")),
+        };
         let token_hash = hash_api_token(token);
         let row = sqlx::query_as::<_, ApiToken>(
-            "INSERT INTO api_tokens (name, token_hash, access_level)
-             VALUES (?, ?, ?)
-             RETURNING id, name, access_level, created_at, last_used_at, revoked_at",
+            "INSERT INTO api_tokens (name, token_hash, access_level, access_scope)
+             VALUES (?, ?, ?, ?)
+             RETURNING id, name,
+                       CASE
+                         WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                         ELSE access_level
+                       END AS access_level,
+                       created_at, last_used_at, revoked_at",
         )
         .bind(name)
         .bind(token_hash)
-        .bind(access_level)
+        .bind(stored_access_level)
+        .bind(access_scope)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -179,7 +195,12 @@ impl Db {
     pub async fn get_active_api_token(&self, token: &str) -> Result<Option<ApiTokenRecord>> {
         let token_hash = hash_api_token(token);
         let row = sqlx::query_as::<_, ApiTokenRecord>(
-            "SELECT id, name, token_hash, access_level, created_at, last_used_at, revoked_at
+            "SELECT id, name, token_hash,
+                    CASE
+                        WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                        ELSE access_level
+                    END AS access_level,
+                    created_at, last_used_at, revoked_at
              FROM api_tokens
              WHERE token_hash = ? AND revoked_at IS NULL",
         )

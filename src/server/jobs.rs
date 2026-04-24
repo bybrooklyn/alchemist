@@ -35,8 +35,8 @@ pub(crate) struct EnqueueJobPayload {
 
 #[derive(Serialize)]
 pub(crate) struct EnqueueJobResponse {
-    enqueued: bool,
-    message: String,
+    pub(crate) enqueued: bool,
+    pub(crate) message: String,
 }
 
 pub(crate) fn blocked_jobs_response(message: impl Into<String>, blocked: &[Job]) -> Response {
@@ -92,32 +92,29 @@ async fn purge_resume_sessions_for_jobs(state: &AppState, ids: &[i64]) {
     }
 }
 
-pub(crate) async fn enqueue_job_handler(
-    State(state): State<Arc<AppState>>,
-    axum::Json(payload): axum::Json<EnqueueJobPayload>,
-) -> impl IntoResponse {
-    let submitted_path = payload.path.trim();
+pub(crate) async fn enqueue_job_from_submitted_path(
+    state: &AppState,
+    submitted_path: &str,
+) -> (StatusCode, EnqueueJobResponse) {
     if submitted_path.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: false,
                 message: "Path must not be empty.".to_string(),
-            }),
-        )
-            .into_response();
+            },
+        );
     }
 
     let requested_path = PathBuf::from(submitted_path);
     if !requested_path.is_absolute() {
         return (
             StatusCode::BAD_REQUEST,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: false,
                 message: "Path must be absolute.".to_string(),
-            }),
-        )
-            .into_response();
+            },
+        );
     }
 
     let canonical_path = match std::fs::canonicalize(&requested_path) {
@@ -125,12 +122,11 @@ pub(crate) async fn enqueue_job_handler(
         Err(err) => {
             return (
                 StatusCode::BAD_REQUEST,
-                axum::Json(EnqueueJobResponse {
+                EnqueueJobResponse {
                     enqueued: false,
                     message: format!("Unable to resolve path: {err}"),
-                }),
-            )
-                .into_response();
+                },
+            );
         }
     };
 
@@ -139,23 +135,21 @@ pub(crate) async fn enqueue_job_handler(
         Err(err) => {
             return (
                 StatusCode::BAD_REQUEST,
-                axum::Json(EnqueueJobResponse {
+                EnqueueJobResponse {
                     enqueued: false,
                     message: format!("Unable to read file metadata: {err}"),
-                }),
-            )
-                .into_response();
+                },
+            );
         }
     };
     if !metadata.is_file() {
         return (
             StatusCode::BAD_REQUEST,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: false,
                 message: "Path must point to a file.".to_string(),
-            }),
-        )
-            .into_response();
+            },
+        );
     }
 
     let extension = canonical_path
@@ -169,18 +163,23 @@ pub(crate) async fn enqueue_job_handler(
     {
         return (
             StatusCode::BAD_REQUEST,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: false,
                 message: "File type is not supported for enqueue.".to_string(),
-            }),
-        )
-            .into_response();
+            },
+        );
     }
 
     let watch_dirs = match state.db.get_watch_dirs().await {
         Ok(watch_dirs) => watch_dirs,
         Err(err) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                EnqueueJobResponse {
+                    enqueued: false,
+                    message: err.to_string(),
+                },
+            );
         }
     };
 
@@ -193,24 +192,37 @@ pub(crate) async fn enqueue_job_handler(
     match crate::media::pipeline::enqueue_discovered_with_db(state.db.as_ref(), discovered).await {
         Ok(true) => (
             StatusCode::OK,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: true,
                 message: format!("Enqueued {}.", canonical_path.display()),
-            }),
-        )
-            .into_response(),
+            },
+        ),
         Ok(false) => (
             StatusCode::OK,
-            axum::Json(EnqueueJobResponse {
+            EnqueueJobResponse {
                 enqueued: false,
                 message:
                     "File was not enqueued because it matched existing output or dedupe rules."
                         .to_string(),
-            }),
-        )
-            .into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            },
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            EnqueueJobResponse {
+                enqueued: false,
+                message: err.to_string(),
+            },
+        ),
     }
+}
+
+pub(crate) async fn enqueue_job_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<EnqueueJobPayload>,
+) -> impl IntoResponse {
+    let (status, response) =
+        enqueue_job_from_submitted_path(state.as_ref(), payload.path.trim()).await;
+    (status, axum::Json(response)).into_response()
 }
 
 pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bool> {

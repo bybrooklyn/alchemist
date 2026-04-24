@@ -1,6 +1,5 @@
 use super::AppState;
 use crate::conversion::ConversionSettings;
-use crate::media::pipeline::Analyzer as _;
 use axum::{
     body::Body,
     extract::{Multipart, Path, State},
@@ -229,7 +228,7 @@ pub(crate) async fn upload_conversion_handler(
     drop(output_file);
 
     let analyzer = crate::media::analyzer::FfmpegAnalyzer;
-    let analysis = match analyzer.analyze(&stored_path).await {
+    let analysis = match analyzer.analyze_with_cache(&state.db, &stored_path).await {
         Ok(analysis) => analysis,
         Err(err) => {
             cleanup_upload_path(&stored_path).await;

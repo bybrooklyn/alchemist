@@ -99,6 +99,7 @@ requires at least one day in every window.
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
+| `arr_path_translations` | list | `[]` | Optional path prefix mappings for ARR webhook ingestion, each entry `{ from, to }`; longest matching `from` prefix wins |
 
 ## Example
 
@@ -151,4 +152,7 @@ conversion_download_retention_hours = 1
 enable_telemetry = false
 log_retention_days = 30
 engine_mode = "balanced"
+arr_path_translations = [
+  { from = "/container/media", to = "/mnt/media" }
+]
 ```

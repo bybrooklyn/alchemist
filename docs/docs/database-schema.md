@@ -202,7 +202,8 @@ Tracks uploads from the Convert workflow and their generated outputs. Cleanup ru
 | `id` | INTEGER | Primary key |
 | `name` | TEXT | Human-readable token label |
 | `token_hash` | TEXT | Hashed token value; the plaintext is shown once at issue |
-| `access_level` | TEXT | `read_only` or `full_access` |
+| `access_level` | TEXT | Stored access class (`read_only` or `full_access`) |
+| `access_scope` | TEXT | Optional narrowed scope (currently `arr_webhook` for ARR-only webhook tokens) |
 | `created_at` | DATETIME | Insert timestamp |
 | `last_used_at` | DATETIME | Updated on each successful authenticated request |
 | `revoked_at` | DATETIME | Non-null once the token is revoked |

@@ -74,7 +74,7 @@ Uploads and generated outputs are removed automatically by a cleanup sweep that 
 | File Settings | Output extension, suffix, output root, replace strategy |
 | Quality | VMAF scoring, minimum score, revert on failure |
 | Notifications | Discord webhook, Discord bot, Gotify, Telegram, email, webhook targets, daily summary time |
-| API Tokens | Named bearer tokens with `read_only` and `full_access` classes |
+| API Tokens | Named bearer tokens with `read_only`, `arr_webhook`, and `full_access` classes |
 | Schedule | Time windows |
 | Runtime | Engine mode, concurrent jobs override, Library Doctor |
 | System | Monitoring poll interval, manual conversion upload limit and post-download retention, telemetry toggle, watch-folder switch |

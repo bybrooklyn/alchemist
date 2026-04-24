@@ -2,7 +2,7 @@
 
 use alchemist::db::EventChannels;
 use alchemist::error::Result;
-use alchemist::media::pipeline::{Analyzer as _, Planner as _};
+use alchemist::media::pipeline::Planner as _;
 use alchemist::system::hardware;
 use alchemist::version;
 use alchemist::{Agent, Transcoder, config, db, runtime};
@@ -937,7 +937,7 @@ async fn build_cli_plan(
             continue;
         }
 
-        let analysis = match analyzer.analyze(&input_path).await {
+        let analysis = match analyzer.analyze_with_cache(db, &input_path).await {
             Ok(analysis) => analysis,
             Err(err) => {
                 items.push(CliPlanItem {

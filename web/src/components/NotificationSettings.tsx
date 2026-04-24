@@ -24,6 +24,9 @@ interface NotificationTarget {
 
 interface NotificationsSettingsResponse {
     daily_summary_time_local: string;
+    quiet_hours_enabled?: boolean;
+    quiet_hours_start_local?: string;
+    quiet_hours_end_local?: string;
     targets: NotificationTarget[];
 }
 
@@ -130,7 +133,11 @@ function defaultConfigForType(type: NotificationTargetType): Record<string, unkn
 export default function NotificationSettings() {
     const [targets, setTargets] = useState<NotificationTarget[]>([]);
     const [dailySummaryTime, setDailySummaryTime] = useState("09:00");
+    const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
+    const [quietHoursStart, setQuietHoursStart] = useState("22:00");
+    const [quietHoursEnd, setQuietHoursEnd] = useState("08:00");
     const [loading, setLoading] = useState(true);
+    const [savingSchedule, setSavingSchedule] = useState(false);
     const [testingId, setTestingId] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
 
@@ -153,9 +160,15 @@ export default function NotificationSettings() {
             if (Array.isArray(data)) {
                 setTargets(data.map(normalizeTarget));
                 setDailySummaryTime("09:00");
+                setQuietHoursEnabled(false);
+                setQuietHoursStart("22:00");
+                setQuietHoursEnd("08:00");
             } else {
                 setTargets(data.targets.map(normalizeTarget));
                 setDailySummaryTime(data.daily_summary_time_local);
+                setQuietHoursEnabled(data.quiet_hours_enabled ?? false);
+                setQuietHoursStart(data.quiet_hours_start_local ?? "22:00");
+                setQuietHoursEnd(data.quiet_hours_end_local ?? "08:00");
             }
             setError(null);
         } catch (e) {
@@ -166,22 +179,31 @@ export default function NotificationSettings() {
         }
     };
 
-    const saveDailySummaryTime = async () => {
+    const saveNotificationSettings = async () => {
+        setSavingSchedule(true);
         try {
             await apiAction("/api/settings/notifications", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ daily_summary_time_local: dailySummaryTime }),
+                body: JSON.stringify({
+                    daily_summary_time_local: dailySummaryTime,
+                    quiet_hours_enabled: quietHoursEnabled,
+                    quiet_hours_start_local: quietHoursStart,
+                    quiet_hours_end_local: quietHoursEnd,
+                }),
             });
+            await fetchTargets();
             showToast({
                 kind: "success",
                 title: "Notifications",
-                message: "Daily summary time saved.",
+                message: "Notification schedule settings saved.",
             });
         } catch (e) {
-            const message = isApiError(e) ? e.message : "Failed to save daily summary time";
+            const message = isApiError(e) ? e.message : "Failed to save notification schedule settings";
             setError(message);
             showToast({ kind: "error", title: "Notifications", message });
+        } finally {
+            setSavingSchedule(false);
         }
     };
 
@@ -270,26 +292,69 @@ export default function NotificationSettings() {
     return (
         <div className="space-y-6" aria-live="polite">
             <div className="grid gap-4 md:grid-cols-[1fr_auto] items-end">
-                <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft p-4">
-                    <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink">
-                        <Bell size={16} className="text-helios-solar" />
-                        Daily Summary Time
+                <div className="space-y-4">
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft p-4">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink">
+                            <Bell size={16} className="text-helios-solar" />
+                            Daily Summary Time
+                        </div>
+                        <p className="mt-1 text-xs text-helios-slate">
+                            Daily summaries are opt-in per target, but they all use one global local-time send window.
+                        </p>
+                        <input
+                            type="time"
+                            value={dailySummaryTime}
+                            onChange={(event) => setDailySummaryTime(event.target.value)}
+                            className="mt-3 w-full max-w-xs bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
+                        />
                     </div>
-                    <p className="mt-1 text-xs text-helios-slate">
-                        Daily summaries are opt-in per target, but they all use one global local-time send window.
-                    </p>
-                    <input
-                        type="time"
-                        value={dailySummaryTime}
-                        onChange={(event) => setDailySummaryTime(event.target.value)}
-                        className="mt-3 w-full max-w-xs bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
-                    />
+                    <div className="rounded-xl border border-helios-line/20 bg-helios-surface-soft p-4">
+                        <div className="flex items-center justify-between gap-4">
+                            <div>
+                                <div className="text-sm font-semibold text-helios-ink">Quiet Hours</div>
+                                <p className="mt-1 text-xs text-helios-slate">
+                                    Suppress non-critical notifications inside a local-time window.
+                                </p>
+                            </div>
+                            <label className="inline-flex items-center gap-2 text-sm text-helios-ink">
+                                <input
+                                    type="checkbox"
+                                    checked={quietHoursEnabled}
+                                    onChange={(event) => setQuietHoursEnabled(event.target.checked)}
+                                />
+                                Enabled
+                            </label>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
+                            <div>
+                                <label className="block text-xs font-medium text-helios-slate mb-1">Start</label>
+                                <input
+                                    type="time"
+                                    value={quietHoursStart}
+                                    onChange={(event) => setQuietHoursStart(event.target.value)}
+                                    disabled={!quietHoursEnabled}
+                                    className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink disabled:opacity-60"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-helios-slate mb-1">End</label>
+                                <input
+                                    type="time"
+                                    value={quietHoursEnd}
+                                    onChange={(event) => setQuietHoursEnd(event.target.value)}
+                                    disabled={!quietHoursEnabled}
+                                    className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink disabled:opacity-60"
+                                />
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <button
-                    onClick={() => void saveDailySummaryTime()}
+                    onClick={() => void saveNotificationSettings()}
+                    disabled={savingSchedule}
                     className="rounded-lg border border-helios-line/20 px-4 py-2 text-sm font-semibold text-helios-ink hover:bg-helios-surface-soft transition-colors"
                 >
-                    Save Summary Time
+                    {savingSchedule ? "Saving..." : "Save Schedule Settings"}
                 </button>
             </div>
 

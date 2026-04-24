@@ -9,6 +9,7 @@ pub mod settings;
 pub mod sse;
 pub mod stats;
 pub mod system;
+pub mod webhooks;
 pub mod wizard;
 
 #[cfg(test)]
@@ -352,6 +353,7 @@ fn app_router(state: Arc<AppState>) -> Router {
     use sse::*;
     use stats::*;
     use system::*;
+    use webhooks::*;
     use wizard::*;
 
     Router::new()
@@ -369,6 +371,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs", get(jobs_table_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
         .route("/api/jobs/enqueue", post(enqueue_job_handler))
+        .route("/api/webhooks/arr", post(arr_webhook_handler))
         .route("/api/jobs/batch", post(batch_jobs_handler))
         .route("/api/logs/history", get(logs_history_handler))
         .route("/api/logs", delete(clear_logs_handler))

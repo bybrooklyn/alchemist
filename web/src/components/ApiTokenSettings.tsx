@@ -4,7 +4,7 @@ import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 
-type ApiTokenAccessLevel = "read_only" | "full_access";
+type ApiTokenAccessLevel = "read_only" | "full_access" | "arr_webhook";
 
 interface ApiToken {
     id: number;
@@ -102,7 +102,9 @@ export default function ApiTokenSettings() {
                     Static API Tokens
                 </div>
                 <p className="mt-1 text-xs text-helios-slate">
-                    Read-only tokens are observability-only. Full-access tokens can do everything an authenticated session can do.
+                    Read-only tokens are observability-only. ARR webhook tokens are limited to
+                    <span className="mx-1 font-mono">POST /api/webhooks/arr</span>.
+                    Full-access tokens can do everything an authenticated session can do.
                 </p>
             </div>
 
@@ -138,6 +140,7 @@ export default function ApiTokenSettings() {
                         className="w-full bg-helios-surface-soft border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
                     >
                         <option value="read_only">Read Only</option>
+                        <option value="arr_webhook">ARR Webhook Only</option>
                         <option value="full_access">Full Access</option>
                     </select>
                 </div>
