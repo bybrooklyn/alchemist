@@ -594,6 +594,14 @@ impl NotificationTargetConfig {
                     anyhow::bail!("gotify target requires config_json.app_token");
                 }
             }
+            "ntfy" => {
+                if config_json_string(&self.config_json, "server_url").is_none() {
+                    anyhow::bail!("ntfy target requires config_json.server_url");
+                }
+                if config_json_string(&self.config_json, "topic").is_none() {
+                    anyhow::bail!("ntfy target requires config_json.topic");
+                }
+            }
             "webhook" => {
                 if config_json_string(&self.config_json, "url").is_none() {
                     anyhow::bail!("webhook target requires config_json.url");
@@ -1262,6 +1270,26 @@ mod tests {
         config.canonicalize_for_save();
         assert_eq!(config.notifications.quiet_hours_start_local, "22:00");
         assert_eq!(config.notifications.quiet_hours_end_local, "08:00");
+    }
+
+    #[test]
+    fn validate_accepts_ntfy_notification_targets() {
+        let mut config = Config::default();
+        config.notifications.targets = vec![NotificationTargetConfig {
+            name: "ntfy".to_string(),
+            target_type: "ntfy".to_string(),
+            config_json: serde_json::json!({
+                "server_url": "https://ntfy.sh",
+                "topic": "alchemist-alerts",
+                "access_token": "optional-token"
+            }),
+            endpoint_url: None,
+            auth_token: None,
+            events: vec!["encode.failed".to_string()],
+            enabled: true,
+        }];
+
+        assert!(config.validate().is_ok());
     }
 
     #[test]

@@ -9,6 +9,22 @@ All API routes require the `alchemist_session` auth cookie established via `/api
 
 Machine-readable contract: [OpenAPI spec](/openapi.yaml)
 
+Most API errors use this envelope:
+
+```json
+{
+  "error": {
+    "code": "CONFIG_SAVE_FAILED",
+    "message": "Failed to save configuration"
+  }
+}
+```
+
+Older routes may still have legacy shapes, but high-traffic
+auth, settings, jobs, system, ARR webhook, readiness, SSE,
+and metrics failure paths now use stable machine-readable
+codes.
+
 ### `POST /api/auth/login`
 Establish a session. Returns a `Set-Cookie` header.
 
@@ -48,6 +64,47 @@ Revoke a token.
 
 ---
 
+## Settings
+
+### `GET /api/settings/bundle`
+Fetch the full settings projection used by setup and the
+settings UI.
+
+### `PUT /api/settings/bundle`
+Persist the full settings bundle. Fails with `409` when
+`ALCHEMIST_CONFIG_MUTABLE=false`.
+
+### `GET|POST /api/settings/system`
+Read or update runtime-facing system settings:
+conversion upload limit, converted-download retention,
+telemetry switch, engine mode, metrics switch, and ARR path
+translations.
+
+### `GET|POST /api/settings/hardware`
+Read or update hardware preference, device path, CPU
+fallback, CPU encoding, and CPU preset. Updating hardware
+settings refreshes runtime hardware state and cache.
+
+### `GET|PUT|POST /api/settings/notifications`
+Read notification schedule/quiet-hours state, update global
+notification timing, or add a target.
+
+Global fields:
+
+- `daily_summary_time_local`
+- `quiet_hours_enabled`
+- `quiet_hours_start_local`
+- `quiet_hours_end_local`
+
+Targets use `target_type`, provider-specific `config_json`,
+`events`, and `enabled`.
+
+### `POST /api/settings/notifications/test`
+Send a test notification using a target payload without
+saving it.
+
+---
+
 ## ARR webhook ingress
 
 ### `POST /api/webhooks/arr`
@@ -72,6 +129,36 @@ arr_path_translations = [
   { from = "/container/media", to = "/mnt/media" }
 ]
 ```
+
+---
+
+## Conversion
+
+The Convert workflow is an experimental single-file utility.
+It reuses the normal analyzer/planner/executor path, but
+tracks staged uploads in `conversion_jobs`.
+
+### `POST /api/conversion/uploads`
+Upload one source file. The maximum size is
+`system.conversion_upload_limit_gb` GiB.
+
+### `POST /api/conversion/preview`
+Return normalized settings, generated FFmpeg command text,
+and a structured source/output/estimate summary.
+
+### `POST /api/conversion/jobs/:id/start`
+Queue the uploaded conversion job.
+
+### `GET /api/conversion/jobs/:id`
+Fetch current conversion job state.
+
+### `GET /api/conversion/jobs/:id/download`
+Download completed output. After download, cleanup retention
+is governed by `system.conversion_download_retention_hours`.
+
+### `DELETE /api/conversion/jobs/:id`
+Delete the conversion record and any staged artifacts that
+are safe to remove.
 
 ---
 
@@ -113,6 +200,10 @@ Restart all failed or cancelled jobs.
 ### `POST /api/jobs/clear-completed`
 Archive all completed jobs from the active queue.
 
+### `POST /api/jobs/clear-history`
+Archive terminal completed, failed, cancelled, and skipped
+jobs from the active table.
+
 ---
 
 ## Engine
@@ -120,14 +211,31 @@ Archive all completed jobs from the active queue.
 ### `GET /api/engine/status`
 Get current operational status and limits.
 
+Response fields include:
+
+- `status`: `running`, `paused`, or `draining`
+- `manual_paused`
+- `scheduler_paused`
+- `draining`
+- `blocked_reason`: `manual_paused`, `scheduled_pause`,
+  `draining`, `workers_busy`, or `null`
+
 ### `POST /api/engine/pause`
-Pause the engine (suspend active jobs).
+Pause the engine. Active jobs continue; no new jobs are
+claimed.
 
 ### `POST /api/engine/resume`
 Resume the engine.
 
 ### `POST /api/engine/drain`
 Enter drain mode (finish active jobs, don't start new ones).
+
+### `POST /api/engine/stop-drain`
+Cancel drain mode without changing scheduler pause state.
+
+### `POST /api/engine/restart`
+Pause briefly, cancel in-flight work, clear drain state, then
+resume claiming jobs.
 
 ### `POST /api/engine/mode`
 Switch engine mode or apply manual overrides.
@@ -159,13 +267,46 @@ Detailed breakdown of storage savings.
 ## System
 
 ### `GET /api/system/hardware`
-Detected hardware backend and codec support matrix.
+Detected hardware backend and codec support matrix. During
+startup this may be served from a valid hardware detection
+cache before a background refresh updates runtime state.
 
 ### `GET /api/system/hardware/probe-log`
 Full logs from the startup hardware probe.
 
 ### `GET /api/system/resources`
 Live telemetry: CPU, Memory, GPU utilization, and uptime.
+
+### `POST /api/system/backup`
+Download a gzip-compressed SQLite backup produced through
+SQLite's online backup path. Requires full access.
+
+### `GET /api/ready`
+Readiness check. Returns `503` with structured error code
+`DATABASE_UNAVAILABLE` if SQLite is not usable.
+
+### `GET /metrics`
+Prometheus metrics endpoint. Disabled unless
+`system.metrics_enabled=true`.
+
+---
+
+## Library
+
+### `GET /api/library/intelligence`
+Storage-focused recommendations: duplicates, remux
+opportunities, wasteful audio layouts, and
+commentary/descriptive-track cleanup candidates.
+
+### `GET /api/library/health`
+Current Library Doctor summary.
+
+### `POST /api/library/health/scan`
+Start a full health scan. Overlapping full-library scans are
+rejected.
+
+### `GET /api/library/health/issues`
+List current health issues.
 
 ---
 

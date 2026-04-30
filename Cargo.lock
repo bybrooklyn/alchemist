@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "alchemist"
-version = "0.3.2-rc.1"
+version = "0.3.2-rc.2"
 dependencies = [
  "anyhow",
  "argon2",

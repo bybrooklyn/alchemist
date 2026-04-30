@@ -21,19 +21,27 @@ That means:
 The entire codebase lives in one repository:
 [github.com/bybrooklyn/alchemist](https://github.com/bybrooklyn/alchemist).
 There is no private, closed, or "pro" repository that ships
-features the public version lacks.
+features the public version lacks. The public source tree is
+the product.
 
 ## What "actually open source" means here
 
 Several tools in this category ship a free tier alongside a
-paid tier with extra features, or a source-available license
-that restricts commercial use. Alchemist does neither:
+paid tier with extra features, license-key unlocks, or
+source-available terms that are not the same thing as a
+copyleft open-source project. Alchemist does neither:
 
 - There is no paid tier. Every feature in Alchemist is in
   the GPLv3 source tree.
 - There is no account, no license key, no phone-home check.
 - The binary you install is built from the same code in the
   repository you can read.
+- Commercial use is allowed under GPLv3. If you distribute a
+  modified build, you keep it GPLv3 and ship the source.
+
+That is the line Alchemist draws: no "community edition"
+that exists to upsell the real one, and no operational
+feature held behind a subscription.
 
 ## Telemetry
 

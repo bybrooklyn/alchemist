@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2-rc.2] - 2026-04-29
+
+### Performance & Startup
+
+- Hardware detection cache: successful hardware probes are persisted by OS, architecture, FFmpeg/FFprobe versions, hardware settings, and cache schema version so repeat boots can reuse a valid detection result immediately.
+- Hardware detection now refreshes runtime state and the probe log after background detection completes, avoiding a blocking startup path while still updating the UI when hardware changes.
+- Database migration coverage now verifies schema version 13, including the `hardware_detection_cache` table, ARR token scope storage, and the `media_probe_cache` table against the v0.2.5 upgrade fixture.
+
+### Conversion & Jobs
+
+- Convert preview now returns a structured source/output/estimate summary alongside the generated FFmpeg command so the UI can explain the planned operation before queueing it.
+- Job queue stress coverage now verifies a large queued set can be claimed without duplicate IDs or skipped rows.
+- Failure coverage now checks FFmpeg process crashes surface as job failures with logs and no leftover output artifact.
+
+### API & Documentation
+
+- Additional settings, schedule, metrics, readiness, SSE, and ARR webhook failure paths now use the structured `{ error: { code, message } }` API envelope.
+- Documentation was refreshed for the current 0.3.2 state: hardware caching, schema version 13, notification quiet hours, ARR ingress, Convert preview summaries, runtime backup, and engine lifecycle semantics.
+- Comparison and open-source docs now make the GPLv3/no-paid-tier/no-license-key positioning explicit and contrast it with official competitor pricing, license, server/node, worker, and flow/plugin documentation.
+
 ## [0.3.2-rc.1] - 2026-04-24
 
 ### Integrations & Automation

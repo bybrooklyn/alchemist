@@ -24,7 +24,7 @@ Default config file location:
 | `allow_fallback` | bool | `true` | Allow codec fallback when the requested codec is unavailable |
 | `hdr_mode` | string | `"preserve"` | Preserve HDR metadata or tonemap to SDR |
 | `tonemap_algorithm` | string | `"hable"` | HDR tonemapping algorithm |
-| `tonemap_peak` | float | `100.0` | Tonemap peak luminance target |
+| `tonemap_peak` | float | `1000.0` | Tonemap peak luminance target |
 | `tonemap_desat` | float | `0.2` | Tonemap desaturation factor |
 | `subtitle_mode` | string | `"copy"` | Subtitle handling: `copy`, `burn`, `extract`, or `none` |
 
@@ -59,8 +59,29 @@ Default config file location:
 | Field | Type | Default | Description |
 |------|------|---------|-------------|
 | `enabled` | bool | `false` | Master switch for notifications |
+| `allow_local_notifications` | bool | `false` | Allow notification targets to point at local/private network addresses. Off by default for SSRF safety |
 | `daily_summary_time_local` | string | `"09:00"` | Global local-time send window for daily summary notifications |
+| `quiet_hours_enabled` | bool | `false` | Suppress non-critical notifications inside the configured local-time quiet-hours window |
+| `quiet_hours_start_local` | string | `"22:00"` | Quiet-hours start time in `HH:MM` local time |
+| `quiet_hours_end_local` | string | `"08:00"` | Quiet-hours end time in `HH:MM` local time |
 | `targets` | list | `[]` | Notification target objects with `name`, `target_type`, `config_json`, `events`, and `enabled` |
+
+Supported `target_type` values and required `config_json`
+keys:
+
+| Target | Required `config_json` |
+|--------|------------------------|
+| `discord_webhook` | `webhook_url` |
+| `discord_bot` | `bot_token`, `channel_id` |
+| `gotify` | `server_url`, `app_token` |
+| `ntfy` | `server_url`, `topic`; optional `access_token` |
+| `webhook` | `url`; optional `auth_token` |
+| `telegram` | `bot_token`, `chat_id` |
+| `email` | `smtp_host`, `from_address`, `to_addresses` |
+
+Supported target events: `encode.queued`,
+`encode.started`, `encode.completed`, `encode.failed`,
+`scan.completed`, `engine.idle`, and `daily.summary`.
 
 ## `[files]`
 
@@ -98,7 +119,10 @@ requires at least one day in every window.
 | `conversion_download_retention_hours` | int | `1` | Hours to retain a completed Convert output after the user downloads it, before the cleanup pass removes the upload and output. Must be between 1 and 24 |
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
+| `metrics_enabled` | bool | `false` | Enable the Prometheus `/metrics` endpoint |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
+| `https_only` | bool | `false` | Add HSTS when Alchemist is served behind HTTPS. Do not enable for plain HTTP |
+| `trusted_proxies` | list | `[]` | Explicit reverse proxy IPs whose forwarded headers are trusted. Empty preserves private-range proxy compatibility |
 | `arr_path_translations` | list | `[]` | Optional path prefix mappings for ARR webhook ingestion, each entry `{ from, to }`; longest matching `from` prefix wins |
 
 ## Example
@@ -115,7 +139,7 @@ output_codec = "av1"
 allow_fallback = true
 hdr_mode = "preserve"
 tonemap_algorithm = "hable"
-tonemap_peak = 100.0
+tonemap_peak = 1000.0
 tonemap_desat = 0.2
 subtitle_mode = "copy"
 
@@ -145,12 +169,20 @@ enable_vmaf = false
 min_vmaf_score = 90.0
 revert_on_low_quality = true
 
+[notifications]
+enabled = false
+daily_summary_time_local = "09:00"
+quiet_hours_enabled = false
+quiet_hours_start_local = "22:00"
+quiet_hours_end_local = "08:00"
+
 [system]
 monitoring_poll_interval = 2.0
 conversion_upload_limit_gb = 8
 conversion_download_retention_hours = 1
 enable_telemetry = false
 log_retention_days = 30
+metrics_enabled = false
 engine_mode = "balanced"
 arr_path_translations = [
   { from = "/container/media", to = "/mnt/media" }

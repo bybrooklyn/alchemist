@@ -46,11 +46,17 @@ interface HardwareSettings {
     preferred_vendor: string | null;
 }
 
+const isHardwarePendingError = (err: unknown) =>
+    isApiError(err) &&
+    err.status === 503 &&
+    err.message.toLowerCase().includes("hardware state");
+
 export default function HardwareSettings() {
     const [info, setInfo] = useState<HardwareInfo | null>(null);
     const [settings, setSettings] = useState<HardwareSettings | null>(null);
     const [probeLog, setProbeLog] = useState<HardwareProbeLog>({ entries: [] });
     const [loading, setLoading] = useState(true);
+    const [hardwarePending, setHardwarePending] = useState(false);
     const [loadError, setLoadError] = useState("");
     const [saveError, setSaveError] = useState("");
     const [saving, setSaving] = useState(false);
@@ -62,12 +68,29 @@ export default function HardwareSettings() {
         void Promise.all([fetchHardware(), fetchSettings(), fetchProbeLog()]).finally(() => setLoading(false));
     }, []);
 
+    useEffect(() => {
+        const eventSource = new EventSource("/api/events");
+        eventSource.addEventListener("hardware_state_changed", () => {
+            void Promise.all([fetchHardware(), fetchProbeLog()]);
+        });
+
+        return () => eventSource.close();
+    }, []);
+
     const fetchHardware = async () => {
         try {
             const data = await apiJson<HardwareInfo>("/api/system/hardware");
             setInfo(data);
+            setHardwarePending(false);
             setLoadError("");
         } catch (err) {
+            if (isHardwarePendingError(err)) {
+                setInfo(null);
+                setHardwarePending(true);
+                setLoadError("");
+                return;
+            }
+            setHardwarePending(false);
             setLoadError(
                 isApiError(err)
                     ? err.message
@@ -83,7 +106,6 @@ export default function HardwareSettings() {
             if (!devicePathDirty) {
                 setDraftDevicePath(data.device_path ?? "");
             }
-            setLoadError("");
         } catch (err) {
             setLoadError(isApiError(err) ? err.message : "Failed to fetch hardware settings.");
         }
@@ -173,11 +195,20 @@ export default function HardwareSettings() {
         );
     }
 
-    if (loadError || !info) {
+    if (loadError) {
         return (
             <div className="p-6 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg flex items-center gap-3" aria-live="polite">
                 <AlertCircle size={20} />
-                <span className="font-semibold">{loadError || "Hardware detection failed."}</span>
+                <span className="font-semibold">{loadError}</span>
+            </div>
+        );
+    }
+
+    if (hardwarePending || !info) {
+        return (
+            <div className="p-6 bg-blue-500/10 border border-blue-500/20 text-blue-500 rounded-lg flex items-center gap-3" aria-live="polite">
+                <AlertCircle size={20} />
+                <span className="font-semibold">Hardware detection pending. This panel will update automatically.</span>
             </div>
         );
     }

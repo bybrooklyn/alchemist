@@ -239,6 +239,11 @@ impl Agent {
     /// watcher-triggered passes. Caller holds the
     /// semaphore permit.
     async fn _run_analysis_pass(&self) {
+        if self.hardware_state.snapshot().await.is_none() {
+            debug!("Auto-analysis: hardware detection pending, skipping pass.");
+            return;
+        }
+
         self.set_boot_analyzing(true);
         debug!("Auto-analysis: starting pass...");
 
@@ -391,6 +396,12 @@ impl Agent {
             // Block while paused OR while boot analysis runs
             if self.is_paused() || self.is_boot_analyzing() {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+
+            if self.hardware_state.snapshot().await.is_none() {
+                debug!("Hardware detection pending; engine claim loop is waiting.");
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 continue;
             }
 

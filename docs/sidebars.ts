@@ -70,6 +70,7 @@ const sidebars: SidebarsConfig = {
         'api',
         'codecs',
         'skip-decisions',
+        'engine-lifecycle',
         'engine-modes',
         'environment-variables',
         'database-schema',

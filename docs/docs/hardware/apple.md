@@ -39,7 +39,7 @@ Expected encoders include:
 
 VideoToolbox fails with error `-12908` if you probe it with
 a synthetic `lavfi` frame without `-allow_sw 1` and
-`-vf format=yuv420p`. Alchemist `0.3.0` includes that fix in
+`-vf format=yuv420p`. Current Alchemist releases include that fix in
 hardware detection automatically.
 
 If you want to verify the probe manually, use this exact

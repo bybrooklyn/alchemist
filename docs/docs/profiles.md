@@ -25,6 +25,8 @@ directory. Each watch directory gets its own profile.
 - **Stream rules** — which audio tracks to keep or strip
 - **Subtitle mode** — copy, burn, extract, or drop
 - **HDR mode** — preserve metadata or tonemap to SDR
+- **Custom video filters** — optional FFmpeg filter chain for
+  advanced per-library video handling
 
 ## Assigning profiles
 

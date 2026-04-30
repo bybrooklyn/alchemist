@@ -1,4 +1,4 @@
-use super::AppState;
+use super::{AppState, api_error_response};
 use crate::conversion::ConversionSettings;
 use axum::{
     body::Body,
@@ -162,23 +162,39 @@ pub(crate) async fn upload_conversion_handler(
     let upload_limit_gb = state.config.read().await.system.conversion_upload_limit_gb;
     let upload_limit = upload_limit_bytes(upload_limit_gb);
     if request_content_length(&headers).is_some_and(|value| value > upload_limit) {
-        return (
+        return api_error_response(
             StatusCode::PAYLOAD_TOO_LARGE,
+            "CONVERSION_UPLOAD_LIMIT_EXCEEDED",
             format!("Upload exceeds configured limit of {} GiB", upload_limit_gb),
-        )
-            .into_response();
+        );
     }
 
     let mut field = match multipart.next_field().await {
         Ok(Some(field)) => field,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "missing upload file").into_response(),
-        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+        Ok(None) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "CONVERSION_UPLOAD_FILE_MISSING",
+                "missing upload file",
+            );
+        }
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "CONVERSION_UPLOAD_FIELD_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let upload_id = uuid::Uuid::new_v4().to_string();
     let upload_dir = uploads_root().join(&upload_id);
     if let Err(err) = fs::create_dir_all(&upload_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_UPLOAD_DIR_CREATE_FAILED",
+            err.to_string(),
+        );
     }
 
     let file_name = field
@@ -188,7 +204,13 @@ pub(crate) async fn upload_conversion_handler(
     let stored_path = upload_dir.join(file_name);
     let mut output_file = match fs::File::create(&stored_path).await {
         Ok(file) => file,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_UPLOAD_FILE_CREATE_FAILED",
+                err.to_string(),
+            );
+        }
     };
     let mut written_bytes = 0_u64;
     loop {
@@ -199,31 +221,43 @@ pub(crate) async fn upload_conversion_handler(
                     let _ = output_file.flush().await;
                     drop(output_file);
                     cleanup_upload_path(&stored_path).await;
-                    return (
+                    return api_error_response(
                         StatusCode::PAYLOAD_TOO_LARGE,
+                        "CONVERSION_UPLOAD_LIMIT_EXCEEDED",
                         format!("Upload exceeds configured limit of {} GiB", upload_limit_gb),
-                    )
-                        .into_response();
+                    );
                 }
 
                 if let Err(err) = output_file.write_all(&chunk).await {
                     drop(output_file);
                     cleanup_upload_path(&stored_path).await;
-                    return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "CONVERSION_UPLOAD_WRITE_FAILED",
+                        err.to_string(),
+                    );
                 }
             }
             Ok(None) => break,
             Err(err) => {
                 drop(output_file);
                 cleanup_upload_path(&stored_path).await;
-                return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "CONVERSION_UPLOAD_CHUNK_FAILED",
+                    err.to_string(),
+                );
             }
         }
     }
     if let Err(err) = output_file.flush().await {
         drop(output_file);
         cleanup_upload_path(&stored_path).await;
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_UPLOAD_FLUSH_FAILED",
+            err.to_string(),
+        );
     }
     drop(output_file);
 
@@ -232,7 +266,11 @@ pub(crate) async fn upload_conversion_handler(
         Ok(analysis) => analysis,
         Err(err) => {
             cleanup_upload_path(&stored_path).await;
-            return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "CONVERSION_UPLOAD_ANALYSIS_FAILED",
+                err.to_string(),
+            );
         }
     };
 
@@ -241,14 +279,22 @@ pub(crate) async fn upload_conversion_handler(
         Ok(value) => value,
         Err(err) => {
             cleanup_upload_path(&stored_path).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_UPLOAD_SETTINGS_SERIALIZE_FAILED",
+                err.to_string(),
+            );
         }
     };
     let probe_json = match serde_json::to_string(&analysis) {
         Ok(value) => value,
         Err(err) => {
             cleanup_upload_path(&stored_path).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_UPLOAD_PROBE_SERIALIZE_FAILED",
+                err.to_string(),
+            );
         }
     };
     let expires_at = sqlite_timestamp_after_hours(DRAFT_RETENTION_HOURS);
@@ -270,7 +316,11 @@ pub(crate) async fn upload_conversion_handler(
         Ok(job) => job,
         Err(err) => {
             cleanup_upload_path(&stored_path).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_UPLOAD_JOB_CREATE_FAILED",
+                err.to_string(),
+            );
         }
     };
 
@@ -290,7 +340,13 @@ pub(crate) async fn preview_conversion_handler(
 
     let Some(job) = (match state.db.get_conversion_job(payload.conversion_job_id).await {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     }) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -299,10 +355,20 @@ pub(crate) async fn preview_conversion_handler(
         Some(probe_json) => match serde_json::from_str(probe_json) {
             Ok(analysis) => analysis,
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CONVERSION_PROBE_DESERIALIZE_FAILED",
+                    err.to_string(),
+                );
             }
         },
-        None => return (StatusCode::BAD_REQUEST, "missing conversion probe").into_response(),
+        None => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "CONVERSION_PROBE_MISSING",
+                "missing conversion probe",
+            );
+        }
     };
 
     let preview_output = outputs_root().join(format!(
@@ -326,11 +392,19 @@ pub(crate) async fn preview_conversion_handler(
             )
             .await
             {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CONVERSION_PREVIEW_PERSIST_FAILED",
+                    err.to_string(),
+                );
             }
             axum::Json(preview).into_response()
         }
-        Err(err) => (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::BAD_REQUEST,
+            "CONVERSION_PREVIEW_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -372,13 +446,23 @@ pub(crate) async fn start_conversion_job_handler(
 
     let Some(job) = (match state.db.get_conversion_job(id).await {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     }) else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     if job.linked_job_id.is_some() {
-        return (StatusCode::CONFLICT, "conversion job already started").into_response();
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "CONVERSION_JOB_ALREADY_STARTED",
+            "conversion job already started",
+        );
     }
 
     let input_path = PathBuf::from(&job.upload_path);
@@ -388,12 +472,22 @@ pub(crate) async fn start_conversion_job_handler(
         .unwrap_or("output");
     let settings: ConversionSettings = match serde_json::from_str(&job.settings_json) {
         Ok(settings) => settings,
-        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "CONVERSION_SETTINGS_DESERIALIZE_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let output_dir = outputs_root().join(job.id.to_string());
     if let Err(err) = fs::create_dir_all(&output_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_OUTPUT_DIR_CREATE_FAILED",
+            err.to_string(),
+        );
     }
     let output_path = output_dir.join(format!("{file_stem}.{}", settings.output_container));
     let mtime = std::fs::metadata(&input_path)
@@ -401,7 +495,11 @@ pub(crate) async fn start_conversion_job_handler(
         .unwrap_or(std::time::SystemTime::now());
 
     if let Err(err) = state.db.enqueue_job(&input_path, &output_path, mtime).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "JOB_ENQUEUE_FAILED",
+            err.to_string(),
+        );
     }
     let linked_job = match state
         .db
@@ -410,16 +508,30 @@ pub(crate) async fn start_conversion_job_handler(
     {
         Ok(Some(job)) => job,
         Ok(None) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "linked job missing").into_response();
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "LINKED_JOB_MISSING",
+                "linked job missing",
+            );
         }
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "LINKED_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     };
     if let Err(err) = state
         .db
         .update_conversion_job_start(id, &output_path.to_string_lossy(), linked_job.id)
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_JOB_START_UPDATE_FAILED",
+            err.to_string(),
+        );
     }
 
     StatusCode::OK.into_response()
@@ -433,7 +545,13 @@ pub(crate) async fn get_conversion_job_handler(
 
     let Some(conversion_job) = (match state.db.get_conversion_job(id).await {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     }) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -442,7 +560,11 @@ pub(crate) async fn get_conversion_job_handler(
         Some(job_id) => match state.db.get_job_by_id(job_id).await {
             Ok(job) => job,
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "LINKED_JOB_LOAD_FAILED",
+                    err.to_string(),
+                );
             }
         },
         None => None,
@@ -480,7 +602,13 @@ pub(crate) async fn download_conversion_job_handler(
 
     let Some(job) = (match state.db.get_conversion_job(id).await {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     }) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -494,7 +622,13 @@ pub(crate) async fn download_conversion_job_handler(
 
     let file = match fs::File::open(&output_path).await {
         Ok(file) => file,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_OUTPUT_OPEN_FAILED",
+                err.to_string(),
+            );
+        }
     };
     let file_name = FsPath::new(&output_path)
         .file_name()
@@ -548,7 +682,13 @@ pub(crate) async fn delete_conversion_job_handler(
 
     let Some(job) = (match state.db.get_conversion_job(id).await {
         Ok(job) => job,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONVERSION_JOB_LOAD_FAILED",
+                err.to_string(),
+            );
+        }
     }) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -556,17 +696,29 @@ pub(crate) async fn delete_conversion_job_handler(
     if let Some(linked_job_id) = job.linked_job_id {
         if let Ok(Some(linked_job)) = state.db.get_job_by_id(linked_job_id).await {
             if linked_job.is_active() {
-                return (StatusCode::CONFLICT, "conversion job is still active").into_response();
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "CONVERSION_JOB_ACTIVE",
+                    "conversion job is still active",
+                );
             }
             let _ = state.db.delete_job(linked_job_id).await;
         }
     }
 
     if let Err(err) = remove_conversion_artifacts(&job).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_ARTIFACT_REMOVE_FAILED",
+            err.to_string(),
+        );
     }
     if let Err(err) = state.db.delete_conversion_job(id).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CONVERSION_JOB_DELETE_FAILED",
+            err.to_string(),
+        );
     }
     StatusCode::OK.into_response()
 }

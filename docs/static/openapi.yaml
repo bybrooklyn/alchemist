@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Alchemist API
-  version: 0.3.0
+  version: 0.3.2-rc.2
   description: >
     Hand-maintained API contract for Alchemist. Authentication may use the
     alchemist_session cookie or a bearer token. Bearer tokens support
@@ -19,6 +19,18 @@ components:
       scheme: bearer
       bearerFormat: opaque
   schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
     ApiToken:
       type: object
       properties:
@@ -40,6 +52,22 @@ components:
           type: string
           format: date-time
           nullable: true
+    EngineStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [running, paused, draining]
+        manual_paused:
+          type: boolean
+        scheduler_paused:
+          type: boolean
+        draining:
+          type: boolean
+        blocked_reason:
+          type: string
+          nullable: true
+          enum: [manual_paused, scheduled_pause, draining, workers_busy]
 paths:
   /api/auth/login:
     post:
@@ -114,6 +142,10 @@ paths:
           description: Non-Download event ignored
         "400":
           description: Download payload missing a resolvable file path
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/settings/api-tokens/{id}:
     delete:
       summary: Revoke an API token
@@ -156,6 +188,39 @@ paths:
       responses:
         "200":
           description: Job list
+  /api/conversion/uploads:
+    post:
+      summary: Upload a source file for the Convert workflow
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Upload accepted and conversion row created
+  /api/conversion/preview:
+    post:
+      summary: Preview generated FFmpeg command and source/output estimate
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Normalized settings, command preview, and structured summary
+  /api/conversion/jobs/{id}/start:
+    post:
+      summary: Queue a staged conversion job
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversion job queued
   /api/jobs/{id}/details:
     get:
       summary: Get a single job detail record
@@ -180,3 +245,25 @@ paths:
       responses:
         "200":
           description: Engine status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineStatus"
+  /api/system/backup:
+    post:
+      summary: Download a gzip-compressed SQLite backup
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Gzip-compressed SQLite database backup
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint when system.metrics_enabled is true
+      security:
+        - sessionCookie: []
+        - bearerToken: []
+      responses:
+        "200":
+          description: Prometheus text exposition format

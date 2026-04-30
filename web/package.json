@@ -1,6 +1,6 @@
 {
   "name": "alchemist-web",
-  "version": "0.3.2-rc.1",
+  "version": "0.3.2-rc.2",
   "private": true,
   "packageManager": "bun@1",
   "type": "module",
@@ -16,20 +16,20 @@
     "@astrojs/react": "4.4.2",
     "@astrojs/tailwind": "6.0.2",
     "astro": "^5.18.1",
-    "clsx": "^2.0.0",
-    "framer-motion": "^10.0.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^10.18.0",
     "lucide-react": "^0.300.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "recharts": "^2.15.4",
-    "tailwind-merge": "^2.0.0"
+    "tailwind-merge": "^2.6.1"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.4",
+    "@astrojs/check": "^0.9.9",
     "typescript": "^5.9.3",
-    "tailwindcss": "^3.3.0",
-    "postcss": "^8.5.10",
-    "autoprefixer": "^10.4.0"
+    "tailwindcss": "^3.4.19",
+    "postcss": "^8.5.12",
+    "autoprefixer": "^10.5.0"
   },
   "overrides": {
     "defu": "^6.1.6",

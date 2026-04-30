@@ -5,7 +5,8 @@ description: Common questions from self-hosters running Alchemist.
 
 ## 1. Is Alchemist free?
 
-Yes. Alchemist is GPLv3 open source.
+Yes. Alchemist is GPLv3 open source. There is no paid tier,
+license key, private pro build, or commercial-use unlock.
 
 ## 2. Will it ruin my quality?
 
@@ -61,6 +62,9 @@ docker compose pull && docker compose up -d
 
 CPU fallback is automatic unless you disabled it. Check the
 hardware probe log to fix the GPU path.
+
+On repeat boots, Alchemist may show a cached hardware result
+immediately if the runtime fingerprint still matches.
 
 ## 13. Can I control when it runs?
 

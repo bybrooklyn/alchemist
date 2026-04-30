@@ -4,6 +4,8 @@ description: Configure Discord, Gotify, ntfy, Telegram, email, and webhook alert
 ---
 
 Configure notification targets in **Settings → Notifications**.
+Targets subscribe to specific events, and quiet hours can
+suppress non-critical sends during a local-time window.
 
 ## Supported targets
 
@@ -72,6 +74,36 @@ Targets can subscribe independently to:
 Daily summaries are opt-in per target and use the global
 local-time send window configured in **Settings →
 Notifications**.
+
+## Quiet hours
+
+Quiet hours are global and use local wall-clock time.
+
+- `quiet_hours_enabled`
+- `quiet_hours_start_local`
+- `quiet_hours_end_local`
+
+When enabled, non-critical event notifications are suppressed
+inside the window. Failure notifications remain immediate so
+operators still see broken encodes.
+
+## Config shape
+
+Targets are stored as:
+
+```json
+{
+  "name": "Example",
+  "target_type": "webhook",
+  "config_json": { "url": "https://example.com/hook" },
+  "events": ["encode.completed", "encode.failed"],
+  "enabled": true
+}
+```
+
+Legacy `endpoint_url` / `auth_token` target fields are
+migrated into `config_json` and kept only as compatibility
+projections.
 
 ## Troubleshooting
 

@@ -107,7 +107,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "12");
+    assert_eq!(schema_version, "13");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")
@@ -213,6 +213,14 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
     .await?
     .get("count");
     assert_eq!(media_probe_cache_exists, 1);
+
+    let hardware_detection_cache_exists: i64 = sqlx::query(
+        "SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name = 'hardware_detection_cache'",
+    )
+    .fetch_one(&pool)
+    .await?
+    .get("count");
+    assert_eq!(hardware_detection_cache_exists, 1);
 
     pool.close().await;
     drop(db);

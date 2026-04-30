@@ -126,6 +126,7 @@ documentation, or iteration.
 ### UI Improvements
 - Tighten settings and detail-panel consistency
 - Improve dense forms, empty states, and action affordances
+- Rework Appearance/theme selection later: simplify the page structure, fix light-theme token contrast, add a reliable text-on-accent token, and verify cards/buttons across light profiles
 - Keep this narrowly scoped to automation-supporting UX problems
 
 ### Keyboard Shortcuts (UX-2)

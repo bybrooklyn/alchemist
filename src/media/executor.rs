@@ -301,9 +301,13 @@ pub(crate) fn encoder_tag_matches(
 mod tests {
     use super::*;
     use crate::db::Db;
-    use crate::media::pipeline::Encoder;
+    use crate::media::pipeline::{
+        AnalysisConfidence, AudioStreamPlan, DynamicRange, Encoder, EncoderBackend, MediaMetadata,
+        RateControl, SubtitleStreamPlan, TranscodeDecision,
+    };
     use crate::orchestrator::LocalExecutionObserver;
     use std::path::Path;
+    use std::process::Command;
     use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::broadcast;
@@ -349,6 +353,14 @@ mod tests {
         let mut path = std::env::temp_dir();
         path.push(format!("{prefix}_{}.db", rand::random::<u64>()));
         path
+    }
+
+    fn ffmpeg_ready() -> bool {
+        Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 
     #[tokio::test]
@@ -402,6 +414,121 @@ mod tests {
         assert!(matches!(second, JobEvent::Progress { .. }));
 
         drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_executor_surfaces_process_failure()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+
+        let db_path = temp_db_path("alchemist_executor_failure");
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_executor_failure_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("bad-input.mkv");
+        let output = temp_root.join("bad-output.mkv");
+        std::fs::write(&input, b"ffmpeg should fail on this input")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let Some(job) = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+        else {
+            panic!("expected seeded job");
+        };
+
+        let (jobs_tx, _) = broadcast::channel(100);
+        let (config_tx, _) = broadcast::channel(10);
+        let (system_tx, _) = broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+        let executor = FfmpegExecutor::new(
+            Arc::new(crate::orchestrator::Transcoder::new()),
+            db.clone(),
+            None,
+            event_channels,
+            false,
+        );
+        let metadata = MediaMetadata {
+            path: input.clone(),
+            duration_secs: 1.0,
+            codec_name: "h264".to_string(),
+            width: 16,
+            height: 16,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 32,
+            video_bitrate_bps: Some(10_000),
+            container_bitrate_bps: Some(10_000),
+            fps: 1.0,
+            container: "mkv".to_string(),
+            audio_codec: None,
+            audio_bitrate_bps: None,
+            audio_channels: None,
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+        };
+        let analysis = MediaAnalysis {
+            metadata,
+            warnings: Vec::new(),
+            confidence: AnalysisConfidence::Low,
+        };
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "failure test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: Some(output.clone()),
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::H264,
+            output_codec: Some(crate::config::OutputCodec::H264),
+            encoder: Some(Encoder::H264X264),
+            backend: Some(EncoderBackend::Cpu),
+            rate_control: Some(RateControl::Crf { value: 21 }),
+            encoder_preset: Some("ultrafast".to_string()),
+            threads: 1,
+            audio: AudioStreamPlan::Drop,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::Drop,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+
+        let err = match executor.execute(&job, &plan, &analysis).await {
+            Ok(_) => {
+                return Err("invalid input unexpectedly encoded successfully".into());
+            }
+            Err(err) => err,
+        };
+        assert!(matches!(err, crate::error::AlchemistError::FFmpeg(_)));
+        assert!(format!("{err}").contains("FFmpeg failed"));
+
+        let logs = db.get_logs_for_job(job.id, 20).await?;
+        assert!(!logs.is_empty());
+        assert!(!output.exists());
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);
         Ok(())
     }

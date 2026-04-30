@@ -1125,6 +1125,7 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::path::Path;
     use std::time::SystemTime;
 
@@ -1189,6 +1190,62 @@ mod tests {
 
         let none = db.claim_next_job().await?;
         assert!(none.is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claim_next_job_handles_queue_spam_without_duplicates()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_queue_spam_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        let job_count = 128;
+
+        for index in 0..job_count {
+            let input = format!("spam-input-{index:03}.mkv");
+            let output = format!("spam-output-{index:03}.mkv");
+            let changed = db
+                .enqueue_job(
+                    Path::new(&input),
+                    Path::new(&output),
+                    SystemTime::UNIX_EPOCH,
+                )
+                .await?;
+            assert!(changed, "expected fresh insert for {input}");
+        }
+
+        let mut claimed_ids = HashSet::new();
+        let mut claimed_inputs = HashSet::new();
+        for _ in 0..job_count {
+            let claimed = db
+                .claim_next_job()
+                .await?
+                .ok_or_else(|| std::io::Error::other("queue drained before every job claimed"))?;
+            assert_eq!(claimed.status, JobState::Analyzing);
+            assert!(
+                claimed_ids.insert(claimed.id),
+                "job {} was claimed more than once",
+                claimed.id
+            );
+            assert!(
+                claimed_inputs.insert(claimed.input_path.clone()),
+                "input {} was claimed more than once",
+                claimed.input_path
+            );
+        }
+
+        assert!(db.claim_next_job().await?.is_none());
+        assert_eq!(claimed_ids.len(), job_count);
+        assert!(db.get_jobs_by_status(JobState::Queued).await?.is_empty());
+        assert_eq!(
+            db.get_jobs_by_status(JobState::Analyzing).await?.len(),
+            job_count
+        );
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

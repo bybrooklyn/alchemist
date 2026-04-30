@@ -4,6 +4,19 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const url = process.env.DOCS_URL ?? 'https://alchemist-project.org';
 const baseUrl = process.env.DOCS_BASE_URL ?? '/';
+const docsThemeScript = `
+(function () {
+  try {
+    var key = 'alchemist-docs-color-profile';
+    var allowed = ['helios-orange', 'fjord', 'neon', 'crimson'];
+    var stored = window.localStorage.getItem(key);
+    var theme = allowed.indexOf(stored) >= 0 ? stored : 'helios-orange';
+    document.documentElement.setAttribute('data-color-profile', theme);
+  } catch (_) {
+    document.documentElement.setAttribute('data-color-profile', 'helios-orange');
+  }
+})();
+`;
 
 const config: Config = {
   title: 'Alchemist',
@@ -27,6 +40,13 @@ const config: Config = {
   },
 
   headTags: [
+    {
+      tagName: 'script',
+      attributes: {
+        type: 'text/javascript',
+      },
+      innerHTML: docsThemeScript,
+    },
     {
       tagName: 'script',
       attributes: {

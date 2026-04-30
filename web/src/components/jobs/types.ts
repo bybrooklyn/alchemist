@@ -120,6 +120,15 @@ export interface ConfirmConfig {
 export type TabType = "all" | "active" | "queued" | "completed" | "failed" | "skipped" | "archived";
 export type SortField = "updated_at" | "created_at" | "input_path" | "size";
 
+export interface SavedJobView {
+    id: string;
+    label: string;
+    activeTab: TabType;
+    sortBy: SortField;
+    sortDesc: boolean;
+    search?: string;
+}
+
 export const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
     { value: "updated_at", label: "Last Updated" },
     { value: "created_at", label: "Date Added" },

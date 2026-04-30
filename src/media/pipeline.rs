@@ -2412,6 +2412,36 @@ mod tests {
         }
     }
 
+    fn test_pipeline(db: Arc<Db>, dry_run: bool) -> Pipeline {
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }));
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(100);
+        let (config_tx, _) = tokio::sync::broadcast::channel(10);
+        let (system_tx, _) = tokio::sync::broadcast::channel(10);
+        let event_channels = Arc::new(crate::db::EventChannels {
+            jobs: jobs_tx,
+            config: config_tx,
+            system: system_tx,
+        });
+
+        Pipeline::new(
+            db,
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            dry_run,
+        )
+    }
+
     #[test]
     fn generated_output_pattern_matches_default_suffix() {
         let settings = default_file_settings();
@@ -2422,6 +2452,34 @@ mod tests {
         assert!(!matches_generated_output_pattern(
             Path::new("/media/movie.mkv"),
             &settings,
+        ));
+    }
+
+    #[test]
+    fn map_failure_classifies_crash_resource_and_bad_input_failures() {
+        assert!(matches!(
+            map_failure(&crate::error::AlchemistError::FFmpeg(
+                "FFmpeg failed with status 1".to_string()
+            )),
+            JobFailure::Transient
+        ));
+        assert!(matches!(
+            map_failure(&crate::error::AlchemistError::Unknown(
+                "No space left on device".to_string()
+            )),
+            JobFailure::Transient
+        ));
+        assert!(matches!(
+            map_failure(&crate::error::AlchemistError::Analyzer(
+                "Invalid data found when processing input".to_string()
+            )),
+            JobFailure::MediaCorrupt
+        ));
+        assert!(matches!(
+            map_failure(&crate::error::AlchemistError::EncoderUnavailable(
+                "h264_videotoolbox".to_string()
+            )),
+            JobFailure::EncoderUnavailable
         ));
     }
 
@@ -2652,6 +2710,23 @@ mod tests {
                 .any(|entry| entry.message.contains("Finalization failed"))
         );
 
+        let failure = db
+            .get_job_failure_explanation(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failure explanation"))?;
+        assert_eq!(failure.code, "finalize_failed");
+
+        let attempts = db.get_encode_attempts_by_job(job.id).await?;
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].outcome, "failed");
+        assert_eq!(attempts[0].failure_code.as_deref(), Some("finalize_failed"));
+        assert!(
+            attempts[0]
+                .failure_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Finalization failed"))
+        );
+
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);
         Ok(())
@@ -2732,6 +2807,67 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing skipped job"))?;
         assert_eq!(updated.status, crate::db::JobState::Skipped);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_job_marks_unreadable_media_failed_without_encoding() -> anyhow::Result<()> {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_bad_input_failure_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_bad_input_failure_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let input = temp_root.join("not-media.mkv");
+        let output = temp_root.join("not-media-alchemist.mkv");
+        std::fs::write(&input, b"this is not a media file")?;
+
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        let pipeline = test_pipeline(db.clone(), false);
+        let result = pipeline.process_job(job.clone()).await;
+        assert!(matches!(result, Err(JobFailure::MediaCorrupt)));
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Failed);
+        assert_eq!(updated.attempt_count, 1);
+        assert!(!temp_output_path_for(&output).exists());
+
+        let failure = db
+            .get_job_failure_explanation(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failure explanation"))?;
+        assert_eq!(failure.code, "corrupt_or_unreadable_media");
+
+        let attempts = db.get_encode_attempts_by_job(job.id).await?;
+        assert!(attempts.is_empty());
+
+        let logs = db.get_logs_for_job(job.id, 10).await?;
+        assert!(
+            logs.iter()
+                .any(|entry| entry.message.contains("Probing failed"))
+        );
 
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);

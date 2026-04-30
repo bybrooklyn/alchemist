@@ -8,21 +8,24 @@ keywords:
   - foss transcoding
 ---
 
-This is an honest, narrow comparison for people evaluating
-FileFlows against Alchemist. It stays on the points that
-typically drive the decision: licensing, deployment shape,
-config model, and what each tool treats as a first-class
+This is a direct comparison for people evaluating FileFlows
+against Alchemist. It stays on the points that usually drive
+the decision: licensing, deployment shape, config model,
+feature gates, and what each tool treats as a first-class
 feature.
 
 For current FileFlows features and licensing terms, refer to
-[fileflows.com](https://fileflows.com/) — this page only
-compares against what FileFlows documents publicly.
+[fileflows.com](https://fileflows.com/), including its
+[pricing](https://fileflows.com/pricing) and
+[license-management docs](https://fileflows.com/docs/webconsole/config/settings/license).
+This page only compares against what FileFlows documents
+publicly.
 
 ## At a glance
 
 | | Alchemist | FileFlows |
 |---|---|---|
-| License | GPLv3 (fully open source) | See FileFlows' own licensing page |
+| License | GPLv3, no paid tier, no license key | Free / Personal / Commercial license tiers |
 | Config model | Declarative — TOML file and UI settings | Flow editor (node-based) |
 | Deployment | Single binary (also a single Docker container) | Server + optional additional processing nodes |
 | AV1 target | First-class in the planner | Supported (see FileFlows docs) |
@@ -36,14 +39,16 @@ compares against what FileFlows documents publicly.
   graphical flow editor.
 - You rely on specific FileFlows plugins or flows you don't
   want to re-express.
+- You need a broader general-purpose file automation suite,
+  not just media optimization.
 - You already have a working FileFlows deployment and no
   concrete reason to change.
 
 ## Choose Alchemist if
 
 - **Licensing matters to you.** Alchemist is GPLv3 source,
-  binary, and distribution. No paid tier, no license key.
-  See [Open Source](/open-source).
+  binary, and distribution. No paid tier, no license key,
+  no commercial-use gate. See [Open Source](/open-source).
 - **You prefer declarative config over a flow editor.** The
   planner decides per file whether to skip, remux, or
   transcode based on thresholds and rules you set. See
@@ -78,17 +83,27 @@ fit.
 ### Licensing
 
 This is the most common reason people come looking for a
-FileFlows alternative. Alchemist is GPLv3 with no paid tier.
-Everything in Alchemist is in the public source tree and
-stays that way. See [Open Source](/open-source) for the
-specifics.
+FileFlows alternative. FileFlows' own pricing page documents
+Free, Personal, and Commercial tiers, including differences
+in processing nodes, flow runners, flow elements, database
+types, paid support, commercial use, and advanced features.
+Its license page documents license email/key entry and
+features that depend on license level.
+
+Alchemist does not have that layer. It is GPLv3 with no paid
+tier, no license key, no private unlock, and no separate
+commercial feature set. Everything in Alchemist is in the
+public source tree and stays that way. See
+[Open Source](/open-source) for the specifics.
 
 ### Hardware selection
 
 Alchemist probes each available encoder at startup and
 selects one active device using a deterministic scoring
-policy. The probe log shows exactly why every probed backend
-succeeded or failed. See [Hardware Acceleration](/hardware).
+policy. A valid detection result is cached across repeat
+boots, and the probe log shows exactly why every probed
+backend succeeded or failed. See
+[Hardware Acceleration](/hardware).
 
 ## Moving off FileFlows
 
