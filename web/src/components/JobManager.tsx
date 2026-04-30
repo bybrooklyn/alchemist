@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw, Trash2, Ban } from "lucide-react";
+import { RefreshCw, Trash2, Ban, Plus } from "lucide-react";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { withErrorBoundary } from "./ErrorBoundary";
-import type { Job, TabType, SortField, CountMessageResponse } from "./jobs/types";
+import type { Job, TabType, SortField, CountMessageResponse, SavedJobView } from "./jobs/types";
 import { isJobActive } from "./jobs/types";
 import { useJobSSE } from "./jobs/useJobSSE";
 import { JobsToolbar } from "./jobs/JobsToolbar";
@@ -15,6 +17,96 @@ import { JobDetailModal } from "./jobs/JobDetailModal";
 import { EnqueuePathDialog } from "./jobs/EnqueuePathDialog";
 import { getStatusBadge } from "./jobs/jobStatusBadge";
 import { useJobDetailController } from "./jobs/useJobDetailController";
+
+const BUILT_IN_JOB_VIEWS: SavedJobView[] = [
+    {
+        id: "builtin-recent-failures",
+        label: "Recent Failures",
+        activeTab: "failed",
+        sortBy: "updated_at",
+        sortDesc: true,
+    },
+    {
+        id: "builtin-queued",
+        label: "Queued",
+        activeTab: "queued",
+        sortBy: "created_at",
+        sortDesc: false,
+    },
+    {
+        id: "builtin-recent-completions",
+        label: "Recent Completions",
+        activeTab: "completed",
+        sortBy: "updated_at",
+        sortDesc: true,
+    },
+];
+
+const TAB_TYPES: TabType[] = ["all", "active", "queued", "completed", "failed", "skipped", "archived"];
+const SORT_FIELDS: SortField[] = ["updated_at", "created_at", "input_path", "size"];
+
+function cn(...inputs: ClassValue[]) {
+    return twMerge(clsx(inputs));
+}
+
+function isTabType(value: unknown): value is TabType {
+    return typeof value === "string" && TAB_TYPES.includes(value as TabType);
+}
+
+function isSortField(value: unknown): value is SortField {
+    return typeof value === "string" && SORT_FIELDS.includes(value as SortField);
+}
+
+function normalizeSavedJobView(candidate: unknown): SavedJobView | null {
+    if (!candidate || typeof candidate !== "object") {
+        return null;
+    }
+
+    const view = candidate as Partial<Record<keyof SavedJobView, unknown>>;
+    const id = typeof view.id === "string" ? view.id.trim() : "";
+    const label = typeof view.label === "string" ? view.label.trim() : "";
+    if (!id || !label || BUILT_IN_JOB_VIEWS.some((builtin) => builtin.id === id)) {
+        return null;
+    }
+    if (!isTabType(view.activeTab) || !isSortField(view.sortBy) || typeof view.sortDesc !== "boolean") {
+        return null;
+    }
+
+    const search = typeof view.search === "string" && view.search.trim() ? view.search.trim() : undefined;
+    return {
+        id,
+        label,
+        activeTab: view.activeTab,
+        sortBy: view.sortBy,
+        sortDesc: view.sortDesc,
+        search,
+    };
+}
+
+function parseSavedJobViews(raw: string): SavedJobView[] {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+        return [];
+    }
+    return parsed
+        .map(normalizeSavedJobView)
+        .filter((view): view is SavedJobView => view !== null);
+}
+
+function viewMatchesCurrentState(
+    view: SavedJobView,
+    activeTab: TabType,
+    sortBy: SortField,
+    sortDesc: boolean,
+    searchInput: string,
+) {
+    return (
+        view.activeTab === activeTab &&
+        view.sortBy === sortBy &&
+        view.sortDesc === sortDesc &&
+        (view.search ?? "") === searchInput.trim()
+    );
+}
 
 function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
@@ -28,7 +120,102 @@ function JobManager() {
     const [sortBy, setSortBy] = useState<SortField>("updated_at");
     const [sortDesc, setSortDesc] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [savedViews, setSavedViews] = useState<SavedJobView[]>([]);
+    const [activeViewId, setActiveViewId] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const loadSavedViews = async () => {
+            try {
+                const pref = await apiJson<{ value: string }>("/api/settings/preferences/saved_job_views");
+                if (pref.value) {
+                    setSavedViews(parseSavedJobViews(pref.value));
+                }
+            } catch (error) {
+                if (isApiError(error) && error.status === 404) {
+                    return;
+                }
+                showToast({ kind: "error", title: "Jobs", message: "Saved job views could not be loaded" });
+            }
+        };
+        void loadSavedViews();
+    }, []);
+
+    useEffect(() => {
+        if (!activeViewId) {
+            return;
+        }
+
+        const activeView = [...BUILT_IN_JOB_VIEWS, ...savedViews].find((view) => view.id === activeViewId);
+        if (!activeView || !viewMatchesCurrentState(activeView, activeTab, sortBy, sortDesc, searchInput)) {
+            setActiveViewId(null);
+        }
+    }, [activeTab, activeViewId, savedViews, searchInput, sortBy, sortDesc]);
+
+    const persistSavedViews = async (views: SavedJobView[]) => {
+        await apiAction("/api/settings/preferences", {
+            method: "POST",
+            body: JSON.stringify({
+                key: "saved_job_views",
+                value: JSON.stringify(views),
+            }),
+        });
+    };
+
+    const applyView = (view: SavedJobView) => {
+        setActiveTab(view.activeTab);
+        setSortBy(view.sortBy);
+        setSortDesc(view.sortDesc);
+        setSearchInput(view.search ?? "");
+        setActiveViewId(view.id);
+        setPage(1);
+    };
+
+    const saveCurrentView = async (label: string) => {
+        const trimmedLabel = label.trim();
+        if (!trimmedLabel) {
+            showToast({ kind: "error", title: "Jobs", message: "View name is required" });
+            return;
+        }
+
+        const previousViews = savedViews;
+        const previousActiveViewId = activeViewId;
+        const newView: SavedJobView = {
+            id: `custom-${crypto.randomUUID()}`,
+            label: trimmedLabel,
+            activeTab,
+            sortBy,
+            sortDesc,
+            search: searchInput.trim() || undefined,
+        };
+        const nextViews = [...savedViews, newView];
+        setSavedViews(nextViews);
+        setActiveViewId(newView.id);
+
+        try {
+            await persistSavedViews(nextViews);
+        } catch (e) {
+            setSavedViews(previousViews);
+            setActiveViewId(previousActiveViewId);
+            showToast({ kind: "error", title: "Jobs", message: "Failed to save view" });
+        }
+    };
+
+    const deleteView = async (id: string) => {
+        const previousViews = savedViews;
+        const previousActiveViewId = activeViewId;
+        const nextViews = savedViews.filter(v => v.id !== id);
+        setSavedViews(nextViews);
+        if (activeViewId === id) setActiveViewId(null);
+
+        try {
+            await persistSavedViews(nextViews);
+        } catch (e) {
+            setSavedViews(previousViews);
+            setActiveViewId(previousActiveViewId);
+            showToast({ kind: "error", title: "Jobs", message: "Failed to delete view" });
+        }
+    };
     const [menuJobId, setMenuJobId] = useState<number | null>(null);
     const [enqueueDialogOpen, setEnqueueDialogOpen] = useState(false);
     const [enqueuePath, setEnqueuePath] = useState("");
@@ -381,6 +568,61 @@ function JobManager() {
                     <span className="font-medium text-emerald-500">{completedCount}</span>
                     {" "}completed
                 </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 px-1">
+                {BUILT_IN_JOB_VIEWS.map((view) => (
+                    <button
+                        key={view.id}
+                        onClick={() => applyView(view)}
+                        className={cn(
+                            "px-3 py-1 rounded-full text-xs font-semibold border transition-all",
+                            activeViewId === view.id
+                                ? "bg-helios-solar border-helios-solar text-white"
+                                : "bg-helios-surface border-helios-line/20 text-helios-slate hover:border-helios-solar hover:text-helios-solar"
+                        )}
+                    >
+                        {view.label}
+                    </button>
+                ))}
+                {savedViews.map((view) => (
+                    <div key={view.id} className="group relative flex items-center">
+                        <button
+                            onClick={() => applyView(view)}
+                            className={cn(
+                                "px-3 py-1 rounded-full text-xs font-semibold border transition-all pr-7",
+                                activeViewId === view.id
+                                    ? "bg-helios-solar border-helios-solar text-white"
+                                    : "bg-helios-surface border-helios-line/20 text-helios-slate hover:border-helios-solar hover:text-helios-solar"
+                            )}
+                        >
+                            {view.label}
+                        </button>
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteView(view.id);
+                            }}
+                            className={cn(
+                                "absolute right-2 p-0.5 rounded-full hover:bg-black/10 transition-colors opacity-0 group-hover:opacity-100",
+                                activeViewId === view.id ? "text-white/80 hover:text-white" : "text-helios-slate hover:text-red-500"
+                            )}
+                            title="Delete view"
+                            aria-label={`Delete ${view.label}`}
+                        >
+                            <Trash2 size={10} />
+                        </button>
+                    </div>
+                ))}
+                <button
+                    onClick={() => {
+                        const label = window.prompt("View name");
+                        if (label !== null) void saveCurrentView(label);
+                    }}
+                    className="px-3 py-1 rounded-full text-xs font-semibold border border-dashed border-helios-line/40 text-helios-slate hover:border-helios-solar hover:text-helios-solar transition-all flex items-center gap-1"
+                >
+                    <Plus size={10} /> Save View
+                </button>
             </div>
 
             <JobsToolbar

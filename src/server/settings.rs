@@ -377,7 +377,11 @@ pub(crate) async fn get_setting_preference_handler(
 ) -> impl IntoResponse {
     match state.db.get_preference(key.as_str()).await {
         Ok(Some(value)) => axum::Json(SettingPreferenceResponse { key, value }).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => api_error_response(
+            StatusCode::NOT_FOUND,
+            "SETTING_PREFERENCE_NOT_FOUND",
+            "Preference not found",
+        ),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "SETTING_PREFERENCE_READ_FAILED",
@@ -618,6 +622,11 @@ async fn validate_notification_target(
             .and_then(JsonValue::as_str)
             .map(str::to_string),
         "gotify" => target
+            .config_json
+            .get("server_url")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        "ntfy" => target
             .config_json
             .get("server_url")
             .and_then(JsonValue::as_str)
@@ -900,7 +909,11 @@ pub(crate) async fn revoke_api_token_handler(
 ) -> impl IntoResponse {
     match state.db.revoke_api_token(id).await {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(err) if super::is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) if super::is_row_not_found(&err) => api_error_response(
+            StatusCode::NOT_FOUND,
+            "API_TOKEN_NOT_FOUND",
+            "API token not found",
+        ),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "API_TOKEN_REVOKE_FAILED",
@@ -1016,7 +1029,11 @@ pub(crate) async fn delete_schedule_handler(
         }
     };
     let Some(window_index) = window_index else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "SCHEDULE_WINDOW_NOT_FOUND",
+            "Schedule window not found",
+        );
     };
 
     let mut next_config = state.config.read().await.clone();

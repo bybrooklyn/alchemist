@@ -12,7 +12,7 @@ The Alchemist engine is a background loop that claims queued jobs, processes the
 | State | Jobs start? | Active jobs affected? | How to enter |
 |-------|------------|----------------------|-------------|
 | **Running** | Yes | Not affected | Resume, restart |
-| **Paused** (manual) | No | Not cancelled | Header → Stop, `POST /api/engine/pause` |
+| **Paused** (manual) | No | Active jobs continue | `POST /api/engine/pause`, Runtime pause control |
 | **Paused** (scheduler) | No | Not cancelled | Schedule window activates |
 | **Draining** | No | Run to completion | Header → Stop (while running), `POST /api/engine/drain` |
 | **Restarting** | No (briefly) | Cancelled | `POST /api/engine/restart` |
@@ -147,6 +147,15 @@ Use **Restart** to force a clean slate — e.g. after changing hardware settings
 ## Boot sequence
 
 1. Migrations run.
-2. Any jobs left in `encoding`, `remuxing`, `analyzing`, or `resuming` are reset to `queued` (crash recovery).
-3. Boot analysis runs — all `queued` jobs that have no metadata have FFprobe run on them. This uses a single-slot semaphore and blocks the claim loop.
-4. Engine claim loop starts — jobs are claimed and processed up to the concurrent limit.
+2. A valid hardware detection cache is loaded immediately if
+   the runtime fingerprint still matches.
+3. The web server and UI become available.
+4. Hardware detection runs or refreshes in the background
+   when the cache is missing or stale, then updates runtime
+   state and the probe log.
+5. Any jobs left in `encoding`, `remuxing`, `analyzing`, or
+   `resuming` are reset to `queued` (crash recovery).
+6. Boot analysis runs for queued jobs missing metadata. This
+   uses a single-slot semaphore and blocks the claim loop.
+7. Engine claim loop starts — jobs are claimed and processed
+   up to the concurrent limit.

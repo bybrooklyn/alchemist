@@ -1,6 +1,8 @@
 //! Library scanning and watch folder handlers.
 
-use super::{AppState, is_row_not_found, refresh_file_watcher, save_config_or_response};
+use super::{
+    AppState, api_error_response, is_row_not_found, refresh_file_watcher, save_config_or_response,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -32,7 +34,11 @@ pub(crate) async fn scan_handler(State(state): State<Arc<AppState>>) -> impl Int
 
     if let Err(e) = state.agent.scan_and_enqueue(dirs).await {
         error!("Scan failed: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SCAN_FAILED",
+            e.to_string(),
+        );
     }
 
     // Trigger analysis after scan completes so jobs
@@ -49,7 +55,11 @@ pub(crate) async fn scan_handler(State(state): State<Arc<AppState>>) -> impl Int
 pub(crate) async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.library_scanner.start_scan().await {
         Ok(_) => StatusCode::ACCEPTED.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "START_SCAN_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -73,7 +83,11 @@ pub(crate) async fn library_health_handler(
 ) -> impl IntoResponse {
     match state.db.get_health_summary().await {
         Ok(summary) => axum::Json(summary).into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_HEALTH_SUMMARY_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -97,7 +111,11 @@ pub(crate) async fn get_library_health_issues_handler(
                 .collect::<Vec<_>>();
             axum::Json(issues).into_response()
         }
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_HEALTH_ISSUES_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -218,13 +236,23 @@ pub(crate) async fn rescan_library_health_issue_handler(
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => job,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_JOB_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     match crate::media::health::HealthChecker::check_file(FsPath::new(&job.output_path)).await {
         Ok(issue) => {
             if let Err(err) = state.db.record_health_check(job.id, issue.as_ref()).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "RECORD_HEALTH_CHECK_FAILED",
+                    err.to_string(),
+                );
             }
             axum::Json(serde_json::json!({
                 "job_id": job.id,
@@ -232,7 +260,11 @@ pub(crate) async fn rescan_library_health_issue_handler(
             }))
             .into_response()
         }
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "HEALTH_CHECK_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -249,7 +281,11 @@ pub(crate) async fn get_watch_dirs_handler(
 ) -> impl IntoResponse {
     match state.db.get_watch_dirs().await {
         Ok(dirs) => axum::Json(dirs).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_WATCH_DIRS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -259,7 +295,7 @@ pub(crate) async fn add_watch_dir_handler(
 ) -> impl IntoResponse {
     let normalized_path = match super::canonicalize_directory_path(&payload.path, "path") {
         Ok(path) => path,
-        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(msg) => return api_error_response(StatusCode::BAD_REQUEST, "INVALID_PATH", msg),
     };
 
     let normalized_path = normalized_path.to_string_lossy().to_string();
@@ -270,7 +306,11 @@ pub(crate) async fn add_watch_dir_handler(
         .iter()
         .any(|watch_dir| watch_dir.path == normalized_path)
     {
-        return (StatusCode::CONFLICT, "watch folder already exists").into_response();
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "WATCH_DIR_EXISTS",
+            "watch folder already exists",
+        );
     }
     next_config
         .scanner
@@ -294,7 +334,11 @@ pub(crate) async fn add_watch_dir_handler(
             .find(|dir| dir.path == normalized_path)
             .map(|dir| axum::Json(dir).into_response())
             .unwrap_or_else(|| StatusCode::OK.into_response()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_WATCH_DIRS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -323,7 +367,11 @@ pub(crate) async fn sync_watch_dirs_handler(
 
     match state.db.get_watch_dirs().await {
         Ok(dirs) => axum::Json(dirs).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_WATCH_DIRS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -333,7 +381,13 @@ pub(crate) async fn remove_watch_dir_handler(
 ) -> impl IntoResponse {
     let dir = match state.db.get_watch_dirs().await {
         Ok(dirs) => dirs.into_iter().find(|dir| dir.id == id),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_WATCH_DIRS_FAILED",
+                e.to_string(),
+            );
+        }
     };
     let Some(dir) = dir else {
         return StatusCode::NOT_FOUND.into_response();
@@ -462,7 +516,11 @@ pub(crate) async fn list_profiles_handler(State(state): State<Arc<AppState>>) ->
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_PROFILES_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -492,13 +550,19 @@ pub(crate) async fn create_profile_handler(
     axum::Json(payload): axum::Json<LibraryProfilePayload>,
 ) -> impl IntoResponse {
     if let Err(message) = validate_library_profile_payload(&payload) {
-        return (StatusCode::BAD_REQUEST, message).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "INVALID_PROFILE", message);
     }
 
     let new_profile = to_new_library_profile(payload);
     let id = match state.db.create_profile(new_profile).await {
         Ok(id) => id,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CREATE_PROFILE_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     match state.db.get_profile(id).await {
@@ -508,7 +572,11 @@ pub(crate) async fn create_profile_handler(
         )
             .into_response(),
         Ok(None) => StatusCode::CREATED.into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_PROFILE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -518,10 +586,14 @@ pub(crate) async fn update_profile_handler(
     axum::Json(payload): axum::Json<LibraryProfilePayload>,
 ) -> impl IntoResponse {
     if is_builtin_profile_id(id) {
-        return (StatusCode::CONFLICT, "Built-in presets are read-only").into_response();
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "BUILTIN_PROFILE_READ_ONLY",
+            "Built-in presets are read-only",
+        );
     }
     if let Err(message) = validate_library_profile_payload(&payload) {
-        return (StatusCode::BAD_REQUEST, message).into_response();
+        return api_error_response(StatusCode::BAD_REQUEST, "INVALID_PROFILE", message);
     }
 
     match state
@@ -532,10 +604,18 @@ pub(crate) async fn update_profile_handler(
         Ok(_) => match state.db.get_profile(id).await {
             Ok(Some(profile)) => axum::Json(library_profile_response(profile)).into_response(),
             Ok(None) => StatusCode::NOT_FOUND.into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            Err(err) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_PROFILE_FAILED",
+                err.to_string(),
+            ),
         },
         Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "UPDATE_PROFILE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -544,21 +624,33 @@ pub(crate) async fn delete_profile_handler(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     if is_builtin_profile_id(id) {
-        return (StatusCode::CONFLICT, "Built-in presets cannot be deleted").into_response();
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "BUILTIN_PROFILE_DELETE_BLOCKED",
+            "Built-in presets cannot be deleted",
+        );
     }
 
     match state.db.count_watch_dirs_using_profile(id).await {
-        Ok(count) if count > 0 => (
+        Ok(count) if count > 0 => api_error_response(
             StatusCode::CONFLICT,
+            "PROFILE_IN_USE",
             "Profile is still assigned to one or more watch folders",
-        )
-            .into_response(),
+        ),
         Ok(_) => match state.db.delete_profile(id).await {
             Ok(_) => StatusCode::OK.into_response(),
             Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            Err(err) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DELETE_PROFILE_FAILED",
+                err.to_string(),
+            ),
         },
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "COUNT_PROFILE_USAGE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -572,7 +664,11 @@ pub(crate) async fn assign_watch_dir_profile_handler(
             Ok(Some(_)) => {}
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GET_PROFILE_FAILED",
+                    err.to_string(),
+                );
             }
         }
     }
@@ -588,10 +684,18 @@ pub(crate) async fn assign_watch_dir_profile_handler(
                 .find(|dir| dir.id == id)
                 .map(|dir| axum::Json(dir).into_response())
                 .unwrap_or_else(|| StatusCode::OK.into_response()),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            Err(err) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_WATCH_DIRS_FAILED",
+                err.to_string(),
+            ),
         },
         Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ASSIGN_PROFILE_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -601,7 +705,13 @@ pub(crate) async fn reanalyze_watch_dir_handler(
 ) -> impl IntoResponse {
     let watch_dir = match state.db.get_watch_dirs().await {
         Ok(dirs) => dirs.into_iter().find(|d| d.id == id),
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_WATCH_DIRS_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let Some(watch_dir) = watch_dir else {
@@ -610,7 +720,13 @@ pub(crate) async fn reanalyze_watch_dir_handler(
 
     let jobs = match state.db.get_jobs_under_root_path(&watch_dir.path).await {
         Ok(jobs) => jobs,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_JOBS_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let ids: Vec<i64> = jobs
@@ -621,6 +737,10 @@ pub(crate) async fn reanalyze_watch_dir_handler(
 
     match state.db.batch_reanalyze_jobs(&ids).await {
         Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "BATCH_REANALYZE_FAILED",
+            err.to_string(),
+        ),
     }
 }

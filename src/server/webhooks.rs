@@ -205,28 +205,23 @@ pub(crate) async fn arr_webhook_handler(
         translate_arr_path(&resolved, &config.system.arr_path_translations)
     };
 
-    let (status, enqueue_result) =
-        super::jobs::enqueue_job_from_submitted_path(state.as_ref(), translated.trim()).await;
-
-    if !status.is_success() {
-        let error_code = if status.is_server_error() {
-            "ARR_WEBHOOK_ENQUEUE_FAILED"
-        } else {
-            "ARR_WEBHOOK_ENQUEUE_REJECTED"
-        };
-        return api_error_response(status, error_code, enqueue_result.message);
-    }
-
-    (
-        status,
-        axum::Json(ArrWebhookResponse {
+    match super::jobs::enqueue_job_from_submitted_path(state.as_ref(), translated.trim()).await {
+        Ok(enqueue_result) => axum::Json(ArrWebhookResponse {
             accepted: true,
             enqueued: enqueue_result.enqueued,
             message: enqueue_result.message,
             resolved_path: Some(translated),
-        }),
-    )
-        .into_response()
+        })
+        .into_response(),
+        Err((status, _code, msg)) => {
+            let error_code = if status.is_server_error() {
+                "ARR_WEBHOOK_ENQUEUE_FAILED"
+            } else {
+                "ARR_WEBHOOK_ENQUEUE_REJECTED"
+            };
+            api_error_response(status, error_code, msg)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -18,12 +18,12 @@ mod tests;
 use crate::Agent;
 use crate::Transcoder;
 use crate::config::Config;
-use crate::db::{Db, EventChannels};
+use crate::db::{Db, EventChannels, SystemEvent};
 use crate::error::{AlchemistError, Result};
 use crate::system::hardware::{HardwareInfo, HardwareProbeLog, HardwareState};
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{StatusCode, Uri, header},
     middleware as axum_middleware,
     response::{IntoResponse, Response},
@@ -133,6 +133,79 @@ pub struct RunServerArgs {
     pub library_health_scan_in_progress: Arc<AtomicBool>,
 }
 
+const DEFAULT_SERVER_PORT: u16 = 3000;
+const DEFAULT_SERVER_PORT_FALLBACK_ATTEMPTS: u16 = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ServerPortSelection {
+    requested_port: u16,
+    user_specified: bool,
+    max_attempts: u16,
+}
+
+fn parse_server_port_env(raw_value: Option<&str>) -> Result<ServerPortSelection> {
+    let Some(value) = raw_value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(ServerPortSelection {
+            requested_port: DEFAULT_SERVER_PORT,
+            user_specified: false,
+            max_attempts: DEFAULT_SERVER_PORT_FALLBACK_ATTEMPTS,
+        });
+    };
+
+    let requested_port = value.parse::<u16>().map_err(|_| {
+        AlchemistError::Config("ALCHEMIST_SERVER_PORT must be a valid u16".to_string())
+    })?;
+
+    Ok(ServerPortSelection {
+        requested_port,
+        user_specified: true,
+        max_attempts: 1,
+    })
+}
+
+fn server_port_selection_from_env() -> Result<ServerPortSelection> {
+    parse_server_port_env(std::env::var("ALCHEMIST_SERVER_PORT").ok().as_deref())
+}
+
+fn port_range_end(start: u16, attempts: u16) -> u16 {
+    start.saturating_add(attempts.saturating_sub(1))
+}
+
+fn browser_url_for_port(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+async fn bind_server_listener(
+    selection: ServerPortSelection,
+) -> Result<(tokio::net::TcpListener, SocketAddr)> {
+    for attempt in 0..selection.max_attempts {
+        let Some(try_port) = selection.requested_port.checked_add(attempt) else {
+            break;
+        };
+        let addr = SocketAddr::from(([0, 0, 0, 0], try_port));
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                let bound_addr = listener.local_addr()?;
+                return Ok((listener, bound_addr));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+                if selection.user_specified {
+                    return Err(AlchemistError::Config(format!(
+                        "Port {try_port} is already in use. Set ALCHEMIST_SERVER_PORT to a different port."
+                    )));
+                }
+            }
+            Err(err) => return Err(AlchemistError::Io(err)),
+        }
+    }
+
+    Err(AlchemistError::Config(format!(
+        "Could not bind to any port in range {}-{}. Set ALCHEMIST_SERVER_PORT to use a specific port.",
+        selection.requested_port,
+        port_range_end(selection.requested_port, selection.max_attempts)
+    )))
+}
+
 pub async fn run_server(args: RunServerArgs) -> Result<()> {
     let RunServerArgs {
         db,
@@ -233,66 +306,19 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
 
     let app = app_router(state.clone());
 
-    let port = std::env::var("ALCHEMIST_SERVER_PORT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            value.trim().parse::<u16>().map_err(|_| {
-                AlchemistError::Config("ALCHEMIST_SERVER_PORT must be a valid u16".to_string())
-            })
-        })
-        .transpose()?
-        .unwrap_or(3000);
-    let user_specified_port = std::env::var("ALCHEMIST_SERVER_PORT")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_some();
-    let max_attempts: u16 = if user_specified_port { 1 } else { 10 };
-    let mut listener = None;
-    let mut bound_port = port;
+    let port_selection = server_port_selection_from_env()?;
+    let requested_port = port_selection.requested_port;
+    let user_specified_port = port_selection.user_specified;
+    let (listener, bound_addr) = bind_server_listener(port_selection).await?;
+    let bound_port = bound_addr.port();
 
-    for attempt in 0..max_attempts {
-        let try_port = port.saturating_add(attempt);
-        let addr = format!("0.0.0.0:{try_port}");
-        match tokio::net::TcpListener::bind(&addr).await {
-            Ok(l) => {
-                bound_port = try_port;
-                listener = Some(l);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                if user_specified_port {
-                    return Err(AlchemistError::Config(format!(
-                        "Port {try_port} is already in use. Set ALCHEMIST_SERVER_PORT to a different port."
-                    )));
-                }
-                let next = try_port.saturating_add(1);
-                if attempt + 1 < max_attempts {
-                    tracing::warn!("Port {try_port} is in use, trying {next}");
-                } else {
-                    tracing::warn!("Port {try_port} is in use, no more ports to try");
-                }
-            }
-            Err(e) => return Err(AlchemistError::Io(e)),
-        }
+    if !user_specified_port && requested_port != 0 && bound_port != requested_port {
+        tracing::warn!("Port {requested_port} is in use; using {bound_port} instead.");
     }
-
-    let listener = listener.ok_or_else(|| {
-        AlchemistError::Config(format!(
-            "Could not bind to any port in range {port}–{}. Set ALCHEMIST_SERVER_PORT to use a specific port.",
-            port.saturating_add(max_attempts - 1)
-        ))
-    })?;
-
-    if bound_port != port {
-        tracing::warn!(
-            "Port {} was in use — Alchemist is listening on http://0.0.0.0:{bound_port} instead",
-            port
-        );
-        info!("listening on http://0.0.0.0:{bound_port}");
-    } else {
-        info!("listening on http://0.0.0.0:{bound_port}");
-    }
+    info!(
+        "Alchemist UI available at {} (listening on {bound_addr})",
+        browser_url_for_port(bound_port)
+    );
 
     // Run server with graceful shutdown on Ctrl+C
     axum::serve(
@@ -383,7 +409,10 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/:id/restart", post(restart_job_handler))
         .route("/api/jobs/:id/delete", post(delete_job_handler))
         .route("/api/jobs/:id/details", get(get_job_detail_handler))
-        .route("/api/conversion/uploads", post(upload_conversion_handler))
+        .route(
+            "/api/conversion/uploads",
+            post(upload_conversion_handler).layer(DefaultBodyLimit::disable()),
+        )
         .route("/api/conversion/preview", post(preview_conversion_handler))
         .route(
             "/api/conversion/jobs/:id/start",
@@ -583,8 +612,33 @@ pub(crate) async fn replace_runtime_hardware(
     hardware_info: HardwareInfo,
     probe_log: HardwareProbeLog,
 ) {
+    let cache_hardware_info = hardware_info.clone();
+    let cache_probe_log = probe_log.clone();
     state.hardware_state.replace(Some(hardware_info)).await;
     *state.hardware_probe_log.write().await = probe_log;
+    let _ = state
+        .event_channels
+        .system
+        .send(SystemEvent::HardwareStateChanged);
+
+    let config = state.config.read().await.clone();
+    match crate::system::hardware::hardware_detection_cache_key_and_json(&config).await {
+        Ok((cache_key, fingerprint_json)) => {
+            if let Err(err) = state
+                .db
+                .upsert_hardware_detection_cache(
+                    &cache_key,
+                    &fingerprint_json,
+                    &cache_hardware_info,
+                    &cache_probe_log,
+                )
+                .await
+            {
+                tracing::warn!("Failed to persist hardware detection cache: {err}");
+            }
+        }
+        Err(err) => tracing::warn!("Failed to build hardware detection cache key: {err}"),
+    }
 }
 
 pub(crate) fn config_write_blocked_response(config_path: &FsPath) -> Response {
@@ -606,22 +660,22 @@ pub(crate) fn config_save_error_to_response(config_path: &FsPath, err: &anyhow::
             .to_ascii_lowercase()
             .contains("read-only");
         if io_err.kind() == std::io::ErrorKind::PermissionDenied || read_only {
-            return (
+            return api_error_response(
                 StatusCode::CONFLICT,
+                "CONFIG_NOT_WRITABLE",
                 format!(
                     "Configuration file {:?} is not writable: {}",
                     config_path, io_err
                 ),
-            )
-                .into_response();
+            );
         }
     }
 
-    (
+    api_error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
+        "CONFIG_SAVE_FAILED",
         format!("Failed to save config at {:?}: {}", config_path, err),
     )
-        .into_response()
 }
 
 pub(crate) async fn save_config_or_response(
@@ -662,11 +716,11 @@ pub(crate) async fn save_config_or_response(
 }
 
 pub(crate) fn config_read_error_response(context: &str, err: &AlchemistError) -> Response {
-    (
+    api_error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
+        "CONFIG_READ_FAILED",
         format!("Failed to {context}: {err}"),
     )
-        .into_response()
 }
 
 pub(crate) fn hardware_error_response(err: &AlchemistError) -> Response {
@@ -674,7 +728,7 @@ pub(crate) fn hardware_error_response(err: &AlchemistError) -> Response {
         AlchemistError::Config(_) | AlchemistError::Hardware(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (status, err.to_string()).into_response()
+    api_error_response(status, "HARDWARE_ERROR", err.to_string())
 }
 
 pub(crate) fn validate_transcode_payload(
@@ -940,4 +994,121 @@ async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl I
 
     // Default fallback to 404 for missing files.
     StatusCode::NOT_FOUND.into_response()
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_empty_port_env_uses_default_with_fallback() -> Result<()> {
+        let missing = parse_server_port_env(None)?;
+        assert_eq!(missing.requested_port, DEFAULT_SERVER_PORT);
+        assert!(!missing.user_specified);
+        assert_eq!(missing.max_attempts, DEFAULT_SERVER_PORT_FALLBACK_ATTEMPTS);
+
+        let empty = parse_server_port_env(Some("   "))?;
+        assert_eq!(empty, missing);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_port_env_returns_config_error() {
+        match parse_server_port_env(Some("not-a-port")) {
+            Err(AlchemistError::Config(message)) => {
+                assert!(message.contains("ALCHEMIST_SERVER_PORT"));
+                assert!(message.contains("valid u16"));
+            }
+            Err(err) => panic!("expected config error, got {err}"),
+            Ok(selection) => panic!("expected error, got {selection:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_port_disables_fallback() -> Result<()> {
+        let selection = parse_server_port_env(Some("3017"))?;
+        assert_eq!(selection.requested_port, 3017);
+        assert!(selection.user_specified);
+        assert_eq!(selection.max_attempts, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn port_range_end_saturates_at_u16_max() {
+        assert_eq!(port_range_end(65534, 10), u16::MAX);
+        assert_eq!(port_range_end(3000, 10), 3009);
+    }
+
+    #[test]
+    fn browser_url_uses_loopback_host() {
+        assert_eq!(browser_url_for_port(3001), "http://127.0.0.1:3001");
+    }
+
+    #[tokio::test]
+    async fn explicit_zero_port_binds_ephemeral_port() -> Result<()> {
+        let selection = parse_server_port_env(Some("0"))?;
+        assert_eq!(selection.requested_port, 0);
+        assert!(selection.user_specified);
+
+        let (_listener, bound_addr) = bind_server_listener(selection).await?;
+        assert_ne!(bound_addr.port(), 0);
+        assert_eq!(
+            browser_url_for_port(bound_addr.port()),
+            format!("http://127.0.0.1:{}", bound_addr.port())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_selection_uses_next_available_port() -> Result<()> {
+        for _ in 0..50 {
+            let reserved =
+                tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+            let reserved_port = reserved.local_addr()?.port();
+            let Some(next_port) = reserved_port.checked_add(1) else {
+                continue;
+            };
+
+            let Ok(next_probe) =
+                tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], next_port))).await
+            else {
+                continue;
+            };
+            drop(next_probe);
+
+            let selection = ServerPortSelection {
+                requested_port: reserved_port,
+                user_specified: false,
+                max_attempts: 2,
+            };
+            let (_listener, bound_addr) = bind_server_listener(selection).await?;
+            assert_eq!(bound_addr.port(), next_port);
+            return Ok(());
+        }
+
+        panic!("could not find two adjacent available ports for fallback test");
+    }
+
+    #[tokio::test]
+    async fn explicit_busy_port_returns_config_error() -> Result<()> {
+        let reserved = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        let reserved_port = reserved.local_addr()?.port();
+
+        let selection = ServerPortSelection {
+            requested_port: reserved_port,
+            user_specified: true,
+            max_attempts: 1,
+        };
+
+        match bind_server_listener(selection).await {
+            Err(AlchemistError::Config(message)) => {
+                assert!(message.contains(&reserved_port.to_string()));
+                assert!(message.contains("ALCHEMIST_SERVER_PORT"));
+            }
+            Err(err) => panic!("expected config error, got {err}"),
+            Ok((_listener, bound_addr)) => panic!("expected error, got {bound_addr}"),
+        }
+
+        Ok(())
+    }
 }

@@ -12,7 +12,9 @@ Assumes you've completed the setup wizard. If not, see
 ## Start the engine
 
 The engine starts paused after setup. Click **Start** in
-the header bar.
+the header bar. If the header shows **Stopping**, the engine
+is draining; wait for active jobs to finish or use the
+Runtime controls to stop drain mode.
 
 ## Watch the queue
 
@@ -28,7 +30,11 @@ files are already efficiently compressed. See
 
 Go to **Settings → Hardware**. Confirm your GPU is the
 active backend. If you see `CPU (Software)` with a supported
-GPU, see [GPU Passthrough](/gpu-passthrough).
+GPU, open the probe log first, then see
+[GPU Passthrough](/gpu-passthrough).
+
+On repeat boots, a valid cached hardware result may appear
+immediately while the full probe refreshes in the background.
 
 ## See your savings
 
@@ -39,7 +45,7 @@ recovered, compression ratios, and a savings chart.
 
 | Action | Where |
 |--------|-------|
-| Pause encoding | Header → Pause |
+| Pause new job claims | Settings → Runtime → Pause |
 | Drain (finish active, stop new) | Header → Stop |
 | Cancel a job | Jobs → ⋯ → Cancel |
 | Boost priority | Jobs → ⋯ → Boost |

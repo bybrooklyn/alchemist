@@ -2,8 +2,9 @@
 
 use super::auth::build_session_cookie;
 use super::{
-    AppState, canonicalize_directory_path, config_write_blocked_response, hardware_error_response,
-    refresh_file_watcher, replace_runtime_hardware, save_config_or_response,
+    AppState, api_error_response, canonicalize_directory_path, config_write_blocked_response,
+    hardware_error_response, refresh_file_watcher, replace_runtime_hardware,
+    save_config_or_response,
 };
 use argon2::{
     Argon2,
@@ -97,36 +98,48 @@ pub(crate) async fn setup_complete_handler(
     axum::Json(payload): axum::Json<SetupConfig>,
 ) -> impl IntoResponse {
     if !state.setup_required.load(Ordering::Relaxed) {
-        return (StatusCode::FORBIDDEN, "Setup already completed").into_response();
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "SETUP_ALREADY_COMPLETE",
+            "Setup already completed",
+        );
     }
 
     let username = payload.username.trim();
     if username.len() < 3 {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SETUP_USERNAME_INVALID",
             "username must be at least 3 characters",
-        )
-            .into_response();
+        );
     }
     if payload.password.len() < 8 {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SETUP_PASSWORD_INVALID",
             "password must be at least 8 characters",
-        )
-            .into_response();
+        );
     }
     if payload.settings.is_none() && payload.concurrent_jobs == 0 {
-        return (StatusCode::BAD_REQUEST, "concurrent_jobs must be > 0").into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SETUP_CONCURRENT_JOBS_INVALID",
+            "concurrent_jobs must be > 0",
+        );
     }
     if payload.settings.is_none() && !(0.0..=1.0).contains(&payload.size_reduction_threshold) {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SETUP_THRESHOLD_INVALID",
             "size_reduction_threshold must be 0.0-1.0",
-        )
-            .into_response();
+        );
     }
     if payload.settings.is_none() && payload.min_bpp_threshold < 0.0 {
-        return (StatusCode::BAD_REQUEST, "min_bpp_threshold must be >= 0.0").into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SETUP_BPP_INVALID",
+            "min_bpp_threshold must be >= 0.0",
+        );
     }
 
     if !state.config_mutable {
@@ -140,28 +153,40 @@ pub(crate) async fn setup_complete_handler(
             let mut settings: crate::config::Config = match serde_json::from_value(raw_settings) {
                 Ok(c) => c,
                 Err(err) => {
-                    return (
+                    return api_error_response(
                         StatusCode::BAD_REQUEST,
+                        "SETUP_CONFIG_INVALID",
                         format!(
                             "Setup configuration is invalid: {}. \
                                  Please go back and check your settings.",
                             err
                         ),
-                    )
-                        .into_response();
+                    );
                 }
             };
             settings.scanner.directories =
                 match normalize_setup_directories(&settings.scanner.directories) {
                     Ok(paths) => paths,
-                    Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+                    Err(msg) => {
+                        return api_error_response(
+                            StatusCode::BAD_REQUEST,
+                            "SETUP_DIRECTORIES_INVALID",
+                            msg,
+                        );
+                    }
                 };
             settings
         }
         None => {
             let setup_directories = match normalize_setup_directories(&payload.directories) {
                 Ok(paths) => paths,
-                Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+                Err(msg) => {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "SETUP_DIRECTORIES_INVALID",
+                        msg,
+                    );
+                }
             };
             let mut config = state.config.read().await.clone();
             config.transcode.concurrent_jobs = payload.concurrent_jobs;
@@ -179,23 +204,27 @@ pub(crate) async fn setup_complete_handler(
     next_config.scanner.watch_enabled = true;
 
     if next_config.scanner.directories.is_empty() {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SETUP_DIRECTORIES_REQUIRED",
             "At least one library directory must be configured.",
-        )
-            .into_response();
+        );
     }
 
     if next_config.transcode.concurrent_jobs == 0 {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "SETUP_CONCURRENT_JOBS_REQUIRED",
             "Concurrent jobs must be at least 1.",
-        )
-            .into_response();
+        );
     }
 
     if let Err(e) = next_config.validate() {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SETUP_VALIDATION_FAILED",
+            e.to_string(),
+        );
     }
 
     let runtime_concurrent_jobs = next_config.transcode.concurrent_jobs;
@@ -218,42 +247,42 @@ pub(crate) async fn setup_complete_handler(
     // Create User and Initial Session after config persistence succeeds.
     let mut salt_bytes = [0u8; 16];
     if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "SETUP_SALT_GEN_FAILED",
             format!("Failed to generate salt: {}", e),
-        )
-            .into_response();
+        );
     }
     let salt = match SaltString::encode_b64(&salt_bytes) {
         Ok(salt) => salt,
         Err(e) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "SETUP_SALT_ENCODE_FAILED",
                 format!("Failed to encode salt: {}", e),
-            )
-                .into_response();
+            );
         }
     };
     let argon2 = Argon2::default();
     let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
         Ok(h) => h.to_string(),
         Err(e) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "SETUP_HASHING_FAILED",
                 format!("Hashing failed: {}", e),
-            )
-                .into_response();
+            );
         }
     };
 
     let user_id = match state.db.create_user(username, &password_hash).await {
         Ok(id) => id,
         Err(e) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "SETUP_USER_CREATE_FAILED",
                 format!("Failed to create user: {}", e),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -265,11 +294,11 @@ pub(crate) async fn setup_complete_handler(
     let expires_at = Utc::now() + chrono::Duration::days(30);
 
     if let Err(e) = state.db.create_session(user_id, &token, expires_at).await {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "SETUP_SESSION_CREATE_FAILED",
             format!("Failed to create session: {}", e),
-        )
-            .into_response();
+        );
     }
 
     // Update Setup State (Hot Reload)

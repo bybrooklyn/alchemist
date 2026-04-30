@@ -30,10 +30,11 @@ filesystem.
 quality profile, output rules. Defaults are sensible.
 Everything is changeable later.
 
-**4. Hardware, notifications & schedule** — GPU is detected
-automatically. You can pin a vendor, configure Discord or
-webhook notifications, and restrict encoding to schedule
-windows.
+**4. Hardware, notifications & schedule** — GPU detection is
+automatic. You can pin a vendor, configure a basic
+notification target, and restrict encoding to schedule
+windows. More notification providers and quiet hours are in
+**Settings → Notifications** after setup.
 
 **5. Review & complete** — Summary of all choices. Click
 **Complete Setup** to write the config and start the first
@@ -44,8 +45,9 @@ library scan.
 The engine starts **paused** after setup. Click **Start**
 in the header bar to begin processing.
 
-The initial scan runs automatically in the background. Watch
-files enter the queue in the **Jobs** tab.
+The initial scan runs automatically in the background and
+queues matching files. The engine still starts paused; click
+**Start** when you are ready for queued work to process.
 
 ## Resetting
 

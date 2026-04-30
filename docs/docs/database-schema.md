@@ -122,9 +122,11 @@ Database location:
 |--------|------|-------------|
 | `id` | INTEGER | Primary key |
 | `name` | TEXT | Target name |
-| `target_type` | TEXT | `gotify`, `discord`, or `webhook` |
-| `endpoint_url` | TEXT | Destination URL |
-| `auth_token` | TEXT | Optional auth token |
+| `target_type` | TEXT | Legacy target type retained for compatibility |
+| `target_type_v2` | TEXT | Canonical provider type such as `discord_webhook`, `gotify`, `webhook`, `telegram`, or `email` |
+| `endpoint_url` | TEXT | Legacy destination URL projection |
+| `auth_token` | TEXT | Legacy auth token projection |
+| `config_json` | TEXT | Provider-specific target config JSON |
 | `events` | TEXT | Serialized event list |
 | `enabled` | BOOLEAN | Enabled flag |
 | `created_at` | DATETIME | Insert timestamp |
@@ -162,6 +164,7 @@ Database location:
 | `hdr_mode` | TEXT | HDR behavior |
 | `audio_mode` | TEXT | Audio policy |
 | `crf_override` | INTEGER | Optional CRF override |
+| `custom_vfilters` | TEXT | Optional custom FFmpeg video filter chain |
 | `notes` | TEXT | Optional notes |
 | `created_at` | TEXT | Insert timestamp |
 | `updated_at` | TEXT | Last update timestamp |
@@ -194,6 +197,42 @@ Tracks uploads from the Convert workflow and their generated outputs. Cleanup ru
 | `downloaded_at` | TEXT | Download timestamp; cleanup extends `expires_at` by `conversion_download_retention_hours` once this is set |
 | `created_at` | TEXT | Insert timestamp |
 | `updated_at` | TEXT | Last update timestamp |
+
+## `media_probe_cache`
+
+Caches FFprobe analysis for unchanged files. The analyzer
+uses the cache when the input path, mtime, size, and probe
+version all match.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `input_path` | TEXT | Absolute path that was probed |
+| `mtime_ns` | INTEGER | File modification time fingerprint |
+| `size_bytes` | INTEGER | File size fingerprint |
+| `probe_version` | TEXT | FFprobe version marker |
+| `analysis_json` | TEXT | Serialized analyzer result |
+| `created_at` | DATETIME | Insert timestamp |
+| `updated_at` | DATETIME | Last cache write timestamp |
+| `last_accessed_at` | DATETIME | Last successful cache read timestamp |
+
+`(input_path, mtime_ns, size_bytes, probe_version)` is unique.
+
+## `hardware_detection_cache`
+
+Stores the last successful hardware detection result so boot
+can reuse it when the machine/runtime fingerprint is still
+valid.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Singleton row key (`1`) |
+| `cache_key` | TEXT | Hash of the hardware detection fingerprint |
+| `fingerprint_json` | TEXT | OS, architecture, FFmpeg/FFprobe versions, hardware settings, and cache schema version |
+| `hardware_info_json` | TEXT | Serialized selected hardware backend and supported codecs |
+| `probe_log_json` | TEXT | Serialized probe log shown in Settings -> Hardware |
+| `detected_at` | DATETIME | Time this detection result was produced |
+| `updated_at` | DATETIME | Last cache write timestamp |
 
 ## `api_tokens`
 
@@ -269,8 +308,8 @@ Tracks resumable segmented encodes so long-running jobs can pick up after restar
 | `key` | TEXT | Primary key |
 | `value` | TEXT | Version or compatibility value |
 
-Common keys include `schema_version` and
-`min_compatible_version`.
+Common keys include `schema_version` (`13` in
+`0.3.2-rc.2`) and `min_compatible_version`.
 
 ## Migration policy
 

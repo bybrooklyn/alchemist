@@ -5,7 +5,7 @@
 use super::settings::TranscodeSettingsPayload;
 use super::wizard::normalize_setup_directories;
 use super::*;
-use crate::db::{JobEvent, JobState};
+use crate::db::{JobEvent, JobState, SystemEvent};
 use crate::system::hardware::{HardwareProbeLog, HardwareState};
 use axum::{
     Router,
@@ -494,6 +494,7 @@ async fn hardware_settings_route_updates_runtime_state()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
     let token = create_session(state.db.as_ref()).await?;
+    let mut system_events = state.event_channels.system.subscribe();
 
     let response = app
         .clone()
@@ -511,6 +512,8 @@ async fn hardware_settings_route_updates_runtime_state()
         ))
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
+    let event = system_events.recv().await?;
+    assert!(matches!(event, SystemEvent::HardwareStateChanged));
 
     assert_eq!(
         state
@@ -537,6 +540,15 @@ async fn hardware_settings_route_updates_runtime_state()
     let persisted = crate::config::Config::load(config_path.as_path())?;
     assert_eq!(persisted.hardware.preferred_vendor.as_deref(), Some("cpu"));
     assert_eq!(persisted.hardware.device_path, None);
+    let (cache_key, _) =
+        crate::system::hardware::hardware_detection_cache_key_and_json(&persisted).await?;
+    assert!(
+        state
+            .db
+            .get_hardware_detection_cache(&cache_key)
+            .await?
+            .is_some()
+    );
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())
@@ -1041,6 +1053,34 @@ async fn arr_webhook_endpoint_returns_structured_error_when_payload_has_no_path(
         body["error"]["code"].as_str(),
         Some("ARR_WEBHOOK_PATH_MISSING")
     );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn engine_resume_waits_for_runtime_hardware()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    state.hardware_state.replace(None).await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some("HARDWARE_DETECTION_PENDING")
+    );
+    assert!(state.agent.is_paused());
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())
@@ -1663,6 +1703,46 @@ async fn conversion_upload_rejects_oversized_requests_without_persisting_jobs()
 }
 
 #[tokio::test]
+async fn conversion_upload_accepts_payloads_above_axum_default_body_limit()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.system.conversion_upload_limit_gb = 1;
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let boundary = "alchemist-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.mov\"\r\nContent-Type: video/quicktime\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend(std::iter::repeat_n(b'x', 2 * 1024 * 1024 + 1024));
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = app
+        .clone()
+        .oneshot(auth_multipart_request(
+            Method::POST,
+            "/api/conversion/uploads",
+            &token,
+            boundary,
+            Some(body.len() as u64),
+            body,
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = body_text(response).await;
+    assert!(!body.contains("multipart/form-data"));
+    assert_eq!(count_conversion_jobs_in_db(db_path.as_path()).await?, 0);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn conversion_cleanup_skips_active_linked_jobs()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -1928,6 +2008,73 @@ async fn conversion_preview_returns_500_when_persistence_fails()
         .await?
         .ok_or_else(|| std::io::Error::other("missing conversion job"))?;
     assert_eq!(persisted.status, "uploaded");
+
+    cleanup_paths(&[upload_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_preview_returns_summary_estimate()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    state
+        .hardware_state
+        .replace(Some(crate::system::hardware::HardwareInfo {
+            vendor: crate::system::hardware::Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["hevc".to_string()],
+            backends: vec![crate::system::hardware::BackendCapability {
+                kind: crate::system::hardware::HardwareBackend::Vaapi,
+                codec: "hevc".to_string(),
+                encoder: "libx265".to_string(),
+                device_path: None,
+            }],
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: crate::system::hardware::ProbeSummary::default(),
+        }))
+        .await;
+    let upload_path = temp_path("alchemist_conversion_preview_summary", "mkv");
+    std::fs::write(&upload_path, b"source")?;
+
+    let settings = crate::conversion::ConversionSettings::default();
+    let mut analysis = sample_media_analysis(upload_path.as_path());
+    analysis.metadata.size_bytes = 100_000_000;
+    let conversion_job = state
+        .db
+        .create_conversion_job(
+            &upload_path.to_string_lossy(),
+            "transcode",
+            &serde_json::to_string(&settings)?,
+            Some(&serde_json::to_string(&analysis)?),
+            "2999-01-01 00:00:00",
+        )
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/conversion/preview",
+            &token,
+            json!({
+                "conversion_job_id": conversion_job.id,
+                "settings": settings
+            }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(body["summary"]["source"]["container"], "mkv");
+    assert_eq!(body["summary"]["planned_output"]["mode"], "compress");
+    assert!(
+        body["summary"]["estimate"]["estimated_savings_bytes"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
 
     cleanup_paths(&[upload_path, config_path, db_path]);
     Ok(())

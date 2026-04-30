@@ -8,6 +8,7 @@ type NotificationTargetType =
     | "discord_webhook"
     | "discord_bot"
     | "gotify"
+    | "ntfy"
     | "webhook"
     | "telegram"
     | "email";
@@ -45,6 +46,7 @@ const TARGET_TYPES: Array<{ value: NotificationTargetType; label: string }> = [
     { value: "discord_webhook", label: "Discord Webhook" },
     { value: "discord_bot", label: "Discord Bot" },
     { value: "gotify", label: "Gotify" },
+    { value: "ntfy", label: "ntfy" },
     { value: "webhook", label: "Generic Webhook" },
     { value: "telegram", label: "Telegram" },
     { value: "email", label: "Email" },
@@ -69,6 +71,8 @@ function targetSummary(target: NotificationTarget): string {
             return `channel ${String(config.channel_id ?? "")}`;
         case "gotify":
             return String(config.server_url ?? "");
+        case "ntfy":
+            return `${String(config.server_url ?? "")}/${String(config.topic ?? "")}`;
         case "webhook":
             return String(config.url ?? "");
         case "telegram":
@@ -113,6 +117,8 @@ function defaultConfigForType(type: NotificationTargetType): Record<string, unkn
             return { bot_token: "", channel_id: "" };
         case "gotify":
             return { server_url: "", app_token: "" };
+        case "ntfy":
+            return { server_url: "", topic: "", access_token: "" };
         case "webhook":
             return { url: "", auth_token: "" };
         case "telegram":
@@ -446,6 +452,29 @@ export default function NotificationSettings() {
                                 value={String(draftConfig.app_token ?? "")}
                                 onChange={(value) => setConfigField("app_token", value)}
                                 placeholder="Gotify app token"
+                            />
+                        </div>
+                    )}
+
+                    {draftType === "ntfy" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <TextField
+                                label="Server URL"
+                                value={String(draftConfig.server_url ?? "")}
+                                onChange={(value) => setConfigField("server_url", value)}
+                                placeholder="https://ntfy.sh"
+                            />
+                            <TextField
+                                label="Topic"
+                                value={String(draftConfig.topic ?? "")}
+                                onChange={(value) => setConfigField("topic", value)}
+                                placeholder="alchemist-alerts"
+                            />
+                            <TextField
+                                label="Access Token (Optional)"
+                                value={String(draftConfig.access_token ?? "")}
+                                onChange={(value) => setConfigField("access_token", value)}
+                                placeholder="ntfy access token"
                             />
                         </div>
                     )}

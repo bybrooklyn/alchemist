@@ -3,7 +3,10 @@
 use crate::db::{ConfigEvent, JobEvent, SystemEvent};
 use axum::{
     extract::State,
-    response::sse::{Event as AxumEvent, Sse},
+    response::{
+        IntoResponse,
+        sse::{Event as AxumEvent, Sse},
+    },
 };
 use futures::stream::{self, Stream, StreamExt};
 use std::convert::Infallible;
@@ -189,12 +192,8 @@ impl Drop for SseConnectionGuard {
     }
 }
 
-pub(crate) async fn sse_handler(
-    State(state): State<Arc<AppState>>,
-) -> std::result::Result<
-    Sse<impl Stream<Item = std::result::Result<AxumEvent, Infallible>>>,
-    axum::http::StatusCode,
-> {
+pub(crate) async fn sse_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use crate::server::api_error_response;
     use std::sync::atomic::Ordering;
 
     // Enforce connection limit
@@ -205,7 +204,11 @@ pub(crate) async fn sse_handler(
             "SSE connection limit reached ({}/{}). Rejecting new connection.",
             current, MAX_SSE_CONNECTIONS
         );
-        return Err(axum::http::StatusCode::TOO_MANY_REQUESTS);
+        return api_error_response(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "SSE_CONNECTION_LIMIT_REACHED",
+            "Too many concurrent SSE connections",
+        );
     }
 
     // RAII guard to decrement the counter when the stream is dropped
@@ -222,10 +225,12 @@ pub(crate) async fn sse_handler(
     let stream = unified_stream.map(move |message| {
         let _guard = guard.clone(); // keep the guard alive as long as the stream lives
         match message {
-            Ok(message) => Ok(message.into()),
+            Ok(message) => Ok::<AxumEvent, Infallible>(message.into()),
             Err(never) => match never {},
         }
     });
 
-    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+    Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }

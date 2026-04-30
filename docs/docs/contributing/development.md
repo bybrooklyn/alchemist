@@ -64,7 +64,11 @@ bun run build       # production build
 ## Backend only
 
 ```bash
-cargo run           # starts on :3000
+cargo run           # starts on :3000, or the next free port if 3000 is busy
 cargo clippy -- -D warnings
 cargo fmt
 ```
+
+Use `ALCHEMIST_SERVER_PORT=<port> cargo run` to require a
+specific port. Startup prints an `INFO` line with the exact
+`http://127.0.0.1:<port>` link to open.

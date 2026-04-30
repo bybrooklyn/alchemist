@@ -27,6 +27,11 @@ import type {
     StepValidator,
 } from "./setup/types";
 
+const isHardwarePendingError = (err: unknown) =>
+    isApiError(err) &&
+    err.status === 503 &&
+    err.message.toLowerCase().includes("hardware state");
+
 export default function SetupWizard() {
     const [step, setStep] = useState(0);
     const [submitting, setSubmitting] = useState(false);
@@ -68,10 +73,16 @@ export default function SetupWizard() {
     useEffect(() => {
         const loadBootstrap = async () => {
             try {
+                const hardwareRequest = apiJson<HardwareInfo>("/api/system/hardware").catch((err) => {
+                    if (isHardwarePendingError(err)) {
+                        return null;
+                    }
+                    throw err;
+                });
                 const [status, bundle, hw, recommendationData] = await Promise.all([
                     apiJson<SetupStatusResponse>("/api/setup/status"),
                     apiJson<SettingsBundleResponse>("/api/settings/bundle"),
-                    apiJson<HardwareInfo>("/api/system/hardware"),
+                    hardwareRequest,
                     apiJson<FsRecommendationsResponse>("/api/fs/recommendations"),
                 ]);
                 setConfigMutable(status.config_mutable ?? true);
@@ -86,6 +97,21 @@ export default function SetupWizard() {
         };
 
         void loadBootstrap();
+    }, [showError]);
+
+    useEffect(() => {
+        const eventSource = new EventSource("/api/events");
+        eventSource.addEventListener("hardware_state_changed", () => {
+            void apiJson<HardwareInfo>("/api/system/hardware")
+                .then((hw) => setHardware(hw))
+                .catch((err) => {
+                    if (!isHardwarePendingError(err)) {
+                        showError(isApiError(err) ? err.message : "Failed to refresh hardware state.");
+                    }
+                });
+        });
+
+        return () => eventSource.close();
     }, [showError]);
 
     const handleSubmit = async () => {

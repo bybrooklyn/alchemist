@@ -8,22 +8,24 @@ keywords:
   - open source tdarr alternative
 ---
 
-This is an honest, narrow comparison for people who already
-know what Tdarr is and are evaluating alternatives. It
-covers the questions that actually come up when switching:
-licensing, deployment shape, hardware coverage, and where
-each tool is a better fit.
+This is a direct comparison for people who already know what
+Tdarr is and are evaluating alternatives. It covers the
+questions that actually come up when switching: licensing,
+deployment shape, hardware coverage, operational overhead,
+and where each tool is a better fit.
 
-For current Tdarr features and licensing terms, refer to
-[tdarr.io](https://home.tdarr.io/) — this page only compares
-against what Tdarr documents publicly.
+For current Tdarr behavior, refer to the
+[Tdarr docs](https://docs.tdarr.io/). This page only compares
+against what Tdarr documents publicly, including its
+[server/node/worker model](https://docs.tdarr.io/docs/welcome/why/)
+and [worker types](https://docs.tdarr.io/docs/nodes/workers/).
 
 ## At a glance
 
 | | Alchemist | Tdarr |
 |---|---|---|
 | License | GPLv3 (fully open source) | See Tdarr's own licensing page |
-| Deployment | Single binary (also a single Docker container) | Server + node(s) |
+| Deployment | Single binary (also a single Docker container) | Central server + node process(es) + workers |
 | Config model | Declarative — TOML file and UI settings | Plugin stack / flow editor |
 | AV1 target | First-class in the planner, uses AV1-capable GPUs when available | Supported via plugins/flows |
 | Hardware acceleration | NVENC, Intel Quick Sync, VAAPI, AMD AMF, Apple VideoToolbox, CPU fallback | NVENC, Quick Sync, VAAPI, VideoToolbox (see Tdarr docs) |
@@ -44,8 +46,9 @@ against what Tdarr documents publicly.
 ## Choose Alchemist if
 
 - **You want a single binary to deploy.** Alchemist is one
-  service. There's no node to register, no separate UI
-  server, no plugin repository to pin.
+  service. There's no node to register, no server/worker
+  topology to keep healthy, and no plugin stack to debug
+  before a file can be processed.
 - **Licensing matters to you.** Alchemist is GPLv3
   end-to-end — source, binary, and everything it does. No
   paid tier, no license key, no phone-home.
@@ -64,11 +67,11 @@ against what Tdarr documents publicly.
 
 ### Deployment shape
 
-Tdarr has a server process and one or more node processes.
-That maps well onto a homelab that already spans multiple
-machines, and poorly onto a homelab that doesn't — the
-server/node split is overhead you carry for the option of
-scaling out later.
+Tdarr documents a central server, nodes, and workers. That
+maps well onto a homelab that already spans multiple
+machines, and poorly onto a single-box setup. If all your
+media work happens on one host, the server/node/worker split
+is overhead you carry for a scaling option you may never use.
 
 Alchemist is one process. Concurrency is bounded by the host
 it runs on. If you want to scale across machines you'd run
@@ -88,12 +91,22 @@ questions resolve against
 
 ### Hardware selection
 
-Both tools probe FFmpeg for available encoders. Alchemist
-runs a short test encode per backend at startup and selects
-one active device using a deterministic scoring policy (see
-[Hardware Acceleration](/hardware)). The probe log is
-visible in **Settings → Hardware** and records exactly why a
-backend failed.
+Tdarr's docs split CPU and GPU worker behavior and route work
+based on FFmpeg/HandBrake arguments. Alchemist keeps that
+decision inside one runtime: it runs a short test encode per
+backend, caches a valid detection result across repeat boots,
+and selects one active device using a deterministic scoring
+policy. The probe log is visible in **Settings → Hardware**
+and records exactly why a backend failed.
+
+### Open source line
+
+Alchemist's GPLv3 position is intentionally simple: the
+public repository is the product. There is no private feature
+tree, no paid unlock, and no license key. If that matters to
+you, Alchemist is the cleaner bet. If horizontal worker
+distribution matters more, Tdarr's architecture is still the
+thing it does best.
 
 ## Moving off Tdarr
 

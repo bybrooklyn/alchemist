@@ -10,11 +10,17 @@ keywords:
   - gpu accelerated transcoding
 ---
 
-Alchemist detects hardware automatically at startup,
-actively probes every plausible backend/codec candidate,
-and selects a single active device/backend with a
-deterministic scoring policy. Override in
-**Settings → Hardware**.
+Alchemist detects hardware automatically, actively probes
+every plausible backend/codec candidate, and selects a
+single active device/backend with a deterministic scoring
+policy. Override in **Settings → Hardware**.
+
+After the first successful probe, Alchemist stores a hardware
+detection cache keyed by OS, architecture, FFmpeg/FFprobe
+versions, hardware settings, and cache schema version. If
+that fingerprint still matches on the next boot, the server
+can start with the cached backend immediately while a full
+probe refreshes runtime state when needed.
 
 ## Detection flow (auto mode)
 
@@ -56,6 +62,20 @@ shows:
 
 On Linux, explicit device paths only apply to render-node
 backends such as VAAPI and QSV.
+
+## Cache invalidation
+
+The hardware cache is ignored and rebuilt when any of these
+change:
+
+- operating system or architecture
+- FFmpeg or FFprobe version marker
+- preferred vendor, device path, CPU fallback, or CPU
+  encoding setting
+- Alchemist's hardware detection cache version
+
+Changing hardware settings in the UI refreshes runtime
+hardware state and writes a new cache entry.
 
 ## Vendor-specific guides
 

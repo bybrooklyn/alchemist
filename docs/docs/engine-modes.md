@@ -28,7 +28,7 @@ States determine whether the engine is actively processing the queue.
 | State | Behavior |
 |-------|----------|
 | **Running** | Engine is active. Jobs start up to the current mode's limit. |
-| **Paused** | Engine is suspended. No new jobs start; active jobs are frozen. |
+| **Paused** | No new jobs start. Active jobs continue until they finish. |
 | **Draining** | Engine is stopping. Active jobs finish, but no new jobs start. |
 | **Scheduler Paused** | Engine is temporarily paused by a configured [Schedule Window](/scheduling). |
 

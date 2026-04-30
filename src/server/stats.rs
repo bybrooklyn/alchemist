@@ -1,6 +1,6 @@
 //! Statistics and savings dashboard handlers.
 
-use super::{AppState, config_read_error_response};
+use super::{AppState, api_error_response, config_read_error_response};
 use crate::db::Db;
 use crate::error::Result;
 use axum::{
@@ -148,11 +148,11 @@ pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     ) {
         Ok(metric) => metric,
         Err(err) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "METRICS_CREATE_JOBS_FAILED",
                 format!("Failed to create jobs metric: {err}"),
-            )
-                .into_response();
+            );
         }
     };
     let completed_jobs = match IntGauge::new(
@@ -161,11 +161,11 @@ pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     ) {
         Ok(metric) => metric,
         Err(err) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "METRICS_CREATE_COMPLETED_FAILED",
                 format!("Failed to create completed-jobs metric: {err}"),
-            )
-                .into_response();
+            );
         }
     };
     let bytes_saved = match IntGauge::new(
@@ -174,11 +174,11 @@ pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     ) {
         Ok(metric) => metric,
         Err(err) => {
-            return (
+            return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "METRICS_CREATE_SAVINGS_FAILED",
                 format!("Failed to create bytes-saved metric: {err}"),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -194,36 +194,36 @@ pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     );
 
     if let Err(err) = registry.register(Box::new(jobs_by_status.clone())) {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "METRICS_REGISTER_JOBS_FAILED",
             format!("Failed to register jobs metric: {err}"),
-        )
-            .into_response();
+        );
     }
     if let Err(err) = registry.register(Box::new(completed_jobs.clone())) {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "METRICS_REGISTER_COMPLETED_FAILED",
             format!("Failed to register completed-jobs metric: {err}"),
-        )
-            .into_response();
+        );
     }
     if let Err(err) = registry.register(Box::new(bytes_saved.clone())) {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "METRICS_REGISTER_SAVINGS_FAILED",
             format!("Failed to register bytes-saved metric: {err}"),
-        )
-            .into_response();
+        );
     }
 
     let encoder = TextEncoder::new();
     let metric_families = registry.gather();
     let mut buffer = Vec::new();
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "METRICS_ENCODE_FAILED",
             format!("Failed to encode metrics: {err}"),
-        )
-            .into_response();
+        );
     }
 
     let mut headers = HeaderMap::new();

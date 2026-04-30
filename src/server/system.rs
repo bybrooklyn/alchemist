@@ -732,10 +732,12 @@ pub(crate) async fn ready_handler(State(state): State<Arc<AppState>>) -> impl In
             StatusCode::OK,
             axum::Json(serde_json::json!({ "ready": true })),
         )
+            .into_response()
     } else {
-        (
+        api_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({ "ready": false, "reason": "database unavailable" })),
+            "DATABASE_UNAVAILABLE",
+            "database unavailable",
         )
     }
 }

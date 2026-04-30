@@ -1,6 +1,7 @@
 mod config;
 mod conversion;
 mod events;
+mod hardware_cache;
 mod jobs;
 mod probe_cache;
 mod stats;

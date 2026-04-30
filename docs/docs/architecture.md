@@ -44,7 +44,7 @@ States:
 Behavior:
 
 - `Running`: jobs start up to the active concurrency limit
-- `Paused`: no new jobs start; active jobs freeze
+- `Paused`: no new jobs start; active jobs continue
 - `Draining`: active jobs finish; no new jobs start
 - `SchedulerPaused`: pause state enforced by schedule windows
 
@@ -96,7 +96,9 @@ Split into focused submodules — no ORM, direct `sqlx` usage:
 - `conversion.rs`: Convert-workflow upload/output tracking and cleanup queries
 - `stats.rs`: aggregates, savings history, daily rollups
 - `config.rs`: persisted settings projections
-- `system.rs`: watch dirs, library profiles, schema/version info
+- `system.rs`: watch dirs, library profiles, schema/version info, API tokens
+- `probe_cache.rs`: FFprobe result cache keyed by path, mtime, size, and probe version
+- `hardware_cache.rs`: persisted selected hardware/probe-log cache keyed by runtime fingerprint
 - `events.rs`: typed broadcast channel plumbing
 
 ### Other core files

@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import { motion } from "framer-motion";
-import { FileCog, Info, Video } from "lucide-react";
+import { FileCog, Gauge, Info, ShieldCheck, SlidersHorizontal, Trash2, Video, Zap } from "lucide-react";
 import clsx from "clsx";
 import { LabeledInput, LabeledSelect, RangeControl, ToggleRow } from "./SetupControls";
 import type { SetupSettings } from "./types";
@@ -13,6 +14,31 @@ interface ProcessingStepProps {
     onQualityChange: (value: SetupSettings["quality"]) => void;
 }
 
+interface SectionHeaderProps {
+    icon: ReactNode;
+    eyebrow: string;
+    title: string;
+    body: string;
+}
+
+function SectionHeader({ icon, eyebrow, title, body }: SectionHeaderProps) {
+    return (
+        <div className="flex items-start gap-3">
+            <div className="rounded-lg bg-helios-solar/10 p-2 text-helios-solar">
+                {icon}
+            </div>
+            <div>
+                <p className="text-xs font-semibold uppercase text-helios-slate/70">{eyebrow}</p>
+                <h3 className="mt-1 text-base font-semibold text-helios-ink">{title}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-helios-slate">{body}</p>
+            </div>
+        </div>
+    );
+}
+
+const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
+const formatBpp = (value: number) => `${value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} BPP`;
+
 export default function ProcessingStep({ transcode, files, quality, onTranscodeChange, onFilesChange, onQualityChange }: ProcessingStepProps) {
     const updateTranscode = (patch: Partial<SetupSettings["transcode"]>) => onTranscodeChange({ ...transcode, ...patch });
     const updateFiles = (patch: Partial<SetupSettings["files"]>) => onFilesChange({ ...files, ...patch });
@@ -22,111 +48,204 @@ export default function ProcessingStep({ transcode, files, quality, onTranscodeC
         hevc: "HEVC",
         h264: "H.264",
     };
+    const codecOptions: Array<{ value: SetupSettings["transcode"]["output_codec"]; title: string; body: string }> = [
+        { value: "av1", title: "Smallest files", body: "Best compression when your playback devices can handle it." },
+        { value: "hevc", title: "Modern default", body: "Strong savings with broad TV, phone, and Jellyfin support." },
+        { value: "h264", title: "Maximum reach", body: "Use when compatibility matters more than storage savings." },
+    ];
+    const qualityOptions: Array<{ value: SetupSettings["transcode"]["quality_profile"]; title: string; body: string }> = [
+        { value: "speed", title: "Speed", body: "Prioritize faster completion and lighter resource use." },
+        { value: "balanced", title: "Balanced", body: "Good default for unattended library processing." },
+        { value: "quality", title: "Quality", body: "Spend more time per encode to protect detail." },
+    ];
 
     return (
         <motion.div key="processing" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-8">
             <div className="space-y-2">
-                <h2 className="text-xl font-semibold text-helios-ink flex items-center gap-2"><Video size={20} className="text-helios-solar" />Processing, Output & Quality</h2>
-                <p className="text-sm text-helios-slate">Tune what Alchemist creates, how aggressive it should be, and how quality should be validated before replacing source material.</p>
+                <h2 className="flex items-center gap-2 text-xl font-semibold text-helios-ink">
+                    <Video size={20} className="text-helios-solar" />
+                    Processing, Output & Quality
+                </h2>
+                <p className="max-w-3xl text-sm leading-relaxed text-helios-slate">
+                    Choose the target format, decide how conservative Alchemist should be, and keep output behavior explicit before the engine touches real media.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                        <p className="text-xs font-medium text-helios-slate">Codec</p>
+                        <p className="mt-1 text-sm font-semibold text-helios-ink">{codecLabels[transcode.output_codec]}</p>
+                    </div>
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                        <p className="text-xs font-medium text-helios-slate">Profile</p>
+                        <p className="mt-1 text-sm font-semibold capitalize text-helios-ink">{transcode.quality_profile}</p>
+                    </div>
+                    <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                        <p className="text-xs font-medium text-helios-slate">Skip target</p>
+                        <p className="mt-1 text-sm font-semibold text-helios-ink">{formatPercent(transcode.size_reduction_threshold)} minimum savings</p>
+                    </div>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
-                    <div className="text-sm font-semibold text-helios-ink">Transcoding Target</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        {(["av1", "hevc", "h264"] as const).map((codec) => (
-                            <button
-                                key={codec}
-                                type="button"
-                                onClick={() => updateTranscode({ output_codec: codec })}
-                                className={clsx("rounded-lg border px-4 py-4 text-left transition-all", transcode.output_codec === codec ? "border-helios-solar bg-helios-solar/10 text-helios-ink" : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate")}
-                            >
-                                <div className="font-semibold uppercase">{codecLabels[codec]}</div>
-                                <div className="text-xs mt-2 opacity-70">{codec === "av1" ? "Best compression" : codec === "hevc" ? "Broad modern compatibility" : "Maximum playback compatibility"}</div>
-                            </button>
-                        ))}
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+                <section className="space-y-5 rounded-lg border border-helios-line/20 bg-helios-surface p-5">
+                    <SectionHeader
+                        icon={<Zap size={18} />}
+                        eyebrow="Encoding target"
+                        title="Pick the output codec and effort profile"
+                        body="These settings decide what every planned transcode is trying to produce."
+                    />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        {codecOptions.map((option) => {
+                            const selected = transcode.output_codec === option.value;
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => updateTranscode({ output_codec: option.value })}
+                                    className={clsx(
+                                        "rounded-lg border px-4 py-4 text-left transition-all",
+                                        selected
+                                            ? "border-helios-solar bg-helios-solar/10 text-helios-ink ring-1 ring-helios-solar/20"
+                                            : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate hover:border-helios-solar/40 hover:text-helios-ink"
+                                    )}
+                                >
+                                    <div className="text-sm font-semibold uppercase">{codecLabels[option.value]}</div>
+                                    <div className="mt-2 text-sm font-medium">{option.title}</div>
+                                    <p className="mt-1 text-xs leading-relaxed opacity-75">{option.body}</p>
+                                </button>
+                            );
+                        })}
                     </div>
 
                     <div className="space-y-3">
-                        <label className="text-xs font-medium text-helios-slate">
-                            Quality Profile
-                        </label>
-                        <select value={transcode.quality_profile} onChange={(e) => updateTranscode({ quality_profile: e.target.value as SetupSettings["transcode"]["quality_profile"] })} className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink">
-                            <option value="speed">Speed</option>
-                            <option value="balanced">Balanced</option>
-                            <option value="quality">Quality</option>
-                        </select>
-                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                            Controls the balance between file size and visual quality. Lower numbers = better quality but larger files. Higher numbers = smaller files with slightly lower quality. The default works well for most people.
-                        </p>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink">
+                            <SlidersHorizontal size={16} className="text-helios-solar" />
+                            Quality profile
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                            {qualityOptions.map((option) => {
+                                const selected = transcode.quality_profile === option.value;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => updateTranscode({ quality_profile: option.value })}
+                                        className={clsx(
+                                            "rounded-lg border px-4 py-3 text-left transition-all",
+                                            selected
+                                                ? "border-helios-solar bg-helios-solar/10 text-helios-ink ring-1 ring-helios-solar/20"
+                                                : "border-helios-line/20 bg-helios-surface-soft/40 text-helios-slate hover:border-helios-solar/40 hover:text-helios-ink"
+                                        )}
+                                    >
+                                        <p className="text-sm font-semibold">{option.title}</p>
+                                        <p className="mt-1 text-xs leading-relaxed opacity-75">{option.body}</p>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
+                </section>
 
-                    <div>
-                        <RangeControl label="Concurrent Jobs" min={1} max={8} step={1} value={transcode.concurrent_jobs} onChange={(concurrent_jobs) => updateTranscode({ concurrent_jobs })} />
-                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                            How many videos to convert at the same time. More means faster overall progress but uses more CPU and GPU resources. Start with 1 or 2 if you're not sure — you can always increase it later.
-                        </p>
-                    </div>
-                    <div>
-                        <RangeControl label="Minimum Savings" min={0} max={0.9} step={0.05} value={transcode.size_reduction_threshold} onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })} />
-                        <p className="text-xs text-helios-slate mt-1 leading-relaxed">
-                            Alchemist will skip a file if the newly encoded version wouldn't be at least this much smaller than the original. This prevents pointless re-encoding of files that are already well-optimized.
-                        </p>
-                    </div>
-                    <details className="group">
-                        <summary className="flex items-center gap-1.5 text-xs text-helios-solar cursor-pointer hover:underline select-none list-none">
-                            <Info size={13} />
-                            What is the BPP threshold?
+                <section className="space-y-5 rounded-lg border border-helios-line/20 bg-helios-surface p-5">
+                    <SectionHeader
+                        icon={<Gauge size={18} />}
+                        eyebrow="Throughput and skips"
+                        title="Control load and avoid pointless encodes"
+                        body="The defaults keep the engine conservative until you have watched it run on your hardware."
+                    />
+                    <RangeControl
+                        label="Concurrent Jobs"
+                        min={1}
+                        max={8}
+                        step={1}
+                        value={transcode.concurrent_jobs}
+                        valueLabel={`${transcode.concurrent_jobs} ${transcode.concurrent_jobs === 1 ? "job" : "jobs"}`}
+                        helperText="More jobs increase throughput, but they also compete for CPU, GPU, disk, and memory."
+                        onChange={(concurrent_jobs) => updateTranscode({ concurrent_jobs })}
+                    />
+                    <RangeControl
+                        label="Minimum Savings"
+                        min={0}
+                        max={0.9}
+                        step={0.05}
+                        value={transcode.size_reduction_threshold}
+                        valueLabel={formatPercent(transcode.size_reduction_threshold)}
+                        helperText="Skip files when the estimated output is not smaller enough to justify re-encoding."
+                        onChange={(size_reduction_threshold) => updateTranscode({ size_reduction_threshold })}
+                    />
+                    <details className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-4 py-3">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-helios-ink">
+                            <Info size={15} className="text-helios-solar" />
+                            Advanced skip guards
                         </summary>
-                        <p className="mt-2 text-xs text-helios-slate leading-relaxed pl-5">
-                            Bits Per Pixel — determines how compressed a file must
-                            already be before Alchemist skips it. If a file is already
-                            very compressed, re-encoding it could reduce quality without
-                            saving much space. Leave this at the default unless you know
-                            what you're doing.
-                        </p>
+                        <div className="mt-4 space-y-4 border-t border-helios-line/10 pt-4">
+                            <RangeControl
+                                label="BPP Skip Threshold"
+                                min={0.03}
+                                max={0.25}
+                                step={0.005}
+                                value={transcode.min_bpp_threshold}
+                                valueLabel={formatBpp(transcode.min_bpp_threshold)}
+                                helperText="Bits per pixel helps identify files that are already aggressively compressed."
+                                onChange={(min_bpp_threshold) => updateTranscode({ min_bpp_threshold })}
+                            />
+                            <RangeControl
+                                label="Minimum File Size"
+                                min={0}
+                                max={2000}
+                                step={25}
+                                value={transcode.min_file_size_mb}
+                                valueLabel={`${transcode.min_file_size_mb} MB`}
+                                helperText="Skip tiny files where encode time is unlikely to produce meaningful storage savings."
+                                onChange={(min_file_size_mb) => updateTranscode({ min_file_size_mb })}
+                            />
+                        </div>
                     </details>
-                    <details className="group">
-                        <summary className="flex items-center gap-1.5 text-xs text-helios-solar cursor-pointer hover:underline select-none list-none">
-                            <Info size={13} />
-                            Why are small files skipped?
-                        </summary>
-                        <p className="mt-2 text-xs text-helios-slate leading-relaxed pl-5">
-                            Files smaller than this will be skipped entirely. Small
-                            files rarely benefit from transcoding and it's usually not
-                            worth the processing time.
-                        </p>
-                    </details>
-                </div>
+                </section>
 
-                <div className="rounded-lg border border-helios-line/20 bg-helios-surface p-5 space-y-4">
-                    <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink"><FileCog size={16} className="text-helios-solar" />Output Rules</div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <section className="space-y-5 rounded-lg border border-helios-line/20 bg-helios-surface p-5 xl:col-span-2">
+                    <SectionHeader
+                        icon={<FileCog size={18} />}
+                        eyebrow="Output and safety"
+                        title="Decide where finished files go and what can be removed"
+                        body="Alchemist should never surprise you with destructive output behavior. Keep these choices explicit."
+                    />
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                         <LabeledInput label="Output Extension" value={files.output_extension} onChange={(output_extension) => updateFiles({ output_extension })} placeholder="mkv" />
                         <LabeledInput label="Output Suffix" value={files.output_suffix} onChange={(output_suffix) => updateFiles({ output_suffix })} placeholder="-alchemist" />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <LabeledSelect label="Replace Strategy" value={files.replace_strategy} onChange={(replace_strategy) => updateFiles({ replace_strategy })} options={[{ value: "keep", label: "Keep existing output" }, { value: "replace", label: "Replace existing output" }]} />
+                        <LabeledSelect label="Existing Output Policy" value={files.replace_strategy} onChange={(replace_strategy) => updateFiles({ replace_strategy })} options={[{ value: "keep", label: "Keep existing output" }, { value: "replace", label: "Replace existing output" }]} />
                         <LabeledSelect label="Subtitle Handling" value={transcode.subtitle_mode} onChange={(subtitle_mode) => updateTranscode({ subtitle_mode: subtitle_mode as SetupSettings["transcode"]["subtitle_mode"] })} options={[{ value: "copy", label: "Copy subtitles" }, { value: "burn", label: "Burn one subtitle track" }, { value: "extract", label: "Extract to sidecar" }, { value: "none", label: "Drop subtitles" }]} />
                     </div>
-
                     <LabeledInput label="Optional Output Root" value={files.output_root ?? ""} onChange={(output_root) => updateFiles({ output_root: output_root || null })} placeholder="Leave blank to write beside the source" />
 
-                    <div className="space-y-3">
-                        <ToggleRow title="Allow Fallback" body="Permit alternate encoders if the preferred codec/hardware path is unavailable." checked={transcode.allow_fallback} onChange={(allow_fallback) => updateTranscode({ allow_fallback })} />
-                        <ToggleRow title="Delete Source After Success" body="Remove the original file after a successful completed transcode." checked={files.delete_source} onChange={(delete_source) => updateFiles({ delete_source })} />
-                        <ToggleRow title="Enable VMAF Validation" body="Score output quality after encoding and optionally revert if it drops too low." checked={quality.enable_vmaf} onChange={(enable_vmaf) => updateQuality({ enable_vmaf })} />
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                        <ToggleRow title="Allow Encoder Fallback" body="Permit alternate encoders if the preferred codec or hardware path is unavailable." checked={transcode.allow_fallback} onChange={(allow_fallback) => updateTranscode({ allow_fallback })} />
+                        <ToggleRow title="Enable VMAF Validation" body="Score output quality after encoding and optionally reject low-quality output." checked={quality.enable_vmaf} onChange={(enable_vmaf) => updateQuality({ enable_vmaf })} />
+                        <ToggleRow title="Delete Source After Success" body="Remove the original file after a completed transcode." checked={files.delete_source} onChange={(delete_source) => updateFiles({ delete_source })} />
                     </div>
 
-                    {quality.enable_vmaf && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <LabeledInput label="Minimum VMAF" value={String(quality.min_vmaf_score)} onChange={(value) => updateQuality({ min_vmaf_score: parseFloat(value) || 0 })} placeholder="90" type="number" />
-                            <ToggleRow title="Revert On Low Quality" body="Keep the source when the VMAF score misses the minimum." checked={quality.revert_on_low_quality} onChange={(revert_on_low_quality) => updateQuality({ revert_on_low_quality })} />
+                    {(files.delete_source || quality.enable_vmaf) && (
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                            {files.delete_source && (
+                                <div className="flex items-start gap-3 rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-helios-ink">
+                                    <Trash2 size={16} className="mt-0.5 shrink-0 text-red-400" />
+                                    <p className="leading-relaxed">Source deletion is only safe after you have verified output quality and backup behavior on real files.</p>
+                                </div>
+                            )}
+                            {quality.enable_vmaf && (
+                                <div className="space-y-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 p-4">
+                                    <div className="flex items-center gap-2 text-sm font-semibold text-helios-ink">
+                                        <ShieldCheck size={16} className="text-helios-solar" />
+                                        VMAF guardrail
+                                    </div>
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <LabeledInput label="Minimum VMAF" value={String(quality.min_vmaf_score)} onChange={(value) => updateQuality({ min_vmaf_score: parseFloat(value) || 0 })} placeholder="90" type="number" />
+                                        <ToggleRow title="Reject Low Quality" body="Keep the source when the VMAF score misses the minimum." checked={quality.revert_on_low_quality} onChange={(revert_on_low_quality) => updateQuality({ revert_on_low_quality })} />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
-                </div>
+                </section>
             </div>
         </motion.div>
     );

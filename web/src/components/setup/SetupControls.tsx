@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from "react";
+import clsx from "clsx";
 
 interface RangeControlProps {
     label: string;
@@ -7,6 +8,9 @@ interface RangeControlProps {
     step: number;
     value: number;
     onChange: (value: number) => void;
+    valueLabel?: string;
+    helperText?: string;
+    disabled?: boolean;
 }
 
 interface LabeledInputProps {
@@ -15,6 +19,8 @@ interface LabeledInputProps {
     onChange: (value: string) => void;
     placeholder?: string;
     type?: string;
+    disabled?: boolean;
+    helperText?: string;
 }
 
 interface LabeledSelectProps {
@@ -22,6 +28,8 @@ interface LabeledSelectProps {
     value: string;
     onChange: (value: string) => void;
     options: Array<{ value: string; label: string }>;
+    disabled?: boolean;
+    helperText?: string;
 }
 
 interface ToggleRowProps {
@@ -38,39 +46,56 @@ interface ReviewCardProps {
     lines: string[];
 }
 
-export function RangeControl({ label, min, max, step, value, onChange }: RangeControlProps) {
+export function RangeControl({ label, min, max, step, value, onChange, valueLabel, helperText, disabled = false }: RangeControlProps) {
     return (
-        <div className="space-y-2">
-            <label className="text-xs font-medium text-helios-slate">{label}</label>
-            <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full accent-helios-solar h-1.5 cursor-pointer" />
-            <div className="text-sm font-semibold text-helios-ink">{value}</div>
+        <div className={clsx("space-y-2", disabled && "opacity-60")}>
+            <div className="flex items-center justify-between gap-3">
+                <label className="text-xs font-medium text-helios-slate">{label}</label>
+                <span className="rounded-md border border-helios-line/20 bg-helios-surface-soft px-2 py-1 text-xs font-semibold text-helios-ink">
+                    {valueLabel ?? value}
+                </span>
+            </div>
+            <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(e) => onChange(parseFloat(e.target.value))}
+                disabled={disabled}
+                className="h-1.5 w-full cursor-pointer accent-helios-solar disabled:cursor-not-allowed"
+            />
+            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }
 
-export function LabeledInput({ label, value, onChange, placeholder, type = "text" }: LabeledInputProps) {
+export function LabeledInput({ label, value, onChange, placeholder, type = "text", disabled = false, helperText }: LabeledInputProps) {
     return (
-        <div className="space-y-2">
+        <div className={clsx("space-y-2", disabled && "opacity-60")}>
             <label className="text-xs font-medium text-helios-slate">{label}</label>
             <input
                 type={type}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder={placeholder}
-                className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none"
+                disabled={disabled}
+                className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar focus:ring-1 focus:ring-helios-solar disabled:cursor-not-allowed"
             />
+            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }
 
-export function LabeledSelect({ label, value, onChange, options }: LabeledSelectProps) {
+export function LabeledSelect({ label, value, onChange, options, disabled = false, helperText }: LabeledSelectProps) {
     return (
-        <div className="space-y-2">
+        <div className={clsx("space-y-2", disabled && "opacity-60")}>
             <label className="text-xs font-medium text-helios-slate">{label}</label>
             <select
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink focus:border-helios-solar focus:ring-1 focus:ring-helios-solar outline-none"
+                disabled={disabled}
+                className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar focus:ring-1 focus:ring-helios-solar disabled:cursor-not-allowed"
             >
                 {options.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -78,6 +103,7 @@ export function LabeledSelect({ label, value, onChange, options }: LabeledSelect
                     </option>
                 ))}
             </select>
+            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }

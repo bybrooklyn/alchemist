@@ -1,14 +1,20 @@
 use crate::error::Result;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 use tracing::{debug, error, info, warn};
 
 use serde::{Deserialize, Serialize};
+
+pub const HARDWARE_DETECTION_CACHE_VERSION: u32 = 1;
+
+static FFMPEG_VERSION_MARKER: OnceCell<String> = OnceCell::const_new();
+static FFPROBE_VERSION_MARKER: OnceCell<String> = OnceCell::const_new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -179,6 +185,106 @@ impl HardwareInfo {
         self.probe_summary = probe_summary;
         self
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareDetectionCacheFingerprint {
+    pub os: String,
+    pub arch: String,
+    pub ffmpeg_version: String,
+    pub ffprobe_version: String,
+    pub preferred_vendor: Option<String>,
+    pub device_path: Option<String>,
+    pub allow_cpu_fallback: bool,
+    pub allow_cpu_encoding: bool,
+    pub detection_version: u32,
+}
+
+impl HardwareDetectionCacheFingerprint {
+    pub fn to_cache_json(&self) -> Result<String> {
+        serde_json::to_string(self)
+            .map_err(|err| crate::error::AlchemistError::Unknown(err.to_string()))
+    }
+
+    pub fn cache_key(&self) -> Result<String> {
+        let json = self.to_cache_json()?;
+        let mut hasher = Sha256::new();
+        hasher.update(json.as_bytes());
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+}
+
+fn normalize_optional_lowercase(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn normalize_optional_path(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+async fn command_version_marker(program: &'static str, fallback: &'static str) -> String {
+    match tokio::process::Command::new(program)
+        .arg("-version")
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout
+                .lines()
+                .next()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| fallback.to_string())
+        }
+        _ => fallback.to_string(),
+    }
+}
+
+async fn ffmpeg_version_marker() -> String {
+    FFMPEG_VERSION_MARKER
+        .get_or_init(|| async { command_version_marker("ffmpeg", "ffmpeg:unknown").await })
+        .await
+        .clone()
+}
+
+async fn ffprobe_version_marker() -> String {
+    FFPROBE_VERSION_MARKER
+        .get_or_init(|| async { command_version_marker("ffprobe", "ffprobe:unknown").await })
+        .await
+        .clone()
+}
+
+pub async fn hardware_detection_cache_fingerprint(
+    config: &crate::config::Config,
+) -> HardwareDetectionCacheFingerprint {
+    let (ffmpeg_version, ffprobe_version) =
+        tokio::join!(ffmpeg_version_marker(), ffprobe_version_marker());
+
+    HardwareDetectionCacheFingerprint {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        ffmpeg_version,
+        ffprobe_version,
+        preferred_vendor: normalize_optional_lowercase(config.hardware.preferred_vendor.as_deref()),
+        device_path: normalize_optional_path(config.hardware.device_path.as_deref()),
+        allow_cpu_fallback: config.hardware.allow_cpu_fallback,
+        allow_cpu_encoding: config.hardware.allow_cpu_encoding,
+        detection_version: HARDWARE_DETECTION_CACHE_VERSION,
+    }
+}
+
+pub async fn hardware_detection_cache_key_and_json(
+    config: &crate::config::Config,
+) -> Result<(String, String)> {
+    let fingerprint = hardware_detection_cache_fingerprint(config).await;
+    Ok((fingerprint.cache_key()?, fingerprint.to_cache_json()?))
 }
 
 #[derive(Clone, Default)]
@@ -1435,6 +1541,44 @@ mod tests {
             use std::os::windows::process::ExitStatusExt;
             std::process::ExitStatus::from_raw(if success { 0 } else { 1 })
         }
+    }
+
+    fn cache_fingerprint_fixture() -> HardwareDetectionCacheFingerprint {
+        HardwareDetectionCacheFingerprint {
+            os: "macos".to_string(),
+            arch: "aarch64".to_string(),
+            ffmpeg_version: "ffmpeg 7".to_string(),
+            ffprobe_version: "ffprobe 7".to_string(),
+            preferred_vendor: Some("apple".to_string()),
+            device_path: None,
+            allow_cpu_fallback: true,
+            allow_cpu_encoding: true,
+            detection_version: HARDWARE_DETECTION_CACHE_VERSION,
+        }
+    }
+
+    #[test]
+    fn hardware_cache_key_changes_with_policy_and_runtime_inputs() -> Result<()> {
+        let base = cache_fingerprint_fixture();
+        let base_key = base.cache_key()?;
+
+        let mut changed_vendor = base.clone();
+        changed_vendor.preferred_vendor = Some("cpu".to_string());
+        assert_ne!(base_key, changed_vendor.cache_key()?);
+
+        let mut changed_ffmpeg = base.clone();
+        changed_ffmpeg.ffmpeg_version = "ffmpeg 8".to_string();
+        assert_ne!(base_key, changed_ffmpeg.cache_key()?);
+
+        let mut changed_cpu_policy = base.clone();
+        changed_cpu_policy.allow_cpu_encoding = false;
+        assert_ne!(base_key, changed_cpu_policy.cache_key()?);
+
+        let mut changed_device = base;
+        changed_device.device_path = Some("/dev/dri/renderD128".to_string());
+        assert_ne!(base_key, changed_device.cache_key()?);
+
+        Ok(())
     }
 
     #[tokio::test]

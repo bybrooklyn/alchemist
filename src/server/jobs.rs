@@ -95,61 +95,51 @@ async fn purge_resume_sessions_for_jobs(state: &AppState, ids: &[i64]) {
 pub(crate) async fn enqueue_job_from_submitted_path(
     state: &AppState,
     submitted_path: &str,
-) -> (StatusCode, EnqueueJobResponse) {
+) -> std::result::Result<EnqueueJobResponse, (StatusCode, &'static str, String)> {
     if submitted_path.is_empty() {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
-            EnqueueJobResponse {
-                enqueued: false,
-                message: "Path must not be empty.".to_string(),
-            },
-        );
+            "ENQUEUE_PATH_EMPTY",
+            "Path must not be empty.".to_string(),
+        ));
     }
 
     let requested_path = PathBuf::from(submitted_path);
     if !requested_path.is_absolute() {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
-            EnqueueJobResponse {
-                enqueued: false,
-                message: "Path must be absolute.".to_string(),
-            },
-        );
+            "ENQUEUE_PATH_NOT_ABSOLUTE",
+            "Path must be absolute.".to_string(),
+        ));
     }
 
     let canonical_path = match std::fs::canonicalize(&requested_path) {
         Ok(path) => path,
         Err(err) => {
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
-                EnqueueJobResponse {
-                    enqueued: false,
-                    message: format!("Unable to resolve path: {err}"),
-                },
-            );
+                "ENQUEUE_PATH_UNRESOLVED",
+                format!("Unable to resolve path: {err}"),
+            ));
         }
     };
 
     let metadata = match std::fs::metadata(&canonical_path) {
         Ok(metadata) => metadata,
         Err(err) => {
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
-                EnqueueJobResponse {
-                    enqueued: false,
-                    message: format!("Unable to read file metadata: {err}"),
-                },
-            );
+                "ENQUEUE_METADATA_READ_FAILED",
+                format!("Unable to read file metadata: {err}"),
+            ));
         }
     };
     if !metadata.is_file() {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
-            EnqueueJobResponse {
-                enqueued: false,
-                message: "Path must point to a file.".to_string(),
-            },
-        );
+            "ENQUEUE_PATH_NOT_FILE",
+            "Path must point to a file.".to_string(),
+        ));
     }
 
     let extension = canonical_path
@@ -161,25 +151,21 @@ pub(crate) async fn enqueue_job_from_submitted_path(
         .as_deref()
         .is_none_or(|value| !supported.iter().any(|candidate| candidate == value))
     {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
-            EnqueueJobResponse {
-                enqueued: false,
-                message: "File type is not supported for enqueue.".to_string(),
-            },
-        );
+            "ENQUEUE_UNSUPPORTED_TYPE",
+            "File type is not supported for enqueue.".to_string(),
+        ));
     }
 
     let watch_dirs = match state.db.get_watch_dirs().await {
         Ok(watch_dirs) => watch_dirs,
         Err(err) => {
-            return (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                EnqueueJobResponse {
-                    enqueued: false,
-                    message: err.to_string(),
-                },
-            );
+                "ENQUEUE_WATCH_DIRS_LOAD_FAILED",
+                err.to_string(),
+            ));
         }
     };
 
@@ -190,29 +176,20 @@ pub(crate) async fn enqueue_job_from_submitted_path(
     };
 
     match crate::media::pipeline::enqueue_discovered_with_db(state.db.as_ref(), discovered).await {
-        Ok(true) => (
-            StatusCode::OK,
-            EnqueueJobResponse {
-                enqueued: true,
-                message: format!("Enqueued {}.", canonical_path.display()),
-            },
-        ),
-        Ok(false) => (
-            StatusCode::OK,
-            EnqueueJobResponse {
-                enqueued: false,
-                message:
-                    "File was not enqueued because it matched existing output or dedupe rules."
-                        .to_string(),
-            },
-        ),
-        Err(err) => (
+        Ok(true) => Ok(EnqueueJobResponse {
+            enqueued: true,
+            message: format!("Enqueued {}.", canonical_path.display()),
+        }),
+        Ok(false) => Ok(EnqueueJobResponse {
+            enqueued: false,
+            message: "File was not enqueued because it matched existing output or dedupe rules."
+                .to_string(),
+        }),
+        Err(err) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            EnqueueJobResponse {
-                enqueued: false,
-                message: err.to_string(),
-            },
-        ),
+            "ENQUEUE_FAILED",
+            err.to_string(),
+        )),
     }
 }
 
@@ -220,9 +197,10 @@ pub(crate) async fn enqueue_job_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<EnqueueJobPayload>,
 ) -> impl IntoResponse {
-    let (status, response) =
-        enqueue_job_from_submitted_path(state.as_ref(), payload.path.trim()).await;
-    (status, axum::Json(response)).into_response()
+    match enqueue_job_from_submitted_path(state.as_ref(), payload.path.trim()).await {
+        Ok(res) => axum::Json(res).into_response(),
+        Err((status, code, msg)) => api_error_response(status, code, msg),
+    }
 }
 
 pub(crate) async fn request_job_cancel(state: &AppState, job: &Job) -> Result<bool> {
@@ -373,7 +351,13 @@ pub(crate) async fn batch_jobs_handler(
 ) -> impl IntoResponse {
     let jobs = match state.db.get_jobs_by_ids(&payload.ids).await {
         Ok(jobs) => jobs,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "BATCH_JOBS_LOAD_FAILED",
+                e.to_string(),
+            );
+        }
     };
 
     match payload.action.as_str() {
@@ -419,7 +403,11 @@ pub(crate) async fn batch_jobs_handler(
                         for id in &immediate_ids {
                             state.transcoder.remove_cancel_request(*id).await;
                         }
-                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                        return api_error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "BATCH_CANCEL_FAILED",
+                            e.to_string(),
+                        );
                     }
                 }
                 // Remove cancel requests for jobs already resolved in DB.
@@ -456,10 +444,18 @@ pub(crate) async fn batch_jobs_handler(
                     }
                     axum::Json(serde_json::json!({ "count": count })).into_response()
                 }
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(e) => api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "BATCH_ACTION_FAILED",
+                    e.to_string(),
+                ),
             }
         }
-        _ => (StatusCode::BAD_REQUEST, "Invalid action").into_response(),
+        _ => api_error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_BATCH_ACTION",
+            "Invalid action",
+        ),
     }
 }
 
@@ -471,10 +467,18 @@ pub(crate) async fn cancel_job_handler(
         Ok(Some(job)) => match request_job_cancel(&state, &job).await {
             Ok(_) => StatusCode::OK.into_response(),
             Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CANCEL_JOB_FAILED",
+                e.to_string(),
+            ),
         },
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_JOB_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -492,7 +496,11 @@ pub(crate) async fn restart_failed_handler(
             };
             axum::Json(serde_json::json!({ "count": count, "message": message })).into_response()
         }
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RESTART_FAILED_JOBS_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -501,7 +509,13 @@ pub(crate) async fn clear_completed_handler(
 ) -> impl IntoResponse {
     let completed_job_ids = match state.db.get_jobs_by_status(JobState::Completed).await {
         Ok(jobs) => jobs.into_iter().map(|job| job.id).collect::<Vec<_>>(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_COMPLETED_JOBS_FAILED",
+                e.to_string(),
+            );
+        }
     };
     match state.db.clear_completed_jobs().await {
         Ok(count) => {
@@ -518,7 +532,11 @@ pub(crate) async fn clear_completed_handler(
             };
             axum::Json(serde_json::json!({ "count": count, "message": message })).into_response()
         }
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CLEAR_COMPLETED_FAILED",
+            err.to_string(),
+        ),
     }
 }
 
@@ -532,12 +550,20 @@ pub(crate) async fn restart_job_handler(
                 return blocked_jobs_response("restart is blocked while the job is active", &[job]);
             }
             if let Err(e) = state.db.batch_restart_jobs(&[job.id]).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "RESTART_JOB_FAILED",
+                    e.to_string(),
+                );
             }
             StatusCode::OK.into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_JOB_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -548,7 +574,13 @@ pub(crate) async fn delete_job_handler(
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => job,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_JOB_FAILED",
+                e.to_string(),
+            );
+        }
     };
 
     if job.is_active() {
@@ -563,7 +595,11 @@ pub(crate) async fn delete_job_handler(
             StatusCode::OK.into_response()
         }
         Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DELETE_JOB_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -581,7 +617,11 @@ pub(crate) async fn update_job_priority_handler(
         Ok(_) => axum::Json(serde_json::json!({ "id": id, "priority": payload.priority }))
             .into_response(),
         Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SET_PRIORITY_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -671,7 +711,13 @@ pub(crate) async fn get_job_detail_handler(
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(j)) => j,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_JOB_FAILED",
+                e.to_string(),
+            );
+        }
     };
 
     let metadata = job.input_metadata();
@@ -683,7 +729,11 @@ pub(crate) async fn get_job_detail_handler(
             Ok(stats) => Some(stats),
             Err(err) if is_row_not_found(&err) => None,
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GET_ENCODE_STATS_FAILED",
+                    err.to_string(),
+                );
             }
         }
     } else {
@@ -692,12 +742,24 @@ pub(crate) async fn get_job_detail_handler(
 
     let job_logs = match state.db.get_logs_for_job(id, 200).await {
         Ok(logs) => logs,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_JOB_LOGS_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let decision_explanation = match state.db.get_job_decision_explanation(id).await {
         Ok(explanation) => explanation,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_DECISION_EXPLANATION_FAILED",
+                err.to_string(),
+            );
+        }
     };
 
     let (job_failure_summary, failure_explanation) = if job.status == JobState::Failed {
@@ -709,7 +771,11 @@ pub(crate) async fn get_job_detail_handler(
         let stored_failure = match state.db.get_job_failure_explanation(id).await {
             Ok(explanation) => explanation,
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GET_FAILURE_EXPLANATION_FAILED",
+                    err.to_string(),
+                );
             }
         };
         let summary = stored_failure
@@ -728,7 +794,13 @@ pub(crate) async fn get_job_detail_handler(
 
     let encode_attempts = match state.db.get_encode_attempts_by_job(id).await {
         Ok(attempts) => attempts,
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET_ENCODE_ATTEMPTS_FAILED",
+                err.to_string(),
+            );
+        }
     };
     let encode_history_runs = group_encode_attempts_by_run(&encode_attempts);
 
@@ -736,7 +808,11 @@ pub(crate) async fn get_job_detail_handler(
         match state.db.get_queue_position(id).await {
             Ok(position) => position,
             Err(err) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GET_QUEUE_POSITION_FAILED",
+                    err.to_string(),
+                );
             }
         }
     } else {
@@ -767,9 +843,17 @@ pub(crate) async fn pause_engine_handler(State(state): State<Arc<AppState>>) -> 
 }
 
 pub(crate) async fn resume_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state.hardware_state.snapshot().await.is_none() {
+        state.agent.pause();
+        return api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "HARDWARE_DETECTION_PENDING",
+            "Hardware detection is still running",
+        );
+    }
     state.agent.stop_drain();
     state.agent.resume();
-    axum::Json(serde_json::json!({ "status": "running" }))
+    axum::Json(serde_json::json!({ "status": "running" })).into_response()
 }
 
 pub(crate) async fn drain_engine_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -785,11 +869,20 @@ pub(crate) async fn stop_drain_handler(State(state): State<Arc<AppState>>) -> im
 pub(crate) async fn restart_engine_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    if state.hardware_state.snapshot().await.is_none() {
+        state.agent.pause();
+        return api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "HARDWARE_DETECTION_PENDING",
+            "Hardware detection is still running",
+        );
+    }
     state.agent.restart().await;
-    axum::Json(serde_json::json!({ "status": "running" }))
+    axum::Json(serde_json::json!({ "status": "running" })).into_response()
 }
 
 pub(crate) async fn engine_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let hardware_pending = state.hardware_state.snapshot().await.is_none();
     axum::Json(serde_json::json!({
         "status": if state.agent.is_draining() {
             "draining"
@@ -804,6 +897,7 @@ pub(crate) async fn engine_status_handler(State(state): State<Arc<AppState>>) ->
         "mode": state.agent.current_mode().await.as_str(),
         "concurrent_limit": state.agent.concurrent_jobs_limit(),
         "is_manual_override": state.agent.is_manual_override(),
+        "hardware_pending": hardware_pending,
     }))
 }
 
@@ -852,11 +946,11 @@ pub(crate) async fn set_engine_mode_handler(
     };
 
     if matches!(payload.concurrent_jobs_override, Some(0)) {
-        return (
+        return api_error_response(
             StatusCode::BAD_REQUEST,
+            "ENGINE_JOBS_OVERRIDE_INVALID",
             "concurrent_jobs_override must be > 0",
-        )
-            .into_response();
+        );
     }
 
     let mut next_config = state.config.read().await.clone();
@@ -907,14 +1001,22 @@ pub(crate) async fn logs_history_handler(
 
     match state.db.get_logs(limit, offset).await {
         Ok(logs) => axum::Json(logs).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET_LOGS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
 pub(crate) async fn clear_logs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.clear_logs().await {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CLEAR_LOGS_FAILED",
+            e.to_string(),
+        ),
     }
 }
 
@@ -940,6 +1042,10 @@ pub(crate) async fn clear_history_handler(
         .await
     {
         Ok(count) => axum::Json(serde_json::json!({ "count": count })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PURGE_JOBS_FAILED",
+            e.to_string(),
+        ),
     }
 }

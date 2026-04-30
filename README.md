@@ -2,11 +2,11 @@
 
 Point it at your media library. Walk away. Come back to a smaller, better-encoded collection.
 
-Alchemist saves space automatically without asking you to babysit shell commands or risk your originals. It is free, open source, self-hosted, and gives you a web UI for setup, monitoring, and day-to-day control. If you want storage back without turning media management into a hobby project, this is the tool.
+Alchemist saves space automatically without asking you to babysit shell commands or risk your originals. It is GPLv3 open source, self-hosted, and ships as one application with a web UI for setup, monitoring, and day-to-day control. No paid tier, no private "pro" feature tree, no license key.
 
 ## Why Alchemist?
 
-Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Tools like Tdarr can scale, but they also ask you to learn a larger system. Alchemist is built for the middle: no plugin stacks, no flow editors, no separate services to install, smart enough to skip files that would not really benefit, shipped as a single binary, genuinely GPLv3 open source instead of source-available, and designed for people who just want it to work.
+Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Flow tools can scale and branch, but they also ask you to run more moving parts and model media policy as a graph. Alchemist is built for the self-hoster who wants the boring path: one process, deterministic planning, plain explanations, automatic hardware selection, and public GPLv3 code for every feature it ships.
 
 ## What It Does
 
@@ -21,16 +21,17 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 ## Features
 
 - Give movies, TV, and home videos different behavior with per-library profiles.
-- Convert or remux a single uploaded file from the **Convert** page using the same pipeline Alchemist uses for library jobs. Experimental.
+- Convert or remux a single uploaded file from the **Convert** page using the same pipeline Alchemist uses for library jobs. Experimental utility, not a second product track.
 - Catch corrupt or broken files before they surprise you with Library Doctor.
 - See exactly how much storage you have recovered in the savings dashboard.
 - Understand every skipped file immediately with plain-English explanations.
-- Get a ping when work finishes through Discord, Gotify, Telegram, email, or a webhook.
-- Create named API tokens for automation, with `read_only` and `full_access` access classes.
+- Get a ping when work finishes through Discord, Gotify, ntfy, Telegram, email, or a webhook, with quiet hours for non-critical events.
+- Create named API tokens for automation, with `read_only`, `arr_webhook`, and `full_access` access classes.
+- Accept Sonarr/Radarr download webhooks through a narrowed `arr_webhook` token and optional container path translations.
 - Keep heavy jobs out of the way with a scheduler for off-peak hours.
 - Push urgent files to the front with the priority queue.
 - Switch the engine between background, balanced, and throughput modes without restarting the app.
-- Let hardware acceleration happen automatically on NVIDIA, Intel, AMD, or Apple, with CPU fallback when needed.
+- Let hardware acceleration happen automatically on NVIDIA, Intel, AMD, or Apple, with CPU fallback when needed and cached detection on repeat boots.
 - Preserve HDR metadata or tonemap to SDR depending on what you need.
 - Add folders once and let watch folders keep monitoring them automatically.
 - Shape audio output with stream rules for commentary stripping, language filtering, and default-track retention.
@@ -45,7 +46,7 @@ Alchemist uses hardware acceleration when it can and falls back to CPU encoding 
 | NVIDIA | AV1, HEVC, H.264 (NVENC) |
 | Intel  | AV1, HEVC, H.264 (QSV) |
 | AMD    | HEVC, H.264 (VAAPI/AMF) |
-| Apple  | HEVC, H.264 (VideoToolbox) |
+| Apple  | AV1 on M3+, HEVC, H.264 (VideoToolbox) |
 | CPU    | AV1 (SVT-AV1), HEVC (x265), H.264 (x264) |
 
 CPU fallback is automatic when no GPU is available.
@@ -107,6 +108,11 @@ Start Alchemist, then open [http://localhost:3000](http://localhost:3000):
 ./alchemist
 ```
 
+If port 3000 is already busy, native runs automatically use the next available
+port and print an `INFO` line with the exact
+`http://127.0.0.1:<port>` link. Set `ALCHEMIST_SERVER_PORT=3000` to require a
+specific port.
+
 On Windows, run `alchemist.exe` instead.
 
 ### From Source
@@ -154,13 +160,22 @@ alchemist plan /path/to/media --json
 2. Complete the setup wizard. It takes about 2 minutes.
    During first-time setup, the web UI is reachable only from the local network.
 3. Add your media folders in Watch Folders.
-4. Alchemist scans and starts working automatically.
-5. Check the Dashboard to see progress and savings.
+4. Alchemist runs the initial scan and queues matching work automatically.
+5. Click **Start** in the header when you are ready for the engine to process queued work.
+6. Check the Dashboard to see progress and savings.
 
 ## Automation + Subpath Notes
 
 - API automation can use bearer tokens created in **Settings → API Tokens**.
 - Read-only tokens are limited to observability and monitoring routes.
+- ARR webhooks should use the dedicated `arr_webhook` token class, not a full-access token.
+
+## Open Source
+
+Alchemist is GPLv3. The public repository is the product:
+there is no commercial unlock, no separate enterprise build,
+no license-key gate, and telemetry is opt-in/off by default.
+See [Open Source](docs/docs/open-source.md) for the details.
 
 ## Backups
 

@@ -68,6 +68,11 @@ dev-w:
 run:
     cargo run
 
+# Start the backend with release profile and frontend build
+perform:
+    cd web && bun run build
+    cargo run --release
+
 # Start frontend dev server only
 web:
     cd web && bun install --frozen-lockfile && bun run dev

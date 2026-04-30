@@ -1,6 +1,6 @@
 #![deny(clippy::expect_used, clippy::unwrap_used)]
 
-use alchemist::db::EventChannels;
+use alchemist::db::{EventChannels, SystemEvent};
 use alchemist::error::Result;
 use alchemist::media::pipeline::Planner as _;
 use alchemist::system::hardware;
@@ -108,12 +108,15 @@ async fn apply_reloaded_config(
     agent: &Arc<Agent>,
     hardware_state: &hardware::HardwareState,
     hardware_probe_log: &Arc<RwLock<hardware::HardwareProbeLog>>,
+    event_channels: &Arc<EventChannels>,
 ) -> Result<hardware::HardwareInfo> {
     let new_config = config::Config::load(config_path)
         .map_err(|err| alchemist::error::AlchemistError::Config(err.to_string()))?;
     let (detected_hardware, probe_log) = hardware::detect_hardware_with_log(&new_config).await?;
     let new_limit = new_config.transcode.concurrent_jobs;
     alchemist::settings::project_config_to_db(db.as_ref(), &new_config).await?;
+    persist_hardware_detection_cache(db.as_ref(), &new_config, &detected_hardware, &probe_log)
+        .await;
 
     {
         let mut config_guard = config_state.write().await;
@@ -123,8 +126,119 @@ async fn apply_reloaded_config(
     hardware_state
         .replace(Some(detected_hardware.clone()))
         .await;
-    *hardware_probe_log.write().await = probe_log;
+    *hardware_probe_log.write().await = probe_log.clone();
+    let _ = event_channels
+        .system
+        .send(SystemEvent::HardwareStateChanged);
     agent.set_concurrent_jobs(new_limit).await;
+
+    Ok(detected_hardware)
+}
+
+fn detection_config_for_mode(config: &config::Config, setup_mode: bool) -> config::Config {
+    let mut detection_config = config.clone();
+    if setup_mode {
+        detection_config.hardware.allow_cpu_fallback = true;
+    }
+    detection_config
+}
+
+async fn persist_hardware_detection_cache(
+    db: &db::Db,
+    detection_config: &config::Config,
+    hardware_info: &hardware::HardwareInfo,
+    probe_log: &hardware::HardwareProbeLog,
+) {
+    match hardware::hardware_detection_cache_key_and_json(detection_config).await {
+        Ok((cache_key, fingerprint_json)) => {
+            if let Err(err) = db
+                .upsert_hardware_detection_cache(
+                    &cache_key,
+                    &fingerprint_json,
+                    hardware_info,
+                    probe_log,
+                )
+                .await
+            {
+                warn!("Failed to persist hardware detection cache: {err}");
+            }
+        }
+        Err(err) => warn!("Failed to build hardware detection cache key: {err}"),
+    }
+}
+
+async fn load_cached_hardware_detection(
+    db: &db::Db,
+    detection_config: &config::Config,
+    setup_mode: bool,
+) -> (Option<hardware::HardwareInfo>, hardware::HardwareProbeLog) {
+    let cache_key = match hardware::hardware_detection_cache_key_and_json(detection_config).await {
+        Ok((cache_key, _)) => cache_key,
+        Err(err) => {
+            warn!("Failed to build hardware detection cache key: {err}");
+            return (None, hardware::HardwareProbeLog::default());
+        }
+    };
+
+    match db.get_hardware_detection_cache(&cache_key).await {
+        Ok(Some(entry)) => {
+            if !setup_mode
+                && entry.hardware_info.vendor == hardware::Vendor::Cpu
+                && !detection_config.hardware.allow_cpu_encoding
+            {
+                warn!("Ignoring cached CPU hardware state because CPU encoding is disabled.");
+                return (None, hardware::HardwareProbeLog::default());
+            }
+            info!(
+                target: "startup",
+                "Loaded cached hardware detection from {}",
+                entry.detected_at
+            );
+            (Some(entry.hardware_info), entry.probe_log)
+        }
+        Ok(None) => (None, hardware::HardwareProbeLog::default()),
+        Err(err) => {
+            warn!("Failed to load hardware detection cache: {err}");
+            (None, hardware::HardwareProbeLog::default())
+        }
+    }
+}
+
+async fn detect_and_publish_hardware(
+    db: Arc<db::Db>,
+    detection_config: config::Config,
+    hardware_state: hardware::HardwareState,
+    hardware_probe_log: Arc<RwLock<hardware::HardwareProbeLog>>,
+    event_channels: Arc<EventChannels>,
+) -> Result<hardware::HardwareInfo> {
+    let hw_start = Instant::now();
+    let (detected_hardware, probe_log) =
+        hardware::detect_hardware_with_log(&detection_config).await?;
+    info!(
+        target: "startup",
+        "Hardware detection completed in {} ms",
+        hw_start.elapsed().as_millis()
+    );
+    info!("Selected Hardware: {}", detected_hardware.vendor);
+    if let Some(ref path) = detected_hardware.device_path {
+        info!("  Device Path: {}", path);
+    }
+
+    hardware_state
+        .replace(Some(detected_hardware.clone()))
+        .await;
+    *hardware_probe_log.write().await = probe_log.clone();
+    persist_hardware_detection_cache(
+        db.as_ref(),
+        &detection_config,
+        &detected_hardware,
+        &probe_log,
+    )
+    .await;
+    alchemist::media::ffmpeg::warm_encoder_cache();
+    let _ = event_channels
+        .system
+        .send(SystemEvent::HardwareStateChanged);
 
     Ok(detected_hardware)
 }
@@ -213,21 +327,9 @@ async fn run() -> Result<()> {
     );
 
     if is_server_mode {
-        info!(
-            " ______     __         ______     __  __     ______     __    __     __     ______     ______ "
-        );
-        info!(
-            "/\\  __ \\   /\\ \\       /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\ \"-./  \\   /\\ \\   /\\  ___\\   /\\__  _\\"
-        );
-        info!(
-            "\\ \\  __ \\  \\ \\ \\____  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\-./\\ \\  \\ \\ \\  \\ \\___  \\  \\/_/\\ \\/"
-        );
-        info!(
-            " \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\ \\_\\  \\ \\_\\  \\/\\_____\\    \\ \\_\\"
-        );
-        info!(
-            "  \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/  \\/_/   \\/_/   \\/_____/     \\/_/"
-        );
+        info!("▄▖▜   ▌      ▘  ▗ ");
+        info!("▌▌▐ ▛▘▛▌█▌▛▛▌▌▛▘▜▘");
+        info!("▛▌▐▖▙▖▌▌▙▖▌▌▌▌▄▌▐▖");
         info!("");
         info!("");
         let version = alchemist::version::current();
@@ -474,28 +576,49 @@ async fn run() -> Result<()> {
     }
     info!("");
 
-    // 2. Hardware Detection (using async version to avoid blocking runtime)
-    let hw_start = Instant::now();
-    let mut detection_config = config.clone();
-    if setup_mode {
-        detection_config.hardware.allow_cpu_fallback = true;
-    }
-    let (hw_info, initial_probe_log) =
-        hardware::detect_hardware_with_log(&detection_config).await?;
-    info!(
-        target: "startup",
-        "Hardware detection completed in {} ms",
-        hw_start.elapsed().as_millis()
-    );
-    info!("");
-    info!("Selected Hardware: {}", hw_info.vendor);
-    if let Some(ref path) = hw_info.device_path {
-        info!("  Device Path: {}", path);
-    }
-    alchemist::media::ffmpeg::warm_encoder_cache();
+    // 2. Hardware Detection
+    let detection_config = detection_config_for_mode(&config, setup_mode);
+    let (initial_hardware_info, initial_probe_log) = if is_server_mode {
+        let (cached_hardware, cached_probe_log) =
+            load_cached_hardware_detection(db.as_ref(), &detection_config, setup_mode).await;
+        match cached_hardware.as_ref() {
+            Some(info) => {
+                info!(
+                    "Using cached hardware while live detection runs: {}",
+                    info.vendor
+                );
+                if let Some(ref path) = info.device_path {
+                    info!("  Device Path: {}", path);
+                }
+            }
+            None => {
+                info!("Hardware detection pending; starting web server before live probing.");
+            }
+        }
+        (cached_hardware, cached_probe_log)
+    } else {
+        let hw_start = Instant::now();
+        let (detected_hardware, probe_log) =
+            hardware::detect_hardware_with_log(&detection_config).await?;
+        info!(
+            target: "startup",
+            "Hardware detection completed in {} ms",
+            hw_start.elapsed().as_millis()
+        );
+        info!("Selected Hardware: {}", detected_hardware.vendor);
+        if let Some(ref path) = detected_hardware.device_path {
+            info!("  Device Path: {}", path);
+        }
+        alchemist::media::ffmpeg::warm_encoder_cache();
+        (Some(detected_hardware), probe_log)
+    };
 
     // Check CPU encoding policy
-    if !setup_mode && hw_info.vendor == hardware::Vendor::Cpu {
+    if !setup_mode
+        && initial_hardware_info
+            .as_ref()
+            .is_some_and(|info| info.vendor == hardware::Vendor::Cpu)
+    {
         if !config.hardware.allow_cpu_encoding {
             // In setup mode, we might not have set this yet, so don't error out.
             error!("CPU encoding is disabled in configuration.");
@@ -526,9 +649,31 @@ async fn run() -> Result<()> {
     });
 
     let transcoder = Arc::new(Transcoder::new());
-    let hardware_state = hardware::HardwareState::new(Some(hw_info.clone()));
+    let hardware_state = hardware::HardwareState::new(initial_hardware_info);
     let hardware_probe_log = Arc::new(RwLock::new(initial_probe_log));
     let config = Arc::new(RwLock::new(config));
+
+    if is_server_mode {
+        let detection_db = db.clone();
+        let detection_config = detection_config.clone();
+        let detection_hardware_state = hardware_state.clone();
+        let detection_probe_log = hardware_probe_log.clone();
+        let detection_events = event_channels.clone();
+        tokio::spawn(async move {
+            info!("Hardware detection running in background.");
+            if let Err(err) = detect_and_publish_hardware(
+                detection_db,
+                detection_config,
+                detection_hardware_state,
+                detection_probe_log,
+                detection_events,
+            )
+            .await
+            {
+                error!("Background hardware detection failed: {err}");
+            }
+        });
+    }
 
     // Initialize Notification Manager (needs config for allow_local_notifications)
     let notification_manager = Arc::new(alchemist::notifications::NotificationManager::new(
@@ -695,6 +840,7 @@ async fn run() -> Result<()> {
         let hardware_probe_log_for_config = hardware_probe_log.clone();
         let config_watch_path = config_path.clone();
         let db_for_config = db.clone();
+        let event_channels_for_config = event_channels.clone();
 
         // Channel for file events
         let (tx_notify, mut rx_notify) = tokio::sync::mpsc::unbounded_channel();
@@ -738,6 +884,7 @@ async fn run() -> Result<()> {
                                     &agent_for_config,
                                     &hardware_state_for_config,
                                     &hardware_probe_log_for_config,
+                                    &event_channels_for_config,
                                 )
                                 .await
                                 {
@@ -1301,7 +1448,7 @@ mod tests {
                 transcoder,
                 config_state.clone(),
                 hardware_state.clone(),
-                event_channels,
+                event_channels.clone(),
                 true,
             )
             .await,
@@ -1321,6 +1468,7 @@ mod tests {
             &agent,
             &hardware_state,
             &hardware_probe_log,
+            &event_channels,
         )
         .await?;
 

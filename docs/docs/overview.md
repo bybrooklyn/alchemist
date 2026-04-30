@@ -14,36 +14,41 @@ Alchemist scans your media library, analyzes every file, and
 decides whether transcoding it would actually save meaningful
 space. If a file is already efficiently compressed, it skips
 it and tells you exactly why in plain English. If it can save
-space without hurting quality, it encodes it — using whatever
-hardware you have — automatically, while you sleep.
+space without hurting quality, it encodes it using whatever
+hardware you have, on your schedule.
 
 Your originals are never touched until the new file passes
 quality validation. Nothing is deleted until you say so.
+
+Alchemist is GPLv3 open source. There is no paid tier, no
+private "pro" build, no license key, and no phone-home check.
 
 ## What it does
 
 - Scans configured library directories and queues files for analysis
 - Runs FFprobe on each file to extract codec, resolution, bitrate, and HDR metadata
 - Applies BPP (bits-per-pixel) analysis and size thresholds to decide whether transcoding is worth it
-- Selects the best available encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, CPU fallback)
+- Selects the best available encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, CPU fallback) and caches valid hardware detection across repeat boots
 - Encodes to AV1, HEVC, or H.264 based on your configured target
 - Validates output quality (optional VMAF scoring) before promoting the result
 - Tells you exactly why every skipped file was skipped
-- Supports named API tokens for automation clients and external observability
+- Supports named API tokens for observability, full automation, and Sonarr/Radarr webhook ingress
 - Can be served under a path prefix such as `/alchemist`
-- Includes an experimental single-file Conversion / Remux workflow
+- Includes an experimental single-file Conversion / Remux utility with command preview and source/output estimates
 - Expands Library Intelligence beyond duplicate detection into storage-focused recommendations
+- Sends notifications through Discord, Gotify, ntfy, Telegram, email, or webhooks, with quiet hours for non-critical events
 
 ## What it is not
 
-Alchemist is not Tdarr. There are no flow editors, no plugin
-stacks, no separate services to install. It is a single
-binary that does one thing without asking you to become an
-FFmpeg expert.
+Alchemist is not Tdarr and not FileFlows. It does not try to
+be a visual workflow product, a plugin marketplace, or a
+general-purpose file automation suite. It is one application
+for one job: decide what media is worth optimizing, encode it
+safely, and explain every decision.
 
 ## Hardware support
 
-Alchemist detects and selects the best available hardware encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, or CPU fallback). 
+Alchemist detects and selects the best available hardware encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, or CPU fallback). Repeat boots reuse a valid cached detection result when the OS, architecture, FFmpeg/FFprobe versions, and hardware settings have not changed.
 
 For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup guides, see the [Hardware Acceleration](/hardware) documentation.
 

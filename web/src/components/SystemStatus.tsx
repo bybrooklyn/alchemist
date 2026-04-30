@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, X, Zap, CheckCircle2, AlertTriangle, Database } from "lucide-react";
 import { useSharedStats } from "../lib/statsStore";
@@ -19,7 +19,6 @@ function focusables(root: HTMLElement): HTMLElement[] {
 export default function SystemStatus() {
     const { stats, error } = useSharedStats();
     const [isExpanded, setIsExpanded] = useState(false);
-    const layoutId = useId();
     const modalRef = useRef<HTMLDivElement | null>(null);
     const closeRef = useRef<HTMLButtonElement | null>(null);
     const lastFocusedRef = useRef<HTMLElement | null>(null);
@@ -90,7 +89,6 @@ export default function SystemStatus() {
     return (
         <>
             <motion.div
-                layoutId={layoutId}
                 onClick={() => setIsExpanded(true)}
                 className="flex flex-col gap-3 cursor-pointer group p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 shadow-sm"
                 whileHover={{ scale: 1.02 }}
@@ -147,7 +145,10 @@ export default function SystemStatus() {
                                 role="dialog"
                                 aria-modal="true"
                                 aria-labelledby="system-status-title"
-                                layoutId={layoutId}
+                                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                                 className="w-full max-w-lg bg-helios-surface border border-helios-line/30 rounded-xl shadow-2xl overflow-hidden relative outline-none"
                                 onClick={(e) => e.stopPropagation()}
                                 tabIndex={-1}

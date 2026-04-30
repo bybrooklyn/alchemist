@@ -86,6 +86,12 @@ winget install Gyan.FFmpeg    # Windows
 alchemist.exe      # Windows
 ```
 
+Native runs bind to port 3000 by default. If that port is
+busy and `ALCHEMIST_SERVER_PORT` is not set, Alchemist tries
+the next available port and prints an `INFO` line with the
+exact `http://127.0.0.1:<port>` link. Set
+`ALCHEMIST_SERVER_PORT=<port>` to require a specific port.
+
 On Windows, Alchemist now exposes an in-app update check in
 the About dialog that compares the running version against
 the latest stable GitHub Release and links directly to the
