@@ -280,12 +280,11 @@ const applyRootTheme = (themeId: string) => {
         return;
     }
     document.documentElement.setAttribute("data-color-profile", themeId);
-    localStorage.setItem("theme", themeId);
 };
 
 export default function AppearanceSettings() {
     const [activeThemeId, setActiveThemeId] = useState(
-        () => (typeof window !== 'undefined' ? localStorage.getItem("theme") : null) || getRootTheme() || "helios-orange"
+        () => getRootTheme() || "helios-orange"
     );
     const [savingThemeId, setSavingThemeId] = useState<string | null>(null);
     const [error, setError] = useState("");

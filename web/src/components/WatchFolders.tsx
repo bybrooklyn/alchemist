@@ -382,7 +382,7 @@ export default function WatchFolders() {
                 </div>
                 <button
                     onClick={() => void triggerScan()}
-                    disabled={scanning}
+                    disabled={loading || scanning}
                     className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
                 >
                     <Play size={14} className={scanning ? "animate-spin" : ""} />
@@ -396,42 +396,44 @@ export default function WatchFolders() {
                 </div>
             )}
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <input
-                    type="text"
-                    value={dirInput}
-                    onChange={(e) => setDirInput(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                            e.preventDefault();
-                            void addDirectory(dirInput);
-                        }
-                    }}
-                    placeholder="/path/to/media"
-                    className="flex-1 rounded-lg border border-helios-line/40 bg-helios-surface px-4 py-2.5 font-mono text-sm text-helios-ink outline-none transition-colors focus:border-helios-solar"
-                />
-                <button
-                    type="button"
-                    onClick={() => setPickerOpen(true)}
-                    className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-slate transition-colors hover:border-helios-solar/40 hover:text-helios-ink"
-                >
-                    Browse
-                </button>
-                <button
-                    type="button"
-                    onClick={() => void addDirectory(dirInput)}
-                    disabled={!dirInput.trim()}
-                    className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    Add
-                </button>
-            </div>
-
             {loading ? (
                 <div className="text-center py-8 text-helios-slate animate-pulse text-sm">
                     Loading folders...
                 </div>
-            ) : dirs.length > 0 ? (
+            ) : (
+                <>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <input
+                            type="text"
+                            value={dirInput}
+                            onChange={(e) => setDirInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    void addDirectory(dirInput);
+                                }
+                            }}
+                            placeholder="/path/to/media"
+                            className="flex-1 rounded-lg border border-helios-line/40 bg-helios-surface px-4 py-2.5 font-mono text-sm text-helios-ink outline-none transition-colors focus:border-helios-solar"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setPickerOpen(true)}
+                            className="rounded-lg border border-helios-line/30 bg-helios-surface px-4 py-2.5 text-sm font-medium text-helios-slate transition-colors hover:border-helios-solar/40 hover:text-helios-ink"
+                        >
+                            Browse
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void addDirectory(dirInput)}
+                            disabled={!dirInput.trim()}
+                            className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Add
+                        </button>
+                    </div>
+
+                    {dirs.length > 0 ? (
                 <div className="overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface">
                     {dirs.map((dir, index) => (
                         <div
@@ -506,6 +508,8 @@ export default function WatchFolders() {
                         Add a folder above or browse the server filesystem
                     </p>
                 </div>
+            )}
+                </>
             )}
 
             <ConfirmDialog
