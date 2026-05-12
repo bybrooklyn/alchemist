@@ -3,11 +3,14 @@ info:
   title: Alchemist API
   version: 0.3.2-rc.2
   description: >
-    Hand-maintained API contract for Alchemist. Authentication may use the
-    alchemist_session cookie or a bearer token. Bearer tokens support
-    read_only, arr_webhook, and full_access classes.
+    Stable v1 API contract for Alchemist clients. Canonical routes live under
+    /api/v1. Legacy /api routes remain available as compatibility aliases, but
+    new external clients should use /api/v1.
 servers:
   - url: /
+security:
+  - sessionCookie: []
+  - bearerToken: []
 components:
   securitySchemes:
     sessionCookie:
@@ -18,19 +21,57 @@ components:
       type: http
       scheme: bearer
       bearerFormat: opaque
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
   schemas:
-    ErrorEnvelope:
+    ProblemDetails:
       type: object
-      required: [error]
+      required: [type, title, status, detail, code, request_id, error]
       properties:
+        type:
+          type: string
+          example: urn:alchemist:problem:auth-required
+        title:
+          type: string
+          example: Unauthorized
+        status:
+          type: integer
+          example: 401
+        detail:
+          type: string
+          example: Unauthorized
+        instance:
+          type: string
+          nullable: true
+          example: /api/v1/engine/status
+        code:
+          type: string
+          example: AUTH_REQUIRED
+        request_id:
+          type: string
+          example: 2c168dbf-6f29-41eb-a8e7-0fd563f76fd4
         error:
           type: object
           required: [code, message]
           properties:
             code:
               type: string
+              example: AUTH_REQUIRED
             message:
               type: string
+              example: Unauthorized
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          example: true
     ApiToken:
       type: object
       properties:
@@ -40,7 +81,7 @@ components:
           type: string
         access_level:
           type: string
-          enum: [read_only, arr_webhook, full_access]
+          enum: [read_only, arr_webhook, jellyfin, full_access]
         created_at:
           type: string
           format: date-time
@@ -68,10 +109,76 @@ components:
           type: string
           nullable: true
           enum: [manual_paused, scheduled_pause, draining, workers_busy]
+    GenericObject:
+      type: object
+      additionalProperties: true
+    UpdateStatus:
+      type: object
+      properties:
+        current_version:
+          type: string
+        channel:
+          type: string
+          enum: [stable, rc, nightly]
+        latest_version:
+          type: string
+          nullable: true
+        update_available:
+          type: boolean
+        release_url:
+          type: string
+          nullable: true
+        checked_at:
+          type: string
+          format: date-time
+        install_type:
+          type: string
+          enum: [docker, homebrew, aur, source, direct_binary, windows_exe, unknown]
+        can_self_update:
+          type: boolean
+        action:
+          type: string
+          enum: [self_update, guided, unsupported]
+        guidance:
+          type: string
+          nullable: true
+        guidance_command:
+          type: string
+          nullable: true
+        verification_status:
+          type: string
+          enum: [verified, public_key_unavailable, manifest_unavailable, failed]
+        verification_error:
+          type: string
+          nullable: true
+  responses:
+    Ok:
+      description: Operation completed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkResponse"
+    Accepted:
+      description: Operation accepted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkResponse"
+    Problem:
+      description: Error response
+      headers:
+        X-Request-Id:
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
 paths:
-  /api/auth/login:
+  /api/v1/auth/login:
     post:
       summary: Create an authenticated session cookie
+      security: []
       requestBody:
         required: true
         content:
@@ -87,12 +194,434 @@ paths:
       responses:
         "200":
           description: Session created
-  /api/settings/api-tokens:
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/auth/logout:
+    post:
+      summary: Clear the authenticated session cookie
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/conversion/jobs/{id}:
+    get:
+      summary: Get a staged conversion job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Conversion job
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      summary: Delete a staged conversion job and removable artifacts
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/conversion/jobs/{id}/download:
+    get:
+      summary: Download completed conversion output
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Converted media stream
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/conversion/jobs/{id}/start:
+    post:
+      summary: Queue a staged conversion job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/conversion/preview:
+    post:
+      summary: Preview conversion command and estimates
+      responses:
+        "200":
+          description: Conversion preview
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/conversion/uploads:
+    post:
+      summary: Upload source media for conversion
+      responses:
+        "200":
+          description: Upload accepted
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/drain:
+    post:
+      summary: Stop accepting new work after current jobs finish
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/mode:
+    get:
+      summary: Get engine mode and active limits
+      responses:
+        "200":
+          description: Engine mode
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Set engine mode and optional overrides
+      responses:
+        "200":
+          description: Engine mode
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/pause:
+    post:
+      summary: Pause job processing
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/restart:
+    post:
+      summary: Restart the engine loop
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/resume:
+    post:
+      summary: Resume job processing
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/status:
+    get:
+      summary: Get engine status
+      responses:
+        "200":
+          description: Engine status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineStatus"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/engine/stop-drain:
+    post:
+      summary: Leave draining mode
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/events:
+    get:
+      summary: Subscribe to server-sent events
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/fs/browse:
+    get:
+      summary: Browse server filesystem paths for setup and settings
+      responses:
+        "200":
+          description: Directory listing
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/fs/preview:
+    post:
+      summary: Preview selected filesystem paths
+      responses:
+        "200":
+          description: Path preview
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/fs/recommendations:
+    get:
+      summary: Get filesystem directory recommendations
+      responses:
+        "200":
+          description: Directory recommendations
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Healthy
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs:
+    get:
+      summary: List jobs with filtering and pagination
+      responses:
+        "200":
+          description: Job list
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/batch:
+    post:
+      summary: Run a bulk job action
+      responses:
+        "200":
+          description: Bulk action result
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/clear-completed:
+    post:
+      summary: Archive completed jobs
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/clear-history:
+    post:
+      summary: Archive terminal jobs from history
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/enqueue:
+    post:
+      summary: Enqueue a media path
+      responses:
+        "200":
+          description: Enqueue result
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/restart-failed:
+    post:
+      summary: Restart failed and cancelled jobs
+      responses:
+        "200":
+          description: Restart result
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/{id}:
+    delete:
+      summary: Delete a job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/{id}/cancel:
+    post:
+      summary: Cancel a job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/{id}/details:
+    get:
+      summary: Get detailed job state
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Job detail
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/{id}/priority:
+    post:
+      summary: Update job priority
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/jobs/{id}/restart:
+    post:
+      summary: Restart a terminal job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/health:
+    get:
+      summary: Get library health summary
+      responses:
+        "200":
+          description: Library health
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/health/issues:
+    get:
+      summary: List library health issues
+      responses:
+        "200":
+          description: Health issues
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/health/scan:
+    post:
+      summary: Start a library health scan
+      responses:
+        "202":
+          $ref: "#/components/responses/Accepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/health/scan/{id}:
+    post:
+      summary: Rescan one library health issue
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "202":
+          $ref: "#/components/responses/Accepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/intelligence:
+    get:
+      summary: Get library intelligence summary
+      responses:
+        "200":
+          description: Library intelligence
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/library/reanalyze:
+    post:
+      summary: Reanalyze the library root
+      responses:
+        "202":
+          $ref: "#/components/responses/Accepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/logs:
+    delete:
+      summary: Clear logs
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/logs/history:
+    get:
+      summary: Get recent logs
+      responses:
+        "200":
+          description: Log history
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/processor/status:
+    get:
+      summary: Get processor status
+      responses:
+        "200":
+          description: Processor status
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/profiles:
+    get:
+      summary: List quality profiles
+      responses:
+        "200":
+          description: Profile list
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Create a quality profile
+      responses:
+        "201":
+          description: Profile created
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/profiles/presets:
+    get:
+      summary: List profile presets
+      responses:
+        "200":
+          description: Profile presets
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/profiles/{id}:
+    put:
+      summary: Update a quality profile
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Profile updated
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      summary: Delete a quality profile
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/ready:
+    get:
+      summary: Readiness check
+      security: []
+      responses:
+        "200":
+          description: Ready
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/scan:
+    post:
+      summary: Scan configured libraries
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/scan/start:
+    post:
+      summary: Start a library scan
+      responses:
+        "202":
+          $ref: "#/components/responses/Accepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/scan/status:
+    get:
+      summary: Get scan status
+      responses:
+        "200":
+          description: Scan status
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/api-tokens:
     get:
       summary: List API token metadata
-      security:
-        - sessionCookie: []
-        - bearerToken: []
       responses:
         "200":
           description: Token metadata list
@@ -102,168 +631,438 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ApiToken"
+        default:
+          $ref: "#/components/responses/Problem"
     post:
       summary: Create an API token
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name, access_level]
-              properties:
-                name:
-                  type: string
-                access_level:
-                  type: string
-                  enum: [read_only, arr_webhook, full_access]
       responses:
         "200":
-          description: Token created; plaintext token shown once
-  /api/webhooks/arr:
-    post:
-      summary: Receive Sonarr/Radarr Download webhook payloads and enqueue media
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Webhook accepted and enqueue attempted
-        "202":
-          description: Non-Download event ignored
-        "400":
-          description: Download payload missing a resolvable file path
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorEnvelope"
-  /api/settings/api-tokens/{id}:
+          description: Token created; plaintext token is shown once
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/api-tokens/{id}:
     delete:
       summary: Revoke an API token
-      security:
-        - sessionCookie: []
-        - bearerToken: []
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
+        - $ref: "#/components/parameters/Id"
       responses:
         "200":
-          description: Token revoked
-  /api/system/info:
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/bundle:
+    get:
+      summary: Get full settings bundle
+      responses:
+        "200":
+          description: Settings bundle
+        default:
+          $ref: "#/components/responses/Problem"
+    put:
+      summary: Replace full settings bundle
+      responses:
+        "200":
+          description: Settings bundle
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/config:
+    get:
+      summary: Get editable settings config
+      responses:
+        "200":
+          description: Settings config
+        default:
+          $ref: "#/components/responses/Problem"
+    put:
+      summary: Replace editable settings config
+      responses:
+        "200":
+          description: Settings config
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/files:
+    get:
+      summary: Get file output settings
+      responses:
+        "200":
+          description: File settings
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Update file output settings
+      responses:
+        "200":
+          description: File settings
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/folders:
+    post:
+      summary: Synchronize watched folders
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/hardware:
+    get:
+      summary: Get hardware settings
+      responses:
+        "200":
+          description: Hardware settings
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Update hardware settings
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/notifications:
+    get:
+      summary: Get notification settings and targets
+      responses:
+        "200":
+          description: Notification settings
+        default:
+          $ref: "#/components/responses/Problem"
+    put:
+      summary: Update notification settings
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Add notification target
+      responses:
+        "200":
+          description: Notification target
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/notifications/test:
+    post:
+      summary: Send a test notification
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/notifications/{id}:
+    delete:
+      summary: Delete a notification target
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/preferences:
+    post:
+      summary: Set one settings preference value
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/preferences/{key}:
+    get:
+      summary: Get one settings preference value
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Preference value
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/schedule:
+    get:
+      summary: List schedule windows
+      responses:
+        "200":
+          description: Schedule windows
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Add a schedule window
+      responses:
+        "200":
+          description: Schedule window
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/schedule/{id}:
+    delete:
+      summary: Delete a schedule window
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/system:
+    get:
+      summary: Get system settings
+      responses:
+        "200":
+          description: System settings
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Update system settings
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/transcode:
+    get:
+      summary: Get transcode settings
+      responses:
+        "200":
+          description: Transcode settings
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Update transcode settings
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/watch-dirs:
+    get:
+      summary: List watched directories
+      responses:
+        "200":
+          description: Watch directory list
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Add a watched directory
+      responses:
+        "200":
+          description: Watch directory
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/watch-dirs/{id}:
+    delete:
+      summary: Remove a watched directory
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/settings/watch-dirs/{id}/reanalyze:
+    post:
+      summary: Reanalyze a watched directory
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "202":
+          $ref: "#/components/responses/Accepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/setup/complete:
+    post:
+      summary: Complete setup
+      security: []
+      responses:
+        "200":
+          description: Setup result
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/setup/status:
+    get:
+      summary: Get setup status
+      security: []
+      responses:
+        "200":
+          description: Setup status
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats:
+    get:
+      summary: Get queue stats
+      responses:
+        "200":
+          description: Queue stats
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats/aggregated:
+    get:
+      summary: Get aggregated encode stats
+      responses:
+        "200":
+          description: Aggregated stats
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats/daily:
+    get:
+      summary: Get daily encode stats
+      responses:
+        "200":
+          description: Daily stats
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats/detailed:
+    get:
+      summary: Get detailed encode stats
+      responses:
+        "200":
+          description: Detailed stats
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats/savings:
+    get:
+      summary: Get storage savings summary
+      responses:
+        "200":
+          description: Savings summary
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/stats/skip-reasons:
+    get:
+      summary: Get skip reason counts
+      responses:
+        "200":
+          description: Skip reason counts
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/backup:
+    post:
+      summary: Download a compressed database backup
+      responses:
+        "200":
+          description: Gzip-compressed SQLite backup
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/hardware:
+    get:
+      summary: Get detected hardware info
+      responses:
+        "200":
+          description: Hardware info
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/hardware/probe-log:
+    get:
+      summary: Get hardware detection probe log
+      responses:
+        "200":
+          description: Probe log
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/info:
     get:
       summary: Get runtime version and environment information
-      security:
-        - sessionCookie: []
-        - bearerToken: []
       responses:
         "200":
           description: Runtime info
-  /api/system/update:
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/resources:
     get:
-      summary: Check GitHub Releases for the latest stable version
-      security:
-        - sessionCookie: []
-        - bearerToken: []
+      summary: Get host resource metrics
+      responses:
+        "200":
+          description: Resource metrics
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/update:
+    get:
+      summary: Check configured-channel update status
       responses:
         "200":
           description: Update status
-  /api/jobs:
-    get:
-      summary: List jobs
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      responses:
-        "200":
-          description: Job list
-  /api/conversion/uploads:
-    post:
-      summary: Upload a source file for the Convert workflow
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      responses:
-        "200":
-          description: Upload accepted and conversion row created
-  /api/conversion/preview:
-    post:
-      summary: Preview generated FFmpeg command and source/output estimate
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      responses:
-        "200":
-          description: Normalized settings, command preview, and structured summary
-  /api/conversion/jobs/{id}/start:
-    post:
-      summary: Queue a staged conversion job
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Conversion job queued
-  /api/jobs/{id}/details:
-    get:
-      summary: Get a single job detail record
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Job detail
-  /api/engine/status:
-    get:
-      summary: Get current engine status
-      security:
-        - sessionCookie: []
-        - bearerToken: []
-      responses:
-        "200":
-          description: Engine status
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EngineStatus"
-  /api/system/backup:
+                $ref: "#/components/schemas/UpdateStatus"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/update/check:
     post:
-      summary: Download a gzip-compressed SQLite backup
-      security:
-        - sessionCookie: []
-        - bearerToken: []
+      summary: Force-refresh update metadata
       responses:
         "200":
-          description: Gzip-compressed SQLite database backup
+          description: Update status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateStatus"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/update/install:
+    post:
+      summary: Start a verified direct-binary update when supported
+      responses:
+        "202":
+          description: Update accepted or draining before install
+        "200":
+          description: Already up to date
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/telemetry/payload:
+    get:
+      summary: Get telemetry payload preview
+      responses:
+        "200":
+          description: Telemetry payload
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/ui/preferences:
+    get:
+      summary: Get UI preferences
+      responses:
+        "200":
+          description: UI preferences
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      summary: Update UI preferences
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/watch-dirs/{id}/profile:
+    patch:
+      summary: Assign a quality profile to a watched directory
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Watch directory
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/webhooks/arr:
+    post:
+      summary: Receive a Sonarr/Radarr download webhook
+      responses:
+        "200":
+          description: Webhook accepted
+        "202":
+          description: Non-download event ignored
+        default:
+          $ref: "#/components/responses/Problem"
   /metrics:
     get:
-      summary: Prometheus metrics endpoint when system.metrics_enabled is true
-      security:
-        - sessionCookie: []
-        - bearerToken: []
+      summary: Get Prometheus metrics when enabled
+      security: []
       responses:
         "200":
-          description: Prometheus text exposition format
+          description: Prometheus exposition text
+          content:
+            text/plain:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Problem"
