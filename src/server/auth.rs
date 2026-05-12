@@ -51,32 +51,26 @@ pub(crate) async fn login_handler(
 
     // A valid argon2 static hash of a random string used to simulate work and equalize timing
     const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHN0cmluZzEyMzQ1Ng$1tJ2tA109qj15m3u5+kS/sX5X1UoZ6/H9b/30tX9N/g";
-    let dummy_hash = match PasswordHash::new(DUMMY_HASH) {
-        Ok(hash) => hash,
-        Err(_) => {
-            return api_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "AUTH_FALLBACK_HASH_INVALID",
-                "Authentication fallback hash is invalid",
-            );
-        }
+
+    let password = payload.password.clone();
+    let hash_to_verify = match &user_result {
+        Some(u) => u.password_hash.clone(),
+        None => DUMMY_HASH.to_string(),
     };
 
-    let parsed_hash = match &user_result {
-        Some(u) => PasswordHash::new(&u.password_hash).unwrap_or_else(|_| {
-            is_valid = false;
-            dummy_hash.clone()
-        }),
-        None => {
-            is_valid = false;
-            dummy_hash
-        }
-    };
+    let argon2_valid = tokio::task::spawn_blocking(move || {
+        let parsed_hash = match PasswordHash::new(&hash_to_verify) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false);
 
-    if Argon2::default()
-        .verify_password(payload.password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
+    if !argon2_valid || user_result.is_none() {
         is_valid = false;
     }
 

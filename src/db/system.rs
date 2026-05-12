@@ -150,6 +150,7 @@ impl Db {
             "SELECT id, name,
                     CASE
                         WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                        WHEN access_scope = 'jellyfin' THEN 'jellyfin'
                         ELSE access_level
                     END AS access_level,
                     created_at, last_used_at, revoked_at
@@ -171,6 +172,7 @@ impl Db {
             ApiTokenAccessLevel::ReadOnly => ("read_only", None),
             ApiTokenAccessLevel::FullAccess => ("full_access", None),
             ApiTokenAccessLevel::ArrWebhook => ("read_only", Some("arr_webhook")),
+            ApiTokenAccessLevel::Jellyfin => ("read_only", Some("jellyfin")),
         };
         let token_hash = hash_api_token(token);
         let row = sqlx::query_as::<_, ApiToken>(
@@ -179,6 +181,7 @@ impl Db {
              RETURNING id, name,
                        CASE
                          WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                         WHEN access_scope = 'jellyfin' THEN 'jellyfin'
                          ELSE access_level
                        END AS access_level,
                        created_at, last_used_at, revoked_at",
@@ -198,6 +201,7 @@ impl Db {
             "SELECT id, name, token_hash,
                     CASE
                         WHEN access_scope = 'arr_webhook' THEN 'arr_webhook'
+                        WHEN access_scope = 'jellyfin' THEN 'jellyfin'
                         ELSE access_level
                     END AS access_level,
                     created_at, last_used_at, revoked_at

@@ -1,7 +1,8 @@
 //! Library scanning and watch folder handlers.
 
 use super::{
-    AppState, api_error_response, is_row_not_found, refresh_file_watcher, save_config_or_response,
+    AppState, api_accepted_response, api_error_response, api_ok_response, is_row_not_found,
+    refresh_file_watcher, save_config_or_response,
 };
 use axum::{
     extract::{Path, State},
@@ -49,12 +50,12 @@ pub(crate) async fn scan_handler(State(state): State<Arc<AppState>>) -> impl Int
         agent.analyze_pending_jobs().await;
     });
 
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 pub(crate) async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.library_scanner.start_scan().await {
-        Ok(_) => StatusCode::ACCEPTED.into_response(),
+        Ok(_) => api_accepted_response(),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "START_SCAN_FAILED",
@@ -235,7 +236,9 @@ pub(crate) async fn rescan_library_health_issue_handler(
 ) -> impl IntoResponse {
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => job,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found");
+        }
         Err(err) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -333,7 +336,7 @@ pub(crate) async fn add_watch_dir_handler(
             .into_iter()
             .find(|dir| dir.path == normalized_path)
             .map(|dir| axum::Json(dir).into_response())
-            .unwrap_or_else(|| StatusCode::OK.into_response()),
+            .unwrap_or_else(api_ok_response),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "GET_WATCH_DIRS_FAILED",
@@ -390,7 +393,11 @@ pub(crate) async fn remove_watch_dir_handler(
         }
     };
     let Some(dir) = dir else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "WATCH_DIR_NOT_FOUND",
+            "Watch folder not found",
+        );
     };
 
     let mut next_config = state.config.read().await.clone();
@@ -406,7 +413,7 @@ pub(crate) async fn remove_watch_dir_handler(
         *config = next_config;
     }
     refresh_file_watcher(&state).await;
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 // Library profiles handlers
@@ -571,7 +578,11 @@ pub(crate) async fn create_profile_handler(
             axum::Json(library_profile_response(profile)),
         )
             .into_response(),
-        Ok(None) => StatusCode::CREATED.into_response(),
+        Ok(None) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({ "ok": true, "id": id })),
+        )
+            .into_response(),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "GET_PROFILE_FAILED",
@@ -603,14 +614,22 @@ pub(crate) async fn update_profile_handler(
     {
         Ok(_) => match state.db.get_profile(id).await {
             Ok(Some(profile)) => axum::Json(library_profile_response(profile)).into_response(),
-            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => api_error_response(
+                StatusCode::NOT_FOUND,
+                "PROFILE_NOT_FOUND",
+                "Profile not found",
+            ),
             Err(err) => api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "GET_PROFILE_FAILED",
                 err.to_string(),
             ),
         },
-        Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) if is_row_not_found(&err) => api_error_response(
+            StatusCode::NOT_FOUND,
+            "PROFILE_NOT_FOUND",
+            "Profile not found",
+        ),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "UPDATE_PROFILE_FAILED",
@@ -638,8 +657,12 @@ pub(crate) async fn delete_profile_handler(
             "Profile is still assigned to one or more watch folders",
         ),
         Ok(_) => match state.db.delete_profile(id).await {
-            Ok(_) => StatusCode::OK.into_response(),
-            Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+            Ok(_) => api_ok_response(),
+            Err(err) if is_row_not_found(&err) => api_error_response(
+                StatusCode::NOT_FOUND,
+                "PROFILE_NOT_FOUND",
+                "Profile not found",
+            ),
             Err(err) => api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DELETE_PROFILE_FAILED",
@@ -662,7 +685,13 @@ pub(crate) async fn assign_watch_dir_profile_handler(
     if let Some(profile_id) = payload.profile_id {
         match state.db.get_profile(profile_id).await {
             Ok(Some(_)) => {}
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => {
+                return api_error_response(
+                    StatusCode::NOT_FOUND,
+                    "PROFILE_NOT_FOUND",
+                    "Profile not found",
+                );
+            }
             Err(err) => {
                 return api_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -683,14 +712,18 @@ pub(crate) async fn assign_watch_dir_profile_handler(
                 .into_iter()
                 .find(|dir| dir.id == id)
                 .map(|dir| axum::Json(dir).into_response())
-                .unwrap_or_else(|| StatusCode::OK.into_response()),
+                .unwrap_or_else(api_ok_response),
             Err(err) => api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "GET_WATCH_DIRS_FAILED",
                 err.to_string(),
             ),
         },
-        Err(err) if is_row_not_found(&err) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) if is_row_not_found(&err) => api_error_response(
+            StatusCode::NOT_FOUND,
+            "WATCH_DIR_NOT_FOUND",
+            "Watch folder not found",
+        ),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "ASSIGN_PROFILE_FAILED",
@@ -715,7 +748,11 @@ pub(crate) async fn reanalyze_watch_dir_handler(
     };
 
     let Some(watch_dir) = watch_dir else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "WATCH_DIR_NOT_FOUND",
+            "Watch folder not found",
+        );
     };
 
     let jobs = match state.db.get_jobs_under_root_path(&watch_dir.path).await {

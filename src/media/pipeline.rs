@@ -1899,11 +1899,23 @@ impl Pipeline {
                 | crate::db::JobState::Skipped
                 | crate::db::JobState::Completed => {
                     tracing::info!(
-                        "Ignoring state update to {:?} for job {} because it was cancelled",
+                        "Intercepted state update to {:?} for job {} due to cancellation. Marking as Cancelled.",
                         status,
                         job_id
                     );
                     self.orchestrator.remove_cancel_request(job_id).await;
+                    if let Err(e) = self
+                        .db
+                        .update_job_status(job_id, crate::db::JobState::Cancelled)
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to update job {} status to Cancelled: {}",
+                            job_id,
+                            e
+                        );
+                        return Err(e);
+                    }
                     return Ok(());
                 }
                 _ => {}

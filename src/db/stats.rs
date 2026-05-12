@@ -123,6 +123,24 @@ impl Db {
         Ok(attempts)
     }
 
+    /// Lightweight lookup used by the metrics subscriber. Returns `None` when
+    /// the encode_stats row has not been written yet (rare; can happen if a
+    /// terminal status fires before the finalizer persists stats).
+    pub async fn get_encode_completion_summary(
+        &self,
+        job_id: i64,
+    ) -> Result<Option<EncodeCompletionSummary>> {
+        let row = sqlx::query_as::<_, EncodeCompletionSummary>(
+            "SELECT output_codec AS codec, encode_time_seconds
+             FROM encode_stats
+             WHERE job_id = ?",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn get_encode_stats_by_job_id(&self, job_id: i64) -> Result<DetailedEncodeStats> {
         let stats = sqlx::query_as::<_, DetailedEncodeStats>(
             "SELECT
@@ -179,7 +197,7 @@ impl Db {
     /// Get daily statistics for the last N days (for time-series charts)
     pub async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>> {
         let pool = &self.pool;
-        let days_str = format!("-{}", days);
+        let days_str = format!("{} days", days);
         timed_query("get_daily_stats", || async {
             let rows = sqlx::query(
                 "SELECT
@@ -189,8 +207,8 @@ impl Db {
                     COALESCE(SUM(e.input_size_bytes), 0) as total_input_bytes,
                     COALESCE(SUM(e.output_size_bytes), 0) as total_output_bytes
                  FROM encode_stats e
-                 WHERE e.created_at >= DATE('now', ? || ' days')
-                 GROUP BY DATE(e.created_at)
+                 WHERE e.created_at >= datetime('now', 'start of day', '-' || ?)
+                 GROUP BY date
                  ORDER BY date ASC",
             )
             .bind(&days_str)
@@ -294,8 +312,8 @@ impl Db {
                     COALESCE(SUM(e.input_size_bytes - e.output_size_bytes), 0) as bytes_saved
                  FROM encode_stats e
                  WHERE e.output_size_bytes IS NOT NULL
-                   AND e.created_at >= datetime('now', '-30 days')
-                 GROUP BY DATE(e.created_at)
+                   AND e.created_at >= datetime('now', 'start of day', '-30 days')
+                 GROUP BY date
                  ORDER BY date ASC",
             )
             .fetch_all(pool)
@@ -352,9 +370,9 @@ impl Db {
         timed_query("get_daily_summary_stats", || async {
             let row = sqlx::query(
                 "SELECT
-                    COALESCE(SUM(CASE WHEN status = 'completed' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS completed,
-                    COALESCE(SUM(CASE WHEN status = 'failed' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS failed,
-                    COALESCE(SUM(CASE WHEN status = 'skipped' AND DATE(updated_at, 'localtime') = DATE('now', 'localtime') THEN 1 ELSE 0 END), 0) AS skipped
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS completed,
+                    COALESCE(SUM(CASE WHEN status = 'failed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS failed,
+                    COALESCE(SUM(CASE WHEN status = 'skipped' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS skipped
                  FROM jobs",
             )
             .fetch_one(pool)
@@ -367,7 +385,7 @@ impl Db {
             let bytes_row = sqlx::query(
                 "SELECT COALESCE(SUM(input_size_bytes - output_size_bytes), 0) AS bytes_saved
                  FROM encode_stats
-                 WHERE DATE(created_at, 'localtime') = DATE('now', 'localtime')",
+                 WHERE created_at >= datetime('now', 'start of day', 'localtime')",
             )
             .fetch_one(pool)
             .await?;
@@ -376,7 +394,7 @@ impl Db {
             let failure_rows = sqlx::query(
                 "SELECT code, COUNT(*) AS count
                  FROM job_failure_explanations
-                 WHERE DATE(updated_at, 'localtime') = DATE('now', 'localtime')
+                 WHERE updated_at >= datetime('now', 'start of day', 'localtime')
                  GROUP BY code
                  ORDER BY count DESC, code ASC
                  LIMIT 3",
@@ -392,7 +410,7 @@ impl Db {
                 "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
                  FROM decisions
                  WHERE action = 'skip'
-                   AND DATE(created_at, 'localtime') = DATE('now', 'localtime')
+                   AND created_at >= datetime('now', 'start of day', 'localtime')
                  GROUP BY COALESCE(reason_code, action)
                  ORDER BY count DESC, code ASC
                  LIMIT 3",
@@ -423,7 +441,7 @@ impl Db {
                 "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
                  FROM decisions
                  WHERE action = 'skip'
-                   AND DATE(created_at, 'localtime') = DATE('now', 'localtime')
+                   AND created_at >= datetime('now', 'start of day', 'localtime')
                  GROUP BY COALESCE(reason_code, action)
                  ORDER BY count DESC, code ASC
                  LIMIT 20",
@@ -436,6 +454,73 @@ impl Db {
                     let code: String = row.get("code");
                     let count: i64 = row.get("count");
                     (code, count)
+                })
+                .collect())
+        })
+        .await
+    }
+
+    /// Top skip reasons inside a sliding `window_days` window (e.g. 1, 7, 30).
+    /// Returns at most 20 rows ordered by `count` descending.
+    pub async fn get_skip_reason_counts_windowed(
+        &self,
+        window_days: i32,
+    ) -> Result<Vec<ReasonCodeCount>> {
+        let pool = &self.pool;
+        let window = format!("-{} days", window_days.max(1));
+        timed_query("get_skip_reason_counts_windowed", || async {
+            let rows = sqlx::query(
+                "SELECT COALESCE(reason_code, action) AS code,
+                        COUNT(*) AS count,
+                        MAX(created_at) AS last_seen
+                 FROM decisions
+                 WHERE action = 'skip'
+                   AND created_at >= datetime('now', ?)
+                 GROUP BY COALESCE(reason_code, action)
+                 ORDER BY count DESC, code ASC
+                 LIMIT 20",
+            )
+            .bind(&window)
+            .fetch_all(pool)
+            .await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| ReasonCodeCount {
+                    code: row.get("code"),
+                    count: row.get("count"),
+                    last_seen: row.get("last_seen"),
+                })
+                .collect())
+        })
+        .await
+    }
+
+    /// Top failure codes from `job_failure_explanations` inside a sliding
+    /// `window_days` window. Returns at most 20 rows ordered by `count`
+    /// descending.
+    pub async fn get_failure_code_counts(&self, window_days: i32) -> Result<Vec<ReasonCodeCount>> {
+        let pool = &self.pool;
+        let window = format!("-{} days", window_days.max(1));
+        timed_query("get_failure_code_counts", || async {
+            let rows = sqlx::query(
+                "SELECT code,
+                        COUNT(*) AS count,
+                        MAX(updated_at) AS last_seen
+                 FROM job_failure_explanations
+                 WHERE updated_at >= datetime('now', ?)
+                 GROUP BY code
+                 ORDER BY count DESC, code ASC
+                 LIMIT 20",
+            )
+            .bind(&window)
+            .fetch_all(pool)
+            .await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| ReasonCodeCount {
+                    code: row.get("code"),
+                    count: row.get("count"),
+                    last_seen: row.get("last_seen"),
                 })
                 .collect())
         })

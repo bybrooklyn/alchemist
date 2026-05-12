@@ -3,12 +3,35 @@ use crate::error::{AlchemistError, Result};
 use inquire::{Confirm, Select, Text};
 use std::path::Path;
 
+pub fn hash_password(password: &str) -> Result<String> {
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
+    use rand::TryRngCore;
+    use rand::rngs::OsRng;
+
+    let mut salt_bytes = [0u8; 16];
+    OsRng
+        .try_fill_bytes(&mut salt_bytes)
+        .map_err(|e| AlchemistError::Unknown(format!("Failed to generate salt: {}", e)))?;
+
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|e| AlchemistError::Unknown(format!("Failed to encode salt: {}", e)))?;
+
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| AlchemistError::Unknown(format!("Hashing failed: {}", e)))?
+        .to_string();
+
+    Ok(password_hash)
+}
+
 /// Interactive configuration wizard
 pub struct ConfigWizard;
 
 impl ConfigWizard {
     /// Run the configuration wizard and create config.toml
-    pub fn run(config_path: &Path) -> Result<Config> {
+    pub async fn run(config_path: &Path, db: Option<&crate::db::Db>) -> Result<Config> {
         println!("\n╔═══════════════════════════════════════════════════════════════╗");
         println!("║                  ALCHEMIST CONFIGURATION WIZARD              ║");
         println!("╚═══════════════════════════════════════════════════════════════╝\n");
@@ -27,9 +50,33 @@ impl ConfigWizard {
             }
         }
 
+        // Section 0: Admin User (Optional if DB provided and has no users)
+        let admin_user = if let Some(db) = db {
+            if !db.has_users().await? {
+                println!("\n┌─────────────────────────────────────────┐");
+                println!("│ Section 0/4: Admin Account             │");
+                println!("└─────────────────────────────────────────┘\n");
+                let username = Text::new("Admin username:")
+                    .with_default("admin")
+                    .prompt()
+                    .map_err(|e| AlchemistError::Config(format!("Prompt failed: {}", e)))?;
+
+                let password = inquire::Password::new("Admin password:")
+                    .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                    .prompt()
+                    .map_err(|e| AlchemistError::Config(format!("Prompt failed: {}", e)))?;
+
+                Some((username, password))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Section 1: Transcoding
         println!("\n┌─────────────────────────────────────────┐");
-        println!("│ Section 1/3: Transcoding Settings      │");
+        println!("│ Section 1/4: Transcoding Settings      │");
         println!("└─────────────────────────────────────────┘\n");
 
         let size_threshold = Self::prompt_size_threshold()?;
@@ -39,7 +86,7 @@ impl ConfigWizard {
 
         // Section 2: Hardware
         println!("\n┌─────────────────────────────────────────┐");
-        println!("│ Section 2/3: Hardware Settings         │");
+        println!("│ Section 2/4: Hardware Settings         │");
         println!("└─────────────────────────────────────────┘\n");
 
         let allow_cpu_fallback = Self::prompt_cpu_fallback()?;
@@ -49,7 +96,7 @@ impl ConfigWizard {
 
         // Section 3: Scanner
         println!("\n┌─────────────────────────────────────────┐");
-        println!("│ Section 3/3: Scanner Settings          │");
+        println!("│ Section 3/4: Scanner Settings          │");
         println!("└─────────────────────────────────────────┘\n");
 
         let directories = Self::prompt_directories()?;
@@ -57,6 +104,7 @@ impl ConfigWizard {
         // Build config
         let config = Config {
             appearance: crate::config::AppearanceConfig::default(),
+            updates: crate::config::UpdatesConfig::default(),
             transcode: crate::config::TranscodeConfig {
                 size_reduction_threshold: size_threshold,
                 min_bpp_threshold: min_bpp,
@@ -108,9 +156,18 @@ impl ConfigWizard {
         // Write to file
         Self::write_config(config_path, &config)?;
 
+        // Create user if requested
+        if let Some((username, password)) = admin_user {
+            if let Some(db) = db {
+                let password_hash = hash_password(&password)?;
+                db.create_user(&username, &password_hash).await?;
+                println!("✅ Admin user '{}' created", username);
+            }
+        }
+
         println!("\n✅ Configuration saved to {}", config_path.display());
         println!("\nYou can now use Alchemist!");
-        println!("  • Run: alchemist --server");
+        println!("  • Run: alchemist");
         println!("  • Edit: {}\n", config_path.display());
 
         Ok(config)

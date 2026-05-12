@@ -535,6 +535,27 @@ impl Db {
                 qb.push(" ESCAPE '\\'");
             }
 
+            if let Some(ref reason_code) = query.reason_code {
+                qb.push(
+                    " AND EXISTS (
+                        SELECT 1 FROM decisions d
+                        WHERE d.job_id = j.id
+                          AND COALESCE(d.reason_code, d.action) = ",
+                );
+                qb.push_bind(reason_code.clone());
+                qb.push(") ");
+            }
+
+            if let Some(ref failure_code) = query.failure_code {
+                qb.push(
+                    " AND EXISTS (
+                        SELECT 1 FROM job_failure_explanations f
+                        WHERE f.job_id = j.id AND f.code = ",
+                );
+                qb.push_bind(failure_code.clone());
+                qb.push(") ");
+            }
+
             qb.push(" ORDER BY ");
             let sort_col = match query.sort_by.as_deref() {
                 Some("created_at") => "j.created_at",
@@ -659,6 +680,71 @@ impl Db {
         update_ids.push_unseparated(")");
 
         let result = update_qb.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn reanalyze_jobs_under_path(&self, root_path: &str) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("CREATE TEMPORARY TABLE jobs_to_reanalyze (id INTEGER PRIMARY KEY)")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO jobs_to_reanalyze (id)
+             SELECT id FROM jobs
+             WHERE archived = 0
+               AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming')
+               AND (
+                    input_path = ?
+                    OR (
+                        length(input_path) > length(?)
+                        AND (
+                            substr(input_path, 1, length(?) + 1) = ? || '/'
+                            OR substr(input_path, 1, length(?) + 1) = ? || '\\'
+                        )
+                    )
+               )",
+        )
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .bind(root_path)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM decisions WHERE job_id IN (SELECT id FROM jobs_to_reanalyze)")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "DELETE FROM job_resume_sessions WHERE job_id IN (SELECT id FROM jobs_to_reanalyze)",
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM encode_stats WHERE job_id IN (SELECT id FROM jobs_to_reanalyze)")
+            .execute(&mut *tx)
+            .await?;
+
+        let result = sqlx::query(
+            "UPDATE jobs
+             SET status = 'queued',
+                 progress = 0.0,
+                 attempt_count = 0,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id IN (SELECT id FROM jobs_to_reanalyze)",
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DROP TABLE jobs_to_reanalyze")
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
         Ok(result.rows_affected())
     }
@@ -1439,6 +1525,104 @@ mod tests {
             explanation.measured.get("bpp"),
             Some(&serde_json::json!(0.043))
         );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reanalyze_jobs_under_path() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_reanalyze_path_{}.db", token));
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        // Setup jobs
+        db.enqueue_job(
+            Path::new("/root/sub/job1.mkv"),
+            Path::new("/root/sub/job1.mp4"),
+            SystemTime::now(),
+        )
+        .await?;
+        let job1 = db
+            .get_job_by_input_path("/root/sub/job1.mkv")
+            .await?
+            .ok_or("job1 not found")?;
+        db.update_job_status(job1.id, JobState::Completed).await?;
+
+        db.enqueue_job(
+            Path::new("/root/sub/job2.mkv"),
+            Path::new("/root/sub/job2.mp4"),
+            SystemTime::now(),
+        )
+        .await?;
+        let job2 = db
+            .get_job_by_input_path("/root/sub/job2.mkv")
+            .await?
+            .ok_or("job2 not found")?;
+        db.update_job_status(job2.id, JobState::Encoding).await?;
+
+        db.enqueue_job(
+            Path::new("/root/other/job3.mkv"),
+            Path::new("/root/other/job3.mp4"),
+            SystemTime::now(),
+        )
+        .await?;
+        let job3 = db
+            .get_job_by_input_path("/root/other/job3.mkv")
+            .await?
+            .ok_or("job3 not found")?;
+        db.update_job_status(job3.id, JobState::Completed).await?;
+
+        // Add some decisions/stats
+        sqlx::query("INSERT INTO decisions (job_id, action, reason) VALUES (?, 'skip', 'test')")
+            .bind(job1.id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO encode_stats (job_id, input_size_bytes, output_size_bytes, compression_ratio, encode_time_seconds, encode_speed, avg_bitrate_kbps) VALUES (?, 100, 50, 0.5, 10.0, 1.0, 1000.0)",
+        )
+        .bind(job1.id)
+        .execute(&db.pool)
+        .await?;
+
+        // Reanalyze /root/sub
+        let count = db.reanalyze_jobs_under_path("/root/sub").await?;
+        assert_eq!(count, 1); // Only job1, job2 is active
+
+        let job1_after = db
+            .get_job_by_id(job1.id)
+            .await?
+            .ok_or("job1_after not found")?;
+        let job2_after = db
+            .get_job_by_id(job2.id)
+            .await?
+            .ok_or("job2_after not found")?;
+        let job3_after = db
+            .get_job_by_id(job3.id)
+            .await?
+            .ok_or("job3_after not found")?;
+
+        assert_eq!(job1_after.status, JobState::Queued);
+        assert_eq!(job2_after.status, JobState::Encoding);
+        assert_eq!(job3_after.status, JobState::Completed);
+
+        // Verify data cleared for job1
+        let decisions = sqlx::query("SELECT COUNT(*) FROM decisions WHERE job_id = ?")
+            .bind(job1.id)
+            .fetch_one(&db.pool)
+            .await?
+            .get::<i64, _>(0);
+        assert_eq!(decisions, 0);
+
+        let stats = sqlx::query("SELECT COUNT(*) FROM encode_stats WHERE job_id = ?")
+            .bind(job1.id)
+            .fetch_one(&db.pool)
+            .await?
+            .get::<i64, _>(0);
+        assert_eq!(stats, 0);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

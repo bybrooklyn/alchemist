@@ -1,6 +1,6 @@
 //! Job CRUD, batch operations, queue control handlers.
 
-use super::{AppState, api_error_response, is_row_not_found};
+use super::{AppState, api_error_response, api_ok_response, is_row_not_found};
 use crate::db::{Job, JobState};
 use crate::error::Result;
 use crate::explanations::Explanation;
@@ -113,7 +113,7 @@ pub(crate) async fn enqueue_job_from_submitted_path(
         ));
     }
 
-    let canonical_path = match std::fs::canonicalize(&requested_path) {
+    let canonical_path = match tokio::fs::canonicalize(&requested_path).await {
         Ok(path) => path,
         Err(err) => {
             return Err((
@@ -124,7 +124,7 @@ pub(crate) async fn enqueue_job_from_submitted_path(
         }
     };
 
-    let metadata = match std::fs::metadata(&canonical_path) {
+    let metadata = match tokio::fs::metadata(&canonical_path).await {
         Ok(metadata) => metadata,
         Err(err) => {
             return Err((
@@ -139,6 +139,41 @@ pub(crate) async fn enqueue_job_from_submitted_path(
             StatusCode::BAD_REQUEST,
             "ENQUEUE_PATH_NOT_FILE",
             "Path must point to a file.".to_string(),
+        ));
+    }
+
+    // Security check: path must be inside an allowed root
+    let mut allowed_roots: Vec<PathBuf> = {
+        let config = state.config.read().await;
+        config
+            .scanner
+            .directories
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    };
+    if let Ok(watch_dirs) = state.db.get_watch_dirs().await {
+        for wd in watch_dirs {
+            allowed_roots.push(PathBuf::from(wd.path));
+        }
+    }
+
+    let mut is_allowed = false;
+    for root in allowed_roots {
+        if let Ok(canonical_root) = std::fs::canonicalize(&root) {
+            if canonical_path.starts_with(&canonical_root) {
+                is_allowed = true;
+                break;
+            }
+        }
+    }
+
+    if !is_allowed {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "ENQUEUE_PATH_FORBIDDEN",
+            "Access to this path is restricted. It must be within a configured library folder."
+                .to_string(),
         ));
     }
 
@@ -258,6 +293,8 @@ pub(crate) struct JobTableParams {
     sort_by: Option<String>,
     sort_desc: Option<bool>,
     archived: Option<String>,
+    reason_code: Option<String>,
+    failure_code: Option<String>,
 }
 
 pub(crate) async fn jobs_table_handler(
@@ -273,6 +310,8 @@ pub(crate) async fn jobs_table_handler(
         sort_by,
         sort_desc,
         archived,
+        reason_code,
+        failure_code,
     } = params;
 
     let limit = limit.unwrap_or(50).clamp(1, 200);
@@ -305,6 +344,8 @@ pub(crate) async fn jobs_table_handler(
             sort_by: sort_by.or(sort),
             sort_desc: sort_desc.unwrap_or(false),
             archived,
+            reason_code: reason_code.filter(|s| !s.is_empty()),
+            failure_code: failure_code.filter(|s| !s.is_empty()),
         })
         .await
     {
@@ -465,15 +506,17 @@ pub(crate) async fn cancel_job_handler(
 ) -> impl IntoResponse {
     match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => match request_job_cancel(&state, &job).await {
-            Ok(_) => StatusCode::OK.into_response(),
-            Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
+            Ok(_) => api_ok_response(),
+            Err(e) if is_row_not_found(&e) => {
+                api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found")
+            }
             Err(e) => api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "CANCEL_JOB_FAILED",
                 e.to_string(),
             ),
         },
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found"),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "GET_JOB_FAILED",
@@ -556,9 +599,9 @@ pub(crate) async fn restart_job_handler(
                     e.to_string(),
                 );
             }
-            StatusCode::OK.into_response()
+            api_ok_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found"),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "GET_JOB_FAILED",
@@ -573,7 +616,9 @@ pub(crate) async fn delete_job_handler(
 ) -> impl IntoResponse {
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => job,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found");
+        }
         Err(e) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -592,9 +637,11 @@ pub(crate) async fn delete_job_handler(
     match state.db.delete_job(id).await {
         Ok(_) => {
             purge_resume_sessions_for_jobs(state.as_ref(), &[id]).await;
-            StatusCode::OK.into_response()
+            api_ok_response()
         }
-        Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) if is_row_not_found(&e) => {
+            api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found")
+        }
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DELETE_JOB_FAILED",
@@ -616,7 +663,9 @@ pub(crate) async fn update_job_priority_handler(
     match state.db.set_job_priority(id, payload.priority).await {
         Ok(_) => axum::Json(serde_json::json!({ "id": id, "priority": payload.priority }))
             .into_response(),
-        Err(e) if is_row_not_found(&e) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) if is_row_not_found(&e) => {
+            api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found")
+        }
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "SET_PRIORITY_FAILED",
@@ -710,7 +759,9 @@ pub(crate) async fn get_job_detail_handler(
 ) -> impl IntoResponse {
     let job = match state.db.get_job_by_id(id).await {
         Ok(Some(j)) => j,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found");
+        }
         Err(e) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1011,7 +1062,7 @@ pub(crate) async fn logs_history_handler(
 
 pub(crate) async fn clear_logs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.clear_logs().await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => api_ok_response(),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "CLEAR_LOGS_FAILED",

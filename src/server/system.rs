@@ -15,7 +15,7 @@ use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::error;
+use tracing::{error, info};
 
 const INTELLIGENCE_CACHE_TTL: Duration = Duration::from_secs(30);
 const MAX_INTELLIGENCE_JOBS: i64 = 500;
@@ -94,27 +94,32 @@ pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>)
     }
 
     let (cpu_percent, memory_used_mb, memory_total_mb, memory_percent, cpu_count) = {
-        let mut sys = state.sys.lock().await;
-        sys.refresh_all();
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut sys = state.sys.blocking_lock();
+            sys.refresh_all();
 
-        let cpu_percent =
-            sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len().max(1) as f32;
-        let cpu_count = sys.cpus().len();
-        let memory_used_mb = sys.used_memory() / 1024 / 1024;
-        let memory_total_mb = sys.total_memory() / 1024 / 1024;
-        let memory_percent = if memory_total_mb > 0 {
-            (memory_used_mb as f32 / memory_total_mb as f32) * 100.0
-        } else {
-            0.0
-        };
+            let cpu_percent = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>()
+                / sys.cpus().len().max(1) as f32;
+            let cpu_count = sys.cpus().len();
+            let memory_used_mb = sys.used_memory() / 1024 / 1024;
+            let memory_total_mb = sys.total_memory() / 1024 / 1024;
+            let memory_percent = if memory_total_mb > 0 {
+                (memory_used_mb as f32 / memory_total_mb as f32) * 100.0
+            } else {
+                0.0
+            };
 
-        (
-            cpu_percent,
-            memory_used_mb,
-            memory_total_mb,
-            memory_percent,
-            cpu_count,
-        )
+            (
+                cpu_percent,
+                memory_used_mb,
+                memory_total_mb,
+                memory_percent,
+                cpu_count,
+            )
+        })
+        .await
+        .unwrap_or((0.0, 0, 0, 0.0, 0))
     };
 
     let uptime_seconds = state.start_time.elapsed().as_secs();
@@ -408,18 +413,7 @@ pub(crate) async fn reanalyze_library_root_handler(
 
     let mut total_reanalyzed = 0;
     for root in root_paths {
-        let jobs = match state.db.get_jobs_under_root_path(&root).await {
-            Ok(jobs) => jobs,
-            Err(_) => continue,
-        };
-
-        let ids: Vec<i64> = jobs
-            .into_iter()
-            .filter(|j| !j.is_active())
-            .map(|j| j.id)
-            .collect();
-
-        if let Ok(count) = state.db.batch_reanalyze_jobs(&ids).await {
+        if let Ok(count) = state.db.reanalyze_jobs_under_path(&root).await {
             total_reanalyzed += count;
         }
     }
@@ -568,14 +562,8 @@ struct SystemInfo {
     is_docker: bool,
     telemetry_enabled: bool,
     ffmpeg_version: String,
-}
-
-#[derive(Serialize)]
-struct UpdateInfo {
-    current_version: String,
-    latest_version: Option<String>,
-    update_available: bool,
-    release_url: Option<String>,
+    cpu_count: usize,
+    total_memory_gb: u64,
 }
 
 pub(crate) async fn get_system_info_handler(
@@ -583,12 +571,42 @@ pub(crate) async fn get_system_info_handler(
 ) -> impl IntoResponse {
     let config = state.config.read().await;
     let version = crate::version::current().to_string();
-    let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
-    let is_docker = std::path::Path::new("/.dockerenv").exists();
+    let os_version = sysinfo::System::long_os_version()
+        .or_else(sysinfo::System::name)
+        .map(|name| {
+            if let Some(ver) = sysinfo::System::os_version() {
+                format!("{} {}", name, ver)
+            } else {
+                name
+            }
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_string());
+    let os_version = format!("{} {}", os_version, std::env::consts::ARCH);
+
+    let is_docker = std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/.containerenv").exists()
+        || std::fs::read_to_string("/proc/1/cgroup")
+            .map(|cgroup| {
+                cgroup.contains("docker")
+                    || cgroup.contains("containerd")
+                    || cgroup.contains("kubepods")
+            })
+            .unwrap_or(false);
 
     // Attempt to verify ffmpeg version
     let ffmpeg_version =
         crate::media::ffmpeg::verify_ffmpeg().unwrap_or_else(|_| "Unknown".to_string());
+
+    let (cpu_count, total_memory_gb) = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut sys = state.sys.blocking_lock();
+            sys.refresh_memory();
+            (sys.cpus().len(), sys.total_memory() / 1024 / 1024 / 1024)
+        })
+        .await
+        .unwrap_or((0, 0))
+    };
 
     axum::Json(SystemInfo {
         version,
@@ -596,30 +614,15 @@ pub(crate) async fn get_system_info_handler(
         is_docker,
         telemetry_enabled: config.system.enable_telemetry,
         ffmpeg_version,
+        cpu_count,
+        total_memory_gb,
     })
     .into_response()
 }
 
-pub(crate) async fn get_system_update_handler() -> impl IntoResponse {
-    let current_version = crate::version::current().to_string();
-    match fetch_latest_stable_release().await {
-        Ok(Some((latest_version, release_url))) => {
-            let update_available = version_is_newer(&latest_version, &current_version);
-            axum::Json(UpdateInfo {
-                current_version,
-                latest_version: Some(latest_version),
-                update_available,
-                release_url: Some(release_url),
-            })
-            .into_response()
-        }
-        Ok(None) => axum::Json(UpdateInfo {
-            current_version,
-            latest_version: None,
-            update_available: false,
-            release_url: None,
-        })
-        .into_response(),
+pub(crate) async fn get_system_update_handler(State(state): State<Arc<AppState>>) -> Response {
+    match resolve_update_status(state, false).await {
+        Ok(status) => axum::Json(status).into_response(),
         Err(err) => api_error_response(
             StatusCode::BAD_GATEWAY,
             "SYSTEM_UPDATE_CHECK_FAILED",
@@ -628,66 +631,188 @@ pub(crate) async fn get_system_update_handler() -> impl IntoResponse {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct GitHubReleaseResponse {
-    tag_name: String,
-    html_url: String,
+pub(crate) async fn check_system_update_handler(State(state): State<Arc<AppState>>) -> Response {
+    match resolve_update_status(state, true).await {
+        Ok(status) => axum::Json(status).into_response(),
+        Err(err) => api_error_response(
+            StatusCode::BAD_GATEWAY,
+            "SYSTEM_UPDATE_CHECK_FAILED",
+            format!("Failed to check for updates: {err}"),
+        ),
+    }
 }
 
-async fn fetch_latest_stable_release() -> Result<Option<(String, String)>, reqwest::Error> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent(format!("alchemist/{}", crate::version::current()))
-        .build()?;
-    let response = client
-        .get("https://api.github.com/repos/bybrooklyn/alchemist/releases/latest")
-        .send()
-        .await?;
+pub(crate) async fn install_system_update_handler(State(state): State<Arc<AppState>>) -> Response {
+    let status = match resolve_update_status(state.clone(), true).await {
+        Ok(status) => status,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_GATEWAY,
+                "SYSTEM_UPDATE_CHECK_FAILED",
+                format!("Failed to check for updates: {err}"),
+            );
+        }
+    };
 
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+    if !status.update_available {
+        return axum::Json(serde_json::json!({
+            "install_state": "up_to_date",
+            "status": status,
+        }))
+        .into_response();
     }
 
-    let release: GitHubReleaseResponse = response.error_for_status()?.json().await?;
-    Ok(Some((
-        release.tag_name.trim_start_matches('v').to_string(),
-        release.html_url,
-    )))
-}
+    if !status.can_self_update {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "UPDATE_SELF_INSTALL_UNAVAILABLE",
+            status
+                .guidance
+                .clone()
+                .unwrap_or_else(|| "This install cannot self-update.".to_string()),
+        );
+    }
 
-fn version_is_newer(latest: &str, current: &str) -> bool {
-    parse_version(latest) > parse_version(current)
-}
+    let active_jobs = match state.db.get_job_stats().await {
+        Ok(stats) => stats.active,
+        Err(err) => return config_read_error_response("load job stats for update", &err),
+    };
+    if active_jobs > 0 {
+        state.agent.drain();
+        return (
+            StatusCode::ACCEPTED,
+            axum::Json(serde_json::json!({
+                "install_state": "draining",
+                "active_jobs": active_jobs,
+                "message": "Alchemist is draining active jobs before applying the update.",
+                "status": status,
+            })),
+        )
+            .into_response();
+    }
 
-fn parse_version(value: &str) -> (u64, u64, u64) {
-    let sanitized = value.trim_start_matches('v');
-    let parts = sanitized
-        .split(['.', '-'])
-        .filter_map(|part| part.parse::<u64>().ok())
-        .collect::<Vec<_>>();
+    let Some(asset) = status.asset.clone() else {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "UPDATE_ASSET_UNAVAILABLE",
+            "No verified update asset is available for this platform.",
+        );
+    };
+    let Some(version) = status.latest_version.clone() else {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "UPDATE_VERSION_UNAVAILABLE",
+            "No update version is available.",
+        );
+    };
+
+    state.agent.drain();
+    let backup_path = match create_update_backup(&state, &version).await {
+        Ok(path) => path,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "UPDATE_BACKUP_FAILED",
+                format!("Database backup failed before update: {err}"),
+            );
+        }
+    };
+    let staged = match crate::update::stage_update_asset(&asset, &version).await {
+        Ok(staged) => staged,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_GATEWAY,
+                "UPDATE_STAGE_FAILED",
+                format!("Failed to stage update: {err}"),
+            );
+        }
+    };
+    let log_path = match crate::update::spawn_update_helper(&staged, &backup_path) {
+        Ok(path) => path,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "UPDATE_HELPER_FAILED",
+                format!("Failed to start update helper: {err}"),
+            );
+        }
+    };
+
+    info!(
+        version = %staged.version,
+        archive = %staged.archive_path.display(),
+        backup = %backup_path.display(),
+        helper_log = %log_path.display(),
+        "Update staged; scheduling process exit for helper apply"
+    );
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        std::process::exit(0);
+    });
+
     (
-        *parts.first().unwrap_or(&0),
-        *parts.get(1).unwrap_or(&0),
-        *parts.get(2).unwrap_or(&0),
+        StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({
+            "install_state": "restarting",
+            "message": "Update verified and staged. Alchemist is restarting to apply it.",
+            "backup_path": backup_path,
+            "helper_log": log_path,
+            "status": status,
+        })),
     )
+        .into_response()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+async fn resolve_update_status(
+    state: Arc<AppState>,
+    force: bool,
+) -> anyhow::Result<crate::update::UpdateStatus> {
+    let updates = {
+        let config = state.config.read().await;
+        config.updates.clone()
+    };
 
-    #[test]
-    fn version_compare_detects_newer_stable_release() {
-        assert!(version_is_newer("0.3.1", "0.3.0"));
-        assert!(!version_is_newer("0.3.0", "0.3.0"));
-        assert!(!version_is_newer("0.2.9", "0.3.0"));
+    if !force {
+        let cache = state.update_status_cache.lock().await;
+        if let Some((status, cached_at)) = cache.as_ref() {
+            let ttl = Duration::from_secs(u64::from(updates.check_interval_hours) * 60 * 60);
+            if cached_at.elapsed() < ttl {
+                return Ok(status.clone());
+            }
+        }
     }
 
-    #[test]
-    fn parse_version_ignores_prefix_and_suffix() {
-        assert_eq!(parse_version("v0.3.1"), (0, 3, 1));
-        assert_eq!(parse_version("0.3.1-rc.1"), (0, 3, 1));
+    let status = crate::update::check_for_updates(&updates).await?;
+    {
+        let mut cache = state.update_status_cache.lock().await;
+        *cache = Some((status.clone(), Instant::now()));
     }
+    Ok(status)
+}
+
+async fn create_update_backup(
+    state: &AppState,
+    version: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let mut backup_dir = crate::runtime::temp_dir();
+    backup_dir.push("updates");
+    tokio::fs::create_dir_all(&backup_dir).await?;
+    let safe_version = version
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let backup_path = backup_dir.join(format!(
+        "alchemist-pre-update-{safe_version}-{}.db",
+        rand::random::<u64>()
+    ));
+    state.db.create_online_backup(&backup_path).await?;
+    Ok(backup_path)
 }
 
 pub(crate) async fn get_hardware_info_handler(
@@ -810,8 +935,27 @@ pub(crate) async fn telemetry_payload_handler(State(state): State<Arc<AppState>>
     };
 
     let version = crate::version::current().to_string();
-    let os_version = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
-    let is_docker = std::path::Path::new("/.dockerenv").exists();
+    let os_version = sysinfo::System::long_os_version()
+        .or_else(sysinfo::System::name)
+        .map(|name| {
+            if let Some(ver) = sysinfo::System::os_version() {
+                format!("{} {}", name, ver)
+            } else {
+                name
+            }
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_string());
+    let os_version = format!("{} {}", os_version, std::env::consts::ARCH);
+
+    let is_docker = std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/.containerenv").exists()
+        || std::fs::read_to_string("/proc/1/cgroup")
+            .map(|cgroup| {
+                cgroup.contains("docker")
+                    || cgroup.contains("containerd")
+                    || cgroup.contains("kubepods")
+            })
+            .unwrap_or(false);
     let uptime_seconds = state.start_time.elapsed().as_secs();
     let stats = match state.db.get_job_stats().await {
         Ok(stats) => stats,

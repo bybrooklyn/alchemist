@@ -6,10 +6,6 @@ use super::{
     hardware_error_response, refresh_file_watcher, replace_runtime_hardware,
     save_config_or_response,
 };
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, SaltString},
-};
 use axum::{
     extract::State,
     http::{StatusCode, header},
@@ -17,8 +13,6 @@ use axum::{
 };
 use chrono::Utc;
 use rand::Rng;
-use rand::TryRngCore;
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -245,35 +239,25 @@ pub(crate) async fn setup_complete_handler(
     }
 
     // Create User and Initial Session after config persistence succeeds.
-    let mut salt_bytes = [0u8; 16];
-    if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "SETUP_SALT_GEN_FAILED",
-            format!("Failed to generate salt: {}", e),
-        );
-    }
-    let salt = match SaltString::encode_b64(&salt_bytes) {
-        Ok(salt) => salt,
-        Err(e) => {
-            return api_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "SETUP_SALT_ENCODE_FAILED",
-                format!("Failed to encode salt: {}", e),
-            );
-        }
-    };
-    let argon2 = Argon2::default();
-    let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
-        Ok(h) => h.to_string(),
-        Err(e) => {
-            return api_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "SETUP_HASHING_FAILED",
-                format!("Hashing failed: {}", e),
-            );
-        }
-    };
+    let password = payload.password.clone();
+    let password_hash =
+        match tokio::task::spawn_blocking(move || crate::wizard::hash_password(&password))
+            .await
+            .unwrap_or_else(|e| {
+                Err(crate::error::AlchemistError::Unknown(format!(
+                    "Hashing task joined failed: {}",
+                    e
+                )))
+            }) {
+            Ok(h) => h,
+            Err(e) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "SETUP_HASHING_FAILED",
+                    format!("Hashing failed: {}", e),
+                );
+            }
+        };
 
     let user_id = match state.db.create_user(username, &password_hash).await {
         Ok(id) => id,
