@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Alchemist</title>
+</head>
+<body>
+    <div id="AlchemistConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="AlchemistConfigForm">
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="AlchemistUrl">Alchemist URL</label>
+                        <input id="AlchemistUrl" name="AlchemistUrl" type="url" is="emby-input" />
+                        <div class="fieldDescription">Base URL for the Alchemist server, for example http://localhost:3000.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ApiToken">API Token</label>
+                        <input id="ApiToken" name="ApiToken" type="password" is="emby-input" autocomplete="off" />
+                        <div class="fieldDescription">Use a Jellyfin-scoped Alchemist API token so the plugin can enqueue local paths and monitor completed jobs.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="AutoEnqueueEnabled" name="AutoEnqueueEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Enqueue newly added Jellyfin media in Alchemist</span>
+                        </label>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EventListenerEnabled" name="EventListenerEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Listen for Alchemist job completion events</span>
+                        </label>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="RefreshOnCompletionEnabled" name="RefreshOnCompletionEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Refresh Jellyfin when Alchemist completes a job</span>
+                        </label>
+                        <div class="fieldDescription">Refreshes the containing Jellyfin directory for completed Alchemist output paths.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="DryRun" name="DryRun" type="checkbox" is="emby-checkbox" />
+                            <span>Dry run only</span>
+                        </label>
+                        <div class="fieldDescription">Log matching media paths without sending them to Alchemist.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="AllowedExtensions">Allowed extensions</label>
+                        <input id="AllowedExtensions" name="AllowedExtensions" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DedupeWindowSeconds">Dedupe window seconds</label>
+                        <input id="DedupeWindowSeconds" name="DedupeWindowSeconds" type="number" is="emby-input" min="1" max="86400" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PathTranslations">Path translations</label>
+                        <textarea id="PathTranslations" name="PathTranslations" is="emby-input" rows="5"></textarea>
+                        <div class="fieldDescription">One per line: /path/in/jellyfin=/path/visible/to/alchemist</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ReversePathTranslations">Reverse path translations</label>
+                        <textarea id="ReversePathTranslations" name="ReversePathTranslations" is="emby-input" rows="5"></textarea>
+                        <div class="fieldDescription">One per line: /path/visible/to/alchemist=/path/in/jellyfin. Leave empty to invert path translations.</div>
+                    </div>
+                    <div class="fieldDescription" id="AlchemistTestResult"></div>
+                    <div class="fieldDescription" id="AlchemistEventTestResult"></div>
+                    <div class="fieldDescription" id="AlchemistRuntimeStatus"></div>
+                    <div>
+                        <button id="AlchemistTestButton" is="emby-button" type="button" class="raised block emby-button">
+                            <span>Test Connection</span>
+                        </button>
+                        <button id="AlchemistTestEventButton" is="emby-button" type="button" class="raised block emby-button">
+                            <span>Test Event Access</span>
+                        </button>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            const AlchemistConfig = {
+                pluginUniqueId: 'f8d50e2d-dc99-43ef-b387-052637738f61'
+            };
+
+            function fillAlchemistConfig(config) {
+                document.querySelector('#AlchemistUrl').value = config.AlchemistUrl || '';
+                document.querySelector('#ApiToken').value = config.ApiToken || '';
+                document.querySelector('#AutoEnqueueEnabled').checked = Boolean(config.AutoEnqueueEnabled);
+                document.querySelector('#EventListenerEnabled').checked = Boolean(config.EventListenerEnabled);
+                document.querySelector('#RefreshOnCompletionEnabled').checked = Boolean(config.RefreshOnCompletionEnabled);
+                document.querySelector('#DryRun').checked = Boolean(config.DryRun);
+                document.querySelector('#AllowedExtensions').value = config.AllowedExtensions || '';
+                document.querySelector('#DedupeWindowSeconds').value = config.DedupeWindowSeconds || 300;
+                document.querySelector('#PathTranslations').value = config.PathTranslations || '';
+                document.querySelector('#ReversePathTranslations').value = config.ReversePathTranslations || '';
+            }
+
+            function readAlchemistConfig(config) {
+                config.AlchemistUrl = document.querySelector('#AlchemistUrl').value;
+                config.ApiToken = document.querySelector('#ApiToken').value;
+                config.AutoEnqueueEnabled = document.querySelector('#AutoEnqueueEnabled').checked;
+                config.EventListenerEnabled = document.querySelector('#EventListenerEnabled').checked;
+                config.RefreshOnCompletionEnabled = document.querySelector('#RefreshOnCompletionEnabled').checked;
+                config.DryRun = document.querySelector('#DryRun').checked;
+                config.AllowedExtensions = document.querySelector('#AllowedExtensions').value;
+                config.DedupeWindowSeconds = parseInt(document.querySelector('#DedupeWindowSeconds').value || '300', 10);
+                config.PathTranslations = document.querySelector('#PathTranslations').value;
+                config.ReversePathTranslations = document.querySelector('#ReversePathTranslations').value;
+                return config;
+            }
+
+            function responseField(response, camelName, pascalName) {
+                return response && (response[camelName] || response[pascalName]) || '';
+            }
+
+            function responseSuccess(response) {
+                return Boolean(response && (response.success === true || response.Success === true));
+            }
+
+            function loadAlchemistStatus() {
+                const status = document.querySelector('#AlchemistRuntimeStatus');
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Alchemist/Status')
+                }).then(function(response) {
+                    const listenerState = responseField(response, 'eventListenerState', 'EventListenerState');
+                    const listenerMessage = responseField(response, 'eventListenerMessage', 'EventListenerMessage');
+                    const refreshResult = responseField(response, 'lastRefreshResult', 'LastRefreshResult');
+                    status.textContent = 'Event listener: ' + listenerState + '. ' + listenerMessage + ' Last refresh: ' + refreshResult;
+                }).catch(function() {
+                    status.textContent = 'Runtime status unavailable.';
+                });
+            }
+
+            document.querySelector('#AlchemistConfigPage')
+                .addEventListener('pageshow', function() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(AlchemistConfig.pluginUniqueId).then(function(config) {
+                        fillAlchemistConfig(config);
+                        loadAlchemistStatus();
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#AlchemistConfigForm')
+                .addEventListener('submit', function(e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(AlchemistConfig.pluginUniqueId).then(function(config) {
+                        ApiClient.updatePluginConfiguration(AlchemistConfig.pluginUniqueId, readAlchemistConfig(config)).then(function(result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+                    e.preventDefault();
+                    return false;
+                });
+
+            document.querySelector('#AlchemistTestButton')
+                .addEventListener('click', function() {
+                    const result = document.querySelector('#AlchemistTestResult');
+                    result.textContent = 'Testing...';
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('Alchemist/TestConnection')
+                    }).then(function(response) {
+                        const message = responseField(response, 'message', 'Message');
+                        result.textContent = responseSuccess(response) ? message : 'Connection failed: ' + message;
+                        loadAlchemistStatus();
+                    }).catch(function() {
+                        result.textContent = 'Connection failed.';
+                    });
+                });
+
+            document.querySelector('#AlchemistTestEventButton')
+                .addEventListener('click', function() {
+                    const result = document.querySelector('#AlchemistEventTestResult');
+                    result.textContent = 'Testing event access...';
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('Alchemist/TestEventAccess')
+                    }).then(function(response) {
+                        const message = responseField(response, 'message', 'Message');
+                        result.textContent = responseSuccess(response) ? message : 'Event access failed: ' + message;
+                        loadAlchemistStatus();
+                    }).catch(function() {
+                        result.textContent = 'Event access failed.';
+                    });
+                });
+        </script>
+    </div>
+</body>
+</html>
