@@ -1,3 +1,4 @@
+use crate::config::LogFormat;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -84,6 +85,23 @@ pub fn config_mutable() -> bool {
         Ok(value) => parse_bool_env(&value).unwrap_or(true),
         Err(_) => true,
     }
+}
+
+/// Resolve the log output format.
+///
+/// `ALCHEMIST_LOG_FORMAT` (values: `text`, `json`) wins if set. Otherwise the
+/// `[system].log_format` field of the on-disk config is consulted. Failing
+/// that, plain text is the default — matching the historical behaviour.
+pub fn log_format() -> LogFormat {
+    if let Ok(value) = env::var("ALCHEMIST_LOG_FORMAT") {
+        if let Some(parsed) = LogFormat::parse(&value) {
+            return parsed;
+        }
+    }
+    let path = config_path();
+    crate::config::Config::load(&path)
+        .map(|cfg| cfg.system.log_format)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
