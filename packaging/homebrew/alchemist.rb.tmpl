@@ -6,16 +6,16 @@ class Alchemist < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/bybrooklyn/alchemist/releases/download/v{{VERSION}}/alchemist-macos-arm64.tar.gz"
+      url "https://github.com/bybrooklyn/alchemist/releases/download/{{RELEASE_TAG}}/alchemist-macos-arm64.tar.gz"
       sha256 "{{MACOS_ARM64_SHA256}}"
     else
-      url "https://github.com/bybrooklyn/alchemist/releases/download/v{{VERSION}}/alchemist-macos-x86_64.tar.gz"
+      url "https://github.com/bybrooklyn/alchemist/releases/download/{{RELEASE_TAG}}/alchemist-macos-x86_64.tar.gz"
       sha256 "{{MACOS_X86_64_SHA256}}"
     end
   end
 
   on_linux do
-    url "https://github.com/bybrooklyn/alchemist/releases/download/v{{VERSION}}/alchemist-linux-x86_64.tar.gz"
+    url "https://github.com/bybrooklyn/alchemist/releases/download/{{RELEASE_TAG}}/alchemist-linux-x86_64.tar.gz"
     sha256 "{{LINUX_X86_64_SHA256}}"
   end
 

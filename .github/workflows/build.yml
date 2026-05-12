@@ -46,6 +46,9 @@ on:
         type: boolean
         required: false
         default: false
+    secrets:
+      ALCHEMIST_RELEASE_SIGNING_KEY_PEM:
+        required: false
 
 env:
   IMAGE_NAME: ghcr.io/bybrooklyn/alchemist
@@ -209,6 +212,7 @@ jobs:
       - name: Build
         env:
           ALCHEMIST_VERSION: ${{ steps.ver.outputs.version }}
+          ALCHEMIST_UPDATE_PUBLIC_KEY_B64: ${{ vars.ALCHEMIST_UPDATE_PUBLIC_KEY_B64 }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
@@ -268,6 +272,7 @@ jobs:
       - name: Build
         env:
           ALCHEMIST_VERSION: ${{ steps.ver.outputs.version }}
+          ALCHEMIST_UPDATE_PUBLIC_KEY_B64: ${{ vars.ALCHEMIST_UPDATE_PUBLIC_KEY_B64 }}
         run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Package
@@ -334,6 +339,7 @@ jobs:
       - name: Build
         env:
           ALCHEMIST_VERSION: ${{ steps.ver.outputs.version }}
+          ALCHEMIST_UPDATE_PUBLIC_KEY_B64: ${{ vars.ALCHEMIST_UPDATE_PUBLIC_KEY_B64 }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
@@ -496,15 +502,19 @@ jobs:
           path: release-assets
 
       - name: Render distribution metadata
+        env:
+          ALCHEMIST_RELEASE_SIGNING_KEY_PEM: ${{ secrets.ALCHEMIST_RELEASE_SIGNING_KEY_PEM }}
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.release_tag }}"
-          VERSION="${VERSION#v}"
+          BASE_VERSION="$(tr -d '\n\r' < VERSION)"
+          VERSION="${BASE_VERSION}${{ inputs.version_suffix }}"
           python3 scripts/render_distribution.py \
             --version "${VERSION}" \
+            --release-tag "${{ inputs.release_tag }}" \
             --assets-dir release-assets \
-            --output-dir release-assets/distribution
+            --output-dir release-assets/distribution \
+            --signing-key-env ALCHEMIST_RELEASE_SIGNING_KEY_PEM
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

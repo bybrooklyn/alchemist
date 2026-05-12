@@ -10,6 +10,7 @@ Invoke-Native -Command @("bun", "install", "--frozen-lockfile") -WorkingDirector
 Invoke-Native -Command @("bunx", "playwright", "install", "chromium") -WorkingDirectory (Join-Path $RepoRoot "web-e2e")
 
 Warn-If-Missing ffmpeg "Install FFmpeg with `winget install Gyan.FFmpeg`."
+Warn-If-Missing dotnet "Install .NET 9 SDK with `winget install Microsoft.DotNet.SDK.9`."
 
 Write-Host "Repo ready for development."
 Write-Host "Next: just dev"

@@ -55,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: cd docs && bun install --frozen-lockfile
 
+      - name: API contract
+        run: python3 scripts/check_api_contract.py
+
       - name: Build docs site
         env:
           DOCS_URL: https://bybrooklyn.github.io
