@@ -36,6 +36,14 @@ install:
 install-u:
     @command -v cargo >/dev/null || { echo "error: cargo is required"; exit 1; }
     @command -v bun >/dev/null || { echo "error: bun is required"; exit 1; }
+    @if [ "$(uname -s)" = "Darwin" ] && ! command -v swift >/dev/null; then \
+        echo "warning: swift is not installed; native/mac recipes will not run"; \
+    fi
+    @if ! command -v dotnet >/dev/null; then \
+        echo "warning: dotnet (.NET 9 SDK) is not installed; Jellyfin plugin recipes will not run"; \
+        echo "  macOS: brew install --cask dotnet-sdk"; \
+        echo "  Linux: https://learn.microsoft.com/dotnet/core/install/linux"; \
+    fi
     @echo "── Rust dependencies ──"
     cargo fetch --locked
     @echo "── Web dependencies ──"
@@ -91,6 +99,12 @@ build:
     cd web && bun install --frozen-lockfile && bun run build
     @echo "Building Rust binary..."
     cargo build --release
+    @echo "Building native macOS client when available..."
+    @if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null; then \
+        just mac-build; \
+    else \
+        echo "Skipping native macOS client build (requires macOS + Swift)."; \
+    fi
     @echo "Done → target/release/alchemist"
 
 # Build frontend assets only
@@ -100,6 +114,55 @@ web-build:
 # Build Rust only (assumes web/dist already exists)
 rust-build:
     cargo build --release
+
+# ─────────────────────────────────────────
+# NATIVE MAC CLIENT
+# ─────────────────────────────────────────
+
+# Build the native macOS SwiftUI prototype
+mac-build:
+    cd native/mac && swift build
+
+# Run native macOS Swift tests
+mac-test:
+    cd native/mac && swift run AlchemistMacChecks
+
+# Check native macOS Swift package
+mac-check:
+    cd native/mac && swift run AlchemistMacChecks && swift build
+
+# Stage the Rust daemon for bundled native macOS development
+mac-stage-daemon: web-build rust-build
+    mkdir -p native/mac/.artifacts
+    cp target/release/alchemist native/mac/.artifacts/alchemistd
+    chmod +x native/mac/.artifacts/alchemistd
+    @echo "Staged native/mac/.artifacts/alchemistd"
+
+# Run the native macOS app against whatever API URL is configured in-app
+mac-run:
+    cd native/mac && swift run AlchemistMac
+
+# Build/stage the Rust daemon, then run the native macOS app in bundled mode
+mac-run-bundled: mac-stage-daemon
+    cd native/mac && ALCHEMIST_DAEMON_PATH="$(pwd)/.artifacts/alchemistd" swift run AlchemistMac
+
+# Build the whole project plus the staged native daemon
+mac-build-full: build mac-stage-daemon
+
+# ─────────────────────────────────────────
+# JELLYFIN PLUGIN
+# ─────────────────────────────────────────
+
+# Build the Jellyfin plugin (requires .NET 9 SDK)
+jellyfin-build:
+    dotnet build integrations/jellyfin/Alchemist.Jellyfin/Alchemist.Jellyfin.csproj
+
+# Run Jellyfin plugin tests
+jellyfin-test:
+    dotnet test integrations/jellyfin/Alchemist.Jellyfin.Tests/Alchemist.Jellyfin.Tests.csproj
+
+# Build + test the Jellyfin plugin
+jellyfin-check: jellyfin-build jellyfin-test
 
 # ─────────────────────────────────────────
 # CHECKS — mirrors CI exactly
@@ -117,8 +180,16 @@ check-u:
     cargo clippy --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
     @echo "── Rust check ──"
     cargo check --all-targets
+    @echo "── API contract ──"
+    python3 scripts/check_api_contract.py
     @echo "── Frontend typecheck ──"
     cd web && bun install --frozen-lockfile && bun run typecheck && echo "── Frontend build ──" && bun run build
+    @if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null; then \
+        echo "── Native macOS check ──"; \
+        just mac-check; \
+    else \
+        echo "── Native macOS check skipped (requires macOS + Swift) ──"; \
+    fi
     @echo "All checks passed ✓"
 
 check-w:
@@ -134,6 +205,10 @@ check-rust:
 check-web:
     cd web && bun install --frozen-lockfile && bun run typecheck && bun run build
     cd web-e2e && bun install --frozen-lockfile && bun run test
+
+# Validate v1 API route coverage against the OpenAPI contract
+api-contract:
+    python3 scripts/check_api_contract.py
 
 # ─────────────────────────────────────────
 # TESTS
@@ -246,6 +321,8 @@ release-verify:
     cargo test --locked --all-targets -- --test-threads=4
     @echo "── Actionlint ──"
     actionlint .github/workflows/*.yml
+    @echo "── API contract ──"
+    python3 scripts/check_api_contract.py
     @echo "── Web verify ──"
     cd web && bun install --frozen-lockfile && bun run verify && python3 ../scripts/run_bun_audit.py .
     @echo "── Docs verify ──"
@@ -267,6 +344,12 @@ release-verify:
         fi; \
         echo "Using web-e2e port ${E2E_PORT}"; \
         cd web-e2e && bun install --frozen-lockfile && ALCHEMIST_E2E_PORT="${E2E_PORT}" bun run test:reliability
+    @echo "── Jellyfin plugin ──"
+    @if command -v dotnet >/dev/null; then \
+        just jellyfin-check; \
+    else \
+        echo "skipped (dotnet not installed)"; \
+    fi
 
 # Checkpoint dirty local work with confirmation, then bump, validate, commit, tag, and push
 # (blocks behind/diverged remote state; e.g. just update 0.3.0-rc.1 or just update v0.3.0-rc.1)
