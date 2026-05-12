@@ -72,6 +72,24 @@ scan. By default, Alchemist does not move or rename your
 originals — Jellyfin keeps seeing both until you decide what
 to do with the sources.
 
+## Jellyfin plugin
+
+Alchemist also ships a Jellyfin plugin integration for tighter automation. The
+plugin uses a dedicated `jellyfin` API token instead of a full-access token. It
+can forward Jellyfin add/update events into Alchemist, listen for completed-job
+events, fetch job details, and ask Jellyfin to refresh only the containing
+directory after Alchemist finishes a file.
+
+The plugin path is intentionally conservative:
+
+- Dry-run mode is enabled by default so you can inspect paths before enqueueing.
+- Forward path translations map Jellyfin-visible paths to Alchemist-visible
+  filesystem paths.
+- Reverse path translations map Alchemist output paths back to Jellyfin-visible
+  paths for narrow refreshes.
+- Live Jellyfin validation and release packaging are still required before
+  treating the plugin as a packaged release artifact.
+
 ## Codec notes for Jellyfin clients
 
 Decoding support varies by client, OS, and browser. A short
@@ -96,9 +114,13 @@ is to reduce how often that live transcoder has to run by
 preparing files in a codec your clients can direct-play.
 
 **Does Alchemist need access to Jellyfin's API?**
-No. Alchemist operates on the filesystem — point it at the
-same directories Jellyfin scans. Jellyfin picks up changes
-on its own library scan.
+Not for the basic filesystem workflow. You can point Alchemist at the same
+directories Jellyfin scans and let Jellyfin pick up changes on its normal scan.
+
+The optional Jellyfin plugin does use API access. It should use an Alchemist
+token with `access_level: "jellyfin"` so it can enqueue files, listen for
+completed jobs, fetch job details, and trigger narrow Jellyfin refreshes without
+receiving full settings or engine-control access.
 
 **Will Alchemist break Jellyfin's existing media?**
 Not by default. Originals are kept until you explicitly

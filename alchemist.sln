@@ -1,0 +1,32 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "integrations", "integrations", "{4958D7D8-4791-2CCE-6FFA-082B65933577}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "jellyfin", "jellyfin", "{65793B68-0114-8A23-3D53-9EDEAEBFFD0F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alchemist.Jellyfin", "integrations\jellyfin\Alchemist.Jellyfin\Alchemist.Jellyfin.csproj", "{94DE2706-164B-7135-E7A2-26889066FBC2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{94DE2706-164B-7135-E7A2-26889066FBC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{94DE2706-164B-7135-E7A2-26889066FBC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{94DE2706-164B-7135-E7A2-26889066FBC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{94DE2706-164B-7135-E7A2-26889066FBC2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{65793B68-0114-8A23-3D53-9EDEAEBFFD0F} = {4958D7D8-4791-2CCE-6FFA-082B65933577}
+		{94DE2706-164B-7135-E7A2-26889066FBC2} = {65793B68-0114-8A23-3D53-9EDEAEBFFD0F}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D3825ED9-7A74-476B-8175-EE1BA46D6B1C}
+	EndGlobalSection
+EndGlobal
