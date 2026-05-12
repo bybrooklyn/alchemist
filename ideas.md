@@ -2,15 +2,15 @@
 
 *Forward-looking ideas for features, UX, integrations, and polish. Bugs go in `audit.md`.*
 
-**Last updated:** 2026-04-23
+**Last updated:** 2026-05-12
 
 ## Top picks
 
-1. [MIG-3] Standardize API Error Schema — eliminates inconsistent error handling across backend handlers (Axum).
-2. [OP-3] Guided backup restore — completes the new backup feature with a safe recovery path for real operator incidents.
-3. [IMPR-1] Astro Content Collections for help content — type-safe, Zod-validated codec/preset tooltips.
-4. [PERF-3] Incremental mtime-based scan — significantly faster re-scans for huge libraries.
-5. [F-4] Batch re-analyze watch folder — force a full library analysis without a full scan.
+1. [OP-6] Redacted diagnostics bundle — makes support and self-debugging safer without exposing secrets.
+2. [F-11] Review-before-replace finalization — adds a high-trust path for destructive replace workflows.
+3. [OP-3] Guided Restore From Backup Snapshot — turn backup support into a safer recovery workflow.
+4. [F-2] Library plan preview in the web UI — lets users see library impact before queueing a large folder.
+5. [AUTO-3] Disk-space guardrails — prevents temp and output volumes from being exhausted during long queues.
 
 ---
 
@@ -110,6 +110,145 @@ Add a `POST /api/watch-folders/:id/reanalyze` endpoint and verify it can reset j
 
 CPU spike if triggered on a 10k+ library; add a confirmation modal with count.
 
+### [F-6] In-app auto-update
+
+**Category:** Features
+**Size:** L
+**Touches:** backend, frontend, docs
+
+**Problem or gap:**
+
+Binary users (non-Docker) have to manually download releases, stop the service, and replace the executable. This friction leads to users running stale versions with known bugs. Docker users have Watchtower/Ouroboros, but native users have no "Update" button.
+
+**Idea:**
+
+Introduce an "Update available" indicator in the UI (already partially researched in `get_system_update_handler`). Add a "Download and Update" button that: 1) Downloads the platform-specific release asset from GitHub, 2) Verifies the GPG signature/checksum, 3) Performs an atomic swap using `self_replace` (Rust crate), and 4) Gracefully restarts the process.
+
+**First step:**
+
+Implement a CLI-only `alchemist system update --check` that reports if a newer version is available and lists the download URL.
+**Risks / tradeoffs:**
+
+Permissions — on Windows and some Linux setups, the binary might be in a read-only directory (`/usr/bin`), requiring a clear error message or sudo-elevation helper.
+
+### [F-7] Headless / CLI-only Mode
+
+**Category:** Features
+**Size:** M
+**Touches:** backend, config
+
+**Problem or gap:**
+
+Alchemist currently assumes a WebUI-first workflow (Setup Wizard → Watch Folders). Advanced users or those running in purely automated environments want to bypass the browser entirely and control everything via flags.
+
+**Idea:**
+
+Allow comprehensive configuration via CLI flags that override `config.toml`. Support flags for: `--codec`, `--append`, `--allow-cpu-encoding`, `--username`, `--password`, `--directory`, `--output-directory`, `--port`, and `--mode` (encode/scan). If these flags are present, the app can skip the setup wizard and start immediately in the requested mode.
+
+**First step:**
+
+Update `src/main.rs` to parse these new flags using `clap` and inject them into the `Config` struct before the server starts.
+
+**Risks / tradeoffs:**
+
+Flag explosion — keep the flag surface strictly aligned with the most critical `config.toml` keys.
+
+---
+
+### [F-8] Tauri / Desktop wrapper
+
+**Category:** Features
+**Size:** XL
+**Touches:** backend, frontend, build
+
+**Problem or gap:**
+
+Running Alchemist as a background binary + browser tab feels "server-like" even when running locally on a workstation. Some users prefer a self-contained desktop application.
+
+**Idea:**
+
+Use Tauri to wrap the Alchemist backend and Astro frontend into a native desktop app. This provides a system tray icon, native notifications, and a dedicated window, making it feel like a local tool rather than a hosted service.
+
+**First step:**
+
+Initialize a Tauri project in the root and configure it to bundle the `target/release/alchemist` binary as a sidecar.
+
+**Risks / tradeoffs:**
+
+Increases build complexity and artifact size.
+
+---
+
+### [F-9] Plugin / Extension System
+
+**Category:** Features
+**Size:** XL
+**Touches:** backend, architecture
+
+**Problem or gap:**
+
+As Alchemist grows, users will want specialized integrations (e.g., with Helios or other niche media tools) that don't necessarily belong in the core binary.
+
+**Idea:**
+
+Implement a lightweight plugin system (possibly using WebAssembly or a simple gRPC/Unix-socket-based sidecar architecture). Plugins could hook into job lifecycle events (e.g., `pre-analyze`, `post-finalize`) to perform custom metadata tagging, file movement, or external API calls.
+
+**First step:**
+
+Define a `Plugin` trait in Rust and implement a single "Internal Plugin" that handles the current notification logic to prove the abstraction.
+
+**Risks / tradeoffs:**
+
+Major architectural complexity; must ensure plugins cannot crash the main pipeline or leak secrets.
+
+---
+
+### [F-10] Native SwiftUI macOS Client
+
+**Category:** Features
+**Size:** XL
+**Touches:** backend, frontend, build (Apple specific)
+
+**Problem or gap:**
+
+macOS users value native-feeling, high-performance apps that integrate with the system's design language. The WebUI, while functional, lacks the polish of a native SwiftUI app.
+
+**Idea:**
+
+Develop a native SwiftUI client for macOS. Option A: Build the Rust core directly into the Swift binary using `uniffi` or `swift-bridge`. Option B: Keep the Rust binary separate but provide a SwiftUI frontend that communicates with the Alchemist API (with an option to disable the WebUI).
+
+**First step:**
+
+Create a minimal SwiftUI prototype that can list jobs by calling the existing local Alchemist API.
+
+**Risks / tradeoffs:**
+
+Platform-specific maintenance burden.
+
+---
+
+### [F-11] Review-before-replace finalization
+
+**Category:** Features
+**Size:** M
+**Touches:** backend, frontend, schema, config
+
+**Problem or gap:**
+
+Alchemist supports keep-both and replace-style output strategies, but replace mode is still a big trust jump for users with large libraries. Quality checks reduce risk, but they do not let an operator review a finished encode before the original is swapped or removed. This is different from undo: it prevents regret before finalization instead of recovering after it.
+
+**Idea:**
+
+Add a third finalization mode, `review`, that completes the encode but parks the output in a pending-review state. Jobs in that state show actions in `JobDetailModal.tsx`: approve replacement, keep both, or discard the generated output. The backend should persist the pending output path and never mutate the source until the explicit approval action succeeds.
+
+**First step:**
+
+Add an additive `pending_review_output_path` field or table plus a narrow backend state transition for one completed job. Prove that an encode can enter pending review without moving or deleting the source file.
+
+**Risks / tradeoffs:**
+
+Pending outputs consume disk until the user acts, so this needs clear cleanup and retention behavior.
+
 ---
 
 ## UX
@@ -207,6 +346,97 @@ Conditional rendering in `JobsToolbar.tsx` that surfaces "Cancel (N)" when items
 **Risks / tradeoffs:**
 
 None.
+
+### [UX-6] Mobile-optimized "Active Now" mini-dashboard
+
+**Category:** UX
+**Size:** S
+**Touches:** frontend
+
+**Problem or gap:**
+
+The current Dashboard and Jobs pages are heavy and designed for desktop. Checking progress on a phone (e.g., "Is that 4K movie done yet?") involves a lot of horizontal scrolling and tiny text.
+
+**Idea:**
+
+Create a dedicated mobile-first view (or a responsive variant of the main dashboard) that focuses exclusively on *active* jobs: a single vertical list of progress bars, "Time remaining" estimates, and a big "Pause/Resume" toggle. Access via a bottom-nav icon or a "Mobile View" toggle in the sidebar.
+
+**First step:**
+
+Create a CSS media query in `Dashboard.tsx` that hides the stats cards and expands the "Active Jobs" list to full width on screens < 768px.
+**Risks / tradeoffs:**
+
+Maintaining two UI layouts — keep the mobile view as a subset of existing data to minimize state duplication.
+
+### [UX-7] Interactive CLI Setup Wizard
+
+**Category:** UX
+**Size:** S
+**Touches:** backend
+
+**Problem or gap:**
+
+The first-run experience currently *requires* a browser. If Alchemist is running on a headless server without an easy way to tunnel port 3000 initially, the user is stuck.
+
+**Idea:**
+
+Implement a `--wizard` CLI flag that walks the user through the same setup steps as the WebUI (admin user creation, default library paths, telemetry opt-in) directly in the terminal using a crate like `dialoguer`.
+
+**First step:**
+
+Build a minimal prototype of the CLI wizard that only collects the admin username and password.
+
+**Risks / tradeoffs:**
+
+None.
+
+---
+
+### [UX-8] Persistent Theme in Config
+
+**Category:** UX
+**Size:** S
+**Touches:** backend, frontend, config
+
+**Problem or gap:**
+
+The current theme selection (light/dark) is stored in `localStorage`. This means the theme resets if the user clears their browser data or switches devices, and it can cause a "flash of wrong theme" before the JS loads.
+
+**Idea:**
+
+Move the theme preference into the `config.toml` file. The backend can then inject the correct CSS class directly into the initial HTML (SSR), ensuring a perfect theme match from the first byte and persistence across all of the user's devices.
+
+**First step:**
+
+Add a `ui_theme` field to the `SystemConfig` struct and expose it via the settings API.
+
+**Risks / tradeoffs:**
+
+Requires a database/config write for a purely visual preference.
+
+---
+
+### [UX-9] Settings impact summary before save
+
+**Category:** UX / Interface
+**Size:** S
+**Touches:** frontend, backend
+
+**Problem or gap:**
+
+Settings pages can change behavior that affects future scans, watch folders, queued jobs, or notifications, but the save flow rarely explains the blast radius. A self-hoster changing output strategy or quality settings wants to know whether active jobs are affected, which folders inherit the setting, and whether the change is future-only.
+
+**Idea:**
+
+Add a compact "Impact" panel to high-risk settings pages such as `FileSettings.tsx`, `TranscodeSettings.tsx`, `QualitySettings.tsx`, and `WatchFolders.tsx`. The panel summarizes affected watch folders, whether active jobs are untouched, whether queued jobs need re-analysis, and any disk or quality risk. Start with client-side summaries from the existing settings bundle, then add backend-calculated impact for more complex changes.
+
+**First step:**
+
+Implement the panel for `FileSettings.tsx` only, using existing settings data to show whether the current save changes output naming, output root, or replace behavior.
+
+**Risks / tradeoffs:**
+
+An inaccurate impact summary is worse than none; keep the first version conservative and explicit about what it does not know.
 
 ---
 
@@ -306,6 +536,99 @@ Write the handler using existing stats queries and document the exact JSON shape
 
 The Homepage PR review is the unknown — schema needs to match their widget conventions.
 
+### [INT-5] Home Assistant Integration
+
+**Category:** Integration
+**Size:** M
+**Touches:** backend, docs
+
+**Problem or gap:**
+
+HomeLab enthusiasts use Home Assistant to monitor their infrastructure. Today, there's no way to trigger a "Cinema Mode" lighting scene based on Alchemist finishing an encode, or to see "Current Transcode Speed" on a wall-mounted tablet.
+
+**Idea:**
+
+Implement a native Home Assistant integration (HACS-compatible or core-eligible). Backend provides a long-lived sensor API; the integration maps Alchemist states to HA sensors: `sensor.alchemist_status`, `sensor.alchemist_queue_depth`, `binary_sensor.alchemist_encoding`. Support triggers for "Job Finished" and "Job Failed".
+
+**First step:**
+
+Expand the `GET /api/widget/summary` (from INT-4) to include everything an HA sensor would need, then document a YAML-based `rest` sensor for HA users.
+**Risks / tradeoffs:**
+
+None significant — leverage existing API token infrastructure for security.
+
+### [INT-6] Model Context Protocol (MCP) Server
+
+**Category:** Integration
+**Size:** S
+**Touches:** backend
+**Status:** V1 implemented as a read-only stdio MCP server
+
+**Problem or gap:**
+
+Users are increasingly using AI agents (OpenClaw, etc.) to manage their infrastructure. There is currently no standardized way for an AI to "reason" about the Alchemist queue or trigger maintenance tasks.
+
+**Idea:**
+
+Expose an MCP server interface directly from the Alchemist binary. V1 is intentionally read-only: status, job summaries, recent jobs, savings, scan state, and system health.
+
+**First step:**
+
+Done: implement a protocol-shaped `--mcp` stdio server with read-only tools and unit coverage. Future action tools should require a separate safety design.
+
+**Risks / tradeoffs:**
+
+None.
+
+---
+
+### [INT-7] Jellyfin Plugin (C#)
+
+**Category:** Integration
+**Size:** L
+**Touches:** external (C#)
+**Status:** V1 plugin implemented; live Jellyfin validation and release packaging remain
+
+**Problem or gap:**
+
+While Alchemist can trigger library refreshes, a deeper integration would allow Jellyfin users to see transcode status or trigger "Optimize this file" directly from the Jellyfin UI.
+
+**Idea:**
+
+Develop a C#-based Jellyfin plugin that communicates with the Alchemist API. V1 listens for Jellyfin library item additions/updates, forwards eligible local paths to Alchemist with dry-run and path translation controls, listens for completed-job events, and refreshes the containing Jellyfin directory.
+
+**First step:**
+
+Done: create a compileable Jellyfin plugin with configuration UI, connection/event tests, library hook service, path filtering, forward/reverse path translation, enqueue client, completed-job SSE listener, and containing-directory refresh.
+
+**Risks / tradeoffs:**
+
+Requires C# development and maintenance of a separate codebase.
+
+---
+
+### [INT-8] Scoped generic import webhook
+
+**Category:** Integration
+**Size:** S
+**Touches:** backend, docs
+
+**Problem or gap:**
+
+ARR webhooks cover Sonarr and Radarr, but many self-hosted stacks still import files through qBittorrent, SABnzbd, FileBot, custom scripts, or media managers that only know how to send a generic webhook. Today those tools need a broad `full_access` token or a bespoke script that calls internal queue APIs.
+
+**Idea:**
+
+Add `POST /api/webhooks/import` with a narrow `import_webhook` token scope. The payload accepts a path, optional source label, optional external event ID for dedupe, and optional dry-run flag. It reuses the same submitted-path validation, path translation, dedupe, and enqueue rules as manual enqueue and ARR ingest.
+
+**First step:**
+
+Add the token scope and a handler that accepts `{ "path": "..." }`, performs validation, and returns the same structured enqueue response as the ARR path.
+
+**Risks / tradeoffs:**
+
+Generic webhooks can become an escape hatch for unsafe paths; keep the scope narrow and reuse the existing library-root restrictions.
+
 ---
 
 ## Performance
@@ -382,6 +705,30 @@ Fails if the OS doesn't propagate child mtime changes to parent (rare on modern 
 
 ---
 
+### [PERF-4] Idle pre-analysis queue
+
+**Category:** Performance
+**Size:** M
+**Touches:** backend, scheduler, config
+
+**Problem or gap:**
+
+Large libraries still make the first useful scan feel expensive because probing and planning happen close to the moment a user wants work queued. The ffprobe cache helps repeated scans, but Alchemist could do more useful preparation while the engine is idle or inside an off-peak window.
+
+**Idea:**
+
+Add an optional pre-analysis queue that walks changed watch folders, refreshes probe cache entries, and records planner-ready summaries without enqueueing encode work. The feature should obey the scheduler, pause when active encodes need resources, and expose progress through system status. Users get faster "real" scans later because the expensive metadata work is already warm.
+
+**First step:**
+
+Create a disabled-by-default config flag and a CLI-only pre-analysis command that refreshes probe cache entries for one folder without enqueueing jobs.
+
+**Risks / tradeoffs:**
+
+Background work can surprise users on slow disks; keep it opt-in and clearly bounded by concurrency and schedule settings.
+
+---
+
 ## Polish
 
 ### [POL-1] Shift-click bulk select in jobs table
@@ -449,10 +796,79 @@ Stream logs via SSE (already mostly implemented in `sse.rs`) and have the `JobDe
 **First step:**
 
 Wire the SSE log stream into the modal's state for the focused job.
-
 **Risks / tradeoffs:**
 
 SSE overhead if many users have modals open; cap at 100 lines for the live view.
+
+### [POL-4] Refined About Screen
+
+**Category:** Polish
+**Size:** S
+**Touches:** frontend
+
+**Problem or gap:**
+
+The current About screen is functional but lacks visual flair and specific system insights. It doesn't feel integrated with the "premium" feel of the rest of the app.
+
+**Idea:**
+
+Improve the About modal with smoother animations (e.g., morphing transitions similar to the system modal). Surface more specific information like the exact build hash, detected hardware backend versions, and a credits section for contributors.
+
+**First step:**
+
+Update `AboutDialog.tsx` with Framer Motion animations for the opening/closing transition.
+
+**Risks / tradeoffs:**
+
+None.
+
+---
+
+### [POL-5] Official Branding & Logo
+
+**Category:** Polish
+**Size:** S
+**Touches:** frontend, docs
+
+**Problem or gap:**
+
+Alchemist currently lacks a unique visual identity or logo. It uses generic icons in the UI and README.
+
+**Idea:**
+
+Establish an official logo: a stylized Delta (∆) where the top-right side is a Helios orange arrow. Use it consistently across approved WebUI, documentation, and social preview surfaces.
+
+**First step:**
+
+Draft the SVG logo and add only the approved brand assets.
+
+**Risks / tradeoffs:**
+
+None.
+
+---
+
+### [POL-6] Absolute-time hover for relative timestamps
+
+**Category:** Polish
+**Size:** S
+**Touches:** frontend
+
+**Problem or gap:**
+
+Jobs, scans, tokens, and settings screens often show human-friendly relative times, but troubleshooting usually needs the exact timestamp. A user comparing Alchemist logs with Jellyfin, Sonarr, or systemd has to infer the real time manually.
+
+**Idea:**
+
+Standardize timestamp rendering so compact views show relative time while hover/focus exposes the exact local timestamp and UTC value. Use one shared React helper for job rows, job detail, API token creation, scan status, and notification history surfaces.
+
+**First step:**
+
+Add a small `TimeDisplay` component and replace one timestamp in `JobsTable.tsx` plus one in `JobDetailModal.tsx`.
+
+**Risks / tradeoffs:**
+
+Too much timestamp detail can clutter dense tables; keep exact values in tooltips or secondary text.
 
 ---
 
@@ -528,10 +944,102 @@ Add one backend query that returns the top failure codes for the last 7 days, ke
 
 The value depends on stable code taxonomies, so future code renames need an alias/migration story.
 
+### [OBS-4] Library Health Dashboard
+
+**Category:** Observability
+**Size:** M
+**Touches:** backend, frontend, schema
+
+**Problem or gap:**
+
+"Library Doctor" exists but it's a one-shot scan. There's no persistent dashboard showing the overall "health" of the library (e.g., % of files with valid streams, count of corrupt headers, files missing audio tracks) over time.
+
+**Idea:**
+
+Turn Library Doctor results into persistent DB rows. Add a "Health" tab in Stats that visualizes: 1) Historical health trend (is the library getting cleaner?), 2) Breakdown by error type (Corrupt, Missing Subtitles, Slow HDD), 3) A "Wall of Shame" for the most problematic files.
+
+**First step:**
+
+Add a `library_health_results` table that persists the output of the current scanner, rather than just returning it to the UI and discarding it.
+**Risks / tradeoffs:**
+
+Full library health scans are heavy; needs to be scheduled or throttled to avoid impacting active encodes.
+
+---
+
+### [OBS-5] Redacted diagnostics bundle
+
+**Category:** Observability
+**Size:** M
+**Touches:** backend, frontend, docs
+
+**Problem or gap:**
+
+When an install misbehaves, the useful evidence is scattered across logs, config, hardware probe output, FFmpeg versions, job failures, and release metadata. Asking users to paste those pieces manually is slow and risks leaking API tokens, paths, webhook URLs, or other private details.
+
+**Idea:**
+
+Add a "Download diagnostics bundle" action in Runtime settings and a matching CLI command. The bundle should include build/version info, OS/arch, FFmpeg/FFprobe versions, redacted config, hardware probe log, recent structured job failures, recent server logs, and current queue counts. Redaction should happen server-side with an allowlist of safe fields.
+
+**First step:**
+
+Implement a CLI-only `alchemist diagnostics --output diagnostics.zip` command that emits version, platform, FFmpeg versions, and a redacted config snapshot.
+
+**Risks / tradeoffs:**
+
+Redaction mistakes are privacy bugs; use allowlist output and tests for token/path/url masking before adding the UI.
+
 ---
 
 ## Operator
 
+### [OP-4] Self-Installation Flag
+
+**Category:** Operator
+**Size:** S
+**Touches:** backend, docs
+
+**Problem or gap:**
+
+Binary users currently run Alchemist from their current directory. There is no built-in way to "install" it to a standard system path (like `/opt/alchemist`) or add it to the system `PATH`.
+
+**Idea:**
+
+Add a `--install` or `--install-directory=PATH` flag. When run, Alchemist copies itself to the target directory, sets up necessary permissions, and optionally creates a symbolic link in `/usr/local/bin` (or registers itself in the Windows PATH).
+
+**First step:**
+
+Implement the logic to copy the current executable to a user-specified path.
+
+**Risks / tradeoffs:**
+
+OS-specific permission issues (UAC on Windows, sudo on Linux).
+
+---
+
+### [OP-5] Guided Custom FFmpeg Compilation
+
+**Category:** Operator
+**Size:** M
+**Touches:** backend, docs
+
+**Problem or gap:**
+
+Pre-built FFmpeg binaries are often "generic". For maximum performance, advanced users may want to compile a version of FFmpeg optimized for their specific CPU/GPU architecture, but the process is daunting.
+
+**Idea:**
+
+Include scripts or a guided CLI tool that assists the user in compiling a customized FFmpeg binary from source. The result would be stored in `.alchemist/ffmpeg` and used preferentially by the pipeline.
+
+**First step:**
+
+Create a documentation page (`docs/ffmpeg-optimization.md`) with a validated "golden" build script for common architectures.
+
+**Risks / tradeoffs:**
+
+Build environments vary wildly; very high support burden if automated.
+
+---
 ### [OP-1] One-click SQLite backup + download
 
 **Category:** Operator
@@ -601,6 +1109,30 @@ Implement a dry-run validation endpoint that accepts a backup upload, decompress
 **Risks / tradeoffs:**
 
 Restore flows are inherently dangerous — require maintenance mode, a fresh automatic safety backup, and an explicit restart step.
+
+---
+
+### [OP-6] Config validate and diff before apply
+
+**Category:** Operator
+**Size:** S
+**Touches:** backend, frontend, config
+
+**Problem or gap:**
+
+The config editor is powerful, but operators do not get a clear dry-run answer before applying a broad config change. A typo in a manually edited TOML blob should be caught early, and a legitimate change should explain what will differ after save.
+
+**Idea:**
+
+Add a validation endpoint that accepts candidate config text and returns parse status, normalized config warnings, and a structured diff against the live config. The UI can show additions, changed fields, and high-risk changes such as output paths, replace strategy, token-related settings, and hardware mode. Applying remains a separate explicit action.
+
+**First step:**
+
+Implement `POST /api/settings/config/validate` for parse-and-normalize only, with no persistence. Add a small UI preview in `ConfigEditorSettings.tsx`.
+
+**Risks / tradeoffs:**
+
+Config diffs can expose secrets in the browser; redact sensitive values in both the API response and UI.
 
 ---
 
@@ -678,6 +1210,30 @@ Short clips can mislead users on content with highly variable complexity, so the
 
 ---
 
+### [ENC-4] Film grain preservation mode
+
+**Category:** Encoding
+**Size:** M
+**Touches:** backend, frontend, config, docs
+
+**Problem or gap:**
+
+AV1 and HEVC encodes can make grain-heavy films look overly smooth even when byte savings look good. Home theater users often care more about preserving texture than maximizing compression, but Alchemist only exposes broad quality profiles today.
+
+**Idea:**
+
+Add an optional `grain_handling` profile setting with conservative choices such as `auto`, `preserve`, and `smooth`. CPU AV1 and x265 can map this to encoder-supported grain/tune behavior; hardware encoders can raise bitrate floors or show a clear "not supported by this backend" explanation. Job detail should record whether grain handling affected the command.
+
+**First step:**
+
+Prototype CPU-only support in the FFmpeg command builder and unit-test the generated SVT-AV1/x265 arguments before exposing any UI.
+
+**Risks / tradeoffs:**
+
+Grain preservation usually costs storage, so the UI must explain that this trades space savings for visual fidelity.
+
+---
+
 ## Automation
 
 ### [AUTO-1] Rules engine — conditional profile routing
@@ -725,6 +1281,30 @@ Add the config fields and short-circuit notification dispatch within the window.
 **Risks / tradeoffs:**
 
 Timezone handling — reuse whatever zone the scheduler already uses so the two features agree.
+
+---
+
+### [AUTO-3] Disk-space guardrails
+
+**Category:** Automation
+**Size:** S
+**Touches:** backend, config, frontend
+
+**Problem or gap:**
+
+Long queues can produce large temporary and final outputs. If the temp or output filesystem fills up mid-run, users get avoidable failures and may have to clean partial files manually.
+
+**Idea:**
+
+Add configurable free-space guardrails for temp and output roots. Before starting a job, Alchemist checks available bytes and pauses or skips with a structured reason if the threshold is below the configured minimum. Surface the blocked reason in System Status and send an optional critical notification.
+
+**First step:**
+
+Add a backend guard before job execution that logs and blocks when the output root has less than a fixed 10 GiB free-space threshold. Make it configurable after the behavior is proven.
+
+**Risks / tradeoffs:**
+
+Free-space APIs vary by platform and mount type; fallback behavior must fail safe without blocking forever on unsupported filesystems.
 
 ---
 
