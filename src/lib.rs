@@ -5,6 +5,7 @@ pub mod conversion;
 pub mod db;
 pub mod error;
 pub mod explanations;
+pub mod mcp;
 pub mod media;
 pub mod notifications;
 pub mod orchestrator;
@@ -14,6 +15,7 @@ pub mod server;
 pub mod settings;
 pub mod system;
 pub mod telemetry;
+pub mod update;
 pub mod version;
 pub mod wizard;
 

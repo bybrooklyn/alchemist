@@ -2,9 +2,11 @@
 
 use alchemist::db::{EventChannels, SystemEvent};
 use alchemist::error::Result;
+use alchemist::mcp::McpServer;
 use alchemist::media::pipeline::Planner as _;
 use alchemist::system::hardware;
 use alchemist::version;
+use alchemist::wizard::ConfigWizard;
 use alchemist::{Agent, Transcoder, config, db, runtime};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -31,8 +33,44 @@ struct Args {
     #[arg(long)]
     debug_flags: bool,
 
+    /// Install Alchemist binary to a system path (/usr/local/bin or custom directory)
+    #[arg(long)]
+    install: bool,
+
+    /// Run the interactive CLI setup wizard
+    #[arg(long)]
+    wizard: bool,
+
+    /// Directory to install the binary to (default: /usr/local/bin or %APPDATA%/Alchemist/bin)
+    #[arg(long, value_name = "PATH")]
+    install_directory: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Override the output codec (av1, hevc, h264)
+    #[arg(long)]
+    codec: Option<String>,
+
+    /// Override the output filename suffix (default: -alchemist)
+    #[arg(long)]
+    append: Option<String>,
+
+    /// Explicitly allow CPU encoding
+    #[arg(long)]
+    allow_cpu_encoding: Option<bool>,
+
+    /// Set the monitoring server port
+    #[arg(long)]
+    port: Option<u16>,
+
+    /// Set the output root directory
+    #[arg(long)]
+    output_directory: Option<PathBuf>,
+
+    /// Start the Model Context Protocol (MCP) server
+    #[arg(long)]
+    mcp: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -314,6 +352,26 @@ fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bo
 async fn run() -> Result<()> {
     let args = Args::parse();
     init_logging(args.debug_flags);
+
+    if args.install {
+        return install_binary(args.install_directory).await;
+    }
+
+    let config_path = runtime::config_path();
+
+    if args.wizard {
+        let db_path = runtime::db_path();
+        if let Some(parent) = db_path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
+            }
+        }
+        let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
+        ConfigWizard::run(&config_path, Some(&db)).await?;
+        info!("Wizard complete. You can now start Alchemist.");
+        return Ok(());
+    }
+
     let is_server_mode = args.command.is_none();
 
     let boot_start = Instant::now();
@@ -354,10 +412,16 @@ async fn run() -> Result<()> {
 
     // 0. Load Configuration
     let config_start = Instant::now();
-    let config_path = runtime::config_path();
     let db_path = runtime::db_path();
     let config_mutable = runtime::config_mutable();
-    let (config, mut setup_mode, config_exists) = if is_server_mode {
+
+    if let Some(port) = args.port {
+        unsafe {
+            std::env::set_var("ALCHEMIST_SERVER_PORT", port.to_string());
+        }
+    }
+
+    let (mut config, mut setup_mode, config_exists) = if is_server_mode {
         load_startup_config(config_path.as_path(), true)
     } else {
         if !config_path.exists() {
@@ -373,6 +437,13 @@ async fn run() -> Result<()> {
             .map_err(|err| alchemist::error::AlchemistError::Config(err.to_string()))?;
         (config, false, true)
     };
+
+    config.apply_cli_overrides(&config::CliOverrides {
+        codec: args.codec,
+        append: args.append,
+        allow_cpu_encoding: args.allow_cpu_encoding,
+        output_directory: args.output_directory,
+    });
     info!(
         target: "startup",
         "Config loaded (path={:?}, exists={}, mutable={}, setup_mode={}) in {} ms",
@@ -728,6 +799,15 @@ async fn run() -> Result<()> {
         services_start.elapsed().as_millis()
     );
 
+    if args.mcp {
+        let library_scanner = Arc::new(alchemist::system::scanner::LibraryScanner::new(
+            db.clone(),
+            config.clone(),
+        ));
+        let mcp_server = McpServer::new(db, agent, Some(library_scanner));
+        return mcp_server.run().await;
+    }
+
     // 3. Start Background Processor Loop
     // In server mode the engine starts paused and waits for an explicit user action.
     if is_server_mode || setup_mode {
@@ -1014,6 +1094,84 @@ async fn wait_for_cli_jobs(db: &db::Db) -> Result<()> {
     Ok(())
 }
 
+async fn install_binary(custom_dir: Option<PathBuf>) -> Result<()> {
+    let current_exe = std::env::current_exe().map_err(|e| {
+        alchemist::error::AlchemistError::Unknown(format!(
+            "Failed to locate current executable: {e}"
+        ))
+    })?;
+
+    let install_dir = if let Some(dir) = custom_dir {
+        dir
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            let mut path = dirs::config_dir().ok_or_else(|| {
+                alchemist::error::AlchemistError::Unknown(
+                    "Failed to resolve config directory".into(),
+                )
+            })?;
+            path.push("Alchemist");
+            path.push("bin");
+            path
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/usr/local/bin")
+        }
+    };
+
+    if !install_dir.exists() {
+        info!("Creating installation directory: {:?}", install_dir);
+        std::fs::create_dir_all(&install_dir).map_err(alchemist::error::AlchemistError::Io)?;
+    }
+
+    let exe_name = current_exe.file_name().ok_or_else(|| {
+        alchemist::error::AlchemistError::Unknown("Invalid executable name".into())
+    })?;
+    let mut target_path = install_dir.clone();
+    target_path.push(exe_name);
+
+    info!("Installing Alchemist to: {:?}", target_path);
+
+    // Try atomic copy/rename first if on the same mount
+    if let Err(e) = std::fs::copy(&current_exe, &target_path) {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            error!("Permission denied. Try running with elevated privileges (sudo/Administrator).");
+        }
+        return Err(alchemist::error::AlchemistError::Io(e));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&target_path)
+            .map_err(alchemist::error::AlchemistError::Io)?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&target_path, perms)
+            .map_err(alchemist::error::AlchemistError::Io)?;
+    }
+
+    info!("Installation successful.");
+
+    // Help the user with PATH if it's a non-standard directory
+    #[cfg(not(target_os = "windows"))]
+    {
+        let path_env = std::env::var("PATH").unwrap_or_default();
+        if !path_env.split(':').any(|p| Path::new(p) == install_dir) {
+            warn!(
+                "Installation directory {:?} is not in your PATH.",
+                install_dir
+            );
+            warn!("Add it to your shell profile (e.g., .bashrc, .zshrc):");
+            warn!("  export PATH=\"$PATH:{:?}\"", install_dir);
+        }
+    }
+
+    Ok(())
+}
+
 async fn build_cli_plan(
     db: &db::Db,
     config_state: Arc<RwLock<config::Config>>,
@@ -1224,23 +1382,40 @@ fn init_logging(debug_flags: bool) {
     };
     let env_filter = EnvFilter::from_default_env().add_directive(default_level.into());
 
-    if debug_flags {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_thread_ids(true)
-            .with_thread_names(true)
-            .with_timer(time())
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .without_time()
-            .with_target(false)
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .compact()
-            .init();
+    match runtime::log_format() {
+        config::LogFormat::Json => {
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_target(true)
+                .with_thread_ids(debug_flags)
+                .with_thread_names(debug_flags)
+                .with_timer(time())
+                .json()
+                .flatten_event(true)
+                .with_current_span(false)
+                .with_span_list(false)
+                .init();
+        }
+        config::LogFormat::Text => {
+            if debug_flags {
+                tracing_subscriber::fmt()
+                    .with_env_filter(env_filter)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_thread_names(true)
+                    .with_timer(time())
+                    .init();
+            } else {
+                tracing_subscriber::fmt()
+                    .with_env_filter(env_filter)
+                    .without_time()
+                    .with_target(false)
+                    .with_thread_ids(false)
+                    .with_thread_names(false)
+                    .compact()
+                    .init();
+            }
+        }
     }
 }
 

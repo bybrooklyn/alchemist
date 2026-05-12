@@ -68,11 +68,13 @@ const sidebars: SidebarsConfig = {
       items: [
         'configuration-reference',
         'api',
+        'mcp',
         'codecs',
         'skip-decisions',
         'engine-lifecycle',
         'engine-modes',
         'environment-variables',
+        'observability',
         'database-schema',
         'architecture',
         'troubleshooting',
