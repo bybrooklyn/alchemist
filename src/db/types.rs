@@ -221,6 +221,10 @@ pub struct JobFilterQuery {
     pub sort_by: Option<String>,
     pub sort_desc: bool,
     pub archived: Option<bool>,
+    /// Restrict to jobs whose latest decision reason matches this code.
+    pub reason_code: Option<String>,
+    /// Restrict to jobs whose failure explanation matches this code.
+    pub failure_code: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -459,6 +463,24 @@ pub struct DailyStats {
     pub total_output_bytes: i64,
 }
 
+/// Minimal projection of an encode_stats row used by the Prometheus metrics
+/// subscriber. The metrics surface only needs the output codec and wall-time
+/// to label and observe a completion event.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct EncodeCompletionSummary {
+    pub codec: Option<String>,
+    pub encode_time_seconds: f64,
+}
+
+/// Aggregate count of a single decision `reason_code` or failure `code`
+/// within a sliding time window. Used by the "top reasons" stats surface.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReasonCodeCount {
+    pub code: String,
+    pub count: i64,
+    pub last_seen: Option<String>,
+}
+
 /// Detailed per-job encoding statistics
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct DetailedEncodeStats {
@@ -597,6 +619,7 @@ pub enum ApiTokenAccessLevel {
     ReadOnly,
     FullAccess,
     ArrWebhook,
+    Jellyfin,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]

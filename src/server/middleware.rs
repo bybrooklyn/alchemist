@@ -1,6 +1,6 @@
 //! Authentication, rate limiting, and security middleware.
 
-use super::{AppState, api_error_response};
+use super::{API_REQUEST_CONTEXT, ApiRequestContext, AppState, api_error_response};
 use crate::db::ApiTokenAccessLevel;
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::time::Duration;
+use uuid::Uuid;
 
 pub(crate) struct RateLimitEntry {
     pub(crate) tokens: f64,
@@ -68,6 +69,37 @@ pub(crate) async fn security_headers_middleware(request: Request, next: Next) ->
     response
 }
 
+pub(crate) async fn request_context_middleware(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| valid_request_id(value))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let context = ApiRequestContext {
+        request_id: request_id.clone(),
+        path,
+    };
+
+    let mut response = API_REQUEST_CONTEXT.scope(context, next.run(request)).await;
+    if !response.headers().contains_key("x-request-id") {
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+    }
+    response
+}
+
+fn valid_request_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+}
+
 pub(crate) async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -75,8 +107,11 @@ pub(crate) async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
     let method = req.method().clone();
+    let normalized_path = normalize_api_path(path);
 
-    if state.setup_required.load(Ordering::Relaxed) && path != "/api/health" && path != "/api/ready"
+    if state.setup_required.load(Ordering::Relaxed)
+        && normalized_path != "/api/health"
+        && normalized_path != "/api/ready"
     {
         let allowed = if let Some(expected_token) = &state.setup_token {
             // Token mode: require `?token=<value>` regardless of client IP.
@@ -98,25 +133,42 @@ pub(crate) async fn auth_middleware(
         }
     }
 
+    // Prometheus `/metrics` is intentionally unauthenticated to match standard
+    // scrape conventions, but it must only respond to local-network callers.
+    // Operators behind a reverse proxy can list the proxy in `trusted_proxies`
+    // so the resolved client IP is used for the LAN check.
+    if normalized_path == "/metrics" {
+        if request_is_lan(&req, &state.trusted_proxies) {
+            return next.run(req).await;
+        }
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "METRICS_LAN_ONLY",
+            "Metrics are only available from the local network",
+        );
+    }
+
     // 1. API Protection: Only lock down /api routes
     if path.starts_with("/api") {
         // Public API endpoints
-        if path.starts_with("/api/setup")
-            || path.starts_with("/api/auth/login")
-            || path.starts_with("/api/auth/logout")
-            || path == "/api/health"
-            || path == "/api/ready"
+        if normalized_path.starts_with("/api/setup")
+            || normalized_path.starts_with("/api/auth/login")
+            || normalized_path.starts_with("/api/auth/logout")
+            || normalized_path == "/api/health"
+            || normalized_path == "/api/ready"
         {
             return next.run(req).await;
         }
 
-        if state.setup_required.load(Ordering::Relaxed) && path == "/api/system/hardware" {
+        if state.setup_required.load(Ordering::Relaxed) && normalized_path == "/api/system/hardware"
+        {
             return next.run(req).await;
         }
-        if state.setup_required.load(Ordering::Relaxed) && path.starts_with("/api/fs/") {
+        if state.setup_required.load(Ordering::Relaxed) && normalized_path.starts_with("/api/fs/") {
             return next.run(req).await;
         }
-        if state.setup_required.load(Ordering::Relaxed) && path == "/api/settings/bundle" {
+        if state.setup_required.load(Ordering::Relaxed) && normalized_path == "/api/settings/bundle"
+        {
             return next.run(req).await;
         }
 
@@ -140,7 +192,7 @@ pub(crate) async fn auth_middleware(
                 match api_token.access_level {
                     ApiTokenAccessLevel::FullAccess => return next.run(req).await,
                     ApiTokenAccessLevel::ReadOnly => {
-                        if read_only_api_token_allows(&method, path) {
+                        if read_only_api_token_allows(&method, normalized_path.as_str()) {
                             return next.run(req).await;
                         }
                         return api_error_response(
@@ -150,7 +202,17 @@ pub(crate) async fn auth_middleware(
                         );
                     }
                     ApiTokenAccessLevel::ArrWebhook => {
-                        if arr_webhook_api_token_allows(&method, path) {
+                        if arr_webhook_api_token_allows(&method, normalized_path.as_str()) {
+                            return next.run(req).await;
+                        }
+                        return api_error_response(
+                            StatusCode::FORBIDDEN,
+                            "API_TOKEN_FORBIDDEN",
+                            "Forbidden",
+                        );
+                    }
+                    ApiTokenAccessLevel::Jellyfin => {
+                        if jellyfin_api_token_allows(&method, normalized_path.as_str()) {
                             return next.run(req).await;
                         }
                         return api_error_response(
@@ -170,6 +232,16 @@ pub(crate) async fn auth_middleware(
     // Allow everything else. The frontend app (Layout.astro) handles client-side redirects
     // if the user isn't authenticated, and the backend API protects the actual data.
     next.run(req).await
+}
+
+fn normalize_api_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("/api/v1") {
+        if rest.is_empty() {
+            return "/api".to_string();
+        }
+        return format!("/api{rest}");
+    }
+    path.to_string()
 }
 
 fn request_is_lan(req: &Request, trusted_proxies: &[IpAddr]) -> bool {
@@ -233,6 +305,21 @@ fn read_only_api_token_allows(method: &Method, path: &str) -> bool {
 
 fn arr_webhook_api_token_allows(method: &Method, path: &str) -> bool {
     *method == Method::POST && path == "/api/webhooks/arr"
+}
+
+fn jellyfin_api_token_allows(method: &Method, path: &str) -> bool {
+    if *method == Method::POST && path == "/api/jobs/enqueue" {
+        return true;
+    }
+
+    if *method != Method::GET && *method != Method::HEAD {
+        return false;
+    }
+
+    path == "/api/system/info"
+        || path == "/api/ready"
+        || path == "/api/events"
+        || path.starts_with("/api/jobs/") && path.ends_with("/details")
 }
 
 pub(crate) async fn rate_limit_middleware(

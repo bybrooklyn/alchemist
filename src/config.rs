@@ -1,12 +1,14 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     pub transcode: TranscodeConfig,
     pub hardware: HardwareConfig,
     pub scanner: ScannerConfig,
@@ -26,6 +28,41 @@ pub struct Config {
 pub struct AppearanceConfig {
     #[serde(default)]
     pub active_theme_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Rc,
+    Nightly,
+}
+
+impl UpdateChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Rc => "rc",
+            Self::Nightly => "nightly",
+        }
+    }
+}
+
+impl std::fmt::Display for UpdateChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UpdatesConfig {
+    #[serde(default)]
+    pub channel: UpdateChannel,
+    #[serde(default = "default_true")]
+    pub auto_check: bool,
+    #[serde(default = "default_update_check_interval_hours")]
+    pub check_interval_hours: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -722,6 +759,28 @@ pub struct SystemConfig {
     pub trusted_proxies: Vec<String>,
     #[serde(default)]
     pub arr_path_translations: Vec<ArrPathTranslation>,
+    #[serde(default)]
+    pub ui_theme: Option<String>,
+    #[serde(default)]
+    pub log_format: LogFormat,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+impl LogFormat {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "text" | "compact" => Some(LogFormat::Text),
+            "json" => Some(LogFormat::Json),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -754,6 +813,20 @@ fn default_log_retention_days() -> Option<u32> {
     Some(30)
 }
 
+fn default_update_check_interval_hours() -> u32 {
+    24
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            channel: UpdateChannel::Stable,
+            auto_check: true,
+            check_interval_hours: default_update_check_interval_hours(),
+        }
+    }
+}
+
 impl Default for SystemConfig {
     fn default() -> Self {
         Self {
@@ -767,6 +840,8 @@ impl Default for SystemConfig {
             https_only: false,
             trusted_proxies: Vec::new(),
             arr_path_translations: Vec::new(),
+            ui_theme: None,
+            log_format: LogFormat::default(),
         }
     }
 }
@@ -843,6 +918,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             appearance: AppearanceConfig::default(),
+            updates: UpdatesConfig::default(),
             transcode: TranscodeConfig {
                 size_reduction_threshold: 0.3,
                 min_bpp_threshold: 0.1,
@@ -887,6 +963,8 @@ impl Default for Config {
                 https_only: false,
                 trusted_proxies: Vec::new(),
                 arr_path_translations: Vec::new(),
+                ui_theme: None,
+                log_format: LogFormat::default(),
             },
         }
     }
@@ -927,6 +1005,12 @@ impl Config {
             anyhow::bail!(
                 "conversion_download_retention_hours must be between 1 and 24, got {}",
                 self.system.conversion_download_retention_hours
+            );
+        }
+        if self.updates.check_interval_hours == 0 || self.updates.check_interval_hours > 168 {
+            anyhow::bail!(
+                "updates.check_interval_hours must be between 1 and 168, got {}",
+                self.updates.check_interval_hours
             );
         }
         for translation in &self.system.arr_path_translations {
@@ -1158,6 +1242,37 @@ impl Config {
     }
 
     pub(crate) fn apply_env_overrides(&mut self) {}
+
+    pub fn apply_cli_overrides(&mut self, overrides: &CliOverrides) {
+        if let Some(ref codec) = overrides.codec {
+            match codec.to_lowercase().as_str() {
+                "av1" => self.transcode.output_codec = OutputCodec::Av1,
+                "hevc" => self.transcode.output_codec = OutputCodec::Hevc,
+                "h264" => self.transcode.output_codec = OutputCodec::H264,
+                _ => {}
+            }
+        }
+
+        if let Some(ref append) = overrides.append {
+            self.files.output_suffix = append.clone();
+        }
+
+        if let Some(allow) = overrides.allow_cpu_encoding {
+            self.hardware.allow_cpu_encoding = allow;
+        }
+
+        if let Some(ref root) = overrides.output_directory {
+            self.files.output_root = Some(root.to_string_lossy().to_string());
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct CliOverrides {
+    pub codec: Option<String>,
+    pub append: Option<String>,
+    pub allow_cpu_encoding: Option<bool>,
+    pub output_directory: Option<PathBuf>,
 }
 
 fn validate_schedule_time(value: &str) -> Result<()> {

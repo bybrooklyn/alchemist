@@ -115,12 +115,17 @@ where
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_intelligence_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress: Arc::new(AtomicBool::new(false)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         trusted_proxies: Vec::new(),
         setup_token: None,
+        metrics: Arc::new(match crate::server::metrics::AlchemistMetrics::new() {
+            Ok(metrics) => metrics,
+            Err(err) => panic!("metrics registry must initialize in tests: {err}"),
+        }),
     });
 
     Ok((state.clone(), app_router(state), config_path, db_path))
@@ -145,6 +150,25 @@ async fn create_api_token(
         .create_api_token("test-token", &token, access_level)
         .await?;
     Ok(token)
+}
+
+fn test_update_status() -> crate::update::UpdateStatus {
+    crate::update::UpdateStatus {
+        current_version: crate::version::current().to_string(),
+        channel: crate::config::UpdateChannel::Stable,
+        latest_version: Some("9.9.9".to_string()),
+        update_available: true,
+        release_url: Some("https://example.invalid/release".to_string()),
+        checked_at: Utc::now().to_rfc3339(),
+        install_type: crate::update::InstallType::Homebrew,
+        can_self_update: false,
+        action: crate::update::UpdateAction::Guided,
+        guidance: Some("Use Homebrew to update Alchemist.".to_string()),
+        guidance_command: Some("brew update && brew upgrade alchemist".to_string()),
+        verification_status: crate::update::VerificationStatus::Verified,
+        verification_error: None,
+        asset: None,
+    }
 }
 
 fn auth_request(method: Method, uri: &str, token: &str, body: Body) -> Request<Body> {
@@ -651,6 +675,126 @@ async fn engine_status_endpoint_reports_draining_state()
 }
 
 #[tokio::test]
+async fn v1_engine_status_alias_uses_existing_handler()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/v1/engine/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("x-request-id"));
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["status"], "running");
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_engine_status_route_still_works()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/engine/status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("x-request-id"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn v1_auth_error_returns_problem_details()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let request_id = "client-request-123";
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/v1/engine/status")
+                .header("x-request-id", request_id)
+                .body(Body::empty())
+                .unwrap_or_else(|err| panic!("failed to build v1 auth request: {err}")),
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(request_id)
+    );
+
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["type"], "urn:alchemist:problem:auth-required");
+    assert_eq!(payload["title"], "Unauthorized");
+    assert_eq!(payload["status"], 401);
+    assert_eq!(payload["detail"], "Unauthorized");
+    assert_eq!(payload["instance"], "/api/v1/engine/status");
+    assert_eq!(payload["code"], "AUTH_REQUIRED");
+    assert_eq!(payload["request_id"], request_id);
+    assert_eq!(payload["error"]["code"], "AUTH_REQUIRED");
+    assert_eq!(payload["error"]["message"], "Unauthorized");
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn v1_job_delete_route_uses_canonical_rest_path()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let (job, input_path, output_path) = seed_job(state.db.as_ref(), JobState::Completed).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::DELETE,
+            &format!("/api/v1/jobs/{}", job.id),
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_str(&body_text(response).await)?;
+    assert_eq!(payload["ok"], true);
+    assert!(state.db.get_job_by_id(job.id).await?.is_none());
+
+    cleanup_paths(&[input_path, output_path, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn processor_status_endpoint_reports_blocking_reason_precedence()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -719,6 +863,10 @@ async fn read_only_api_token_allows_observability_only_routes()
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
     let token =
         create_api_token(state.db.as_ref(), crate::db::ApiTokenAccessLevel::ReadOnly).await?;
+    {
+        let mut cache = state.update_status_cache.lock().await;
+        *cache = Some((test_update_status(), Instant::now()));
+    }
 
     let response = app
         .clone()
@@ -732,9 +880,60 @@ async fn read_only_api_token_allows_observability_only_routes()
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/system/update",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+    assert_eq!(payload["action"], "guided");
+    assert_eq!(
+        payload["guidance_command"],
+        "brew update && brew upgrade alchemist"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/system/update/check",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/v1/system/info",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
         .oneshot(bearer_request(
             Method::POST,
             "/api/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/v1/engine/resume",
             &token,
             Body::empty(),
         ))
@@ -953,6 +1152,105 @@ async fn arr_webhook_api_token_scope_is_limited_to_arr_webhook_route()
 }
 
 #[tokio::test]
+async fn jellyfin_api_token_scope_allows_enqueue_events_and_job_details_only()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let media_root = temp_path("alchemist_jellyfin_token_root", "dir");
+    std::fs::create_dir_all(&media_root)?;
+    let input_path = media_root.join("movie.mkv");
+    std::fs::write(&input_path, b"not a real movie")?;
+
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.scanner.directories = vec![media_root.to_string_lossy().to_string()];
+    })
+    .await?;
+    let token =
+        create_api_token(state.db.as_ref(), crate::db::ApiTokenAccessLevel::Jellyfin).await?;
+
+    let info_response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/v1/system/info",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(info_response.status(), StatusCode::OK);
+
+    let events_response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/v1/events",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(events_response.status(), StatusCode::OK);
+
+    let enqueue_response = app
+        .clone()
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/v1/jobs/enqueue",
+            &token,
+            json!({
+                "path": input_path.to_string_lossy()
+            }),
+        ))
+        .await?;
+    assert_eq!(enqueue_response.status(), StatusCode::OK);
+
+    let details_response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/v1/jobs/999999/details",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(details_response.status(), StatusCode::NOT_FOUND);
+
+    let settings_response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/v1/settings/config",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(settings_response.status(), StatusCode::FORBIDDEN);
+
+    let engine_response = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/v1/engine/resume",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(engine_response.status(), StatusCode::FORBIDDEN);
+
+    let arr_response = app
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/v1/webhooks/arr",
+            &token,
+            json!({
+                "eventType": "Test"
+            }),
+        ))
+        .await?;
+    assert_eq!(arr_response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_paths(&[input_path, media_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn arr_webhook_endpoint_translates_path_and_reuses_enqueue_rules()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let host_root = temp_path("alchemist_arr_webhook_root", "dir");
@@ -963,11 +1261,13 @@ async fn arr_webhook_endpoint_translates_path_and_reuses_enqueue_rules()
     let canonical_host_file = std::fs::canonicalize(&host_file)?;
 
     let container_root = "/container/media/library";
+    let host_root_string = host_root.to_string_lossy().to_string();
     let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
         config.system.arr_path_translations = vec![crate::config::ArrPathTranslation {
             from: container_root.to_string(),
-            to: host_root.to_string_lossy().to_string(),
+            to: host_root_string.clone(),
         }];
+        config.scanner.directories.push(host_root_string.clone());
     })
     .await?;
     let token = create_api_token(
@@ -1638,6 +1938,7 @@ async fn system_settings_round_trip_watch_enabled()
     assert!(body.contains("\"watch_enabled\":true"));
     assert!(body.contains("\"conversion_upload_limit_gb\":8"));
     assert!(body.contains("\"conversion_download_retention_hours\":1"));
+    assert!(body.contains("\"update_channel\":\"stable\""));
 
     let response = app
         .clone()
@@ -1650,7 +1951,10 @@ async fn system_settings_round_trip_watch_enabled()
                 "conversion_upload_limit_gb": 12,
                 "conversion_download_retention_hours": 6,
                 "enable_telemetry": false,
-                "watch_enabled": false
+                "watch_enabled": false,
+                "update_channel": "rc",
+                "update_auto_check": true,
+                "update_check_interval_hours": 12
             }),
         ))
         .await?;
@@ -1660,6 +1964,9 @@ async fn system_settings_round_trip_watch_enabled()
     assert!(!persisted.scanner.watch_enabled);
     assert_eq!(persisted.system.conversion_upload_limit_gb, 12);
     assert_eq!(persisted.system.conversion_download_retention_hours, 6);
+    assert_eq!(persisted.updates.channel, crate::config::UpdateChannel::Rc);
+    assert!(persisted.updates.auto_check);
+    assert_eq!(persisted.updates.check_interval_hours, 12);
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())
@@ -2709,7 +3016,13 @@ async fn job_detail_route_returns_internal_error_when_encode_attempts_query_fail
 #[tokio::test]
 async fn enqueue_job_endpoint_accepts_supported_absolute_files()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config
+            .scanner
+            .directories
+            .push(std::env::temp_dir().to_string_lossy().to_string());
+    })
+    .await?;
     let token = create_session(state.db.as_ref()).await?;
 
     let input_path = temp_path("alchemist_enqueue_input", "mkv");
@@ -2744,7 +3057,13 @@ async fn enqueue_job_endpoint_accepts_supported_absolute_files()
 #[tokio::test]
 async fn enqueue_job_endpoint_rejects_relative_paths_and_unsupported_extensions()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config
+            .scanner
+            .directories
+            .push(std::env::temp_dir().to_string_lossy().to_string());
+    })
+    .await?;
     let token = create_session(_state.db.as_ref()).await?;
 
     let response = app
@@ -2779,7 +3098,13 @@ async fn enqueue_job_endpoint_rejects_relative_paths_and_unsupported_extensions(
 #[tokio::test]
 async fn enqueue_job_endpoint_returns_noop_for_generated_output_paths()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config
+            .scanner
+            .directories
+            .push(std::env::temp_dir().to_string_lossy().to_string());
+    })
+    .await?;
     let token = create_session(_state.db.as_ref()).await?;
 
     let generated_dir = temp_path("alchemist_enqueue_generated_dir", "dir");

@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod conversion;
 pub mod jobs;
+pub mod metrics;
 pub mod middleware;
 pub mod scan;
 pub mod settings;
@@ -24,10 +25,10 @@ use crate::system::hardware::{HardwareInfo, HardwareProbeLog, HardwareState};
 use axum::{
     Router,
     extract::{DefaultBodyLimit, State},
-    http::{StatusCode, Uri, header},
+    http::{HeaderValue, StatusCode, Uri, header},
     middleware as axum_middleware,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
 };
 #[cfg(feature = "embed-web")]
 use rust_embed::RustEmbed;
@@ -47,6 +48,16 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use middleware::RateLimitEntry;
+
+#[derive(Clone)]
+pub(crate) struct ApiRequestContext {
+    pub(crate) request_id: String,
+    pub(crate) path: String,
+}
+
+tokio::task_local! {
+    pub(crate) static API_REQUEST_CONTEXT: ApiRequestContext;
+}
 
 #[cfg(feature = "embed-web")]
 #[derive(RustEmbed)]
@@ -70,16 +81,69 @@ pub(crate) fn api_error_response(
     code: impl Into<String>,
     message: impl Into<String>,
 ) -> Response {
-    (
+    let code = code.into();
+    let message = message.into();
+    let context = API_REQUEST_CONTEXT.try_with(Clone::clone).ok();
+    let request_id = context
+        .as_ref()
+        .map(|context| context.request_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let instance = context.map(|context| context.path);
+    let problem_type = format!("urn:alchemist:problem:{}", problem_slug(&code));
+    let title = status.canonical_reason().unwrap_or("API Error").to_string();
+
+    let mut response = (
         status,
         axum::Json(serde_json::json!({
+            "type": problem_type,
+            "title": title,
+            "status": status.as_u16(),
+            "detail": message.clone(),
+            "instance": instance,
+            "code": code.clone(),
+            "request_id": request_id.clone(),
             "error": {
-                "code": code.into(),
-                "message": message.into(),
+                "code": code,
+                "message": message,
             }
         })),
     )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
+}
+
+pub(crate) fn api_ok_response() -> Response {
+    axum::Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+pub(crate) fn api_accepted_response() -> Response {
+    (
+        StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({ "ok": true })),
+    )
         .into_response()
+}
+
+fn problem_slug(code: &str) -> String {
+    let mut slug = String::with_capacity(code.len());
+    let mut previous_dash = false;
+    for ch in code.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
 }
 
 pub struct AppState {
@@ -103,6 +167,8 @@ pub struct AppState {
     pub resources_cache: Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
     pub library_intelligence_cache:
         Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
+    pub update_status_cache:
+        Arc<tokio::sync::Mutex<Option<(crate::update::UpdateStatus, std::time::Instant)>>>,
     pub library_health_scan_in_progress: Arc<AtomicBool>,
     pub(crate) login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
@@ -111,6 +177,9 @@ pub struct AppState {
     pub(crate) trusted_proxies: Vec<IpAddr>,
     /// If set, setup endpoints require `?token=<value>` query parameter.
     pub(crate) setup_token: Option<String>,
+    /// Persistent Prometheus counters and histograms. Updated by a
+    /// `JobEvent` subscriber spawned at startup; read by `metrics_handler`.
+    pub metrics: Arc<metrics::AlchemistMetrics>,
 }
 
 pub struct RunServerArgs {
@@ -273,6 +342,15 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         );
     }
 
+    let app_metrics = Arc::new(metrics::AlchemistMetrics::new().map_err(|err| {
+        AlchemistError::Unknown(format!("Failed to register Prometheus metrics: {err}"))
+    })?);
+    metrics::spawn_metrics_subscriber(
+        db.clone(),
+        app_metrics.clone(),
+        event_channels.jobs.subscribe(),
+    );
+
     let state = Arc::new(AppState {
         db,
         config,
@@ -293,13 +371,16 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         hardware_probe_log,
         resources_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_intelligence_cache,
+        update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         trusted_proxies,
         setup_token,
+        metrics: app_metrics,
     });
+    spawn_update_auto_check(state.clone());
 
     // Clone agent for shutdown handler before moving state into router
     let shutdown_agent = state.agent.clone();
@@ -370,6 +451,30 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     Ok(())
 }
 
+fn spawn_update_auto_check(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        loop {
+            let updates = {
+                let config = state.config.read().await;
+                config.updates.clone()
+            };
+            if updates.auto_check {
+                match crate::update::check_for_updates(&updates).await {
+                    Ok(status) => {
+                        let mut cache = state.update_status_cache.lock().await;
+                        *cache = Some((status, std::time::Instant::now()));
+                    }
+                    Err(err) => {
+                        tracing::warn!("Background update check failed: {err}");
+                    }
+                }
+            }
+            let interval_hours = updates.check_interval_hours.clamp(1, 168);
+            tokio::time::sleep(Duration::from_secs(u64::from(interval_hours) * 60 * 60)).await;
+        }
+    });
+}
+
 fn app_router(state: Arc<AppState>) -> Router {
     use auth::*;
     use conversion::*;
@@ -383,6 +488,7 @@ fn app_router(state: Arc<AppState>) -> Router {
     use wizard::*;
 
     Router::new()
+        .nest("/api/v1", v1_api_router())
         // API Routes
         .route("/api/scan/start", post(start_scan_handler))
         .route("/api/scan/status", get(get_scan_status_handler))
@@ -393,6 +499,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/stats/detailed", get(detailed_stats_handler))
         .route("/api/stats/savings", get(savings_summary_handler))
         .route("/api/stats/skip-reasons", get(skip_reasons_handler))
+        .route("/api/stats/top-reason-codes", get(top_reason_codes_handler))
         // Canonical job list endpoint.
         .route("/api/jobs", get(jobs_table_handler))
         .route("/api/jobs/table", get(jobs_table_handler))
@@ -533,6 +640,14 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/resources", get(system_resources_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/update", get(get_system_update_handler))
+        .route(
+            "/api/system/update/check",
+            post(check_system_update_handler),
+        )
+        .route(
+            "/api/system/update/install",
+            post(install_system_update_handler),
+        )
         .route("/api/system/hardware", get(get_hardware_info_handler))
         .route("/api/system/backup", post(backup_database_handler))
         .route(
@@ -588,7 +703,200 @@ fn app_router(state: Arc<AppState>) -> Router {
             state.clone(),
             middleware::rate_limit_middleware,
         ))
+        .layer(axum_middleware::from_fn(
+            middleware::request_context_middleware,
+        ))
         .with_state(state)
+}
+
+fn v1_api_router() -> Router<Arc<AppState>> {
+    use auth::*;
+    use conversion::*;
+    use jobs::*;
+    use scan::*;
+    use settings::*;
+    use sse::*;
+    use stats::*;
+    use system::*;
+    use webhooks::*;
+    use wizard::*;
+
+    Router::new()
+        .route("/scan/start", post(start_scan_handler))
+        .route("/scan/status", get(get_scan_status_handler))
+        .route("/scan", post(scan_handler))
+        .route("/stats", get(stats_handler))
+        .route("/stats/aggregated", get(aggregated_stats_handler))
+        .route("/stats/daily", get(daily_stats_handler))
+        .route("/stats/detailed", get(detailed_stats_handler))
+        .route("/stats/savings", get(savings_summary_handler))
+        .route("/stats/skip-reasons", get(skip_reasons_handler))
+        .route("/stats/top-reason-codes", get(top_reason_codes_handler))
+        .route("/jobs", get(jobs_table_handler))
+        .route("/jobs/enqueue", post(enqueue_job_handler))
+        .route("/jobs/batch", post(batch_jobs_handler))
+        .route("/jobs/restart-failed", post(restart_failed_handler))
+        .route("/jobs/clear-completed", post(clear_completed_handler))
+        .route("/jobs/clear-history", post(clear_history_handler))
+        .route("/jobs/:id", delete(delete_job_handler))
+        .route("/jobs/:id/cancel", post(cancel_job_handler))
+        .route("/jobs/:id/priority", post(update_job_priority_handler))
+        .route("/jobs/:id/restart", post(restart_job_handler))
+        .route("/jobs/:id/details", get(get_job_detail_handler))
+        .route(
+            "/conversion/uploads",
+            post(upload_conversion_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/conversion/preview", post(preview_conversion_handler))
+        .route(
+            "/conversion/jobs/:id/start",
+            post(start_conversion_job_handler),
+        )
+        .route(
+            "/conversion/jobs/:id",
+            get(get_conversion_job_handler).delete(delete_conversion_job_handler),
+        )
+        .route(
+            "/conversion/jobs/:id/download",
+            get(download_conversion_job_handler),
+        )
+        .route("/events", get(sse_handler))
+        .route("/engine/pause", post(pause_engine_handler))
+        .route("/engine/resume", post(resume_engine_handler))
+        .route("/engine/drain", post(drain_engine_handler))
+        .route("/engine/stop-drain", post(stop_drain_handler))
+        .route("/engine/restart", post(restart_engine_handler))
+        .route(
+            "/engine/mode",
+            get(get_engine_mode_handler).post(set_engine_mode_handler),
+        )
+        .route("/engine/status", get(engine_status_handler))
+        .route("/processor/status", get(processor_status_handler))
+        .route(
+            "/settings/transcode",
+            get(get_transcode_settings_handler).post(update_transcode_settings_handler),
+        )
+        .route(
+            "/settings/system",
+            get(get_system_settings_handler).post(update_system_settings_handler),
+        )
+        .route(
+            "/settings/bundle",
+            get(get_settings_bundle_handler).put(update_settings_bundle_handler),
+        )
+        .route(
+            "/settings/preferences",
+            post(set_setting_preference_handler),
+        )
+        .route(
+            "/settings/preferences/:key",
+            get(get_setting_preference_handler),
+        )
+        .route(
+            "/settings/config",
+            get(get_settings_config_handler).put(update_settings_config_handler),
+        )
+        .route(
+            "/settings/watch-dirs",
+            get(get_watch_dirs_handler).post(add_watch_dir_handler),
+        )
+        .route("/settings/folders", post(sync_watch_dirs_handler))
+        .route("/settings/watch-dirs/:id", delete(remove_watch_dir_handler))
+        .route(
+            "/settings/watch-dirs/:id/reanalyze",
+            post(reanalyze_watch_dir_handler),
+        )
+        .route(
+            "/watch-dirs/:id/profile",
+            patch(assign_watch_dir_profile_handler),
+        )
+        .route("/profiles/presets", get(get_profile_presets_handler))
+        .route(
+            "/profiles",
+            get(list_profiles_handler).post(create_profile_handler),
+        )
+        .route(
+            "/profiles/:id",
+            put(update_profile_handler).delete(delete_profile_handler),
+        )
+        .route(
+            "/settings/notifications",
+            get(get_notifications_handler)
+                .put(update_notifications_settings_handler)
+                .post(add_notification_handler),
+        )
+        .route(
+            "/settings/notifications/:id",
+            delete(delete_notification_handler),
+        )
+        .route(
+            "/settings/notifications/test",
+            post(test_notification_handler),
+        )
+        .route(
+            "/settings/api-tokens",
+            get(list_api_tokens_handler).post(create_api_token_handler),
+        )
+        .route("/settings/api-tokens/:id", delete(revoke_api_token_handler))
+        .route(
+            "/settings/files",
+            get(get_file_settings_handler).post(update_file_settings_handler),
+        )
+        .route(
+            "/settings/schedule",
+            get(get_schedule_handler).post(add_schedule_handler),
+        )
+        .route(
+            "/settings/hardware",
+            get(get_hardware_settings_handler).post(update_hardware_settings_handler),
+        )
+        .route("/settings/schedule/:id", delete(delete_schedule_handler))
+        .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler))
+        .route("/system/resources", get(system_resources_handler))
+        .route("/system/info", get(get_system_info_handler))
+        .route("/system/update", get(get_system_update_handler))
+        .route("/system/update/check", post(check_system_update_handler))
+        .route(
+            "/system/update/install",
+            post(install_system_update_handler),
+        )
+        .route("/system/hardware", get(get_hardware_info_handler))
+        .route("/system/backup", post(backup_database_handler))
+        .route(
+            "/system/hardware/probe-log",
+            get(get_hardware_probe_log_handler),
+        )
+        .route("/library/intelligence", get(library_intelligence_handler))
+        .route("/library/reanalyze", post(reanalyze_library_root_handler))
+        .route("/library/health", get(library_health_handler))
+        .route(
+            "/library/health/scan",
+            post(start_library_health_scan_handler),
+        )
+        .route(
+            "/library/health/scan/:id",
+            post(rescan_library_health_issue_handler),
+        )
+        .route(
+            "/library/health/issues",
+            get(get_library_health_issues_handler),
+        )
+        .route("/fs/browse", get(fs_browse_handler))
+        .route("/fs/recommendations", get(fs_recommendations_handler))
+        .route("/fs/preview", post(fs_preview_handler))
+        .route("/telemetry/payload", get(telemetry_payload_handler))
+        .route("/setup/status", get(setup_status_handler))
+        .route("/setup/complete", post(setup_complete_handler))
+        .route("/auth/login", post(login_handler))
+        .route("/auth/logout", post(logout_handler))
+        .route(
+            "/ui/preferences",
+            get(get_preferences_handler).post(update_preferences_handler),
+        )
+        .route("/webhooks/arr", post(arr_webhook_handler))
+        .route("/logs/history", get(logs_history_handler))
+        .route("/logs", delete(clear_logs_handler))
 }
 
 // Helper functions used by multiple modules
@@ -642,15 +950,15 @@ pub(crate) async fn replace_runtime_hardware(
 }
 
 pub(crate) fn config_write_blocked_response(config_path: &FsPath) -> Response {
-    (
+    api_error_response(
         StatusCode::CONFLICT,
+        "CONFIG_WRITE_BLOCKED",
         format!(
             "Configuration updates are disabled (ALCHEMIST_CONFIG_MUTABLE=false). \
 Set ALCHEMIST_CONFIG_MUTABLE=true and ensure {:?} is writable.",
             config_path
         ),
     )
-        .into_response()
 }
 
 pub(crate) fn config_save_error_to_response(config_path: &FsPath, err: &anyhow::Error) -> Response {
@@ -942,6 +1250,14 @@ async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 }
 
 async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl IntoResponse {
+    if uri.path().starts_with("/api/") {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "API_ROUTE_NOT_FOUND",
+            "API route not found",
+        );
+    }
+
     let raw_path = uri.path().trim_start_matches('/');
     let path = match sanitize_asset_path(raw_path) {
         Some(path) => path,

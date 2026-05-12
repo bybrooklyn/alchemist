@@ -1,13 +1,14 @@
 //! Configuration get/set, validation handlers.
 
 use super::{
-    AppState, api_error_response, config_read_error_response, config_save_error_to_response,
-    config_write_blocked_response, hardware_error_response, has_path_separator,
-    normalize_optional_directory, normalize_optional_path, normalize_schedule_time,
-    refresh_file_watcher, replace_runtime_hardware, save_config_or_response,
-    validate_notification_url, validate_transcode_payload,
+    AppState, api_error_response, api_ok_response, config_read_error_response,
+    config_save_error_to_response, config_write_blocked_response, hardware_error_response,
+    has_path_separator, normalize_optional_directory, normalize_optional_path,
+    normalize_schedule_time, refresh_file_watcher, replace_runtime_hardware,
+    save_config_or_response, validate_notification_url, validate_transcode_payload,
 };
 use crate::config::Config;
+use crate::config::UpdateChannel;
 use crate::db::ApiTokenAccessLevel;
 
 use axum::{
@@ -117,7 +118,7 @@ pub(crate) async fn update_transcode_settings_handler(
         .set_concurrent_jobs(payload.concurrent_jobs)
         .await;
 
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 // Hardware settings
@@ -197,7 +198,7 @@ pub(crate) async fn update_hardware_settings_handler(
     }
     replace_runtime_hardware(state.as_ref(), hardware_info, probe_log).await;
 
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 // System settings
@@ -210,6 +211,22 @@ pub(crate) struct SystemSettingsPayload {
     enable_telemetry: bool,
     #[serde(default)]
     watch_enabled: bool,
+    #[serde(default)]
+    ui_theme: Option<String>,
+    #[serde(default)]
+    update_channel: UpdateChannel,
+    #[serde(default = "default_update_auto_check")]
+    update_auto_check: bool,
+    #[serde(default = "default_update_check_interval_hours")]
+    update_check_interval_hours: u32,
+}
+
+fn default_update_auto_check() -> bool {
+    true
+}
+
+fn default_update_check_interval_hours() -> u32 {
+    24
 }
 
 pub(crate) async fn get_system_settings_handler(
@@ -222,6 +239,10 @@ pub(crate) async fn get_system_settings_handler(
         conversion_download_retention_hours: config.system.conversion_download_retention_hours,
         enable_telemetry: config.system.enable_telemetry,
         watch_enabled: config.scanner.watch_enabled,
+        ui_theme: config.system.ui_theme.clone(),
+        update_channel: config.updates.channel,
+        update_auto_check: config.updates.auto_check,
+        update_check_interval_hours: config.updates.check_interval_hours,
     })
 }
 
@@ -250,6 +271,13 @@ pub(crate) async fn update_system_settings_handler(
             "conversion_download_retention_hours must be between 1 and 24",
         );
     }
+    if payload.update_check_interval_hours == 0 || payload.update_check_interval_hours > 168 {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "SYSTEM_SETTINGS_INVALID",
+            "update_check_interval_hours must be between 1 and 168",
+        );
+    }
 
     let mut next_config = state.config.read().await.clone();
     next_config.system.monitoring_poll_interval = payload.monitoring_poll_interval;
@@ -258,6 +286,10 @@ pub(crate) async fn update_system_settings_handler(
         payload.conversion_download_retention_hours;
     next_config.system.enable_telemetry = payload.enable_telemetry;
     next_config.scanner.watch_enabled = payload.watch_enabled;
+    next_config.system.ui_theme = payload.ui_theme;
+    next_config.updates.channel = payload.update_channel;
+    next_config.updates.auto_check = payload.update_auto_check;
+    next_config.updates.check_interval_hours = payload.update_check_interval_hours;
 
     if let Err(e) = next_config.validate() {
         return api_error_response(
@@ -275,10 +307,14 @@ pub(crate) async fn update_system_settings_handler(
         let mut config = state.config.write().await;
         *config = next_config;
     }
+    {
+        let mut cache = state.update_status_cache.lock().await;
+        *cache = None;
+    }
 
     refresh_file_watcher(&state).await;
 
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 // Settings bundle
@@ -724,7 +760,7 @@ pub(crate) async fn update_notifications_settings_handler(
         let mut config = state.config.write().await;
         *config = next_config;
     }
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 pub(crate) async fn add_notification_handler(
@@ -758,7 +794,7 @@ pub(crate) async fn add_notification_handler(
         Ok(mut targets) => targets
             .pop()
             .map(|target| axum::Json(notification_target_response(target)).into_response())
-            .unwrap_or_else(|| StatusCode::OK.into_response()),
+            .unwrap_or_else(api_ok_response),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "NOTIFICATIONS_LIST_FAILED",
@@ -805,7 +841,7 @@ pub(crate) async fn delete_notification_handler(
         let mut config = state.config.write().await;
         *config = next_config;
     }
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 pub(crate) async fn test_notification_handler(
@@ -828,7 +864,7 @@ pub(crate) async fn test_notification_handler(
     };
 
     match state.notification_manager.send_test(&target).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => api_ok_response(),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "NOTIFICATION_TEST_FAILED",
@@ -908,7 +944,7 @@ pub(crate) async fn revoke_api_token_handler(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     match state.db.revoke_api_token(id).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => api_ok_response(),
         Err(err) if super::is_row_not_found(&err) => api_error_response(
             StatusCode::NOT_FOUND,
             "API_TOKEN_NOT_FOUND",
@@ -1005,7 +1041,7 @@ pub(crate) async fn add_schedule_handler(
         Ok(mut windows) => windows
             .pop()
             .map(|window| axum::Json(serde_json::json!(window)).into_response())
-            .unwrap_or_else(|| StatusCode::OK.into_response()),
+            .unwrap_or_else(api_ok_response),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "SCHEDULE_LIST_FAILED",
@@ -1053,7 +1089,7 @@ pub(crate) async fn delete_schedule_handler(
         *config = next_config;
     }
     state.scheduler.trigger();
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 // File settings
@@ -1165,5 +1201,5 @@ pub(crate) async fn update_preferences_handler(
         let mut config = state.config.write().await;
         *config = next_config;
     }
-    StatusCode::OK.into_response()
+    api_ok_response()
 }

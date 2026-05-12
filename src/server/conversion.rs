@@ -1,4 +1,4 @@
-use super::{AppState, api_error_response};
+use super::{AppState, api_error_response, api_ok_response};
 use crate::conversion::ConversionSettings;
 use axum::{
     body::Body,
@@ -348,7 +348,11 @@ pub(crate) async fn preview_conversion_handler(
             );
         }
     }) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_JOB_NOT_FOUND",
+            "Conversion job not found",
+        );
     };
 
     let analysis: crate::media::pipeline::MediaAnalysis = match job.probe_json.as_deref() {
@@ -454,7 +458,11 @@ pub(crate) async fn start_conversion_job_handler(
             );
         }
     }) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_JOB_NOT_FOUND",
+            "Conversion job not found",
+        );
     };
 
     if job.linked_job_id.is_some() {
@@ -534,7 +542,7 @@ pub(crate) async fn start_conversion_job_handler(
         );
     }
 
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 pub(crate) async fn get_conversion_job_handler(
@@ -553,7 +561,11 @@ pub(crate) async fn get_conversion_job_handler(
             );
         }
     }) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_JOB_NOT_FOUND",
+            "Conversion job not found",
+        );
     };
 
     let linked_job = match conversion_job.linked_job_id {
@@ -610,14 +622,26 @@ pub(crate) async fn download_conversion_job_handler(
             );
         }
     }) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_JOB_NOT_FOUND",
+            "Conversion job not found",
+        );
     };
 
     let Some(output_path) = job.output_path.clone() else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_OUTPUT_MISSING",
+            "Conversion output is not available",
+        );
     };
     if !FsPath::new(&output_path).exists() {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_OUTPUT_MISSING",
+            "Conversion output is not available",
+        );
     }
 
     let file = match fs::File::open(&output_path).await {
@@ -690,7 +714,11 @@ pub(crate) async fn delete_conversion_job_handler(
             );
         }
     }) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "CONVERSION_JOB_NOT_FOUND",
+            "Conversion job not found",
+        );
     };
 
     if let Some(linked_job_id) = job.linked_job_id {
@@ -720,7 +748,7 @@ pub(crate) async fn delete_conversion_job_handler(
             err.to_string(),
         );
     }
-    StatusCode::OK.into_response()
+    api_ok_response()
 }
 
 fn sanitize_filename(name: &str) -> String {
