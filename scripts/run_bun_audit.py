@@ -10,10 +10,24 @@ AUDIT_IGNORES = {
         # docs/ builds static output, but Docusaurus pulls webpack-dev-server -> sockjs -> uuid.
         # The GHSA is specific to uuid v3/v5/v6 buffer handling; installed sockjs only calls uuid.v4().
         "GHSA-w5hq-g745-h8pq",
+        # fast-uri (<=3.1.1) is pulled in only by Docusaurus' webpack/schema-utils chain.
+        # That chain runs at static-site build time on inputs we author. No patched fast-uri
+        # is published yet (advisory covers all versions <=3.1.1).
+        "GHSA-v39h-62p7-jpjc",
+        "GHSA-q3j6-qgpj-74h6",
+        # @babel/plugin-transform-modules-systemjs (<=7.29.3) only runs at build time on our own
+        # docs source. We do not compile untrusted input. Docusaurus 3.10.1 pins the affected version
+        # transitively through @babel/preset-env; no patched release is reachable via bun update.
+        "GHSA-fv7c-fp4j-7gwp",
     ],
     "web": [
         # Astro 5 is flagged for define:vars script sanitization, but this web app does not use define:vars.
         "GHSA-j687-52p2-xcff",
+        # fast-uri (<=3.1.1) is pulled in only by @astrojs/check -> yaml-language-server
+        # -> ajv. That chain is dev-only (type-check during build) and never receives
+        # untrusted URIs. No patched fast-uri exists yet.
+        "GHSA-v39h-62p7-jpjc",
+        "GHSA-q3j6-qgpj-74h6",
     ],
 }
 

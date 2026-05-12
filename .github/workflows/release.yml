@@ -81,6 +81,7 @@ jobs:
   build:
     needs: [release-meta]
     uses: ./.github/workflows/build.yml
+    secrets: inherit
     with:
       version_suffix: ""
       push_docker: ${{ startsWith(github.ref, 'refs/tags/') }}

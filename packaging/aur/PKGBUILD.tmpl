@@ -6,7 +6,7 @@ arch=('x86_64')
 url="https://github.com/bybrooklyn/alchemist"
 license=('GPL3')
 depends=('ffmpeg')
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bybrooklyn/alchemist/releases/download/v${pkgver}/alchemist-linux-x86_64.tar.gz")
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bybrooklyn/alchemist/releases/download/{{RELEASE_TAG}}/alchemist-linux-x86_64.tar.gz")
 sha256sums=('{{LINUX_X86_64_SHA256}}')
 
 package() {

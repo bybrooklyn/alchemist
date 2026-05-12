@@ -53,6 +53,9 @@ jobs:
       - name: Check
         run: cargo check --locked --all-targets --all-features
 
+      - name: API contract
+        run: python3 scripts/check_api_contract.py
+
   compute-meta:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -110,6 +113,7 @@ jobs:
   build:
     needs: [ci-gate, compute-meta, publish-nightly-tags]
     uses: ./.github/workflows/build.yml
+    secrets: inherit
     with:
       version_suffix: ${{ needs.compute-meta.outputs.version_suffix }}
       push_docker: true
