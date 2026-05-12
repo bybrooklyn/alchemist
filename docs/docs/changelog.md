@@ -5,6 +5,10 @@ description: Release history for Alchemist.
 
 ## [0.3.2-rc.2] - 2026-04-29
 
+### Integrations & Automation
+
+- Native update checks now support stable, RC, and nightly channels with signed release manifests, direct-binary install eligibility, drain-before-install behavior, and package-manager guidance for Docker/Homebrew/AUR/Windows/source installs.
+
 ### Performance & Startup
 
 - Hardware detection cache: successful hardware probes are persisted by OS, architecture, FFmpeg/FFprobe versions, hardware settings, and cache schema version so repeat boots can reuse a valid detection result immediately.

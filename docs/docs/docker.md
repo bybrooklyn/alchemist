@@ -65,6 +65,10 @@ docker compose pull && docker compose up -d
 Migrations run automatically on startup. Config and database
 are preserved in mounted volumes.
 
+The in-app update panel detects Docker and shows this command
+instead of replacing files inside the container. Container
+updates remain owned by your Docker/Compose workflow.
+
 ## Nightly builds
 
 ```yaml

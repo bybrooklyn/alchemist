@@ -92,10 +92,11 @@ the next available port and prints an `INFO` line with the
 exact `http://127.0.0.1:<port>` link. Set
 `ALCHEMIST_SERVER_PORT=<port>` to require a specific port.
 
-On Windows, Alchemist now exposes an in-app update check in
-the About dialog that compares the running version against
-the latest stable GitHub Release and links directly to the
-download page when an update is available.
+The About dialog checks the configured update channel
+(`stable`, `rc`, or `nightly`). Direct Linux/macOS binaries
+can install signed, verified updates after active jobs drain.
+Docker, Homebrew, AUR, Windows, source, and unknown installs
+show guided update instructions instead of replacing files.
 
 ## From source
 

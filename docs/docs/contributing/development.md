@@ -31,11 +31,30 @@ just install-w      # Windows bootstrap
 just check          # supported on macOS, Linux, and Windows
 just test           # cargo test
 just test-e2e       # Playwright reliability suite
+just mac-check      # native/mac Swift package check, macOS only
 just db-reset       # wipe dev DB, keep config
 just db-reset-all   # wipe DB and config (re-triggers wizard)
 just bump <version> # bump version in all repo version files
 just update <version> # full guarded release flow (Unix-first)
 ```
+
+## Native macOS client
+
+The SwiftUI companion app is isolated under `native/mac`.
+Use the repo-level `just` recipes rather than ad hoc Swift
+commands:
+
+```bash
+just mac-build
+just mac-test
+just mac-check
+just mac-run
+just mac-run-bundled
+```
+
+`just mac-run-bundled` builds and stages the Rust daemon as
+`native/mac/.artifacts/alchemistd`, then launches the SwiftUI
+app with `ALCHEMIST_DAEMON_PATH` set for bundled-mode testing.
 
 ## Windows contributor support
 
