@@ -44,16 +44,54 @@ interface DetailedStats {
     created_at: string;
 }
 
+interface ReasonCodeCount {
+    code: string;
+    count: number;
+    last_seen: string | null;
+}
+
+interface TopReasonCodesResponse {
+    window_days: number;
+    skip: ReasonCodeCount[];
+    failure: ReasonCodeCount[];
+}
+
+type ReasonWindow = "24h" | "7d" | "30d";
+
 export default function StatsCharts() {
     const [stats, setStats] = useState<AggregatedStats | null>(null);
     const [dailyStats, setDailyStats] = useState<DailyStats[]>([]);
     const [detailedStats, setDetailedStats] = useState<DetailedStats[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [reasonWindow, setReasonWindow] = useState<ReasonWindow>("7d");
+    const [topReasons, setTopReasons] = useState<TopReasonCodesResponse | null>(null);
 
     useEffect(() => {
         void fetchAllStats();
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        const fetchReasons = async () => {
+            try {
+                const data = await apiJson<TopReasonCodesResponse>(
+                    `/api/stats/top-reason-codes?window=${reasonWindow}`,
+                );
+                if (!cancelled) {
+                    setTopReasons(data);
+                }
+            } catch (_e) {
+                if (!cancelled) {
+                    setTopReasons({ window_days: 0, skip: [], failure: [] });
+                }
+            }
+        };
+        void fetchReasons();
+        return () => {
+            cancelled = true;
+        };
+    }, [reasonWindow]);
 
     const fetchAllStats = async () => {
         try {
@@ -157,6 +195,54 @@ export default function StatsCharts() {
         value: string;
         colorClass: string;
     }
+
+    const ReasonTable = ({
+        title,
+        rows,
+        codeParam,
+    }: {
+        title: string;
+        rows: ReasonCodeCount[];
+        codeParam: "reason_code" | "failure_code";
+    }) => (
+        <div>
+            <h4 className="text-sm font-bold text-helios-ink mb-3 uppercase tracking-wide">{title}</h4>
+            {rows.length === 0 ? (
+                <p className="text-sm text-helios-slate">No data in this window.</p>
+            ) : (
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b border-helios-line/40">
+                            <th className="text-left py-2 px-2 text-helios-slate font-medium">Code</th>
+                            <th className="text-right py-2 px-2 text-helios-slate font-medium">Count</th>
+                            <th className="text-right py-2 px-2 text-helios-slate font-medium">Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row) => (
+                            <tr
+                                key={row.code}
+                                className="border-b border-helios-line/20 hover:bg-helios-surface-soft transition-colors"
+                            >
+                                <td className="py-2 px-2">
+                                    <a
+                                        href={`/jobs?${codeParam}=${encodeURIComponent(row.code)}`}
+                                        className="font-mono text-helios-ink hover:underline"
+                                    >
+                                        {row.code}
+                                    </a>
+                                </td>
+                                <td className="py-2 px-2 text-right font-mono text-helios-ink">{row.count}</td>
+                                <td className="py-2 px-2 text-right text-helios-slate text-xs">
+                                    {row.last_seen ? formatDate(row.last_seen) : "—"}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+        </div>
+    );
 
     const MetricCard = ({ icon: Icon, label, value, colorClass }: MetricCardProps) => (
         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/20 flex items-center gap-3">
@@ -285,6 +371,45 @@ export default function StatsCharts() {
                         <MetricCard icon={Timer} label="Avg Speed" value={`${avgSpeed} fps`} colorClass="text-orange-500" />
                         <MetricCard icon={FileVideo} label="Avg Bitrate" value={`${avgBitrate} kbps`} colorClass="text-pink-500" />
                     </div>
+                </div>
+            </div>
+
+            {/* Top Reasons (skips + failures) */}
+            <div className="p-6 rounded-lg bg-helios-surface border border-helios-line/40">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
+                        <BarChart3 size={20} className="text-amber-500" />
+                        Top Reasons
+                    </h3>
+                    <div className="inline-flex rounded-lg border border-helios-line/40 overflow-hidden text-xs">
+                        {(["24h", "7d", "30d"] as ReasonWindow[]).map((option) => (
+                            <button
+                                key={option}
+                                type="button"
+                                onClick={() => setReasonWindow(option)}
+                                className={
+                                    "px-3 py-1.5 font-medium transition-colors " +
+                                    (reasonWindow === option
+                                        ? "bg-helios-surface-soft text-helios-ink"
+                                        : "text-helios-slate hover:text-helios-ink")
+                                }
+                            >
+                                {option}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <ReasonTable
+                        title="Top Skip Reasons"
+                        rows={topReasons?.skip ?? []}
+                        codeParam="reason_code"
+                    />
+                    <ReasonTable
+                        title="Top Failure Reasons"
+                        rows={topReasons?.failure ?? []}
+                        codeParam="failure_code"
+                    />
                 </div>
             </div>
 

@@ -120,13 +120,57 @@ pub(crate) async fn skip_reasons_handler(State(state): State<Arc<AppState>>) -> 
     }
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct TopReasonCodesQuery {
+    #[serde(default)]
+    window: Option<String>,
+}
+
+pub(crate) async fn top_reason_codes_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<TopReasonCodesQuery>,
+) -> Response {
+    let window_days = match query.window.as_deref().unwrap_or("7d") {
+        "24h" | "1d" => 1,
+        "7d" => 7,
+        "30d" => 30,
+        other => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_WINDOW",
+                format!("window must be one of 24h, 7d, 30d (got {other})"),
+            );
+        }
+    };
+
+    let skip = match state.db.get_skip_reason_counts_windowed(window_days).await {
+        Ok(rows) => rows,
+        Err(err) => return config_read_error_response("load top skip reasons", &err),
+    };
+    let failure = match state.db.get_failure_code_counts(window_days).await {
+        Ok(rows) => rows,
+        Err(err) => return config_read_error_response("load top failure codes", &err),
+    };
+
+    axum::Json(serde_json::json!({
+        "window_days": window_days,
+        "skip": skip,
+        "failure": failure,
+    }))
+    .into_response()
+}
+
 pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Response {
     let metrics_enabled = {
         let config = state.config.read().await;
         config.system.metrics_enabled
     };
     if !metrics_enabled {
-        return StatusCode::NOT_FOUND.into_response();
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "METRICS_DISABLED",
+            "Metrics endpoint is disabled",
+        );
     }
 
     let status_counts = match state.db.get_status_counts().await {
@@ -216,7 +260,12 @@ pub(crate) async fn metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     }
 
     let encoder = TextEncoder::new();
-    let metric_families = registry.gather();
+    let mut metric_families = registry.gather();
+    // Append the persistent process-wide counters and histograms (encode
+    // completions, failures, durations). They live on AppState so they survive
+    // across requests.
+    metric_families.extend(state.metrics.registry().gather());
+
     let mut buffer = Vec::new();
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
         return api_error_response(

@@ -1,4 +1,4 @@
-import { Search, RefreshCw, ArrowDown, ArrowUp, Plus } from "lucide-react";
+import { Search, RefreshCw, ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { RefObject } from "react";
@@ -27,6 +27,10 @@ interface JobsToolbarProps {
     refreshing: boolean;
     fetchJobs: () => Promise<void>;
     openEnqueueDialog: () => void;
+    reasonCode?: string | null;
+    onClearReasonCode?: () => void;
+    failureCode?: string | null;
+    onClearFailureCode?: () => void;
 }
 
 export function JobsToolbar({
@@ -35,9 +39,46 @@ export function JobsToolbar({
     compactSearchOpen, setCompactSearchOpen, compactSearchRef, compactSearchInputRef,
     sortBy, setSortBy, sortDesc, setSortDesc,
     refreshing, fetchJobs, openEnqueueDialog,
+    reasonCode, onClearReasonCode, failureCode, onClearFailureCode,
 }: JobsToolbarProps) {
     return (
         <div className="rounded-xl border border-helios-line/10 bg-helios-surface/50 px-3 py-3">
+            {(reasonCode || failureCode) && (
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                    {reasonCode && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-helios-line/30 bg-helios-surface px-3 py-1 text-xs text-helios-ink">
+                            <span className="text-helios-slate">Skip reason:</span>
+                            <span className="font-mono">{reasonCode}</span>
+                            {onClearReasonCode && (
+                                <button
+                                    type="button"
+                                    onClick={onClearReasonCode}
+                                    className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-helios-slate hover:text-helios-ink"
+                                    aria-label="Clear skip-reason filter"
+                                >
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </span>
+                    )}
+                    {failureCode && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-helios-line/30 bg-helios-surface px-3 py-1 text-xs text-helios-ink">
+                            <span className="text-helios-slate">Failure code:</span>
+                            <span className="font-mono">{failureCode}</span>
+                            {onClearFailureCode && (
+                                <button
+                                    type="button"
+                                    onClick={onClearFailureCode}
+                                    className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-helios-slate hover:text-helios-ink"
+                                    aria-label="Clear failure-code filter"
+                                >
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </span>
+                    )}
+                </div>
+            )}
             <div className="flex flex-wrap gap-1">
                 {(["all", "active", "queued", "completed", "failed", "skipped", "archived"] as TabType[]).map((tab) => (
                     <button

@@ -123,6 +123,42 @@ function JobManager() {
     const [savedViews, setSavedViews] = useState<SavedJobView[]>([]);
     const [activeViewId, setActiveViewId] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
+    const [reasonCode, setReasonCode] = useState<string | null>(() => {
+        if (typeof window === "undefined") return null;
+        const value = new URLSearchParams(window.location.search).get("reason_code");
+        return value && value.length > 0 ? value : null;
+    });
+    const [failureCode, setFailureCode] = useState<string | null>(() => {
+        if (typeof window === "undefined") return null;
+        const value = new URLSearchParams(window.location.search).get("failure_code");
+        return value && value.length > 0 ? value : null;
+    });
+
+    const clearReasonCode = useCallback(() => {
+        setReasonCode(null);
+        if (typeof window === "undefined") return;
+        const params = new URLSearchParams(window.location.search);
+        params.delete("reason_code");
+        const next = params.toString();
+        window.history.replaceState(
+            null,
+            "",
+            next.length > 0 ? `${window.location.pathname}?${next}` : window.location.pathname,
+        );
+    }, []);
+
+    const clearFailureCode = useCallback(() => {
+        setFailureCode(null);
+        if (typeof window === "undefined") return;
+        const params = new URLSearchParams(window.location.search);
+        params.delete("failure_code");
+        const next = params.toString();
+        window.history.replaceState(
+            null,
+            "",
+            next.length > 0 ? `${window.location.pathname}?${next}` : window.location.pathname,
+        );
+    }, []);
 
     useEffect(() => {
         const loadSavedViews = async () => {
@@ -320,6 +356,12 @@ function JobManager() {
             if (debouncedSearch) {
                 params.set("search", debouncedSearch);
             }
+            if (reasonCode) {
+                params.set("reason_code", reasonCode);
+            }
+            if (failureCode) {
+                params.set("failure_code", failureCode);
+            }
 
             const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
             setJobs((prev) =>
@@ -351,7 +393,7 @@ function JobManager() {
                 setRefreshing(false);
             }
         }
-    }, [activeTab, debouncedSearch, page, sortBy, sortDesc]);
+    }, [activeTab, debouncedSearch, page, sortBy, sortDesc, reasonCode, failureCode]);
 
     const fetchJobsRef = useRef<() => Promise<void>>(async () => undefined);
 
@@ -642,6 +684,10 @@ function JobManager() {
                 refreshing={refreshing}
                 fetchJobs={fetchJobs}
                 openEnqueueDialog={() => setEnqueueDialogOpen(true)}
+                reasonCode={reasonCode}
+                onClearReasonCode={clearReasonCode}
+                failureCode={failureCode}
+                onClearFailureCode={clearFailureCode}
             />
 
             {actionError && (
