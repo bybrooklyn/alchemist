@@ -7,6 +7,7 @@
 node_modules/
 dist/
 .astro/
+.build/
 .docusaurus/
 build/
 test-results/
@@ -32,14 +33,24 @@ Thumbs.db
 *.swp
 *.swo
 .vscode/
-.idea/workspace.xml
+.idea/
+.obsidian/
+
+# Scratch / exported assistant sessions
+session.md
+update_ui.sh
 
 # Project Specifics
 public/pkg/alchemist.css
+native/mac/.artifacts/
+integrations/**/bin/
+integrations/**/obj/
 
-# Claude
+# Claude / agent harness
 .claude/worktrees/
-!.claude/settings.local.json
+.claude/settings.local.json
+.claude/skills/duo/
+.agents/settings.local.json
 
 .gemini/
 gha-creds-*.json
