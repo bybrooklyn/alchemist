@@ -10,6 +10,24 @@ Default config file location:
 - Windows: `%APPDATA%\Alchemist\config.toml`
 - Override: `ALCHEMIST_CONFIG_PATH`
 
+## `[appearance]`
+
+| Field | Type | Default | Description |
+|------|------|---------|-------------|
+| `active_theme_id` | string | optional | Saved web UI color theme/profile identifier |
+
+## `[updates]`
+
+| Field | Type | Default | Description |
+|------|------|---------|-------------|
+| `channel` | string | `"stable"` | Release channel checked by the About dialog and background update task. Valid values: `stable`, `rc`, `nightly` |
+| `auto_check` | bool | `true` | Check the configured channel in the background while the server is running |
+| `check_interval_hours` | int | `24` | Update-check cache interval. Must be between 1 and 168 hours |
+
+Only direct Linux/macOS binary installs are eligible for in-app replacement.
+Docker, Homebrew, AUR, Windows, and source builds return package-manager or
+manual update guidance instead.
+
 ## `[transcode]`
 
 | Field | Type | Default | Description |
@@ -175,6 +193,11 @@ daily_summary_time_local = "09:00"
 quiet_hours_enabled = false
 quiet_hours_start_local = "22:00"
 quiet_hours_end_local = "08:00"
+
+[updates]
+channel = "stable"
+auto_check = true
+check_interval_hours = 24
 
 [system]
 monitoring_poll_interval = 2.0

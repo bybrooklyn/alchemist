@@ -54,9 +54,19 @@ slows down post-encode validation.
 
 ## 11. How do I update?
 
+Direct Linux/macOS binary installs can use the prompted
+update flow in **About** when a signed release manifest is
+available. Alchemist drains active jobs, backs up the database,
+verifies the release asset, and restarts.
+
+Docker installs should still update the container image:
+
 ```bash
 docker compose pull && docker compose up -d
 ```
+
+Homebrew, AUR, Windows, and source installs show the matching
+package-manager or manual update guidance in the app.
 
 ## 12. What if hardware is not detected?
 

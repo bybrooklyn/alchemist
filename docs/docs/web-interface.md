@@ -86,5 +86,5 @@ core workflow.
 | API Tokens | Named bearer tokens with `read_only`, `arr_webhook`, and `full_access` classes |
 | Schedule | Time windows |
 | Runtime | Engine mode, concurrent jobs override, Library Doctor, database backup |
-| System | Monitoring poll interval, manual conversion upload limit and post-download retention, telemetry toggle, watch-folder switch, metrics switch |
+| System | Monitoring poll interval, manual conversion upload limit and post-download retention, update channel/check settings, telemetry toggle, watch-folder switch, metrics switch |
 | Appearance | Color theme (35+ themes) |

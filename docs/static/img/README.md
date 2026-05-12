@@ -1,3 +1,3 @@
 # Images
 
-- `social-card.png` — OG social card (add before launch)
+- `social-card.png` — Open Graph social card referenced by Docusaurus.

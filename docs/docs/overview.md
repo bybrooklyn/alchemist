@@ -33,6 +33,7 @@ private "pro" build, no license key, and no phone-home check.
 - Validates output quality (optional VMAF scoring) before promoting the result
 - Tells you exactly why every skipped file was skipped
 - Supports named API tokens for observability, full automation, and Sonarr/Radarr webhook ingress
+- Exposes a read-only MCP server for local assistant integrations
 - Can be served under a path prefix such as `/alchemist`
 - Includes an experimental single-file Conversion / Remux utility with command preview and source/output estimates
 - Expands Library Intelligence beyond duplicate detection into storage-focused recommendations
@@ -63,6 +64,7 @@ For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup
 | Comparing to Tdarr or FileFlows | [Alchemist vs Tdarr](/alternatives/tdarr) · [Alchemist vs FileFlows](/alternatives/fileflows) |
 | Why it's GPLv3 | [Open Source](/open-source) |
 | Automate with tokens | [API](/api) |
+| Connect local assistants | [MCP Server](/mcp) |
 | Understand skip decisions | [Skip Decisions](/skip-decisions) |
 | Tune per-library behavior | [Profiles](/profiles) |
 
