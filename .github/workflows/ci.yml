@@ -61,6 +61,9 @@ jobs:
       - name: Check
         run: cargo check --locked --all-targets --all-features
 
+      - name: API contract
+        run: python3 scripts/check_api_contract.py
+
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30

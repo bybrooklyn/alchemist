@@ -5,27 +5,48 @@ description: REST and SSE API reference for Alchemist.
 
 ## Authentication
 
-All API routes require the `alchemist_session` auth cookie established via `/api/auth/login`, or an `Authorization: Bearer <token>` header. 
+Canonical client routes live under `/api/v1`. The older `/api` routes remain
+available as compatibility aliases for the web UI and existing scripts, but new
+external clients should use `/api/v1`.
+
+All protected API routes require the `alchemist_session` auth cookie established
+via `POST /api/v1/auth/login`, or an `Authorization: Bearer <token>` header.
 
 Machine-readable contract: [OpenAPI spec](/openapi.yaml)
 
-Most API errors use this envelope:
+Maintainers should run `just api-contract` after changing API routes. The
+release checklist runs the same contract check.
+
+The stdio Model Context Protocol server is documented separately in
+[MCP Server](/mcp). It is read-only and does not expose HTTP mutation routes.
+
+API errors use `application/problem+json`, include an `X-Request-Id` response
+header, and retain the legacy `error.code` / `error.message` object for older
+client parsers:
 
 ```json
 {
+  "type": "urn:alchemist:problem:auth-required",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Unauthorized",
+  "instance": "/api/v1/engine/status",
+  "code": "AUTH_REQUIRED",
+  "request_id": "2c168dbf-6f29-41eb-a8e7-0fd563f76fd4",
   "error": {
-    "code": "CONFIG_SAVE_FAILED",
-    "message": "Failed to save configuration"
+    "code": "AUTH_REQUIRED",
+    "message": "Unauthorized"
   }
 }
 ```
 
-Older routes may still have legacy shapes, but high-traffic
-auth, settings, jobs, system, ARR webhook, readiness, SSE,
-and metrics failure paths now use stable machine-readable
-codes.
+Mutation routes that do not return a resource return a typed JSON body:
 
-### `POST /api/auth/login`
+```json
+{ "ok": true }
+```
+
+### `POST /api/v1/auth/login`
 Establish a session. Returns a `Set-Cookie` header.
 
 **Request:**
@@ -36,13 +57,13 @@ Establish a session. Returns a `Set-Cookie` header.
 }
 ```
 
-### `POST /api/auth/logout`
+### `POST /api/v1/auth/logout`
 Invalidate current session and clear cookie.
 
-### `GET /api/settings/api-tokens`
+### `GET /api/v1/settings/api-tokens`
 List metadata for configured API tokens.
 
-### `POST /api/settings/api-tokens`
+### `POST /api/v1/settings/api-tokens`
 Create a new API token. The plaintext value is only returned once.
 
 **Request:**
@@ -56,36 +77,38 @@ Create a new API token. The plaintext value is only returned once.
 `access_level` supports:
 
 - `read_only` — observability GET/HEAD endpoints only
-- `arr_webhook` — only `POST /api/webhooks/arr`
+- `arr_webhook` — only `POST /api/v1/webhooks/arr`
+- `jellyfin` — Jellyfin plugin endpoints: system info, readiness, SSE events,
+  job details, and `POST /api/v1/jobs/enqueue`
 - `full_access` — all authenticated API routes
 
-### `DELETE /api/settings/api-tokens/:id`
+### `DELETE /api/v1/settings/api-tokens/:id`
 Revoke a token.
 
 ---
 
 ## Settings
 
-### `GET /api/settings/bundle`
+### `GET /api/v1/settings/bundle`
 Fetch the full settings projection used by setup and the
 settings UI.
 
-### `PUT /api/settings/bundle`
+### `PUT /api/v1/settings/bundle`
 Persist the full settings bundle. Fails with `409` when
 `ALCHEMIST_CONFIG_MUTABLE=false`.
 
-### `GET|POST /api/settings/system`
+### `GET|POST /api/v1/settings/system`
 Read or update runtime-facing system settings:
 conversion upload limit, converted-download retention,
-telemetry switch, engine mode, metrics switch, and ARR path
-translations.
+telemetry switch, engine mode, metrics switch, update
+channel/check settings, and ARR path translations.
 
-### `GET|POST /api/settings/hardware`
+### `GET|POST /api/v1/settings/hardware`
 Read or update hardware preference, device path, CPU
 fallback, CPU encoding, and CPU preset. Updating hardware
 settings refreshes runtime hardware state and cache.
 
-### `GET|PUT|POST /api/settings/notifications`
+### `GET|PUT|POST /api/v1/settings/notifications`
 Read notification schedule/quiet-hours state, update global
 notification timing, or add a target.
 
@@ -99,7 +122,7 @@ Global fields:
 Targets use `target_type`, provider-specific `config_json`,
 `events`, and `enabled`.
 
-### `POST /api/settings/notifications/test`
+### `POST /api/v1/settings/notifications/test`
 Send a test notification using a target payload without
 saving it.
 
@@ -107,7 +130,7 @@ saving it.
 
 ## ARR webhook ingress
 
-### `POST /api/webhooks/arr`
+### `POST /api/v1/webhooks/arr`
 Accepts Sonarr/Radarr webhook payloads with `eventType=Download`, resolves a
 media path, applies optional `system.arr_path_translations`, then reuses the
 standard enqueue-by-path pipeline (same dedupe/output guards as manual enqueue).
@@ -116,7 +139,7 @@ Webhook setup:
 
 1. Create an API token with `access_level: "arr_webhook"`.
 2. In Sonarr/Radarr add a **Webhook** notification pointing to:
-   `http://<alchemist-host>:3000/api/webhooks/arr`
+   `http://<alchemist-host>:3000/api/v1/webhooks/arr`
 3. Add header: `Authorization: Bearer <token>`.
 4. Ensure the payload includes import path fields (`episodeFile`, `movieFile`,
    `importedEpisodeFiles`, or `importedMovieFiles`).
@@ -132,31 +155,56 @@ arr_path_translations = [
 
 ---
 
+## Jellyfin plugin integration
+
+The Jellyfin plugin uses a dedicated `jellyfin` API token. That token can enqueue
+media, keep an SSE connection open, and fetch completed job details without
+granting full settings or engine-control access.
+
+Allowed routes:
+
+- `GET /api/v1/system/info`
+- `GET /api/v1/ready`
+- `GET /api/v1/events`
+- `GET /api/v1/jobs/:id/details`
+- `POST /api/v1/jobs/enqueue`
+
+Plugin setup:
+
+1. Create an API token with `access_level: "jellyfin"`.
+2. Configure the plugin with the Alchemist URL and token.
+3. Add forward path translations for Jellyfin-to-Alchemist enqueue paths.
+4. Add reverse path translations for Alchemist-to-Jellyfin refresh paths, or
+   leave them empty to invert the forward translations.
+5. Enable the event listener and refresh-on-completion options when ready.
+
+---
+
 ## Conversion
 
 The Convert workflow is an experimental single-file utility.
 It reuses the normal analyzer/planner/executor path, but
 tracks staged uploads in `conversion_jobs`.
 
-### `POST /api/conversion/uploads`
+### `POST /api/v1/conversion/uploads`
 Upload one source file. The maximum size is
 `system.conversion_upload_limit_gb` GiB.
 
-### `POST /api/conversion/preview`
+### `POST /api/v1/conversion/preview`
 Return normalized settings, generated FFmpeg command text,
 and a structured source/output/estimate summary.
 
-### `POST /api/conversion/jobs/:id/start`
+### `POST /api/v1/conversion/jobs/:id/start`
 Queue the uploaded conversion job.
 
-### `GET /api/conversion/jobs/:id`
+### `GET /api/v1/conversion/jobs/:id`
 Fetch current conversion job state.
 
-### `GET /api/conversion/jobs/:id/download`
+### `GET /api/v1/conversion/jobs/:id/download`
 Download completed output. After download, cleanup retention
 is governed by `system.conversion_download_retention_hours`.
 
-### `DELETE /api/conversion/jobs/:id`
+### `DELETE /api/v1/conversion/jobs/:id`
 Delete the conversion record and any staged artifacts that
 are safe to remove.
 
@@ -164,26 +212,30 @@ are safe to remove.
 
 ## Jobs
 
-### `GET /api/jobs`
+### `GET /api/v1/jobs`
 List jobs with filtering and pagination.
 
 **Params:** `limit`, `page`, `status`, `search`, `sort_by`, `sort_desc`, `archived`.
 
-### `GET /api/jobs/:id/details`
+### `GET /api/v1/jobs/:id/details`
 Fetch full job state, metadata, logs, and stats.
 
-### `POST /api/jobs/:id/cancel`
+### `DELETE /api/v1/jobs/:id`
+Delete a terminal job. The legacy alias remains
+`POST /api/jobs/:id/delete`.
+
+### `POST /api/v1/jobs/:id/cancel`
 Cancel a queued or active job.
 
-### `POST /api/jobs/:id/restart`
+### `POST /api/v1/jobs/:id/restart`
 Restart a terminal job (failed/cancelled/completed).
 
-### `POST /api/jobs/:id/priority`
+### `POST /api/v1/jobs/:id/priority`
 Update job priority.
 
 **Request:** `{"priority": 100}`
 
-### `POST /api/jobs/batch`
+### `POST /api/v1/jobs/batch`
 Bulk action on multiple jobs.
 
 **Request:**
@@ -194,13 +246,13 @@ Bulk action on multiple jobs.
 }
 ```
 
-### `POST /api/jobs/restart-failed`
+### `POST /api/v1/jobs/restart-failed`
 Restart all failed or cancelled jobs.
 
-### `POST /api/jobs/clear-completed`
+### `POST /api/v1/jobs/clear-completed`
 Archive all completed jobs from the active queue.
 
-### `POST /api/jobs/clear-history`
+### `POST /api/v1/jobs/clear-history`
 Archive terminal completed, failed, cancelled, and skipped
 jobs from the active table.
 
@@ -208,7 +260,7 @@ jobs from the active table.
 
 ## Engine
 
-### `GET /api/engine/status`
+### `GET /api/v1/engine/status`
 Get current operational status and limits.
 
 Response fields include:
@@ -220,24 +272,24 @@ Response fields include:
 - `blocked_reason`: `manual_paused`, `scheduled_pause`,
   `draining`, `workers_busy`, or `null`
 
-### `POST /api/engine/pause`
+### `POST /api/v1/engine/pause`
 Pause the engine. Active jobs continue; no new jobs are
 claimed.
 
-### `POST /api/engine/resume`
+### `POST /api/v1/engine/resume`
 Resume the engine.
 
-### `POST /api/engine/drain`
+### `POST /api/v1/engine/drain`
 Enter drain mode (finish active jobs, don't start new ones).
 
-### `POST /api/engine/stop-drain`
+### `POST /api/v1/engine/stop-drain`
 Cancel drain mode without changing scheduler pause state.
 
-### `POST /api/engine/restart`
+### `POST /api/v1/engine/restart`
 Pause briefly, cancel in-flight work, clear drain state, then
 resume claiming jobs.
 
-### `POST /api/engine/mode`
+### `POST /api/v1/engine/mode`
 Switch engine mode or apply manual overrides.
 
 **Request:**
@@ -253,35 +305,49 @@ Switch engine mode or apply manual overrides.
 
 ## Statistics
 
-### `GET /api/stats/aggregated`
+### `GET /api/v1/stats/aggregated`
 Total savings, job counts, and global efficiency.
 
-### `GET /api/stats/daily`
+### `GET /api/v1/stats/daily`
 Encode activity history for the last 30 days.
 
-### `GET /api/stats/savings`
+### `GET /api/v1/stats/savings`
 Detailed breakdown of storage savings.
 
 ---
 
 ## System
 
-### `GET /api/system/hardware`
+### `GET /api/v1/system/hardware`
 Detected hardware backend and codec support matrix. During
 startup this may be served from a valid hardware detection
 cache before a background refresh updates runtime state.
 
-### `GET /api/system/hardware/probe-log`
+### `GET /api/v1/system/hardware/probe-log`
 Full logs from the startup hardware probe.
 
-### `GET /api/system/resources`
+### `GET /api/v1/system/resources`
 Live telemetry: CPU, Memory, GPU utilization, and uptime.
 
-### `POST /api/system/backup`
+### `GET /api/v1/system/update`
+Return update metadata for the configured channel (`stable`,
+`rc`, or `nightly`), including install type, verification
+status, self-update eligibility, and package-manager guidance.
+
+### `POST /api/v1/system/update/check`
+Force-refresh update metadata from GitHub Releases.
+
+### `POST /api/v1/system/update/install`
+Start a verified update for eligible direct Linux/macOS binary
+installs. Active jobs trigger drain mode first. Docker,
+Homebrew, AUR, Windows, source, and unknown installs return
+guided update instructions instead of replacing files.
+
+### `POST /api/v1/system/backup`
 Download a gzip-compressed SQLite backup produced through
 SQLite's online backup path. Requires full access.
 
-### `GET /api/ready`
+### `GET /api/v1/ready`
 Readiness check. Returns `503` with structured error code
 `DATABASE_UNAVAILABLE` if SQLite is not usable.
 
@@ -293,26 +359,26 @@ Prometheus metrics endpoint. Disabled unless
 
 ## Library
 
-### `GET /api/library/intelligence`
+### `GET /api/v1/library/intelligence`
 Storage-focused recommendations: duplicates, remux
 opportunities, wasteful audio layouts, and
 commentary/descriptive-track cleanup candidates.
 
-### `GET /api/library/health`
+### `GET /api/v1/library/health`
 Current Library Doctor summary.
 
-### `POST /api/library/health/scan`
+### `POST /api/v1/library/health/scan`
 Start a full health scan. Overlapping full-library scans are
 rejected.
 
-### `GET /api/library/health/issues`
+### `GET /api/v1/library/health/issues`
 List current health issues.
 
 ---
 
 ## Events (SSE)
 
-### `GET /api/events`
+### `GET /api/v1/events`
 Real-time event stream. 
 
 **Emitted Events:**
