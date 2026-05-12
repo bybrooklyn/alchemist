@@ -936,6 +936,25 @@ paths:
           description: Skip reason counts
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/stats/top-reason-codes:
+    get:
+      summary: Top skip and failure reason codes within a sliding window
+      parameters:
+        - in: query
+          name: window
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 7d
+          description: Sliding window over which to aggregate counts.
+      responses:
+        "200":
+          description: Top skip and failure reason codes
+        "400":
+          description: Invalid window value
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/system/backup:
     post:
       summary: Download a compressed database backup
