@@ -44,6 +44,7 @@ documentation, or iteration.
 - Hash-only token storage, plaintext shown once at creation
 - Token management endpoints and Settings UI
 - Hand-maintained OpenAPI contract plus human API docs
+- ARR webhook tokens with limited `arr_webhook` scope
 
 ### Distribution Foundation
 - In-repo distribution metadata sources for:
@@ -77,13 +78,18 @@ documentation, or iteration.
 - Runtime settings now expose one-click SQLite backup as a gzip download backed by SQLite's online snapshot path
 - README / release documentation should treat database backup as shipped product surface, not roadmap work
 
+### Integration Surfaces
+- ARR webhook ingress accepts Sonarr/Radarr download/import events and reuses the standard enqueue-by-path rules
+- MCP v1 is read-only and exposes status, jobs, savings, scan state, and system health over stdio
+- Jellyfin plugin scaffold builds and listens for library add/update events, with dry-run and path translation controls
+
 ---
 
 ## Active Priorities
 
-### `0.3.1` RC Stability Follow-Through
+### `0.3.2` RC Stability Follow-Through
 - Keep the current in-flight backend/frontend/test delta focused on reliability, upgrade safety, and release hardening
-- Expand regression coverage for resume/restart/cancel flows, job-detail refresh semantics, settings projection, and intelligence actions
+- Expand regression coverage for resume/restart/cancel flows, job-detail refresh semantics, settings projection, integration hooks, and intelligence actions
 - Keep release docs, changelog entries, and support wording aligned with what the RC actually ships
 
 ### AMD AV1 Validation
@@ -140,18 +146,14 @@ documentation, or iteration.
 ### Distribution Follow-Ons
 - Flatpak / Snap packaging
 - Additional installer polish beyond the current Windows update-check flow
+- Optional Tauri desktop wrapper as a 1/10 focus item only: package the existing backend and web UI into a desktop shell someday, but do not treat it as a current goal, release blocker, or replacement for the native CLI/server/Docker paths
+- If this is ever explored, keep it as `alchemist-desktop` launching the existing server on a local free port first; tray controls, launch-at-login, and native notifications can wait
 - Only promote these if they become strategically important
 
-### *arr Webhook Ingress (INT-1)
-- Accept Sonarr/Radarr Download and Upgrade webhook payloads at `POST /api/webhooks/arr`
-- Translate container-relative paths through a configurable prefix; enqueue an analyze job on receipt
-- Authenticate via a dedicated `arr_webhook` API token class
-- Highest-intent integration for the dominant self-hosted media stack; promote when scheduling allows
-
 ### Jellyfin / Plex Refresh Hook (INT-2)
-- Fire a library-refresh API call after finalization so downstream players pick up the new file immediately
-- Configure per target (server URL, API key, section ID); bundle multiple finalizations within a short window
-- Start Jellyfin-only behind a config flag, add Plex after the pattern is proven
+- Jellyfin plugin path is implemented: completed Alchemist jobs can trigger a containing-directory refresh through Jellyfin's library monitor
+- Validate against a live Jellyfin 10.11 install and package the plugin release zip/manifest before calling the integration release-ready
+- Keep Plex as future work after the Jellyfin pattern is proven
 
 ### Prometheus Metrics (OBS-1)
 - Expose a `GET /metrics` endpoint behind a config flag (`metrics.enabled`, `metrics.bind`)

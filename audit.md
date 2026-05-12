@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-04-23
+Last updated: 2026-04-30
 
 ---
 
@@ -51,6 +51,18 @@ Last updated: 2026-04-23
 ---
 
 ### [P1-8] Cancel and delete requests can poison future job runs with leaked cancel markers
+
+**Status: RESOLVED**
+
+---
+
+### [P1-9] Race condition in job cancellation can lead to stuck "active" state
+
+**Status: RESOLVED**
+
+---
+
+### [P1-10] Arbitrary file read via manual enqueue API
 
 **Status: RESOLVED**
 
@@ -186,6 +198,12 @@ Last updated: 2026-04-23
 
 ---
 
+### [P2-23] Library reanalyze handler performs unbounded row loading
+
+**Status: RESOLVED**
+
+---
+
 ## Technical Debt
 
 ---
@@ -215,6 +233,24 @@ Last updated: 2026-04-23
 ---
 
 ### [TD-5] Correlated subquery for sort-by-size in job listing
+
+**Status: RESOLVED**
+
+---
+
+### [TD-6] Blocking synchronous calls in async handlers
+
+**Status: RESOLVED**
+
+---
+
+### [TD-7] Blocking Argon2 hashing in setup wizard
+
+**Status: RESOLVED**
+
+---
+
+### [TD-8] Blocking Argon2 verification in auth
 
 **Status: RESOLVED**
 
@@ -255,6 +291,18 @@ Last updated: 2026-04-23
 ---
 
 ### [RG-6] Cancelled backup downloads leave full SQLite snapshots behind in the temp directory
+
+**Status: RESOLVED**
+
+---
+
+### [RG-7] Performance bottleneck: Non-indexed date filters in stats queries
+
+**Status: RESOLVED**
+
+---
+
+### [RG-8] Silent unwrap_or_default() on serde_json in MCP server
 
 **Status: RESOLVED**
 

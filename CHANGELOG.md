@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [0.3.2-rc.2] - 2026-04-29
 
+### Integrations & Automation
+
+- Jellyfin plugin support now has a dedicated `jellyfin` token scope, event-stream access, completed-job detail lookup, reverse path translation, and containing-directory refresh requests.
+- Native update checks now support stable, RC, and nightly channels with signed release manifests, direct-binary install eligibility, drain-before-install behavior, and package-manager guidance for Docker/Homebrew/AUR/Windows/source installs.
+
 ### Performance & Startup
 
 - Hardware detection cache: successful hardware probes are persisted by OS, architecture, FFmpeg/FFprobe versions, hardware settings, and cache schema version so repeat boots can reuse a valid detection result immediately.

@@ -26,8 +26,10 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 - See exactly how much storage you have recovered in the savings dashboard.
 - Understand every skipped file immediately with plain-English explanations.
 - Get a ping when work finishes through Discord, Gotify, ntfy, Telegram, email, or a webhook, with quiet hours for non-critical events.
-- Create named API tokens for automation, with `read_only`, `arr_webhook`, and `full_access` access classes.
+- Create named API tokens for automation, with `read_only`, `arr_webhook`, `jellyfin`, and `full_access` access classes.
 - Accept Sonarr/Radarr download webhooks through a narrowed `arr_webhook` token and optional container path translations.
+- Connect Jellyfin with a narrowed plugin token for enqueue, completion events, job details, and library refresh.
+- Expose read-only operational context to local assistants through the MCP server.
 - Keep heavy jobs out of the way with a scheduler for off-peak hours.
 - Push urgent files to the front with the priority queue.
 - Switch the engine between background, balanced, and throughput modes without restarting the app.
@@ -115,6 +117,12 @@ specific port.
 
 On Windows, run `alchemist.exe` instead.
 
+Direct Linux/macOS binary installs can check for signed updates from the
+About dialog. Alchemist verifies the release manifest and asset checksum,
+backs up the database, drains active jobs, then restarts to apply eligible
+direct-binary updates. Docker, Homebrew, AUR, Windows, and source installs
+show the appropriate package-manager or manual update guidance instead.
+
 ### From Source
 
 For macOS and Linux:
@@ -169,6 +177,8 @@ alchemist plan /path/to/media --json
 - API automation can use bearer tokens created in **Settings → API Tokens**.
 - Read-only tokens are limited to observability and monitoring routes.
 - ARR webhooks should use the dedicated `arr_webhook` token class, not a full-access token.
+- Jellyfin plugins should use the dedicated `jellyfin` token class, not a full-access token.
+- MCP clients can launch `alchemist --mcp` for read-only engine, job, scan, savings, and system-health tools.
 
 ## Open Source
 
