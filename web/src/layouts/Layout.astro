@@ -17,7 +17,6 @@ const { title } = Astro.props;
         <meta charset="UTF-8" />
         <meta name="description" content="Alchemist Media Transcoder" />
         <meta name="viewport" content="width=device-width" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <meta name="generator" content={Astro.generator} />
         <title>{title}</title>
         <ClientRouter />
@@ -29,10 +28,9 @@ const { title } = Astro.props;
         <script is:inline>
             function initTheme() {
                 try {
-                    const theme = localStorage.getItem("theme");
-                    if (theme) {
-                        document.documentElement.setAttribute("data-color-profile", theme);
-                    } else {
+                    // Default to helios-orange if not set.
+                    // The actual theme will be applied by the components once loaded.
+                    if (!document.documentElement.getAttribute("data-color-profile")) {
                         document.documentElement.setAttribute("data-color-profile", "helios-orange");
                     }
                 } catch {

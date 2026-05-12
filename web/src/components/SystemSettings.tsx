@@ -15,6 +15,9 @@ interface SystemSettingsPayload {
     conversion_download_retention_hours: number;
     enable_telemetry: boolean;
     watch_enabled: boolean;
+    update_channel: "stable" | "rc" | "nightly";
+    update_auto_check: boolean;
+    update_check_interval_hours: number;
 }
 
 interface EngineStatus {
@@ -366,6 +369,72 @@ export default function SystemSettings() {
                         <p className="text-xs text-helios-slate">
                             Completed conversion files are kept until download, then cleaned up after this window.
                         </p>
+                    </label>
+                </div>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-helios-line/20 bg-helios-surface-soft/30 p-4">
+                <div>
+                    <h4 className="text-sm font-semibold text-helios-ink">Updates</h4>
+                    <p className="mt-1 text-xs text-helios-slate">
+                        Choose which release channel Alchemist checks and how often background update checks refresh.
+                    </p>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                    <label className="space-y-2">
+                        <span className="text-xs font-medium text-helios-slate">
+                            Release Channel
+                        </span>
+                        <select
+                            value={settings.update_channel}
+                            onChange={(e) => updateSettings("update_channel", e.target.value as SystemSettingsPayload["update_channel"])}
+                            className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-3 py-2 text-sm text-helios-ink"
+                        >
+                            <option value="stable">Stable</option>
+                            <option value="rc">Release Candidate</option>
+                            <option value="nightly">Nightly</option>
+                        </select>
+                    </label>
+
+                    <label className="space-y-2">
+                        <span className="text-xs font-medium text-helios-slate">
+                            Check Interval (hours)
+                        </span>
+                        <input
+                            type="number"
+                            min="1"
+                            max="168"
+                            step="1"
+                            value={settings.update_check_interval_hours}
+                            onChange={(e) => {
+                                const next = Number.parseInt(e.target.value, 10);
+                                if (!Number.isNaN(next)) {
+                                    updateSettings("update_check_interval_hours", next);
+                                }
+                            }}
+                            className="w-full rounded-lg border border-helios-line/30 bg-helios-surface px-3 py-2 text-sm text-helios-ink"
+                        />
+                    </label>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-helios-line/10 pt-3">
+                    <div>
+                        <h4 className="text-xs font-medium text-helios-slate">
+                            Automatic Checks
+                        </h4>
+                        <p className="text-xs text-helios-slate mt-1">
+                            Refresh update metadata in the background; installs still require confirmation.
+                        </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={settings.update_auto_check}
+                            onChange={(e) => updateSettings("update_auto_check", e.target.checked)}
+                            className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-helios-line/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-helios-ink after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-helios-ink after:border-helios-line/30 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-helios-solar"></div>
                     </label>
                 </div>
             </div>
