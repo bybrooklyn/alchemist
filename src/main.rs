@@ -995,6 +995,7 @@ async fn run() -> Result<()> {
         );
         let library_intelligence_cache = Arc::new(tokio::sync::Mutex::new(None));
         let library_health_scan_in_progress = Arc::new(AtomicBool::new(false));
+        let update_install_in_progress = Arc::new(AtomicBool::new(false));
         let server_result = alchemist::server::run_server(alchemist::server::RunServerArgs {
             db,
             config,
@@ -1012,6 +1013,7 @@ async fn run() -> Result<()> {
             library_scanner,
             library_intelligence_cache,
             library_health_scan_in_progress,
+            update_install_in_progress,
         })
         .await;
 

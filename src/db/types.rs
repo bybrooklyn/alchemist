@@ -89,6 +89,7 @@ pub struct Job {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub input_metadata_json: Option<String>,
+    pub source_device: Option<String>,
 }
 
 impl Job {
@@ -144,6 +145,7 @@ pub struct JobWithHealthIssueRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub input_metadata_json: Option<String>,
+    pub source_device: Option<String>,
     pub health_issues: String,
 }
 
@@ -163,6 +165,7 @@ impl JobWithHealthIssueRow {
                 created_at: self.created_at,
                 updated_at: self.updated_at,
                 input_metadata_json: self.input_metadata_json,
+                source_device: self.source_device,
             },
             self.health_issues,
         )
@@ -479,6 +482,12 @@ pub struct ReasonCodeCount {
     pub code: String,
     pub count: i64,
     pub last_seen: Option<String>,
+    /// OBS-3 polish: per-bucket count series for the configured window
+    /// (24h → 24 hourly bins; 7d → 7 daily bins; 30d → 30 daily bins).
+    /// Oldest bin first; sparkline renders left-to-right. `None` when
+    /// the caller did not request trends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<Vec<i64>>,
 }
 
 /// Detailed per-job encoding statistics

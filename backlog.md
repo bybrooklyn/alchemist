@@ -190,6 +190,17 @@ documentation, or iteration.
 - Attach a non-fatal warning to jobs that silently drop chapters and surface it in the detail modal
 - Catches a class of silent-quality-loss bugs that users otherwise notice weeks later
 
+### Review-Before-Replace Finalization (F-11)
+- Add a third `review` finalization mode that completes the encode but parks the output in a pending-review state
+- Job detail surfaces approve / keep-both / discard actions; source is never mutated until the operator explicitly approves
+- Persist the pending output path additively (column or table) and define a clear retention/cleanup policy for unreviewed outputs
+- Complementary to `F-1` Undo Last Encode: prevents regret before finalization rather than recovering after it
+
+### Bulk Actions Toolbar (UX-5)
+- When rows are selected in the jobs table, surface bulk actions (Cancel, Restart, Delete) in `JobsToolbar` instead of forcing per-row menu use
+- Reuse the existing `batch_jobs_handler` backend wiring — no new API surface required
+- First cut: render "Cancel (N)" when `selected.size > 0`; expand to Restart / Delete after the affordance lands
+
 ---
 
 ## Out of Scope

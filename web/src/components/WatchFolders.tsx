@@ -1,9 +1,45 @@
 import { useEffect, useMemo, useState } from "react";
-import { X, Play, Pencil } from "lucide-react";
+import { X, Play, Pencil, Eye } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import ServerDirectoryPicker from "./ui/ServerDirectoryPicker";
+
+interface LibraryPreviewSample {
+    path: string;
+    action: "skip" | "remux" | "encode" | "error";
+    reason: string;
+    size_bytes: number;
+}
+
+interface LibraryPreviewResponse {
+    scanned: number;
+    truncated: boolean;
+    counts: {
+        skip: number;
+        remux: number;
+        encode: number;
+        error: number;
+    };
+    bytes_under_consideration: {
+        skip: number;
+        remux: number;
+        encode: number;
+    };
+    samples: LibraryPreviewSample[];
+}
+
+function formatBytes(bytes: number): string {
+    if (bytes <= 0) return "0 B";
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 interface WatchDir {
     id: number;
@@ -73,6 +109,10 @@ export default function WatchFolders() {
     const [pickerOpen, setPickerOpen] = useState<boolean>(false);
     const [customizeDir, setCustomizeDir] = useState<WatchDir | null>(null);
     const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+    const [previewPath, setPreviewPath] = useState<string | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewData, setPreviewData] = useState<LibraryPreviewResponse | null>(null);
+    const [previewError, setPreviewError] = useState<string | null>(null);
 
     const builtinProfiles = useMemo(
         () => profiles.filter((profile) => profile.builtin),
@@ -166,12 +206,48 @@ export default function WatchFolders() {
         void refreshAll();
     }, []);
 
-    const triggerScan = async () => {
+    const openPreview = async (path: string) => {
+        setPreviewPath(path);
+        setPreviewData(null);
+        setPreviewError(null);
+        setPreviewLoading(true);
+        try {
+            const data = await apiJson<LibraryPreviewResponse>("/api/v1/library/preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path }),
+            });
+            setPreviewData(data);
+        } catch (e) {
+            const message = isApiError(e) ? e.message : "Failed to preview folder";
+            setPreviewError(message);
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const closePreview = () => {
+        setPreviewPath(null);
+        setPreviewData(null);
+        setPreviewError(null);
+        setPreviewLoading(false);
+    };
+
+    const triggerScan = async (forceFull = false) => {
         setScanning(true);
         setError(null);
         try {
-            await apiAction("/api/scan/start", { method: "POST" });
-            showToast({ kind: "success", title: "Scan", message: "Library scan started." });
+            const url = forceFull
+                ? "/api/scan/start?full=true"
+                : "/api/scan/start";
+            await apiAction(url, { method: "POST" });
+            showToast({
+                kind: "success",
+                title: "Scan",
+                message: forceFull
+                    ? "Full scan started — every file will be re-analyzed."
+                    : "Library scan started.",
+            });
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to start scan";
             setError(message);
@@ -380,14 +456,24 @@ export default function WatchFolders() {
                         Folders Alchemist scans and watches for new media.
                     </p>
                 </div>
-                <button
-                    onClick={() => void triggerScan()}
-                    disabled={loading || scanning}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
-                >
-                    <Play size={14} className={scanning ? "animate-spin" : ""} />
-                    {scanning ? "Scanning..." : "Scan Now"}
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => void triggerScan(true)}
+                        disabled={loading || scanning}
+                        title="Re-analyze every file, ignoring caches. Use after profile changes or if something looks stale."
+                        className="flex items-center gap-2 px-3 py-1.5 border border-helios-line/20 text-helios-slate hover:text-helios-ink hover:border-helios-solar/30 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                    >
+                        Force Full Scan
+                    </button>
+                    <button
+                        onClick={() => void triggerScan(false)}
+                        disabled={loading || scanning}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-helios-solar/10 hover:bg-helios-solar/20 text-helios-solar rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                    >
+                        <Play size={14} className={scanning ? "animate-spin" : ""} />
+                        {scanning ? "Scanning..." : "Scan Now"}
+                    </button>
+                </div>
             </div>
 
             {error && (
@@ -488,6 +574,14 @@ export default function WatchFolders() {
                                         </option>
                                     ))}
                                 </select>
+                                <button
+                                    type="button"
+                                    onClick={() => void openPreview(dir.path)}
+                                    className="inline-flex items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft"
+                                    title="Preview what Alchemist would do with this folder"
+                                >
+                                    <Eye size={14} />
+                                </button>
                                 <button
                                     type="button"
                                     onClick={() => openCustomizeModal(dir)}
@@ -682,6 +776,156 @@ export default function WatchFolders() {
                     setPickerOpen(false);
                 }}
             />
+
+            {previewPath !== null ? (
+                <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="preview-modal-title"
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) closePreview();
+                    }}
+                >
+                    <div className="w-full max-w-2xl rounded-xl border border-helios-line/20 bg-helios-surface p-6 shadow-2xl">
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                                <h3
+                                    id="preview-modal-title"
+                                    className="text-base font-semibold text-helios-ink"
+                                >
+                                    Plan preview
+                                </h3>
+                                <p
+                                    className="mt-1 break-all font-mono text-xs text-helios-slate"
+                                    title={previewPath}
+                                >
+                                    {previewPath}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closePreview}
+                                className="shrink-0 rounded-lg p-1.5 text-helios-slate hover:text-helios-ink"
+                                aria-label="Close preview"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="mt-4">
+                            {previewLoading ? (
+                                <div className="py-12 text-center text-sm text-helios-slate animate-pulse">
+                                    Probing files and running the planner...
+                                </div>
+                            ) : previewError ? (
+                                <div className="rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error">
+                                    {previewError}
+                                </div>
+                            ) : previewData ? (
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-3 py-2">
+                                            <p className="text-xs uppercase tracking-wide text-helios-slate">
+                                                Skip
+                                            </p>
+                                            <p className="mt-1 text-lg font-semibold text-helios-ink">
+                                                {previewData.counts.skip}
+                                            </p>
+                                            <p className="text-[10px] text-helios-slate/70">
+                                                {formatBytes(previewData.bytes_under_consideration.skip)}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 px-3 py-2">
+                                            <p className="text-xs uppercase tracking-wide text-helios-slate">
+                                                Remux
+                                            </p>
+                                            <p className="mt-1 text-lg font-semibold text-helios-ink">
+                                                {previewData.counts.remux}
+                                            </p>
+                                            <p className="text-[10px] text-helios-slate/70">
+                                                {formatBytes(previewData.bytes_under_consideration.remux)}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg border border-helios-line/20 bg-helios-solar/10 px-3 py-2">
+                                            <p className="text-xs uppercase tracking-wide text-helios-solar">
+                                                Encode
+                                            </p>
+                                            <p className="mt-1 text-lg font-semibold text-helios-ink">
+                                                {previewData.counts.encode}
+                                            </p>
+                                            <p className="text-[10px] text-helios-slate/70">
+                                                {formatBytes(previewData.bytes_under_consideration.encode)}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-xs text-helios-slate">
+                                        <span>
+                                            Scanned {previewData.scanned} file
+                                            {previewData.scanned === 1 ? "" : "s"}
+                                            {previewData.counts.error > 0
+                                                ? ` (${previewData.counts.error} probe error${previewData.counts.error === 1 ? "" : "s"})`
+                                                : ""}
+                                        </span>
+                                        {previewData.truncated ? (
+                                            <span className="rounded bg-helios-solar/10 px-2 py-0.5 text-helios-solar font-medium">
+                                                Partial preview — folder contains more files
+                                            </span>
+                                        ) : null}
+                                    </div>
+
+                                    <div className="max-h-72 overflow-y-auto rounded-lg border border-helios-line/20">
+                                        <table className="w-full text-xs">
+                                            <thead className="sticky top-0 bg-helios-surface text-helios-slate">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left font-medium">Action</th>
+                                                    <th className="px-3 py-2 text-left font-medium">File</th>
+                                                    <th className="px-3 py-2 text-left font-medium">Reason</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {previewData.samples.map((s) => (
+                                                    <tr
+                                                        key={s.path}
+                                                        className="border-t border-helios-line/10"
+                                                    >
+                                                        <td className="px-3 py-2 align-top">
+                                                            <span
+                                                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                                                                    s.action === "encode"
+                                                                        ? "bg-helios-solar/15 text-helios-solar"
+                                                                        : s.action === "remux"
+                                                                            ? "bg-helios-line/20 text-helios-ink"
+                                                                            : s.action === "skip"
+                                                                                ? "bg-helios-surface-soft text-helios-slate"
+                                                                                : "bg-status-error/15 text-status-error"
+                                                                }`}
+                                                            >
+                                                                {s.action}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-3 py-2 align-top font-mono text-helios-slate break-all">
+                                                            {s.path}
+                                                        </td>
+                                                        <td className="px-3 py-2 align-top text-helios-slate">
+                                                            {s.reason}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <p className="text-[11px] text-helios-slate/70">
+                                        Nothing has been queued. Use Scan Now to actually enqueue this folder.
+                                    </p>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

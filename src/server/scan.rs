@@ -5,7 +5,7 @@ use super::{
     refresh_file_watcher, save_config_or_response,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -14,6 +14,7 @@ use futures::{FutureExt, StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -53,8 +54,23 @@ pub(crate) async fn scan_handler(State(state): State<Arc<AppState>>) -> impl Int
     api_ok_response()
 }
 
-pub(crate) async fn start_scan_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.library_scanner.start_scan().await {
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct StartScanParams {
+    /// PERF-3: when `true`, bypass probe cache reads and the aggressive
+    /// directory pruning shortcut for this scan. Defaults to `false`.
+    #[serde(default)]
+    pub full: bool,
+}
+
+pub(crate) async fn start_scan_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<StartScanParams>,
+) -> impl IntoResponse {
+    match state
+        .library_scanner
+        .start_scan_with_options(params.full)
+        .await
+    {
         Ok(_) => api_accepted_response(),
         Err(e) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -69,6 +85,219 @@ pub(crate) async fn get_scan_status_handler(
 ) -> impl IntoResponse {
     axum::Json::<crate::system::scanner::ScanStatus>(state.library_scanner.get_status().await)
         .into_response()
+}
+
+// F-2 — Library plan preview.
+//
+// Walks `path` (recursively, bounded by `max_files`), runs the planner in
+// dry-run mode against each discovered file, and returns counts plus a
+// short sample so users can see what Alchemist *would* do before
+// enqueueing a watch folder. No database mutation, no enqueueing.
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LibraryPreviewRequest {
+    pub path: String,
+    #[serde(default)]
+    pub max_files: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LibraryPreviewSample {
+    pub path: String,
+    pub action: String,
+    pub reason: String,
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub(crate) struct LibraryPreviewCounts {
+    pub skip: usize,
+    pub remux: usize,
+    pub encode: usize,
+    pub error: usize,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub(crate) struct LibraryPreviewBytes {
+    pub skip: i64,
+    pub remux: i64,
+    pub encode: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LibraryPreviewResponse {
+    pub scanned: usize,
+    pub truncated: bool,
+    pub counts: LibraryPreviewCounts,
+    pub bytes_under_consideration: LibraryPreviewBytes,
+    pub samples: Vec<LibraryPreviewSample>,
+}
+
+const PREVIEW_DEFAULT_MAX_FILES: usize = 200;
+const PREVIEW_SAMPLE_LIMIT: usize = 20;
+
+pub(crate) async fn preview_library_path_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(payload): axum::Json<LibraryPreviewRequest>,
+) -> impl IntoResponse {
+    let max_files = payload
+        .max_files
+        .unwrap_or(PREVIEW_DEFAULT_MAX_FILES)
+        .clamp(1, 2000);
+
+    let preview_root = std::path::PathBuf::from(&payload.path);
+    if !preview_root.exists() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "PREVIEW_PATH_MISSING",
+            format!("Path does not exist: {}", payload.path),
+        );
+    }
+    if !preview_root.is_dir() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "PREVIEW_NOT_DIRECTORY",
+            format!("Preview path must be a directory: {}", payload.path),
+        );
+    }
+
+    let scan_target = preview_root.clone();
+    let files = match tokio::task::spawn_blocking(move || {
+        let scanner = crate::media::scanner::Scanner::new();
+        scanner.scan_with_recursion(vec![(scan_target, true)])
+    })
+    .await
+    {
+        Ok(files) => files,
+        Err(err) => {
+            error!("Preview scan worker failed: {err}");
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PREVIEW_SCAN_FAILED",
+                err.to_string(),
+            );
+        }
+    };
+
+    let truncated = files.len() > max_files;
+    let to_process: Vec<_> = files.into_iter().take(max_files).collect();
+
+    let file_settings = state
+        .db
+        .get_file_settings()
+        .await
+        .unwrap_or_else(|_| crate::media::pipeline::default_file_settings());
+    let config_snapshot = Arc::new(state.config.read().await.clone());
+    let hw_info = state.hardware_state.snapshot().await;
+    let planner = crate::media::planner::BasicPlanner::new(config_snapshot, hw_info);
+    let analyzer = crate::media::analyzer::FfmpegAnalyzer;
+    use crate::media::pipeline::Planner as _;
+
+    let mut counts = LibraryPreviewCounts::default();
+    let mut bytes = LibraryPreviewBytes::default();
+    let mut samples = Vec::new();
+
+    for discovered in &to_process {
+        let path = &discovered.path;
+        let path_string = path.display().to_string();
+
+        if let Ok(Some(reason)) =
+            crate::media::pipeline::skip_reason_for_discovered_path(&state.db, path, &file_settings)
+                .await
+        {
+            counts.skip += 1;
+            if samples.len() < PREVIEW_SAMPLE_LIMIT {
+                samples.push(LibraryPreviewSample {
+                    path: path_string,
+                    action: "skip".to_string(),
+                    reason: reason.to_string(),
+                    size_bytes: 0,
+                });
+            }
+            continue;
+        }
+
+        let analysis = match analyzer.analyze_with_cache(&state.db, path).await {
+            Ok(a) => a,
+            Err(err) => {
+                counts.error += 1;
+                if samples.len() < PREVIEW_SAMPLE_LIMIT {
+                    samples.push(LibraryPreviewSample {
+                        path: path_string,
+                        action: "error".to_string(),
+                        reason: err.to_string(),
+                        size_bytes: 0,
+                    });
+                }
+                continue;
+            }
+        };
+
+        let output_path =
+            file_settings.output_path_for_source(path, discovered.source_root.as_deref());
+        let profile = state
+            .db
+            .get_profile_for_path(&path.to_string_lossy())
+            .await
+            .ok()
+            .flatten();
+
+        let plan = match planner
+            .plan(&analysis, &output_path, profile.as_ref())
+            .await
+        {
+            Ok(p) => p,
+            Err(err) => {
+                counts.error += 1;
+                if samples.len() < PREVIEW_SAMPLE_LIMIT {
+                    samples.push(LibraryPreviewSample {
+                        path: path_string,
+                        action: "error".to_string(),
+                        reason: err.to_string(),
+                        size_bytes: 0,
+                    });
+                }
+                continue;
+            }
+        };
+
+        let size_bytes = analysis.metadata.size_bytes as i64;
+        let (action, reason) = match &plan.decision {
+            crate::media::pipeline::TranscodeDecision::Skip { reason } => {
+                counts.skip += 1;
+                bytes.skip = bytes.skip.saturating_add(size_bytes);
+                ("skip".to_string(), reason.clone())
+            }
+            crate::media::pipeline::TranscodeDecision::Remux { reason } => {
+                counts.remux += 1;
+                bytes.remux = bytes.remux.saturating_add(size_bytes);
+                ("remux".to_string(), reason.clone())
+            }
+            crate::media::pipeline::TranscodeDecision::Transcode { reason } => {
+                counts.encode += 1;
+                bytes.encode = bytes.encode.saturating_add(size_bytes);
+                ("encode".to_string(), reason.clone())
+            }
+        };
+
+        if samples.len() < PREVIEW_SAMPLE_LIMIT {
+            samples.push(LibraryPreviewSample {
+                path: path_string,
+                action,
+                reason,
+                size_bytes,
+            });
+        }
+    }
+
+    let response = LibraryPreviewResponse {
+        scanned: to_process.len(),
+        truncated,
+        counts,
+        bytes_under_consideration: bytes,
+        samples,
+    };
+    axum::Json(response).into_response()
 }
 
 // Library health handlers
@@ -217,10 +446,26 @@ async fn run_library_health_scan(db: Arc<crate::db::Db>) {
 
 pub(crate) async fn start_library_health_scan_handler(
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    if state
+        .library_health_scan_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "HEALTH_SCAN_IN_PROGRESS",
+            "A library health scan is already running",
+        );
+    }
+
     let db = state.db.clone();
+    let flag = state.library_health_scan_in_progress.clone();
     tokio::spawn(async move {
+        // run_library_health_scan already wraps its body in AssertUnwindSafe.catch_unwind(),
+        // so a panic in the inner task still returns and clears the flag here.
         run_library_health_scan(db).await;
+        flag.store(false, Ordering::SeqCst);
     });
 
     (

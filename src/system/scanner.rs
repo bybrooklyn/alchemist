@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::Result;
-use crate::media::scanner::Scanner;
+use crate::media::scanner::{PruneOptions, Scanner};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
@@ -41,6 +42,16 @@ impl LibraryScanner {
     }
 
     pub async fn start_scan(&self) -> Result<()> {
+        self.start_scan_with_options(false).await
+    }
+
+    /// PERF-3: `force_full = true` bypasses every shortcut. Probe cache rows
+    /// under the scan target paths are deleted first so the analyzer can't
+    /// reuse stale entries, and aggressive directory pruning is disabled for
+    /// the duration of this scan regardless of the scanner config flag.
+    /// `last_scanned_at` is still updated after a successful run so the next
+    /// non-force scan benefits.
+    pub async fn start_scan_with_options(&self, force_full: bool) -> Result<()> {
         let mut status = self.status.lock().await;
         if status.is_running {
             return Ok(());
@@ -55,7 +66,11 @@ impl LibraryScanner {
         let config = self.config.clone();
 
         tokio::spawn(async move {
-            info!("Starting full library scan...");
+            if force_full {
+                info!("Starting full library scan (force-full: cache + pruning bypassed)...");
+            } else {
+                info!("Starting library scan...");
+            }
 
             let watch_dirs = match db.get_watch_dirs().await {
                 Ok(dirs) => dirs,
@@ -76,16 +91,65 @@ impl LibraryScanner {
             for dir in config_dirs {
                 scan_targets.insert(PathBuf::from(dir), true);
             }
-            for watch_dir in watch_dirs {
+            for watch_dir in &watch_dirs {
                 scan_targets
                     .entry(PathBuf::from(&watch_dir.path))
                     .and_modify(|recursive| *recursive |= watch_dir.is_recursive)
                     .or_insert(watch_dir.is_recursive);
             }
 
-            let mut all_scanned = Vec::new();
+            // Force-full: wipe probe cache rows under each target so the
+            // analyzer is forced to re-probe every file from scratch.
+            if force_full {
+                for path in scan_targets.keys() {
+                    if let Some(prefix) = path.to_str() {
+                        match db.clear_media_probe_cache_under(prefix).await {
+                            Ok(n) if n > 0 => {
+                                info!(
+                                    "Force-full scan: cleared {} probe cache rows under {}",
+                                    n, prefix
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!(
+                                "Force-full scan: failed to clear probe cache for {}: {}",
+                                prefix, e
+                            ),
+                        }
+                    }
+                }
+            }
 
-            for (path, recursive) in scan_targets {
+            // Build PruneOptions based on config + force_full override.
+            let prune_enabled = if force_full {
+                false
+            } else {
+                let cfg = config.read().await;
+                cfg.scanner.aggressive_directory_pruning
+            };
+            let last_scanned_map = if prune_enabled {
+                db.get_watch_dir_last_scanned_map()
+                    .await
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+            let mut prune = PruneOptions {
+                enabled: prune_enabled,
+                last_scanned_by_root: HashMap::new(),
+            };
+            if prune_enabled {
+                for (path, last_scanned) in last_scanned_map {
+                    if let Some(ts) = last_scanned {
+                        prune.last_scanned_by_root.insert(PathBuf::from(path), ts);
+                    }
+                }
+            }
+
+            let mut all_scanned = Vec::new();
+            let mut completed_roots: Vec<PathBuf> = Vec::new();
+
+            for (path, recursive) in &scan_targets {
                 if !path.exists() {
                     warn!("Watch directory does not exist: {:?}", path);
                     continue;
@@ -97,9 +161,11 @@ impl LibraryScanner {
                 }
 
                 let scan_target = path.clone();
+                let recursive = *recursive;
+                let prune_for_walk = prune.clone();
                 let files = match tokio::task::spawn_blocking(move || {
                     let scanner = Scanner::new();
-                    scanner.scan_with_recursion(vec![(scan_target, recursive)])
+                    scanner.scan_with_options(vec![(scan_target, recursive)], &prune_for_walk)
                 })
                 .await
                 {
@@ -109,6 +175,7 @@ impl LibraryScanner {
                         continue;
                     }
                 };
+                completed_roots.push(path.clone());
                 all_scanned.extend(files);
             }
 
@@ -134,6 +201,21 @@ impl LibraryScanner {
                 if added % 10 == 0 {
                     let mut s = scanner_self.lock().await;
                     s.files_added = added;
+                }
+            }
+
+            // Record completion timestamps only for roots that finished
+            // their walk without erroring out — partial scans must not
+            // poison the pruning baseline.
+            let now_ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            for root in &completed_roots {
+                if let Some(path_str) = root.to_str() {
+                    if let Err(e) = db.update_watch_dir_last_scanned_at(path_str, now_ts).await {
+                        warn!("Failed to update last_scanned_at for {}: {}", path_str, e);
+                    }
                 }
             }
 

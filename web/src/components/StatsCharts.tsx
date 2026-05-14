@@ -48,10 +48,12 @@ interface ReasonCodeCount {
     code: string;
     count: number;
     last_seen: string | null;
+    trend?: number[];
 }
 
 interface TopReasonCodesResponse {
     window_days: number;
+    num_buckets?: number;
     skip: ReasonCodeCount[];
     failure: ReasonCodeCount[];
 }
@@ -76,7 +78,7 @@ export default function StatsCharts() {
         const fetchReasons = async () => {
             try {
                 const data = await apiJson<TopReasonCodesResponse>(
-                    `/api/stats/top-reason-codes?window=${reasonWindow}`,
+                    `/api/stats/top-reason-codes?window=${reasonWindow}&trends=true`,
                 );
                 if (!cancelled) {
                     setTopReasons(data);
@@ -196,6 +198,42 @@ export default function StatsCharts() {
         colorClass: string;
     }
 
+    const Sparkline = ({
+        values,
+        ariaLabel,
+    }: {
+        values: number[];
+        ariaLabel: string;
+    }) => {
+        const width = 80;
+        const height = 20;
+        if (values.length === 0) return null;
+        const max = Math.max(...values, 1);
+        const step = values.length > 1 ? width / (values.length - 1) : 0;
+        const points = values
+            .map((v, i) => `${(i * step).toFixed(1)},${(height - (v / max) * height).toFixed(1)}`)
+            .join(" ");
+        return (
+            <svg
+                role="img"
+                aria-label={ariaLabel}
+                width={width}
+                height={height}
+                viewBox={`0 0 ${width} ${height}`}
+                className="block"
+            >
+                <polyline
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.25"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={points}
+                />
+            </svg>
+        );
+    };
+
     const ReasonTable = ({
         title,
         rows,
@@ -204,45 +242,65 @@ export default function StatsCharts() {
         title: string;
         rows: ReasonCodeCount[];
         codeParam: "reason_code" | "failure_code";
-    }) => (
-        <div>
-            <h4 className="text-sm font-bold text-helios-ink mb-3 uppercase tracking-wide">{title}</h4>
-            {rows.length === 0 ? (
-                <p className="text-sm text-helios-slate">No data in this window.</p>
-            ) : (
-                <table className="w-full text-sm">
-                    <thead>
-                        <tr className="border-b border-helios-line/40">
-                            <th className="text-left py-2 px-2 text-helios-slate font-medium">Code</th>
-                            <th className="text-right py-2 px-2 text-helios-slate font-medium">Count</th>
-                            <th className="text-right py-2 px-2 text-helios-slate font-medium">Last Seen</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map((row) => (
-                            <tr
-                                key={row.code}
-                                className="border-b border-helios-line/20 hover:bg-helios-surface-soft transition-colors"
-                            >
-                                <td className="py-2 px-2">
-                                    <a
-                                        href={`/jobs?${codeParam}=${encodeURIComponent(row.code)}`}
-                                        className="font-mono text-helios-ink hover:underline"
-                                    >
-                                        {row.code}
-                                    </a>
-                                </td>
-                                <td className="py-2 px-2 text-right font-mono text-helios-ink">{row.count}</td>
-                                <td className="py-2 px-2 text-right text-helios-slate text-xs">
-                                    {row.last_seen ? formatDate(row.last_seen) : "—"}
-                                </td>
+    }) => {
+        const showTrend = rows.some((r) => Array.isArray(r.trend) && r.trend.length > 0);
+        return (
+            <div>
+                <h4 className="text-sm font-bold text-helios-ink mb-3 uppercase tracking-wide">{title}</h4>
+                {rows.length === 0 ? (
+                    <p className="text-sm text-helios-slate">No data in this window.</p>
+                ) : (
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-helios-line/40">
+                                <th className="text-left py-2 px-2 text-helios-slate font-medium">Code</th>
+                                <th className="text-right py-2 px-2 text-helios-slate font-medium">Count</th>
+                                {showTrend ? (
+                                    <th className="py-2 px-2 text-helios-slate font-medium text-right">Trend</th>
+                                ) : null}
+                                <th className="text-right py-2 px-2 text-helios-slate font-medium">Last Seen</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
-            )}
-        </div>
-    );
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr
+                                    key={row.code}
+                                    className="border-b border-helios-line/20 hover:bg-helios-surface-soft transition-colors"
+                                >
+                                    <td className="py-2 px-2">
+                                        <a
+                                            href={`/jobs?${codeParam}=${encodeURIComponent(row.code)}`}
+                                            className="font-mono text-helios-ink hover:underline"
+                                        >
+                                            {row.code}
+                                        </a>
+                                    </td>
+                                    <td className="py-2 px-2 text-right font-mono text-helios-ink">{row.count}</td>
+                                    {showTrend ? (
+                                        <td className="py-2 px-2 text-right text-helios-slate/70">
+                                            {row.trend && row.trend.length > 0 ? (
+                                                <span className="inline-block">
+                                                    <Sparkline
+                                                        values={row.trend}
+                                                        ariaLabel={`Trend for ${row.code}`}
+                                                    />
+                                                </span>
+                                            ) : (
+                                                <span className="text-helios-slate/40">—</span>
+                                            )}
+                                        </td>
+                                    ) : null}
+                                    <td className="py-2 px-2 text-right text-helios-slate text-xs">
+                                        {row.last_seen ? formatDate(row.last_seen) : "—"}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+        );
+    };
 
     const MetricCard = ({ icon: Icon, label, value, colorClass }: MetricCardProps) => (
         <div className="p-4 rounded-xl bg-helios-surface-soft border border-helios-line/20 flex items-center gap-3">

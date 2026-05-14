@@ -117,6 +117,7 @@ where
         library_intelligence_cache: Arc::new(tokio::sync::Mutex::new(None)),
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress: Arc::new(AtomicBool::new(false)),
+        update_install_in_progress: Arc::new(AtomicBool::new(false)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3432,5 +3433,40 @@ async fn watch_dir_paths_are_canonicalized_and_deduplicated()
     );
 
     cleanup_paths(&[watch_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn library_health_scan_returns_conflict_when_already_running()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::Ordering;
+
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    // Simulate an in-flight scan by flipping the atomic directly. The handler
+    // uses compare_exchange, so the second call must observe the latch and
+    // return a CONFLICT response with HEALTH_SCAN_IN_PROGRESS.
+    state
+        .library_health_scan_in_progress
+        .store(true, Ordering::SeqCst);
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/library/health/scan",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_text(response).await;
+    assert!(
+        body.contains("HEALTH_SCAN_IN_PROGRESS"),
+        "expected HEALTH_SCAN_IN_PROGRESS code, got body: {body}"
+    );
+
+    cleanup_paths(&[config_path, db_path]);
     Ok(())
 }

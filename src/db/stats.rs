@@ -29,9 +29,11 @@ impl Db {
     pub async fn get_stats(&self) -> Result<serde_json::Value> {
         let pool = &self.pool;
         timed_query("get_stats", || async {
-            let stats = sqlx::query("SELECT status, count(*) as count FROM jobs GROUP BY status")
-                .fetch_all(pool)
-                .await?;
+            let stats = sqlx::query(
+                "SELECT status, count(*) as count FROM jobs WHERE archived = 0 GROUP BY status",
+            )
+            .fetch_all(pool)
+            .await?;
 
             let mut map = serde_json::Map::new();
             for row in stats {
@@ -373,7 +375,8 @@ impl Db {
                     COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS completed,
                     COALESCE(SUM(CASE WHEN status = 'failed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS failed,
                     COALESCE(SUM(CASE WHEN status = 'skipped' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS skipped
-                 FROM jobs",
+                 FROM jobs
+                 WHERE archived = 0",
             )
             .fetch_one(pool)
             .await?;
@@ -489,6 +492,7 @@ impl Db {
                     code: row.get("code"),
                     count: row.get("count"),
                     last_seen: row.get("last_seen"),
+                    trend: None,
                 })
                 .collect())
         })
@@ -521,11 +525,100 @@ impl Db {
                     code: row.get("code"),
                     count: row.get("count"),
                     last_seen: row.get("last_seen"),
+                    trend: None,
                 })
                 .collect())
         })
         .await
     }
+
+    /// OBS-3 trend support: returns `(code -> bucket counts)` over the
+    /// window. Buckets are 1-hour wide for a 24h window and 1-day wide
+    /// otherwise. The bucket array is always exactly `num_buckets` long
+    /// and ordered oldest → newest so it can render directly as a
+    /// sparkline. Bucket 0 is the oldest, bucket `num_buckets-1` is
+    /// the most recent.
+    pub async fn get_skip_reason_trend(
+        &self,
+        window_days: i32,
+        num_buckets: usize,
+    ) -> Result<std::collections::HashMap<String, Vec<i64>>> {
+        let bucket_seconds = bucket_seconds_for(window_days, num_buckets);
+        let window = format!("-{} days", window_days.max(1));
+        let rows = sqlx::query(
+            "SELECT COALESCE(reason_code, action) AS code,
+                    CAST((strftime('%s','now') - strftime('%s', created_at)) AS INTEGER) AS age_secs
+             FROM decisions
+             WHERE action = 'skip'
+               AND created_at >= datetime('now', ?)",
+        )
+        .bind(&window)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(bucketize_rows(
+            rows,
+            bucket_seconds,
+            num_buckets,
+            "code",
+            "age_secs",
+        ))
+    }
+
+    pub async fn get_failure_code_trend(
+        &self,
+        window_days: i32,
+        num_buckets: usize,
+    ) -> Result<std::collections::HashMap<String, Vec<i64>>> {
+        let bucket_seconds = bucket_seconds_for(window_days, num_buckets);
+        let window = format!("-{} days", window_days.max(1));
+        let rows = sqlx::query(
+            "SELECT code,
+                    CAST((strftime('%s','now') - strftime('%s', updated_at)) AS INTEGER) AS age_secs
+             FROM job_failure_explanations
+             WHERE updated_at >= datetime('now', ?)",
+        )
+        .bind(&window)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(bucketize_rows(
+            rows,
+            bucket_seconds,
+            num_buckets,
+            "code",
+            "age_secs",
+        ))
+    }
+}
+
+fn bucket_seconds_for(window_days: i32, num_buckets: usize) -> i64 {
+    let total_seconds = (window_days.max(1) as i64) * 86_400;
+    (total_seconds / num_buckets.max(1) as i64).max(1)
+}
+
+fn bucketize_rows(
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+    bucket_seconds: i64,
+    num_buckets: usize,
+    code_col: &str,
+    age_col: &str,
+) -> std::collections::HashMap<String, Vec<i64>> {
+    let mut out: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    for row in rows {
+        let code: String = row.get(code_col);
+        let age: i64 = row.get(age_col);
+        if age < 0 {
+            continue;
+        }
+        // Bucket 0 = oldest. Convert "seconds ago" → bucket index.
+        let bucket_from_recent = (age / bucket_seconds) as usize;
+        if bucket_from_recent >= num_buckets {
+            continue;
+        }
+        let bucket_index = num_buckets - 1 - bucket_from_recent;
+        let entry = out.entry(code).or_insert_with(|| vec![0; num_buckets]);
+        entry[bucket_index] += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -614,6 +707,14 @@ mod tests {
         assert_eq!(stats.total_input_size, 1000);
         assert_eq!(stats.total_output_size, 400);
         assert_eq!(stats.avg_vmaf, Some(80.0));
+
+        // get_stats() must also drop archived rows from its status map.
+        let raw_stats = db.get_stats().await?;
+        let completed = raw_stats
+            .get("completed")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        assert_eq!(completed, 1, "get_stats should exclude archived jobs");
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

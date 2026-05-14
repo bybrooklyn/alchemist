@@ -170,6 +170,11 @@ pub struct AppState {
     pub update_status_cache:
         Arc<tokio::sync::Mutex<Option<(crate::update::UpdateStatus, std::time::Instant)>>>,
     pub library_health_scan_in_progress: Arc<AtomicBool>,
+    /// Set while `install_system_update_handler` is staging and spawning the
+    /// helper. Prevents two concurrent installers from racing the running
+    /// binary. Cleared via RAII guard on every early return; deliberately
+    /// leaked on the success path because the process is about to exit.
+    pub update_install_in_progress: Arc<AtomicBool>,
     pub(crate) login_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) global_rate_limiter: Mutex<HashMap<IpAddr, RateLimitEntry>>,
     pub(crate) sse_connections: Arc<std::sync::atomic::AtomicUsize>,
@@ -200,6 +205,7 @@ pub struct RunServerArgs {
     pub library_intelligence_cache:
         Arc<tokio::sync::Mutex<Option<(serde_json::Value, std::time::Instant)>>>,
     pub library_health_scan_in_progress: Arc<AtomicBool>,
+    pub update_install_in_progress: Arc<AtomicBool>,
 }
 
 const DEFAULT_SERVER_PORT: u16 = 3000;
@@ -293,6 +299,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         library_scanner,
         library_intelligence_cache,
         library_health_scan_in_progress,
+        update_install_in_progress,
     } = args;
     #[cfg(not(feature = "embed-web"))]
     {
@@ -373,6 +380,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         library_intelligence_cache,
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress,
+        update_install_in_progress,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -868,6 +876,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             get(get_hardware_probe_log_handler),
         )
         .route("/library/intelligence", get(library_intelligence_handler))
+        .route("/library/preview", post(preview_library_path_handler))
         .route("/library/reanalyze", post(reanalyze_library_root_handler))
         .route("/library/health", get(library_health_handler))
         .route(

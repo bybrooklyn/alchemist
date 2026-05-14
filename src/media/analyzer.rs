@@ -56,6 +56,7 @@ struct ProbeCacheKey {
     mtime_ns: i64,
     size_bytes: i64,
     probe_version: String,
+    file_id: Option<String>,
 }
 
 async fn ffprobe_version_marker() -> String {
@@ -89,6 +90,23 @@ fn file_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
 
 fn file_size_i64(metadata: &std::fs::Metadata) -> i64 {
     i64::try_from(metadata.len()).unwrap_or(i64::MAX)
+}
+
+/// Optional secondary identity hint for the probe cache (PERF-3).
+/// Unix: inode from `MetadataExt::ino()`. Windows: not exposed by stdlib
+/// without extra ffi work, so we return `None` and rely on (path, size, mtime)
+/// alone. Returning `None` always degrades gracefully.
+fn file_id_marker(metadata: &std::fs::Metadata) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!("ino:{}", metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -338,6 +356,7 @@ impl FfmpegAnalyzer {
             mtime_ns: file_mtime_ns(&fs_metadata),
             size_bytes: file_size_i64(&fs_metadata),
             probe_version,
+            file_id: file_id_marker(&fs_metadata),
         })
     }
 
@@ -386,12 +405,13 @@ impl FfmpegAnalyzer {
         match serde_json::to_string(&analysis) {
             Ok(serialized) => {
                 if let Err(err) = db
-                    .upsert_media_probe_cache(
+                    .upsert_media_probe_cache_with_file_id(
                         &cache_key.input_path,
                         cache_key.mtime_ns,
                         cache_key.size_bytes,
                         &cache_key.probe_version,
                         &serialized,
+                        cache_key.file_id.as_deref(),
                     )
                     .await
                 {

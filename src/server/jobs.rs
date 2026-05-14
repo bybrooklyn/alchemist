@@ -160,7 +160,7 @@ pub(crate) async fn enqueue_job_from_submitted_path(
 
     let mut is_allowed = false;
     for root in allowed_roots {
-        if let Ok(canonical_root) = std::fs::canonicalize(&root) {
+        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await {
             if canonical_path.starts_with(&canonical_root) {
                 is_allowed = true;
                 break;
@@ -1081,11 +1081,23 @@ pub(crate) async fn clear_history_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ClearHistoryParams>,
 ) -> impl IntoResponse {
-    let statuses = params.status.map(|s| {
-        s.split(',')
-            .filter_map(|part| part.parse::<JobState>().ok())
-            .collect::<Vec<_>>()
-    });
+    let statuses = match params.status {
+        Some(raw) => {
+            let parsed: Vec<JobState> = raw
+                .split(',')
+                .filter_map(|part| part.parse::<JobState>().ok())
+                .collect();
+            if !raw.trim().is_empty() && parsed.is_empty() {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_STATUS_FILTER",
+                    "status filter contained no recognised values",
+                );
+            }
+            Some(parsed)
+        }
+        None => None,
+    };
 
     match state
         .db

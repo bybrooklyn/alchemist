@@ -650,6 +650,7 @@ mod tests {
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 input_metadata_json: None,
+                source_device: None,
             })
             .await?;
         let response = handle(
