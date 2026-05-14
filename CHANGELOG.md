@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2-rc.3] - 2026-05-14
+
+### Performance & Reliability
+
+- Stats top-reason trends now use dedicated indexes on `decisions(created_at, action)` and `job_failure_explanations(updated_at)` (schema 16), preventing full table scans on the Statistics page that could leave it loading indefinitely on large libraries.
+- The Statistics page now uses `Promise.allSettled` so a slow or failed endpoint never freezes the whole view; partial results render alongside a visible error state.
+
+### UX & UI
+
+- Selected color profile persists across all pages and survives navigation. A first-paint script reads a localStorage cache, and a global `ThemeBootstrap` island syncs the server preference and writes it back to the cache.
+- About dialog motion now matches the System modal (duration 0.18, easing `[0.22, 1, 0.36, 1]`, smaller travel) and animates out of the About button position when triggered from the header.
+- `AboutDialog` `titleCase` now tolerates missing channel/install-type/verification fields instead of crashing on undefined.
+
+### Operations
+
+- Schema migration coverage now asserts schema 16 and verifies the new trend indexes against the v0.2.5 upgrade fixture.
+- Dashboard e2e brought back into sync with the refreshed About dialog (full update payload shape, hardened version selectors).
+
+### Source-Device Engine Mode
+
+- Source-device tracking (PERF-2, schema 14) now drives the Balanced engine mode: a second concurrent job is never claimed from the same physical disk while one is in flight.
+
+### Incremental Scan
+
+- Incremental scan (PERF-3, schema 15) records `watch_dirs.last_scanned_at` and a `media_probe_cache.file_id` identity hint so unchanged files skip re-analysis when path, size, mtime, and inode/volume index all match.
+
+### Data Safety
+
+- `POST /api/jobs/clear-history?status=…` now rejects (or refuses to delete) when the filter parses to no recognised values; previously a single mistyped query parameter could wipe the entire jobs table.
+
 ## [0.3.2-rc.2] - 2026-04-29
 
 ### Integrations & Automation

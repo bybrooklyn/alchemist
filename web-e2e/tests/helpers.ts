@@ -385,6 +385,11 @@ export async function mockDashboardData(
   await page.route("**/api/system/resources", async (route) => {
     await fulfillJson(route, 200, resources);
   });
+  // ThemeBootstrap fetches this on every authenticated page. Without a mock
+  // the 401 from the unmocked route triggers apiJson's redirect-to-login.
+  await page.route("**/api/ui/preferences", async (route) => {
+    await fulfillJson(route, 200, { active_theme_id: "helios-orange" });
+  });
 }
 
 export async function mockEngineStatus(

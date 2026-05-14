@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Info, LogOut, Play, Square } from "lucide-react";
 import { motion } from "framer-motion";
 import AboutDialog from "./AboutDialog";
@@ -20,6 +20,8 @@ export default function HeaderActions() {
     const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
     const [engineLoading, setEngineLoading] = useState(false);
     const [showAbout, setShowAbout] = useState(false);
+    const [aboutOrigin, setAboutOrigin] = useState<DOMRect | null>(null);
+    const aboutButtonRef = useRef<HTMLButtonElement>(null);
     const { stats } = useSharedStats();
 
     const statusConfig = {
@@ -208,7 +210,13 @@ export default function HeaderActions() {
 
                 {/* About */}
                 <motion.button
-                    onClick={() => setShowAbout(true)}
+                    ref={aboutButtonRef}
+                    onClick={() => {
+                        setAboutOrigin(
+                            aboutButtonRef.current?.getBoundingClientRect() ?? null,
+                        );
+                        setShowAbout(true);
+                    }}
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink transition-colors"
@@ -231,6 +239,7 @@ export default function HeaderActions() {
             <AboutDialog
                 isOpen={showAbout}
                 onClose={() => setShowAbout(false)}
+                originRect={aboutOrigin}
             />
         </>
     );

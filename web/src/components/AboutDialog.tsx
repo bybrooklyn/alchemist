@@ -39,6 +39,7 @@ interface UpdateInstallResponse {
 interface AboutDialogProps {
     isOpen: boolean;
     onClose: () => void;
+    originRect?: DOMRect | null;
 }
 
 function focusableElements(root: HTMLElement): HTMLElement[] {
@@ -56,7 +57,7 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
     );
 }
 
-export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
+export default function AboutDialog({ isOpen, onClose, originRect }: AboutDialogProps) {
     const [info, setInfo] = useState<SystemInfo | null>(null);
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [updateLoading, setUpdateLoading] = useState(false);
@@ -198,9 +199,24 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
                         className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
                     >
                         <motion.div
-                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            initial={(() => {
+                                if (originRect && typeof window !== "undefined") {
+                                    const buttonCenterX = originRect.left + originRect.width / 2;
+                                    const buttonCenterY = originRect.top + originRect.height / 2;
+                                    const viewportCenterX = window.innerWidth / 2;
+                                    const viewportCenterY = window.innerHeight / 2;
+                                    return {
+                                        opacity: 0,
+                                        scale: 0.4,
+                                        x: buttonCenterX - viewportCenterX,
+                                        y: buttonCenterY - viewportCenterY,
+                                    };
+                                }
+                                return { opacity: 0, scale: 0.96, y: 8 };
+                            })()}
+                            animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                             onClick={e => e.stopPropagation()}
                             ref={dialogRef}
                             role="dialog"
@@ -280,7 +296,8 @@ interface UpdatePanelProps {
     onInstall: () => void;
 }
 
-function titleCase(value: string): string {
+function titleCase(value: string | null | undefined): string {
+    if (!value) return "Unknown";
     return value
         .split("_")
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))

@@ -3,6 +3,7 @@ import "../styles/global.css";
 import { ClientRouter } from "astro:transitions";
 import ToastRegion from "../components/ui/ToastRegion";
 import AuthGuard from "../components/AuthGuard";
+import ThemeBootstrap from "../components/ThemeBootstrap";
 
 interface Props {
     title: string;
@@ -25,26 +26,30 @@ const { title } = Astro.props;
         <slot />
         <ToastRegion client:load />
         <AuthGuard client:load />
+        <ThemeBootstrap client:load />
         <script is:inline>
+            // First-paint theme application. Reads the cached theme id from
+            // localStorage so navigating between pages doesn't snap back to
+            // the default. Server preference remains authoritative — the
+            // ThemeBootstrap island below fetches /api/ui/preferences after
+            // hydration and overwrites the cache when it returns.
             function initTheme() {
                 try {
-                    // Default to helios-orange if not set.
-                    // The actual theme will be applied by the components once loaded.
-                    if (!document.documentElement.getAttribute("data-color-profile")) {
-                        document.documentElement.setAttribute("data-color-profile", "helios-orange");
-                    }
+                    const cached = localStorage.getItem("theme");
+                    document.documentElement.setAttribute(
+                        "data-color-profile",
+                        cached || "helios-orange",
+                    );
                 } catch {
-                    document.documentElement.setAttribute("data-color-profile", "helios-orange");
+                    document.documentElement.setAttribute(
+                        "data-color-profile",
+                        "helios-orange",
+                    );
                 }
             }
-            
-            // Run on initial load
+
             initTheme();
-            
-            // Run on view transition navigation
-            document.addEventListener('astro:after-swap', () => {
-                initTheme();
-            });
+            document.addEventListener("astro:after-swap", initTheme);
         </script>
     </body>
 </html>

@@ -107,7 +107,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "15");
+    assert_eq!(schema_version, "16");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")
@@ -179,6 +179,20 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
     .await?
     .get("count");
     assert_eq!(job_failure_explanations_exists, 1);
+
+    // Schema 16: trend-query indexes for Stats top-reason-codes?trends=true.
+    let trend_indexes: i64 = sqlx::query(
+        "SELECT COUNT(*) as count FROM sqlite_master
+         WHERE type = 'index'
+           AND name IN (
+                'idx_decisions_created_at_action',
+                'idx_failure_explanations_updated_at'
+           )",
+    )
+    .fetch_one(&pool)
+    .await?
+    .get("count");
+    assert_eq!(trend_indexes, 2);
 
     let notification_columns = sqlx::query("PRAGMA table_info(notification_targets)")
         .fetch_all(&pool)
