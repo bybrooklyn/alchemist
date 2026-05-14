@@ -96,21 +96,30 @@ export default function StatsCharts() {
     }, [reasonWindow]);
 
     const fetchAllStats = async () => {
-        try {
-            const [aggData, dailyData, detailedData] = await Promise.all([
-                apiJson<AggregatedStats>("/api/stats/aggregated"),
-                apiJson<DailyStats[]>("/api/stats/daily"),
-                apiJson<DetailedStats[]>("/api/stats/detailed")
-            ]);
-            setStats(aggData);
-            setDailyStats(dailyData);
-            setDetailedStats(detailedData);
+        // Use allSettled so one slow/failed endpoint can't keep the page on
+        // an infinite spinner. Each panel renders whatever it could load and
+        // surfaces its own error if it didn't.
+        const [agg, daily, detailed] = await Promise.allSettled([
+            apiJson<AggregatedStats>("/api/stats/aggregated"),
+            apiJson<DailyStats[]>("/api/stats/daily"),
+            apiJson<DetailedStats[]>("/api/stats/detailed"),
+        ]);
+
+        if (agg.status === "fulfilled") setStats(agg.value);
+        if (daily.status === "fulfilled") setDailyStats(daily.value);
+        if (detailed.status === "fulfilled") setDetailedStats(detailed.value);
+
+        const failures = [agg, daily, detailed].filter(
+            (r): r is PromiseRejectedResult => r.status === "rejected",
+        );
+        if (failures.length > 0) {
+            const first = failures[0].reason;
+            setError(isApiError(first) ? first.message : "Failed to fetch statistics");
+        } else {
             setError(null);
-        } catch (e) {
-            setError(isApiError(e) ? e.message : "Failed to fetch statistics");
-        } finally {
-            setLoading(false);
         }
+
+        setLoading(false);
     };
 
     const formatBytes = (bytes: number) => {
@@ -139,6 +148,16 @@ export default function StatsCharts() {
         return (
             <div className="flex items-center justify-center py-20">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-helios-solar"></div>
+            </div>
+        );
+    }
+
+    if (error && !stats) {
+        return (
+            <div className="text-center py-20 text-helios-slate">
+                <BarChart3 size={48} className="mx-auto mb-4 opacity-50 text-red-500" />
+                <p className="text-helios-ink font-medium">Couldn't load statistics</p>
+                <p className="text-sm mt-2">{error}</p>
             </div>
         );
     }

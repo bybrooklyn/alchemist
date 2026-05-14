@@ -12,6 +12,7 @@ import {
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson } from "../lib/api";
+import { applyRootTheme, cacheTheme, DEFAULT_THEME_ID, getRootTheme } from "../lib/theme";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -268,23 +269,9 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     },
 ];
 
-const getRootTheme = () => {
-    if (typeof document === "undefined") {
-        return null;
-    }
-    return document.documentElement.getAttribute("data-color-profile");
-};
-
-const applyRootTheme = (themeId: string) => {
-    if (typeof document === "undefined") {
-        return;
-    }
-    document.documentElement.setAttribute("data-color-profile", themeId);
-};
-
 export default function AppearanceSettings() {
     const [activeThemeId, setActiveThemeId] = useState(
-        () => getRootTheme() || "helios-orange"
+        () => getRootTheme() || DEFAULT_THEME_ID
     );
     const [savingThemeId, setSavingThemeId] = useState<string | null>(null);
     const [error, setError] = useState("");
@@ -296,6 +283,7 @@ export default function AppearanceSettings() {
                 if (themeId) {
                     setActiveThemeId(themeId);
                     applyRootTheme(themeId);
+                    cacheTheme(themeId);
                 }
             })
             .catch(() => undefined);
@@ -318,6 +306,7 @@ export default function AppearanceSettings() {
             setSavingThemeId(themeId);
             setError("");
             applyRootTheme(themeId);
+            cacheTheme(themeId);
 
             try {
                 await apiAction("/api/ui/preferences", {
