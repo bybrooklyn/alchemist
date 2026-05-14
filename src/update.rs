@@ -232,20 +232,53 @@ pub async fn check_for_updates(config: &UpdatesConfig) -> Result<UpdateStatus> {
 }
 
 pub async fn stage_update_asset(asset: &UpdateAssetStatus, version: &str) -> Result<StagedUpdate> {
+    // RAII cleanup for the staging directory. `armed` is flipped to `false`
+    // just before we return a successful `StagedUpdate` so callers still get
+    // ownership of the directory; on any error path the drop nukes it.
+    struct StagingDirCleanup {
+        path: PathBuf,
+        armed: bool,
+    }
+    impl Drop for StagingDirCleanup {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = fs::remove_dir_all(&self.path);
+            }
+        }
+    }
+
     let staging_dir = create_update_staging_dir()?;
+    let mut staging_guard = StagingDirCleanup {
+        path: staging_dir.clone(),
+        armed: true,
+    };
     let archive_path = staging_dir.join(&asset.filename);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .user_agent(format!("alchemist/{}", crate::version::current()))
         .build()?;
-    let bytes = client
-        .get(&asset.url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let actual_sha = sha256_hex(&bytes);
+
+    // Stream the response straight to disk so a 100+ MB archive never has to
+    // sit fully in RAM, and hash on the fly to avoid a second pass.
+    let mut response = client.get(&asset.url).send().await?.error_for_status()?;
+    let mut file = tokio::fs::File::create(&archive_path).await?;
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = response.chunk().await? {
+        hasher.update(&chunk);
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
+    }
+    tokio::io::AsyncWriteExt::flush(&mut file).await?;
+    drop(file);
+
+    let actual_sha = {
+        let digest = hasher.finalize();
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(&mut hex, "{byte:02x}");
+        }
+        hex
+    };
     if !actual_sha.eq_ignore_ascii_case(&asset.sha256) {
         return Err(anyhow!(
             "downloaded asset hash mismatch: expected {}, got {}",
@@ -253,11 +286,27 @@ pub async fn stage_update_asset(asset: &UpdateAssetStatus, version: &str) -> Res
             actual_sha
         ));
     }
-    tokio::fs::write(&archive_path, bytes).await?;
 
-    let staged_binary_path = extract_archive(&archive_path, &staging_dir)?;
-    verify_staged_binary_version(&staged_binary_path, version)?;
+    // `tar -xzf` and the staged binary's `--version` probe are both blocking
+    // operations driven by external processes. Push them onto the blocking
+    // pool so the calling worker can keep servicing other async tasks while
+    // they run.
+    let staged_binary_path = {
+        let archive = archive_path.clone();
+        let dir = staging_dir.clone();
+        tokio::task::spawn_blocking(move || extract_archive(&archive, &dir))
+            .await
+            .map_err(|err| anyhow!("extract worker failed: {err}"))??
+    };
+    {
+        let staged = staged_binary_path.clone();
+        let version_owned = version.to_string();
+        tokio::task::spawn_blocking(move || verify_staged_binary_version(&staged, &version_owned))
+            .await
+            .map_err(|err| anyhow!("version probe worker failed: {err}"))??;
+    }
 
+    staging_guard.armed = false;
     Ok(StagedUpdate {
         archive_path,
         staged_binary_path,
@@ -664,18 +713,6 @@ done
         fs::set_permissions(path, perms)?;
     }
     Ok(())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

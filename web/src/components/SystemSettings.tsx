@@ -190,7 +190,10 @@ export default function SystemSettings() {
                                 Engine Mode
                             </h3>
                             <p className="text-xs text-helios-slate mt-0.5">
-                                Controls how many jobs run concurrently.
+                                Controls how many jobs run concurrently. Balanced
+                                also limits to one active job per source disk to
+                                avoid spinning rust seek contention; Throughput
+                                ignores disk grouping.
                             </p>
                         </div>
                     </div>

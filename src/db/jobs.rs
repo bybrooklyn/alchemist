@@ -50,20 +50,24 @@ impl Db {
             Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
         };
 
+        let source_device = crate::system::device_id::device_id_for(input_path);
+
         let result = sqlx::query(
-            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, updated_at)
-             VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP)
+            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, source_device, updated_at)
+             VALUES (?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)
              ON CONFLICT(input_path) DO UPDATE SET
              output_path = excluded.output_path,
              status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
              archived = 0,
              mtime_hash = excluded.mtime_hash,
+             source_device = excluded.source_device,
              updated_at = CURRENT_TIMESTAMP
              WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path",
         )
         .bind(input_str)
         .bind(output_str)
         .bind(mtime_hash)
+        .bind(source_device)
         .execute(&self.pool)
         .await?;
 
@@ -72,8 +76,8 @@ impl Db {
 
     pub async fn add_job(&self, job: Job) -> Result<()> {
         sqlx::query(
-            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, priority, progress, attempt_count, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, priority, progress, attempt_count, source_device, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(job.input_path)
         .bind(job.output_path)
@@ -82,6 +86,7 @@ impl Db {
         .bind(job.priority)
         .bind(job.progress)
         .bind(job.attempt_count)
+        .bind(job.source_device)
         .bind(job.created_at)
         .bind(job.updated_at)
         .execute(&self.pool)
@@ -96,7 +101,7 @@ impl Db {
                     COALESCE(attempt_count, 0) as attempt_count,
                     NULL as vmaf_score,
                     created_at, updated_at,
-                    input_metadata_json
+                    input_metadata_json, source_device
              FROM jobs
              WHERE status = 'queued'
                AND archived = 0
@@ -118,7 +123,42 @@ impl Db {
     }
 
     pub async fn claim_next_job(&self) -> Result<Option<Job>> {
-        let job = sqlx::query_as::<_, Job>(
+        self.claim_next_job_with_mode(crate::config::EngineMode::Throughput)
+            .await
+    }
+
+    /// Claim the next queued job, optionally excluding candidates that share a
+    /// `source_device` with an already-running job.
+    ///
+    /// In `Balanced` mode the partial index `idx_jobs_source_device_active`
+    /// supports finding which devices currently have an active job; the
+    /// claim query then skips queued rows whose `source_device` matches.
+    /// `null` source_device counts as its own unique device — multiple
+    /// unknown-device jobs can run concurrently (matches pre-feature
+    /// behavior).
+    ///
+    /// `Throughput` and `Background` modes do not perform device grouping;
+    /// concurrency is governed solely by the processor's semaphore.
+    pub async fn claim_next_job_with_mode(
+        &self,
+        mode: crate::config::EngineMode,
+    ) -> Result<Option<Job>> {
+        let active_states = "('analyzing', 'encoding', 'remuxing', 'resuming')";
+        let device_exclusion = match mode {
+            crate::config::EngineMode::Balanced => format!(
+                "AND (
+                    source_device IS NULL
+                    OR source_device NOT IN (
+                        SELECT source_device FROM jobs
+                        WHERE status IN {} AND source_device IS NOT NULL
+                    )
+                 )",
+                active_states
+            ),
+            _ => String::new(),
+        };
+
+        let sql = format!(
             "UPDATE jobs
              SET status = 'analyzing', updated_at = CURRENT_TIMESTAMP
              WHERE id = (
@@ -126,6 +166,7 @@ impl Db {
                  FROM jobs
                  WHERE status = 'queued'
                    AND archived = 0
+                   {}
                    AND (
                         COALESCE(attempt_count, 0) = 0
                         OR CASE
@@ -142,10 +183,13 @@ impl Db {
                        COALESCE(attempt_count, 0) as attempt_count,
                        NULL as vmaf_score,
                        created_at, updated_at,
-                       input_metadata_json",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+                       input_metadata_json, source_device",
+            device_exclusion,
+        );
+
+        let job = sqlx::query_as::<_, Job>(&sql)
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(job)
     }
@@ -219,7 +263,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.archived = 0
                  ORDER BY j.updated_at DESC",
@@ -451,7 +495,7 @@ impl Db {
                     COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at, j.input_metadata_json
+                    j.created_at, j.updated_at, j.input_metadata_json, j.source_device
              FROM jobs j
              WHERE j.id = ? AND j.archived = 0",
         )
@@ -473,7 +517,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.status = ? AND j.archived = 0
                  ORDER BY j.priority DESC, j.created_at ASC",
@@ -498,7 +542,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  LEFT JOIN encode_stats es ON es.job_id = j.id
                  WHERE 1 = 1 "
@@ -757,14 +801,18 @@ impl Db {
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM jobs WHERE 1=1");
 
         if let Some(st) = statuses {
-            if !st.is_empty() {
-                qb.push(" AND status IN (");
-                let mut sep = qb.separated(", ");
-                for s in st {
-                    sep.push_bind(s);
-                }
-                qb.push(")");
+            if st.is_empty() {
+                // Caller asked for a status filter but supplied none we could
+                // recognise. Refuse to broaden the delete instead of falling
+                // back to WHERE 1=1, which would wipe every job in the table.
+                return Ok(0);
             }
+            qb.push(" AND status IN (");
+            let mut sep = qb.separated(", ");
+            for s in st {
+                sep.push_bind(s);
+            }
+            qb.push(")");
         }
 
         if let Some(a) = archived {
@@ -786,7 +834,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.archived = 0
                    AND j.status != 'cancelled'
@@ -810,7 +858,7 @@ impl Db {
                     COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at, j.input_metadata_json
+                    j.created_at, j.updated_at, j.input_metadata_json, j.source_device
              FROM jobs j
              WHERE j.archived = 0
                AND (
@@ -1043,7 +1091,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.status IN ('queued', 'failed') AND j.archived = 0
                  ORDER BY j.priority DESC, j.created_at ASC",
@@ -1071,7 +1119,7 @@ impl Db {
                                  as attempt_count,
                         (SELECT vmaf_score FROM encode_stats
                          WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.status IN ('queued', 'failed')
                    AND j.archived = 0
@@ -1103,7 +1151,7 @@ impl Db {
                     COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at, j.input_metadata_json
+                    j.created_at, j.updated_at, j.input_metadata_json, j.source_device
              FROM jobs j
              WHERE j.archived = 0 AND j.id IN (",
         );
@@ -1126,7 +1174,7 @@ impl Db {
                     COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                     COALESCE(j.attempt_count, 0) as attempt_count,
                     (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                    j.created_at, j.updated_at, j.input_metadata_json
+                    j.created_at, j.updated_at, j.input_metadata_json, j.source_device
              FROM jobs j
              WHERE j.input_path = ? AND j.archived = 0",
         )
@@ -1156,7 +1204,7 @@ impl Db {
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
                         (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json
+                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
                  FROM jobs j
                  WHERE j.status = 'completed'
                    AND j.archived = 0
@@ -1276,6 +1324,90 @@ mod tests {
 
         let none = db.claim_next_job().await?;
         assert!(none.is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claim_next_job_balanced_mode_excludes_in_flight_devices()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_balanced_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        for i in 0..2 {
+            db.add_job(Job {
+                id: 0,
+                input_path: format!("/disk-a/file{}.mkv", i),
+                output_path: format!("/disk-a/file{}.out.mkv", i),
+                status: JobState::Queued,
+                decision_reason: None,
+                priority: 0,
+                progress: 0.0,
+                attempt_count: 0,
+                vmaf_score: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                input_metadata_json: None,
+                source_device: Some("dev:42".to_string()),
+            })
+            .await?;
+        }
+        for i in 0..2 {
+            db.add_job(Job {
+                id: 0,
+                input_path: format!("/disk-b/file{}.mkv", i),
+                output_path: format!("/disk-b/file{}.out.mkv", i),
+                status: JobState::Queued,
+                decision_reason: None,
+                priority: 0,
+                progress: 0.0,
+                attempt_count: 0,
+                vmaf_score: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                input_metadata_json: None,
+                source_device: Some("dev:99".to_string()),
+            })
+            .await?;
+        }
+
+        let first = db
+            .claim_next_job_with_mode(crate::config::EngineMode::Balanced)
+            .await?
+            .ok_or_else(|| std::io::Error::other("first claim failed"))?;
+        let first_device = first.source_device.clone();
+
+        let second = db
+            .claim_next_job_with_mode(crate::config::EngineMode::Balanced)
+            .await?
+            .ok_or_else(|| std::io::Error::other("second claim should pick the other device"))?;
+        assert_ne!(
+            first_device, second.source_device,
+            "Balanced mode must not claim a second job from the same device"
+        );
+
+        // Third claim should be blocked — both devices in-flight.
+        let third = db
+            .claim_next_job_with_mode(crate::config::EngineMode::Balanced)
+            .await?;
+        assert!(
+            third.is_none(),
+            "Balanced mode must block when every device has an active job"
+        );
+
+        // Throughput mode ignores device grouping; it can claim the remaining job.
+        let fourth = db
+            .claim_next_job_with_mode(crate::config::EngineMode::Throughput)
+            .await?;
+        assert!(
+            fourth.is_some(),
+            "Throughput mode must claim regardless of in-flight devices"
+        );
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
@@ -1623,6 +1755,43 @@ mod tests {
             .await?
             .get::<i64, _>(0);
         assert_eq!(stats, 0);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn purge_jobs_by_filter_empty_status_does_not_delete()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_purge_empty_status_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+        db.enqueue_job(
+            Path::new("/tmp/purge_a.mkv"),
+            Path::new("/tmp/purge_a.out.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        db.enqueue_job(
+            Path::new("/tmp/purge_b.mkv"),
+            Path::new("/tmp/purge_b.out.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+
+        // Caller passed `Some(status filter)` but nothing parsed — must NOT
+        // fall through to "delete every row".
+        let removed = db.purge_jobs_by_filter(Some(Vec::new()), None).await?;
+        assert_eq!(removed, 0);
+
+        let remaining: i64 = sqlx::query("SELECT COUNT(*) FROM jobs")
+            .fetch_one(&db.pool)
+            .await?
+            .get::<i64, _>(0);
+        assert_eq!(remaining, 2);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

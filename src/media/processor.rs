@@ -443,7 +443,8 @@ impl Agent {
                 continue;
             }
 
-            match self.db.claim_next_job().await {
+            let current_mode = *self.engine_mode.read().await;
+            match self.db.claim_next_job_with_mode(current_mode).await {
                 Ok(Some(job)) => {
                     self.idle_notified.store(false, Ordering::SeqCst);
                     let next_in_flight = self.in_flight_jobs.fetch_add(1, Ordering::SeqCst) + 1;

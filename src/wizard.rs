@@ -133,6 +133,7 @@ impl ConfigWizard {
                 directories,
                 watch_enabled: false,
                 extra_watch_dirs: Vec::new(),
+                aggressive_directory_pruning: false,
             },
             notifications: crate::config::NotificationsConfig::default(),
             files: crate::config::FileSettingsConfig::default(),

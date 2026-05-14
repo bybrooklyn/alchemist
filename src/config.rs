@@ -309,6 +309,14 @@ pub struct ScannerConfig {
     pub watch_enabled: bool,
     #[serde(default)]
     pub extra_watch_dirs: Vec<WatchDirConfig>,
+    /// PERF-3 opt-in: when true, the scanner may skip recursing into
+    /// directories whose mtime hasn't advanced past `last_scanned_at`.
+    /// Off by default — only safe on filesystems that propagate child
+    /// changes to parent dir mtime (ext4, APFS, NTFS local). NFS/SMB
+    /// and some snapshot CoW filesystems lie about parent mtimes, so
+    /// the safe-incremental probe-cache shortcut handles them instead.
+    #[serde(default)]
+    pub aggressive_directory_pruning: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -947,6 +955,7 @@ impl Default for Config {
                 directories: Vec::new(),
                 watch_enabled: false,
                 extra_watch_dirs: Vec::new(),
+                aggressive_directory_pruning: false,
             },
             notifications: NotificationsConfig::default(),
             files: FileSettingsConfig::default(),

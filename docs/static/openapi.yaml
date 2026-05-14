@@ -512,12 +512,51 @@ paths:
           description: Library intelligence
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/library/preview:
+    post:
+      summary: Dry-run plan preview for a folder
+      description: |
+        Walks the supplied path (recursively, bounded by `max_files`) and
+        runs the planner in dry-run mode. Returns counts of skip / remux /
+        encode decisions, the source bytes under consideration per bucket,
+        and a short sample of representative files with humanizable reasons.
+        Does not enqueue jobs or mutate the database.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  description: Absolute path to a directory.
+                max_files:
+                  type: integer
+                  minimum: 1
+                  maximum: 2000
+                  default: 200
+                  description: Cap on files actually planned. If the folder contains more, the response is marked truncated.
+      responses:
+        "200":
+          description: Preview summary plus a short sample.
+        "400":
+          $ref: "#/components/responses/Problem"
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/library/reanalyze:
     post:
       summary: Reanalyze the library root
       responses:
-        "202":
-          $ref: "#/components/responses/Accepted"
+        "200":
+          description: |
+            Reanalysis triggered. `count` is the total job rows queued for
+            reanalysis across all configured roots; `errors` is a list of
+            human-readable strings for any root that failed (empty on full
+            success).
+        "500":
+          $ref: "#/components/responses/Problem"
         default:
           $ref: "#/components/responses/Problem"
   /api/v1/logs:

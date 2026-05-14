@@ -2,15 +2,13 @@
 
 *Forward-looking ideas for features, UX, integrations, and polish. Bugs go in `audit.md`.*
 
-**Last updated:** 2026-05-12
+**Last updated:** 2026-05-13
 
 ## Top picks
 
 1. [OP-6] Redacted diagnostics bundle — makes support and self-debugging safer without exposing secrets.
-2. [F-11] Review-before-replace finalization — adds a high-trust path for destructive replace workflows.
-3. [OP-3] Guided Restore From Backup Snapshot — turn backup support into a safer recovery workflow.
-4. [F-2] Library plan preview in the web UI — lets users see library impact before queueing a large folder.
-5. [AUTO-3] Disk-space guardrails — prevents temp and output volumes from being exhausted during long queues.
+2. [OP-3] Guided Restore From Backup Snapshot — turn backup support into a safer recovery workflow.
+3. [AUTO-3] Disk-space guardrails — prevents temp and output volumes from being exhausted during long queues.
 
 ---
 
@@ -227,30 +225,6 @@ Platform-specific maintenance burden.
 
 ---
 
-### [F-11] Review-before-replace finalization
-
-**Category:** Features
-**Size:** M
-**Touches:** backend, frontend, schema, config
-
-**Problem or gap:**
-
-Alchemist supports keep-both and replace-style output strategies, but replace mode is still a big trust jump for users with large libraries. Quality checks reduce risk, but they do not let an operator review a finished encode before the original is swapped or removed. This is different from undo: it prevents regret before finalization instead of recovering after it.
-
-**Idea:**
-
-Add a third finalization mode, `review`, that completes the encode but parks the output in a pending-review state. Jobs in that state show actions in `JobDetailModal.tsx`: approve replacement, keep both, or discard the generated output. The backend should persist the pending output path and never mutate the source until the explicit approval action succeeds.
-
-**First step:**
-
-Add an additive `pending_review_output_path` field or table plus a narrow backend state transition for one completed job. Prove that an encode can enter pending review without moving or deleting the source file.
-
-**Risks / tradeoffs:**
-
-Pending outputs consume disk until the user acts, so this needs clear cleanup and retention behavior.
-
----
-
 ## UX
 
 ### [UX-1] Saved filter views on the jobs page
@@ -324,28 +298,6 @@ Expose a `?q=...` query parameter on the existing jobs list endpoint that matche
 LIKE on a large explanations column will be slow; plan for an index on a tokenized copy if perf shows up as an issue.
 
 ---
-
-### [UX-5] Bulk actions toolbar
-
-**Category:** UX
-**Size:** S
-**Touches:** frontend
-
-**Problem or gap:**
-
-The jobs page has multi-select checkboxes, but the toolbar only offers "Add file" and "Refresh". There's no way to act on the selection (e.g., "Cancel all 50 selected jobs"). Users have to click the "More" menu on every row.
-
-**Idea:**
-
-When `selected.size > 0`, transform the `JobsToolbar` (or show a floating action bar) with bulk actions: "Cancel Selected", "Restart Selected", "Delete Selected". Wire them to the existing `batch_jobs_handler` in the backend.
-
-**First step:**
-
-Conditional rendering in `JobsToolbar.tsx` that surfaces "Cancel (N)" when items are selected.
-
-**Risks / tradeoffs:**
-
-None.
 
 ### [UX-6] Mobile-optimized "Active Now" mini-dashboard
 
@@ -634,6 +586,7 @@ Generic webhooks can become an escape hatch for unsafe paths; keep the scope nar
 ## Performance
 
 ### [PERF-1] FFprobe result cache
+**Status:** Implemented in 0.3.2-rc.1. `media_probe_cache` table keyed by path/mtime/size/ffprobe-version, read/write in `src/db/probe_cache.rs`, used by `FfmpegAnalyzer::analyze_with_cache()` in `src/media/analyzer.rs`. Schema migration `20260424160000_media_probe_cache.sql`.
 
 **Category:** Performance
 **Size:** M
@@ -1353,3 +1306,28 @@ Create `web/src/content/help/nvenc.md` and use `getCollection` in the settings p
 **Risks / tradeoffs:**
 
 Adds build-time overhead for Astro; trivial for this scale.
+
+### [IMPR-2] Switch to ffmpeg-next crate for better control over ffmpeg
+
+**Category** Improvement
+**Size** Potentially large
+**Touchs** Backend
+
+**Problem or gap** None
+
+**Idea:**
+
+Transition to then ffmpeg-next crate for better control of ffmpeg?
+
+**First step**
+
+Read the ffmpeg-next documentation and see how 
+
+**Risks / Tradeoffs**
+
+Uncertainty and could be a breaking change
+
+
+**Idea** random idea, [IMPR-3]
+
+Switch to Mimalloc

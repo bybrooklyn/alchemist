@@ -491,7 +491,7 @@ fmt:
 # Clean all build artifacts
 clean:
     cargo clean
-    rm -rf web/dist web/node_modules web-e2e/node_modules docs/node_modules docs/build
+    rm -rf web/dist web/node_modules web-e2e/node_modules docs/node_modules docs/build native/mac/.build 
 
 # Count lines of source code
 loc:

@@ -398,9 +398,7 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
     axum::Json(value).into_response()
 }
 
-pub(crate) async fn reanalyze_library_root_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub(crate) async fn reanalyze_library_root_handler(State(state): State<Arc<AppState>>) -> Response {
     let config = state.config.read().await;
     let mut root_paths: Vec<String> = config.scanner.directories.clone();
     drop(config);
@@ -411,14 +409,30 @@ pub(crate) async fn reanalyze_library_root_handler(
         }
     }
 
-    let mut total_reanalyzed = 0;
+    let mut count: u64 = 0;
+    let mut errors: Vec<String> = Vec::new();
     for root in root_paths {
-        if let Ok(count) = state.db.reanalyze_jobs_under_path(&root).await {
-            total_reanalyzed += count;
+        match state.db.reanalyze_jobs_under_path(&root).await {
+            Ok(n) => count += n,
+            Err(err) => {
+                tracing::error!(root = %root, "reanalyze_jobs_under_path failed: {err}");
+                errors.push(format!("{root}: {err}"));
+            }
         }
     }
 
-    axum::Json(serde_json::json!({ "count": total_reanalyzed })).into_response()
+    // If every root failed, surface the aggregated error so the caller can
+    // tell the operation didn't succeed. Otherwise return the partial count
+    // alongside the per-root errors.
+    if !errors.is_empty() && count == 0 {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "REANALYZE_FAILED",
+            errors.join("; "),
+        );
+    }
+
+    axum::Json(serde_json::json!({ "count": count, "errors": errors })).into_response()
 }
 
 struct SnapshotCleanup {
@@ -643,6 +657,34 @@ pub(crate) async fn check_system_update_handler(State(state): State<Arc<AppState
 }
 
 pub(crate) async fn install_system_update_handler(State(state): State<Arc<AppState>>) -> Response {
+    // Reject concurrent installs. The atomic is cleared via the RAII guard on
+    // every early-return path; the success path leaks the guard intentionally
+    // because the process is about to exit anyway.
+    struct InstallGuard(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for InstallGuard {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    if state
+        .update_install_in_progress
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "UPDATE_INSTALL_IN_PROGRESS",
+            "An update install is already in progress",
+        );
+    }
+    let install_guard = InstallGuard(state.update_install_in_progress.clone());
+
     let status = match resolve_update_status(state.clone(), true).await {
         Ok(status) => status,
         Err(err) => {
@@ -745,6 +787,10 @@ pub(crate) async fn install_system_update_handler(State(state): State<Arc<AppSta
         helper_log = %log_path.display(),
         "Update staged; scheduling process exit for helper apply"
     );
+    // Hand off to the helper. The flag would normally clear when `install_guard`
+    // drops, but the process is about to exit anyway so leak it deliberately —
+    // anything that observes the flag after this point is racing the exit.
+    std::mem::forget(install_guard);
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(750)).await;
         std::process::exit(0);

@@ -112,6 +112,7 @@ function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState<Set<number>>(new Set());
+    const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
     const [activeTab, setActiveTab] = useState<TabType>("all");
     const [searchInput, setSearchInput] = useState("");
     const [compactSearchOpen, setCompactSearchOpen] = useState(false);
@@ -501,11 +502,31 @@ function JobManager() {
         return () => document.removeEventListener("mousedown", handleClick);
     }, [menuJobId]);
 
-    const toggleSelect = (id: number) => {
+    const toggleSelect = (id: number, withShift = false) => {
+        const anchorIndex =
+            selectionAnchor === null
+                ? -1
+                : jobs.findIndex((j) => j.id === selectionAnchor);
+        const targetIndex = jobs.findIndex((j) => j.id === id);
+
+        if (withShift && anchorIndex !== -1 && targetIndex !== -1) {
+            const [lo, hi] =
+                anchorIndex < targetIndex
+                    ? [anchorIndex, targetIndex]
+                    : [targetIndex, anchorIndex];
+            const newSet = new Set(selected);
+            for (let i = lo; i <= hi; i += 1) {
+                newSet.add(jobs[i].id);
+            }
+            setSelected(newSet);
+            return;
+        }
+
         const newSet = new Set(selected);
         if (newSet.has(id)) newSet.delete(id);
         else newSet.add(id);
         setSelected(newSet);
+        setSelectionAnchor(id);
     };
 
     const toggleSelectAll = () => {
@@ -514,6 +535,7 @@ function JobManager() {
         } else {
             setSelected(new Set(jobs.map(j => j.id)));
         }
+        setSelectionAnchor(null);
     };
 
     const selectedJobs = jobs.filter((job) => selected.has(job.id));

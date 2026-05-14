@@ -216,6 +216,31 @@ impl Db {
         Ok(())
     }
 
+    /// PERF-3: map each watch directory's path to its last-scanned timestamp
+    /// (unix epoch seconds). Used by the aggressive directory-pruning code
+    /// path to decide which subtrees can be skipped.
+    pub async fn get_watch_dir_last_scanned_map(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Option<i64>>> {
+        let rows: Vec<(String, Option<i64>)> =
+            sqlx::query_as("SELECT path, last_scanned_at FROM watch_dirs")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// PERF-3: record that a watch directory completed a successful scan
+    /// at the given unix-epoch second. Called only after the walk
+    /// succeeds so failed scans don't poison the pruning baseline.
+    pub async fn update_watch_dir_last_scanned_at(&self, path: &str, ts: i64) -> Result<()> {
+        sqlx::query("UPDATE watch_dirs SET last_scanned_at = ? WHERE path = ?")
+            .bind(ts)
+            .bind(path)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_all_profiles(&self) -> Result<Vec<LibraryProfile>> {
         let profiles = sqlx::query_as::<_, LibraryProfile>(
             "SELECT id, name, preset, codec, quality_profile, hdr_mode, audio_mode,

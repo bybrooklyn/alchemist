@@ -20,7 +20,7 @@ interface JobsTableProps {
     encodeStartTimes: MutableRefObject<Map<number, number>>;
     menuJobId: number | null;
     menuRef: RefObject<HTMLDivElement | null>;
-    toggleSelect: (id: number) => void;
+    toggleSelect: (id: number, withShift?: boolean) => void;
     toggleSelectAll: () => void;
     fetchJobDetails: (id: number) => Promise<void>;
     setMenuJobId: (id: number | null) => void;
@@ -98,7 +98,11 @@ export function JobsTable({
                                 <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                                     <input type="checkbox"
                                         checked={selected.has(job.id)}
-                                        onChange={() => toggleSelect(job.id)}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleSelect(job.id, e.shiftKey);
+                                        }}
+                                        onChange={() => {}}
                                         className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
                                     />
                                 </td>

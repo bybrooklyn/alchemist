@@ -124,16 +124,20 @@ pub(crate) async fn skip_reasons_handler(State(state): State<Arc<AppState>>) -> 
 pub(crate) struct TopReasonCodesQuery {
     #[serde(default)]
     window: Option<String>,
+    /// OBS-3 polish: when `true`, include a per-bucket count series for
+    /// each returned code so the UI can render a sparkline.
+    #[serde(default)]
+    trends: bool,
 }
 
 pub(crate) async fn top_reason_codes_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<TopReasonCodesQuery>,
 ) -> Response {
-    let window_days = match query.window.as_deref().unwrap_or("7d") {
-        "24h" | "1d" => 1,
-        "7d" => 7,
-        "30d" => 30,
+    let (window_days, num_buckets) = match query.window.as_deref().unwrap_or("7d") {
+        "24h" | "1d" => (1, 24usize),
+        "7d" => (7, 7usize),
+        "30d" => (30, 30usize),
         other => {
             return api_error_response(
                 StatusCode::BAD_REQUEST,
@@ -143,17 +147,49 @@ pub(crate) async fn top_reason_codes_handler(
         }
     };
 
-    let skip = match state.db.get_skip_reason_counts_windowed(window_days).await {
+    let mut skip = match state.db.get_skip_reason_counts_windowed(window_days).await {
         Ok(rows) => rows,
         Err(err) => return config_read_error_response("load top skip reasons", &err),
     };
-    let failure = match state.db.get_failure_code_counts(window_days).await {
+    let mut failure = match state.db.get_failure_code_counts(window_days).await {
         Ok(rows) => rows,
         Err(err) => return config_read_error_response("load top failure codes", &err),
     };
 
+    if query.trends {
+        if let Ok(skip_trends) = state
+            .db
+            .get_skip_reason_trend(window_days, num_buckets)
+            .await
+        {
+            for row in skip.iter_mut() {
+                row.trend = Some(
+                    skip_trends
+                        .get(&row.code)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0; num_buckets]),
+                );
+            }
+        }
+        if let Ok(failure_trends) = state
+            .db
+            .get_failure_code_trend(window_days, num_buckets)
+            .await
+        {
+            for row in failure.iter_mut() {
+                row.trend = Some(
+                    failure_trends
+                        .get(&row.code)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0; num_buckets]),
+                );
+            }
+        }
+    }
+
     axum::Json(serde_json::json!({
         "window_days": window_days,
+        "num_buckets": num_buckets,
         "skip": skip,
         "failure": failure,
     }))

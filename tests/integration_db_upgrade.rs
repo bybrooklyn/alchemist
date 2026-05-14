@@ -107,7 +107,7 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
             .fetch_one(&pool)
             .await?
             .get("value");
-    assert_eq!(schema_version, "13");
+    assert_eq!(schema_version, "15");
 
     let min_compatible_version: String =
         sqlx::query("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")
@@ -137,6 +137,27 @@ async fn v0_2_5_fixture_upgrades_and_preserves_core_state() -> Result<()> {
     assert!(jobs_columns.iter().any(|name| name == "archived"));
     assert!(jobs_columns.iter().any(|name| name == "health_issues"));
     assert!(jobs_columns.iter().any(|name| name == "last_health_check"));
+    assert!(jobs_columns.iter().any(|name| name == "source_device"));
+
+    let watch_dirs_columns = sqlx::query("PRAGMA table_info(watch_dirs)")
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(
+        watch_dirs_columns
+            .iter()
+            .any(|name| name == "last_scanned_at")
+    );
+
+    let probe_cache_columns = sqlx::query("PRAGMA table_info(media_probe_cache)")
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(probe_cache_columns.iter().any(|name| name == "file_id"));
 
     let decisions_columns = sqlx::query("PRAGMA table_info(decisions)")
         .fetch_all(&pool)
