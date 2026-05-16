@@ -15,6 +15,19 @@ pub fn device_id_for(path: &Path) -> Option<String> {
     platform_device_id(&canonical)
 }
 
+/// Async wrapper around [`device_id_for`]. Resolution does two blocking
+/// syscalls (`canonicalize` + `metadata`); callers on the async runtime —
+/// notably `Db::enqueue_job`, which the library scanner drives in a tight
+/// per-file loop — must use this variant so the worker is never parked on
+/// a slow network mount.
+pub async fn device_id_for_async(path: &Path) -> Option<String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || device_id_for(&path))
+        .await
+        .ok()
+        .flatten()
+}
+
 #[cfg(unix)]
 fn platform_device_id(path: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;

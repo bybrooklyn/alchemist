@@ -395,10 +395,12 @@ impl Db {
             let bytes_saved: i64 = bytes_row.get("bytes_saved");
 
             let failure_rows = sqlx::query(
-                "SELECT code, COUNT(*) AS count
-                 FROM job_failure_explanations
-                 WHERE updated_at >= datetime('now', 'start of day', 'localtime')
-                 GROUP BY code
+                "SELECT f.code AS code, COUNT(*) AS count
+                 FROM job_failure_explanations f
+                 JOIN jobs j ON j.id = f.job_id
+                 WHERE f.updated_at >= datetime('now', 'start of day', 'localtime')
+                   AND j.archived = 0
+                 GROUP BY f.code
                  ORDER BY count DESC, code ASC
                  LIMIT 3",
             )
@@ -410,11 +412,13 @@ impl Db {
                 .collect::<Vec<_>>();
 
             let skip_rows = sqlx::query(
-                "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
-                 FROM decisions
-                 WHERE action = 'skip'
-                   AND created_at >= datetime('now', 'start of day', 'localtime')
-                 GROUP BY COALESCE(reason_code, action)
+                "SELECT COALESCE(d.reason_code, d.action) AS code, COUNT(*) AS count
+                 FROM decisions d
+                 JOIN jobs j ON j.id = d.job_id
+                 WHERE d.action = 'skip'
+                   AND d.created_at >= datetime('now', 'start of day', 'localtime')
+                   AND j.archived = 0
+                 GROUP BY COALESCE(d.reason_code, d.action)
                  ORDER BY count DESC, code ASC
                  LIMIT 3",
             )
@@ -441,11 +445,13 @@ impl Db {
         let pool = &self.pool;
         timed_query("get_skip_reason_counts", || async {
             let rows = sqlx::query(
-                "SELECT COALESCE(reason_code, action) AS code, COUNT(*) AS count
-                 FROM decisions
-                 WHERE action = 'skip'
-                   AND created_at >= datetime('now', 'start of day', 'localtime')
-                 GROUP BY COALESCE(reason_code, action)
+                "SELECT COALESCE(d.reason_code, d.action) AS code, COUNT(*) AS count
+                 FROM decisions d
+                 JOIN jobs j ON j.id = d.job_id
+                 WHERE d.action = 'skip'
+                   AND d.created_at >= datetime('now', 'start of day', 'localtime')
+                   AND j.archived = 0
+                 GROUP BY COALESCE(d.reason_code, d.action)
                  ORDER BY count DESC, code ASC
                  LIMIT 20",
             )
@@ -473,13 +479,15 @@ impl Db {
         let window = format!("-{} days", window_days.max(1));
         timed_query("get_skip_reason_counts_windowed", || async {
             let rows = sqlx::query(
-                "SELECT COALESCE(reason_code, action) AS code,
+                "SELECT COALESCE(d.reason_code, d.action) AS code,
                         COUNT(*) AS count,
-                        MAX(created_at) AS last_seen
-                 FROM decisions
-                 WHERE action = 'skip'
-                   AND created_at >= datetime('now', ?)
-                 GROUP BY COALESCE(reason_code, action)
+                        MAX(d.created_at) AS last_seen
+                 FROM decisions d
+                 JOIN jobs j ON j.id = d.job_id
+                 WHERE d.action = 'skip'
+                   AND d.created_at >= datetime('now', ?)
+                   AND j.archived = 0
+                 GROUP BY COALESCE(d.reason_code, d.action)
                  ORDER BY count DESC, code ASC
                  LIMIT 20",
             )
@@ -507,12 +515,14 @@ impl Db {
         let window = format!("-{} days", window_days.max(1));
         timed_query("get_failure_code_counts", || async {
             let rows = sqlx::query(
-                "SELECT code,
+                "SELECT f.code AS code,
                         COUNT(*) AS count,
-                        MAX(updated_at) AS last_seen
-                 FROM job_failure_explanations
-                 WHERE updated_at >= datetime('now', ?)
-                 GROUP BY code
+                        MAX(f.updated_at) AS last_seen
+                 FROM job_failure_explanations f
+                 JOIN jobs j ON j.id = f.job_id
+                 WHERE f.updated_at >= datetime('now', ?)
+                   AND j.archived = 0
+                 GROUP BY f.code
                  ORDER BY count DESC, code ASC
                  LIMIT 20",
             )
@@ -546,11 +556,13 @@ impl Db {
         let bucket_seconds = bucket_seconds_for(window_days, num_buckets);
         let window = format!("-{} days", window_days.max(1));
         let rows = sqlx::query(
-            "SELECT COALESCE(reason_code, action) AS code,
-                    CAST((strftime('%s','now') - strftime('%s', created_at)) AS INTEGER) AS age_secs
-             FROM decisions
-             WHERE action = 'skip'
-               AND created_at >= datetime('now', ?)",
+            "SELECT COALESCE(d.reason_code, d.action) AS code,
+                    CAST((strftime('%s','now') - strftime('%s', d.created_at)) AS INTEGER) AS age_secs
+             FROM decisions d
+             JOIN jobs j ON j.id = d.job_id
+             WHERE d.action = 'skip'
+               AND d.created_at >= datetime('now', ?)
+               AND j.archived = 0",
         )
         .bind(&window)
         .fetch_all(&self.pool)
@@ -572,10 +584,12 @@ impl Db {
         let bucket_seconds = bucket_seconds_for(window_days, num_buckets);
         let window = format!("-{} days", window_days.max(1));
         let rows = sqlx::query(
-            "SELECT code,
-                    CAST((strftime('%s','now') - strftime('%s', updated_at)) AS INTEGER) AS age_secs
-             FROM job_failure_explanations
-             WHERE updated_at >= datetime('now', ?)",
+            "SELECT f.code AS code,
+                    CAST((strftime('%s','now') - strftime('%s', f.updated_at)) AS INTEGER) AS age_secs
+             FROM job_failure_explanations f
+             JOIN jobs j ON j.id = f.job_id
+             WHERE f.updated_at >= datetime('now', ?)
+               AND j.archived = 0",
         )
         .bind(&window)
         .fetch_all(&self.pool)
@@ -715,6 +729,79 @@ mod tests {
             .and_then(|value| value.as_i64())
             .unwrap_or(0);
         assert_eq!(completed, 1, "get_stats should exclude archived jobs");
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reason_trends_exclude_archived_jobs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::explanations::failure_from_summary;
+
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_reason_archived_{}.db", token));
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let input = Path::new("/tmp/reason_archived.mkv");
+        db.enqueue_job(
+            input,
+            Path::new("/tmp/reason_archived_out.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let job = db
+            .get_job_by_input_path(
+                input
+                    .to_str()
+                    .ok_or_else(|| std::io::Error::other("path"))?,
+            )
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing job"))?;
+
+        db.add_decision(job.id, "skip", "Already AV1 10-bit")
+            .await?;
+        db.upsert_job_failure_explanation(job.id, &failure_from_summary("ffmpeg crashed"))
+            .await?;
+
+        // Before archiving, both the skip reason and the failure code appear.
+        assert!(
+            !db.get_skip_reason_counts_windowed(7).await?.is_empty(),
+            "skip reason should be visible before archive"
+        );
+        assert!(
+            !db.get_failure_code_counts(7).await?.is_empty(),
+            "failure code should be visible before archive"
+        );
+
+        // Archiving the job must drop it from every reason query.
+        sqlx::query("UPDATE jobs SET archived = 1 WHERE id = ?")
+            .bind(job.id)
+            .execute(&db.pool)
+            .await?;
+
+        assert!(
+            db.get_skip_reason_counts_windowed(7).await?.is_empty(),
+            "archived job must not contribute to windowed skip reasons"
+        );
+        assert!(
+            db.get_failure_code_counts(7).await?.is_empty(),
+            "archived job must not contribute to failure code counts"
+        );
+        assert!(
+            db.get_skip_reason_counts().await?.is_empty(),
+            "archived job must not contribute to today's skip reasons"
+        );
+        assert!(
+            db.get_skip_reason_trend(7, 7).await?.is_empty(),
+            "archived job must not contribute to the skip trend"
+        );
+        assert!(
+            db.get_failure_code_trend(7, 7).await?.is_empty(),
+            "archived job must not contribute to the failure trend"
+        );
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

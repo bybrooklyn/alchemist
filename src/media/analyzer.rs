@@ -93,14 +93,17 @@ fn file_size_i64(metadata: &std::fs::Metadata) -> i64 {
 }
 
 /// Optional secondary identity hint for the probe cache (PERF-3).
-/// Unix: inode from `MetadataExt::ino()`. Windows: not exposed by stdlib
-/// without extra ffi work, so we return `None` and rely on (path, size, mtime)
-/// alone. Returning `None` always degrades gracefully.
+/// Unix: device + inode (`MetadataExt::dev()` + `ino()`) — the inode number
+/// alone is only unique within a single filesystem, so a mount/snapshot swap
+/// could reuse it; pairing it with the device id gives the full POSIX file
+/// identity. Windows: not exposed by stdlib without extra ffi work, so we
+/// return `None` and rely on (path, size, mtime) alone. Returning `None`
+/// always degrades gracefully.
 fn file_id_marker(metadata: &std::fs::Metadata) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Some(format!("ino:{}", metadata.ino()))
+        Some(format!("dev:{}:ino:{}", metadata.dev(), metadata.ino()))
     }
     #[cfg(not(unix))]
     {
@@ -367,11 +370,12 @@ impl FfmpegAnalyzer {
     ) -> Result<MediaAnalysis> {
         let cache_key = Self::probe_cache_key_for_path(path).await?;
         let cached_json = match db
-            .get_media_probe_cache(
+            .get_media_probe_cache_with_file_id(
                 &cache_key.input_path,
                 cache_key.mtime_ns,
                 cache_key.size_bytes,
                 &cache_key.probe_version,
+                cache_key.file_id.as_deref(),
             )
             .await
         {

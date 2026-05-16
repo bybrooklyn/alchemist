@@ -50,7 +50,7 @@ impl Db {
             Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
         };
 
-        let source_device = crate::system::device_id::device_id_for(input_path);
+        let source_device = crate::system::device_id::device_id_for_async(input_path).await;
 
         let result = sqlx::query(
             "INSERT INTO jobs (input_path, output_path, status, mtime_hash, source_device, updated_at)

@@ -1052,43 +1052,6 @@ fn delay_until_next_minute_boundary(now: chrono::DateTime<chrono::Local>) -> Dur
     delay
 }
 
-async fn _unused_ensure_public_endpoint(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let url = Url::parse(raw)?;
-    let host = match url.host_str() {
-        Some(value) => value,
-        None => return Err("notification endpoint host is missing".into()),
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return Err("notification endpoint host is not allowed".into());
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(ip) {
-            return Err("notification endpoint host is not allowed".into());
-        }
-        return Ok(());
-    }
-
-    let port = match url.port_or_known_default() {
-        Some(value) => value,
-        None => return Err("notification endpoint port is missing".into()),
-    };
-    let host_port = format!("{}:{}", host, port);
-    let mut resolved = false;
-    let addrs = tokio::time::timeout(Duration::from_secs(3), lookup_host(host_port)).await??;
-    for addr in addrs {
-        resolved = true;
-        if is_private_ip(addr.ip()) {
-            return Err("notification endpoint host is not allowed".into());
-        }
-    }
-    if !resolved {
-        return Err("notification endpoint host could not be resolved".into());
-    }
-
-    Ok(())
-}
-
 fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -1100,6 +1063,13 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || v4.is_broadcast()
         }
         IpAddr::V6(v6) => {
+            // An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) routes to the
+            // embedded IPv4 destination, so classify it as that IPv4 address —
+            // otherwise `::ffff:169.254.169.254`, `::ffff:127.0.0.1`, etc.
+            // sail past the IPv6 predicates and defeat the SSRF guard.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_ip(IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
@@ -1174,6 +1144,26 @@ mod tests {
         assert!(quiet_hours_suppress_event(
             crate::config::NOTIFICATION_EVENT_ENCODE_COMPLETED
         ));
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_internal_addresses_classify_as_private()
+    -> std::result::Result<(), std::net::AddrParseError> {
+        // IPv4-mapped IPv6 must be resolved to the embedded IPv4 address so
+        // the SSRF guard cannot be bypassed via `::ffff:a.b.c.d` literals.
+        for raw in [
+            "::ffff:169.254.169.254", // cloud metadata
+            "::ffff:127.0.0.1",       // loopback
+            "::ffff:10.0.0.1",        // RFC1918
+            "::ffff:192.168.1.1",     // RFC1918
+        ] {
+            let ip: IpAddr = raw.parse()?;
+            assert!(is_private_ip(ip), "{raw} must classify as private");
+        }
+        // A mapped public address must still be allowed.
+        let public: IpAddr = "::ffff:8.8.8.8".parse()?;
+        assert!(!is_private_ip(public), "mapped public IP must stay public");
+        Ok(())
     }
 
     #[tokio::test]

@@ -170,6 +170,10 @@ pub struct AppState {
     pub update_status_cache:
         Arc<tokio::sync::Mutex<Option<(crate::update::UpdateStatus, std::time::Instant)>>>,
     pub library_health_scan_in_progress: Arc<AtomicBool>,
+    /// Single-flight guard for `preview_library_path_handler`. A preview can
+    /// ffprobe many files; without this, concurrent previews would multiply
+    /// subprocess load and pool contention. Cleared via RAII guard.
+    pub library_preview_in_progress: Arc<AtomicBool>,
     /// Set while `install_system_update_handler` is staging and spawning the
     /// helper. Prevents two concurrent installers from racing the running
     /// binary. Cleared via RAII guard on every early return; deliberately
@@ -380,6 +384,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         library_intelligence_cache,
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress,
+        library_preview_in_progress: Arc::new(AtomicBool::new(false)),
         update_install_in_progress,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
