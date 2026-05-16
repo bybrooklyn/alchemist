@@ -20,18 +20,14 @@ const { title } = Astro.props;
         <meta name="viewport" content="width=device-width" />
         <meta name="generator" content={Astro.generator} />
         <title>{title}</title>
-        <ClientRouter />
-    </head>
-    <body>
-        <slot />
-        <ToastRegion client:load />
-        <AuthGuard client:load />
-        <ThemeBootstrap client:load />
         <script is:inline>
-            // First-paint theme application. Reads the cached theme id from
+            // First-paint theme application. Runs in <head> before any body
+            // content is parsed so the cached profile is applied before the
+            // browser's first paint — placing this in <body> leaves a visible
+            // flash of the default theme. Reads the cached theme id from
             // localStorage so navigating between pages doesn't snap back to
             // the default. Server preference remains authoritative — the
-            // ThemeBootstrap island below fetches /api/ui/preferences after
+            // ThemeBootstrap island fetches /api/ui/preferences after
             // hydration and overwrites the cache when it returns.
             function initTheme() {
                 try {
@@ -51,5 +47,12 @@ const { title } = Astro.props;
             initTheme();
             document.addEventListener("astro:after-swap", initTheme);
         </script>
+        <ClientRouter />
+    </head>
+    <body>
+        <slot />
+        <ToastRegion client:load />
+        <AuthGuard client:load />
+        <ThemeBootstrap client:load />
     </body>
 </html>

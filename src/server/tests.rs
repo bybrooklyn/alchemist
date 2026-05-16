@@ -117,6 +117,7 @@ where
         library_intelligence_cache: Arc::new(tokio::sync::Mutex::new(None)),
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress: Arc::new(AtomicBool::new(false)),
+        library_preview_in_progress: Arc::new(AtomicBool::new(false)),
         update_install_in_progress: Arc::new(AtomicBool::new(false)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
@@ -1684,6 +1685,33 @@ async fn fs_endpoints_are_available_during_setup()
     assert!(preview_body.contains("\"total_media_files\":1"));
 
     cleanup_paths(&[browse_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn library_preview_rejects_paths_outside_configured_roots()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // A directory that is NOT a configured library folder or watch dir.
+    let outside_dir = temp_path("alchemist_preview_outside", "dir");
+    std::fs::create_dir_all(&outside_dir)?;
+
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(bearer_json_request(
+            Method::POST,
+            "/api/v1/library/preview",
+            &token,
+            json!({ "path": outside_dir.to_string_lossy().to_string() }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_text(response).await;
+    assert!(body.contains("PREVIEW_PATH_FORBIDDEN"));
+
+    cleanup_paths(&[outside_dir, config_path, db_path]);
     Ok(())
 }
 

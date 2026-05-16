@@ -133,17 +133,76 @@ pub(crate) struct LibraryPreviewResponse {
     pub samples: Vec<LibraryPreviewSample>,
 }
 
-const PREVIEW_DEFAULT_MAX_FILES: usize = 200;
+const PREVIEW_DEFAULT_MAX_FILES: usize = 60;
+const PREVIEW_MAX_FILES_CAP: usize = 200;
 const PREVIEW_SAMPLE_LIMIT: usize = 20;
+
+/// Resolve `candidate` and confirm it canonicalizes inside one of the
+/// configured library directories or watch folders. Mirrors the bound
+/// `enqueue_job_from_submitted_path` enforces, so the preview endpoint
+/// cannot be pointed at arbitrary host paths.
+async fn preview_path_is_within_allowed_root(
+    state: &AppState,
+    candidate: &std::path::Path,
+) -> bool {
+    let Ok(canonical) = tokio::fs::canonicalize(candidate).await else {
+        return false;
+    };
+
+    let mut allowed_roots: Vec<std::path::PathBuf> = {
+        let config = state.config.read().await;
+        config
+            .scanner
+            .directories
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect()
+    };
+    if let Ok(watch_dirs) = state.db.get_watch_dirs().await {
+        for wd in watch_dirs {
+            allowed_roots.push(std::path::PathBuf::from(wd.path));
+        }
+    }
+
+    for root in allowed_roots {
+        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await {
+            if canonical.starts_with(&canonical_root) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 pub(crate) async fn preview_library_path_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<LibraryPreviewRequest>,
 ) -> impl IntoResponse {
+    // Single-flight: a preview can ffprobe up to PREVIEW_MAX_FILES_CAP files,
+    // so reject overlapping requests rather than multiplying subprocess load.
+    struct PreviewGuard(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for PreviewGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    if state
+        .library_preview_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "PREVIEW_BUSY",
+            "A library preview is already running. Try again in a moment.",
+        );
+    }
+    let _preview_guard = PreviewGuard(state.library_preview_in_progress.clone());
+
     let max_files = payload
         .max_files
         .unwrap_or(PREVIEW_DEFAULT_MAX_FILES)
-        .clamp(1, 2000);
+        .clamp(1, PREVIEW_MAX_FILES_CAP);
 
     let preview_root = std::path::PathBuf::from(&payload.path);
     if !preview_root.exists() {
@@ -158,6 +217,13 @@ pub(crate) async fn preview_library_path_handler(
             StatusCode::BAD_REQUEST,
             "PREVIEW_NOT_DIRECTORY",
             format!("Preview path must be a directory: {}", payload.path),
+        );
+    }
+    if !preview_path_is_within_allowed_root(&state, &preview_root).await {
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "PREVIEW_PATH_FORBIDDEN",
+            "Preview path must be within a configured library folder or watch directory.",
         );
     }
 

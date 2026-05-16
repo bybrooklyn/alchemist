@@ -2,13 +2,17 @@
 
 *Forward-looking ideas for features, UX, integrations, and polish. Bugs go in `audit.md`.*
 
-**Last updated:** 2026-05-13
+**Last updated:** 2026-05-15
 
 ## Top picks
 
-1. [OP-6] Redacted diagnostics bundle — makes support and self-debugging safer without exposing secrets.
-2. [OP-3] Guided Restore From Backup Snapshot — turn backup support into a safer recovery workflow.
-3. [AUTO-3] Disk-space guardrails — prevents temp and output volumes from being exhausted during long queues.
+1. [ENC-5] Sample-based VMAF pre-flight quality gate — bail on a bad profile before spending the full GPU hours, not after.
+2. [F-12] Smart crop / black-bar removal — reclaims bitrate currently spent encoding solid black letterbox bars.
+3. [POL-7] Human-readable FFmpeg error summaries — turns cryptic stderr dumps into actionable failure badges.
+4. [INT-9] Radarr/Sonarr tag synchronization — stops the ARRs from re-downloading files Alchemist already upgraded.
+5. [AUTO-5] Scheduled recurring library rescan — cheap with incremental scan; closes the watcher's coverage gaps.
+
+*Earlier picks still relevant: [OP-6] redacted diagnostics bundle, [OP-3] guided restore, [AUTO-3] disk-space guardrails.*
 
 ---
 
@@ -225,6 +229,102 @@ Platform-specific maintenance burden.
 
 ---
 
+### [F-11] Image-based subtitle OCR to text formats
+
+**Category:** Features
+**Size:** L
+**Touches:** backend, pipeline, schema
+
+**Problem or gap:**
+
+Many library files carry image-based subtitles (PGS/HDMV in Blu-ray rips, VobSub in DVD rips). Web and mobile players can't render those without a server-side subtitle burn or transcode — exactly the downstream transcodes a self-hoster runs Alchemist to avoid. Alchemist currently copies subtitle streams through untouched.
+
+**Idea:**
+
+During analysis, flag image-subtitle streams. Offer an opt-in "OCR image subtitles to SRT" step that extracts each PGS/VobSub track, runs it through an OCR pass, and muxes the resulting text subtitle alongside (not replacing) the original. The planner records an `OcrSubtitle` sub-action so the job detail explains what happened.
+
+**First step:**
+
+Prototype the extraction + OCR of a single PGS track outside the pipeline (a standalone function + test against a sample file) to measure accuracy and runtime before wiring it into `planner.rs`.
+
+**Risks / tradeoffs:**
+
+OCR adds a heavy dependency and is imperfect; keep it opt-in, never delete the original image track, and surface a confidence note.
+
+---
+
+### [F-12] Smart crop / black-bar removal
+
+**Category:** Features
+**Size:** M
+**Touches:** backend, pipeline, ffmpeg
+
+**Problem or gap:**
+
+Films mastered at 2.39:1 inside a 16:9 container spend real bitrate encoding solid black letterbox bars. Alchemist never detects or removes them, so every encode of such a title wastes space on black pixels.
+
+**Idea:**
+
+Add an analyzer step that runs `ffmpeg cropdetect` over a few sampled segments, takes the stable consensus crop rectangle, and — when the user opts in — applies a `crop` filter to the encode. The decision explanation records the detected geometry so users can see why dimensions changed.
+
+**First step:**
+
+Add a `cropdetect` sampling helper in `analyzer.rs` that returns `Option<CropRect>` for a path, with a unit test asserting a known letterboxed sample yields the expected rectangle. No encode wiring yet.
+
+**Risks / tradeoffs:**
+
+Variable-aspect content (mixed scope/flat) can be cropped wrong; require a stable detection across multiple samples and keep it opt-in per profile.
+
+---
+
+### [F-13] Per-title complexity-adaptive bitrate
+
+**Category:** Features
+**Size:** L
+**Touches:** backend, planner, ffmpeg
+
+**Problem or gap:**
+
+The planner picks CRF/quality from resolution and a fixed BPP heuristic. A grainy live-action film and a flat animated show at the same resolution get treated alike — the first comes out soft, the second wastes bitrate.
+
+**Idea:**
+
+Run a fast complexity probe (sampled scene-cut density + spatial/temporal information, or a quick CRF test encode of a short slice) and nudge the chosen CRF up or down within a bounded range. Record the measured complexity and the adjustment in the decision explanation.
+
+**First step:**
+
+Add a `complexity_probe(path) -> ComplexityScore` function with a test over two contrasting samples; log what CRF delta it *would* apply without changing live encodes yet.
+
+**Risks / tradeoffs:**
+
+Adds probe time per job; keep the adjustment range small and deterministic so results stay reproducible (a binding design constraint).
+
+---
+
+### [F-14] Chunked distributed encoding (swarm mode)
+
+**Category:** Features
+**Size:** L
+**Touches:** backend, orchestrator, schema, API
+
+**Problem or gap:**
+
+A single 4K REMUX can take hours on one GPU. Homelabbers often have a second machine with an idle GPU but no way to put it to work — Alchemist is strictly single-node.
+
+**Idea:**
+
+Split a job into keyframe-aligned segments, hand segments to registered worker nodes over an authenticated API, encode in parallel, then concatenate and verify. Workers are stateless; the coordinator owns the queue and the resume bookkeeping (which already exists for segment resume).
+
+**First step:**
+
+Define the worker-node registration + segment-claim API surface and a `segments` schema addition; build the local-only path first (coordinator hands segments to its own worker pool) to prove concat + verify before any network protocol.
+
+**Risks / tradeoffs:**
+
+Large surface area, network trust boundary, and concat artifacts at segment seams. Reuse the existing segment-resume machinery; ship local-parallel first, networked second.
+
+---
+
 ## UX
 
 ### [UX-1] Saved filter views on the jobs page
@@ -389,6 +489,78 @@ Implement the panel for `FileSettings.tsx` only, using existing settings data to
 **Risks / tradeoffs:**
 
 An inaccurate impact summary is worse than none; keep the first version conservative and explicit about what it does not know.
+
+---
+
+### [UX-10] "Storage reclaimed" impact widget
+
+**Category:** UX
+**Size:** S
+**Touches:** frontend
+
+**Problem or gap:**
+
+The Statistics page shows raw byte counts. The single most motivating number in the app — total space saved — lands as an abstract "2.4 TB" with no felt sense of scale.
+
+**Idea:**
+
+Add a compact dashboard widget that translates cumulative savings into tangible equivalents the user picks the framing for: "≈ 610 more 1080p movies", "≈ 3.1 months of a 4K stream", or a simple cost-per-TB estimate. Pure presentation over `get_aggregated_stats` data already on hand.
+
+**First step:**
+
+Add the widget to `StatsCharts.tsx` with one hardcoded equivalence (movies-at-4GB) and verify it reads the existing savings total.
+
+**Risks / tradeoffs:**
+
+Equivalences are rough; label them "approximate" and keep the raw number visible alongside.
+
+---
+
+### [UX-11] Library bitrate-inefficiency heatmap
+
+**Category:** UX
+**Size:** M
+**Touches:** backend, frontend
+
+**Problem or gap:**
+
+A user with a large library has no way to see *where* the worst offenders live. The Intelligence page lists recommendations but not a spatial sense of which folders/shows hold the most reclaimable space.
+
+**Idea:**
+
+Render a treemap (or sortable folder table) keyed by reclaimable bytes — each node sized by current footprint and shaded by estimated savings ratio from the planner's dry-run. Clicking a node pre-filters the jobs view or enqueues that subtree.
+
+**First step:**
+
+Add a backend aggregation that returns, per top-level library subfolder, `{ file_count, total_bytes, estimated_savings_bytes }`, and render it as a plain sorted table before attempting the treemap.
+
+**Risks / tradeoffs:**
+
+Computing estimated savings library-wide is expensive — reuse cached probe/plan data and bound the work; never re-probe on render.
+
+---
+
+### [UX-12] Aggregate queue ETA on the dashboard
+
+**Category:** UX
+**Size:** M
+**Touches:** backend, frontend
+
+**Problem or gap:**
+
+Per-job ETA exists, but a user who just enqueued 800 files has no idea whether the whole queue finishes tonight or next week.
+
+**Idea:**
+
+Compute a rolling queue-wide ETA: take recent completed-job throughput (bytes/sec or seconds-of-video/sec by codec), multiply by remaining queued work, divide by the concurrency limit. Show "~Library finishes: Thu 02:00" on the dashboard, with a confidence band.
+
+**First step:**
+
+Add a backend endpoint that returns `{ remaining_jobs, est_seconds_remaining, sample_size }` from recent `encode_stats`, and render it as plain text before adding any band/visualization.
+
+**Risks / tradeoffs:**
+
+Throughput varies wildly by content; present a range, not a false-precision timestamp, and degrade gracefully when the sample is small.
 
 ---
 
@@ -583,6 +755,30 @@ Generic webhooks can become an escape hatch for unsafe paths; keep the scope nar
 
 ---
 
+### [INT-9] Radarr / Sonarr tag synchronization
+
+**Category:** Integrations
+**Size:** M
+**Touches:** backend, config
+
+**Problem or gap:**
+
+INT-1 ingests ARR webhooks, but the relationship is one-way. After Alchemist replaces a file with an AV1 encode, the ARRs still believe the original release is on disk — a quality-profile upgrade or a manual "search" can re-download and overwrite Alchemist's work.
+
+**Idea:**
+
+After a successful replace, call the Radarr/Sonarr API to add a tag (e.g. `alchemist-av1`) to the movie/episode, and optionally honor an inbound `alchemist-skip` tag so users can exempt titles. The tag also gives users a filter in the ARRs to see what's been processed.
+
+**First step:**
+
+Add config for ARR base URL + API key (reuse the ARR settings surface) and implement the tag-add call behind a feature flag; test against a live Radarr instance with one title.
+
+**Risks / tradeoffs:**
+
+Couples Alchemist to ARR API versions; keep it best-effort — a failed tag call must not fail the job, just log.
+
+---
+
 ## Performance
 
 ### [PERF-1] FFprobe result cache
@@ -679,6 +875,30 @@ Create a disabled-by-default config flag and a CLI-only pre-analysis command tha
 **Risks / tradeoffs:**
 
 Background work can surprise users on slow disks; keep it opt-in and clearly bounded by concurrency and schedule settings.
+
+---
+
+### [PERF-5] Background probe-cache pre-warming
+
+**Category:** Performance
+**Size:** S
+**Touches:** backend, system
+
+**Problem or gap:**
+
+When a user adds a watch folder, the first interaction with it — a library preview (F-2), an Intelligence run, or the first scan — pays the full cold ffprobe cost serially. The UI feels slow precisely at the moment of first impression.
+
+**Idea:**
+
+When a watch dir is added, spawn a low-priority bounded task pool that walks the tree and runs *ffprobe only* (no encode planning) to hydrate `media_probe_cache`. By the time the user opens a preview or the planner runs, most files are warm. Gated by a concurrency cap and the off-peak scheduler.
+
+**First step:**
+
+Hook watch-dir creation to enqueue a pre-warm task that probes up to N files with `analyze_with_cache`, and confirm cache rows appear without blocking the request.
+
+**Risks / tradeoffs:**
+
+Spawning probes on disk-add can surprise users on slow NAS volumes; make it opt-in, respect the engine pause state, and cap concurrency low.
 
 ---
 
@@ -825,6 +1045,54 @@ Too much timestamp detail can clutter dense tables; keep exact values in tooltip
 
 ---
 
+### [POL-7] Human-readable FFmpeg error summaries
+
+**Category:** Polish
+**Size:** M
+**Touches:** backend, frontend
+
+**Problem or gap:**
+
+When an encode fails, the job detail surfaces a reason code plus raw FFmpeg stderr. A user sees a wall of hex and codec jargon and can't tell "my GPU ran out of memory" from "the source file is corrupt".
+
+**Idea:**
+
+Extend the existing failure-explanation classifier with a heuristic pass over FFmpeg stderr that recognizes common signatures — NVENC out-of-memory, unsupported pixel format, corrupt input packet, no space left on device — and emits a clean badge + one-sentence remedy. The raw log stays available behind a disclosure.
+
+**First step:**
+
+Collect a handful of real failing stderr samples, add a `classify_ffmpeg_stderr(&str) -> Option<KnownFailure>` function with table-driven matches and unit tests, and surface the result in the existing failure explanation payload.
+
+**Risks / tradeoffs:**
+
+Heuristics drift as FFmpeg versions change; keep the match table small, well-tested, and always fall back to the raw log.
+
+---
+
+### [POL-8] Live FFmpeg filter-graph visualization
+
+**Category:** Polish
+**Size:** L
+**Touches:** backend, frontend
+
+**Problem or gap:**
+
+`FFmpegCommandBuilder` assembles long argument chains (hwaccel, filters, encoder flags). When an encode behaves unexpectedly, neither the user nor a maintainer has a readable view of the actual pipeline that ran.
+
+**Idea:**
+
+Render the planned pipeline for a job as a small node graph — input → decoder → filters (crop/scale/tonemap) → encoder → muxer → output — derived from the same structured plan the builder consumes. Static (planned) first; a live variant that highlights the active stage is a follow-up.
+
+**First step:**
+
+Have `FFmpegCommandBuilder` expose a structured `PipelineDescription` (it already owns the pieces) and render it as an indented text outline in the job detail before attempting a real graph.
+
+**Risks / tradeoffs:**
+
+A graph that drifts from the real args is worse than none; derive it from the same plan struct the builder uses, never from re-parsing the arg vector.
+
+---
+
 ## Observability
 
 ### [OBS-1] Prometheus `/metrics` endpoint
@@ -941,6 +1209,30 @@ Implement a CLI-only `alchemist diagnostics --output diagnostics.zip` command th
 **Risks / tradeoffs:**
 
 Redaction mistakes are privacy bugs; use allowlist output and tests for token/path/url masking before adding the UI.
+
+---
+
+### [OBS-6] Per-encode energy and cost estimate
+
+**Category:** Observability
+**Size:** M
+**Touches:** backend, frontend, config
+
+**Problem or gap:**
+
+Encoding is the single biggest power draw a homelab user adds by running Alchemist, but the app gives no sense of what a queue costs to run. Off-peak scheduling exists partly for cost reasons, yet the cost itself is invisible.
+
+**Idea:**
+
+Estimate energy per job from encode wall-time × an average-power figure (user-supplied per-encoder watt estimate, or read from `nvidia-smi` power draw where available). Multiply by a configurable electricity rate to show "this encode ≈ 0.18 kWh ≈ $0.04" in job detail and a running total on the dashboard.
+
+**First step:**
+
+Add config for `electricity_rate` and a per-encoder watt estimate; compute and store `estimated_kwh` on `encode_stats` (additive column) from existing wall-time. Display the per-job number first.
+
+**Risks / tradeoffs:**
+
+Estimates are coarse without real power telemetry; label clearly as estimates and let users tune the watt figure.
 
 ---
 
@@ -1089,6 +1381,30 @@ Config diffs can expose secrets in the browser; redact sensitive values in both 
 
 ---
 
+### [OP-7] Config-change audit log
+
+**Category:** Operator
+**Size:** M
+**Touches:** backend, frontend, schema
+
+**Problem or gap:**
+
+Settings, profiles, watch dirs, and engine mode can all change at runtime, but there's no record of *what* changed, *when*, or *via which surface* (UI, API token, wizard). When behavior shifts unexpectedly, a self-hoster has no trail to consult.
+
+**Idea:**
+
+Append a row to a `config_audit` table on every accepted config mutation: timestamp, actor (session user or API token name), the setting key, and old→new values (secrets redacted). Surface a read-only "Change history" view in Settings.
+
+**First step:**
+
+Add the additive `config_audit` table and write one row from the settings-bundle update handler; no UI yet — confirm rows land with correct actor attribution.
+
+**Risks / tradeoffs:**
+
+Must redact secret values before persistence, not just before display; an audit log that stores plaintext tokens is a worse leak than no log.
+
+---
+
 ## Encoding
 
 ### [ENC-1] Audio loudness normalization (EBU R128)
@@ -1187,6 +1503,78 @@ Grain preservation usually costs storage, so the UI must explain that this trade
 
 ---
 
+### [ENC-5] Sample-based VMAF pre-flight quality gate
+
+**Category:** Encoding
+**Size:** L
+**Touches:** backend, pipeline, ffmpeg
+
+**Problem or gap:**
+
+Alchemist measures VMAF *after* a full encode. By then the GPU hours are spent — if the result is poor, the user has already paid for it. There's no way to bail early on a title the chosen profile handles badly.
+
+**Idea:**
+
+Before committing to the full encode, encode a short representative slice (e.g. 3×10s segments), measure VMAF on just those, and gate: if the sample VMAF is below a per-profile threshold, either abort with an explanatory failure or auto-bump quality one step and retry the sample. Distinct from ENC-3 (bake-off compares profiles) — this is a go/no-go on the chosen one.
+
+**First step:**
+
+Add a `sample_vmaf(path, plan) -> f64` helper that encodes and scores a few slices; log the predicted score against the eventual full-encode score on real jobs to validate the correlation before gating anything.
+
+**Risks / tradeoffs:**
+
+Sample VMAF can mispredict for unevenly complex titles; pick segments across the runtime and keep the gate opt-in with a conservative threshold.
+
+---
+
+### [ENC-6] Interactive side-by-side encode preview
+
+**Category:** Encoding
+**Size:** M
+**Touches:** backend, frontend
+
+**Problem or gap:**
+
+A user tuning a custom profile can't see what their CRF/codec choice actually looks like without encoding a whole file and watching it in a separate player.
+
+**Idea:**
+
+Add a "Preview this profile" action that encodes a single ~30s slice with the current settings and serves it next to the same slice from the source for visual A/B comparison in the browser. Reuses the clip-encode path the orchestrator already supports (`clip_start_seconds`/`clip_duration_seconds`).
+
+**First step:**
+
+Wire a `POST /api/profiles/preview-clip` endpoint that produces a short clip to a temp path and streams it back; render a basic two-`<video>` comparison in the profile editor.
+
+**Risks / tradeoffs:**
+
+Browser video tags can't show every codec; fall back to a frame-grab image comparison when the encoded codec isn't browser-playable, and clean up temp clips with an RAII guard.
+
+---
+
+### [ENC-7] Zero-copy hardware decode → encode pipeline
+
+**Category:** Encoding
+**Size:** M
+**Touches:** backend, ffmpeg
+
+**Problem or gap:**
+
+When both decode and encode run on the same GPU, frames can stay in GPU memory the whole way. If the FFmpeg command doesn't explicitly request it, frames round-trip through system RAM — wasted bandwidth and a CPU bottleneck on low-power NAS hardware.
+
+**Idea:**
+
+In `FFmpegCommandBuilder`, when the decode and encode backends are the same vendor (NVDEC↔NVENC, QSV↔QSV, VAAPI↔VAAPI), emit the flags that keep frames on-device (`-hwaccel_output_format`, matching `-hwaccel`, hardware filter chains). Detect capability once and cache it like `EncoderCapabilities`.
+
+**First step:**
+
+Add a unit test asserting `build_args()` for a same-vendor NVENC job includes `-hwaccel cuda -hwaccel_output_format cuda`, then validate real throughput on hardware.
+
+**Risks / tradeoffs:**
+
+Hardware filter chains differ per vendor and break some filters (crop/tonemap); gate per-platform and fall back to the copy-through path when a filter needs system memory.
+
+---
+
 ## Automation
 
 ### [AUTO-1] Rules engine — conditional profile routing
@@ -1258,6 +1646,54 @@ Add a backend guard before job execution that logs and blocks when the output ro
 **Risks / tradeoffs:**
 
 Free-space APIs vary by platform and mount type; fallback behavior must fail safe without blocking forever on unsupported filesystems.
+
+---
+
+### [AUTO-4] Worker-node auto-sleep and Wake-on-LAN
+
+**Category:** Automation
+**Size:** M
+**Touches:** backend, config
+
+**Problem or gap:**
+
+A homelabber with a dedicated GPU box doesn't want it drawing power 24/7 to service an occasionally-empty queue, but also doesn't want to wake it by hand every time work appears.
+
+**Idea:**
+
+When the queue depth crosses a threshold, issue a Wake-on-LAN magic packet to configured worker MAC addresses; when the queue has been empty for a configurable idle period, issue a sleep/suspend command (SSH or an agent endpoint) to those nodes. Pairs naturally with F-14 swarm mode but is also useful for a single remote node.
+
+**First step:**
+
+Add config for worker MAC/host entries and implement the WoL packet send + a manual "wake now" button; defer the auto-sleep half until F-14 lands.
+
+**Risks / tradeoffs:**
+
+Sleeping a node mid-encode would lose work; only suspend after confirming the node reports zero in-flight jobs, and make the whole feature opt-in.
+
+---
+
+### [AUTO-5] Scheduled recurring library rescan
+
+**Category:** Automation
+**Size:** S
+**Touches:** backend, config, scheduler
+
+**Problem or gap:**
+
+The file watcher catches new files in real time, but watchers miss events on network mounts, during downtime, or when files are added while Alchemist is stopped. The only catch-up is a manual "Scan Now". New media can sit unprocessed indefinitely.
+
+**Idea:**
+
+Add a configurable recurring full scan (e.g. "every night at 04:00" or "every 6 hours") driven by the existing scheduler. With incremental scan (PERF-3) already landed, a recurring scan is cheap — it mostly prunes unchanged subtrees.
+
+**First step:**
+
+Add a `scan_interval` / `scan_cron` config field and have the scheduler trigger `library_scanner.start_scan()` on that cadence; surface the next-scan time in the UI.
+
+**Risks / tradeoffs:**
+
+A recurring scan during peak hours competes with encodes for disk I/O; default to off-peak and let it respect the engine pause state.
 
 ---
 
