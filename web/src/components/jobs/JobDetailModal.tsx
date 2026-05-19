@@ -5,6 +5,7 @@ import { twMerge } from "tailwind-merge";
 import { useEffect, useState, type RefObject } from "react";
 import type React from "react";
 import { apiJson } from "../../lib/api";
+import TimeDisplay from "../ui/TimeDisplay";
 import type { JobDetail, EncodeStats, ExplanationView, LogEntry, ConfirmConfig, Job, ProcessorStatus } from "./types";
 import { formatBytes, formatDuration, logLevelClass, isJobActive } from "./types";
 
@@ -439,7 +440,7 @@ export function JobDetailModal({
                                                         {attempt.failure_summary && (
                                                             <p className="mt-0.5 text-helios-slate/80 truncate">{attempt.failure_summary}</p>
                                                         )}
-                                                        <p className="mt-0.5 text-helios-slate/50">{new Date(attempt.finished_at).toLocaleString()}</p>
+                                                        <TimeDisplay value={attempt.finished_at} className="mt-0.5 block text-helios-slate/50" />
                                                     </div>
                                                 </div>
                                             ))}

@@ -12,7 +12,7 @@ use axum::{
     response::IntoResponse,
 };
 use chrono::Utc;
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

@@ -100,6 +100,8 @@ test("savings overview renders on stats page", async ({ page }) => {
 
   await expect(page.getByText("Total saved")).toBeVisible();
   await expect(page.getByText(/saved across/i)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Storage reclaimed" })).toBeVisible();
+  await expect(page.getByText("186 more 1080p movies")).toBeVisible();
   await expect(page.getByText("Unable to load storage savings.")).toHaveCount(0);
 });
 

@@ -136,9 +136,9 @@ documentation, or iteration.
 - Keep this narrowly scoped to automation-supporting UX problems
 
 ### Keyboard Shortcuts (UX-2)
-- Add a concrete shortcut set for common jobs/logs/conversion actions
+- First jobs-page cut is implemented: `/` focuses job search, `?` opens shortcut help, and `Esc` closes the help modal without intercepting text-entry fields
+- Expand the shortcut set for common jobs/logs/conversion actions
 - Avoid a vague "shortcut layer everywhere" rollout
-- First likely cut if scope pressure appears
 
 ### Features from DESIGN_PHILOSOPHY.md
 - Add batch job templates
@@ -176,9 +176,9 @@ documentation, or iteration.
 - Flagship trust feature; aligns with "never overwrite by default" design principle
 
 ### Library Plan Preview (F-2)
-- `POST /api/library/preview` runs the planner in dry-run over a path and returns skip/remux/encode counts plus estimated savings
-- Surface as a "Preview" action in Watch Folders and the setup wizard; nothing is enqueued
-- Cap scope (first N files or fixed timeout) and show partial-preview state clearly
+- First web cut is implemented: `POST /api/v1/library/preview` runs the planner in dry-run over a path and returns skip/remux/encode/error counts plus samples
+- Watch Folders surfaces a Preview action and makes clear that nothing is enqueued
+- Future iteration: add the same preview affordance to setup and continue hardening partial-preview messaging
 
 ### Pipeline Self-Test (OP-2)
 - Ship a tiny embedded public-domain sample clip and a `alchemist selftest` CLI + UI button

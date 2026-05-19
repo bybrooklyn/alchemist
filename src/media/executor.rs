@@ -485,11 +485,13 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
         };
         let analysis = MediaAnalysis {
             metadata,
             warnings: Vec::new(),
             confidence: AnalysisConfidence::Low,
+            analysis_report: crate::media::pipeline::AnalyzerReport::default(),
         };
         let plan = TranscodePlan {
             decision: TranscodeDecision::Transcode {

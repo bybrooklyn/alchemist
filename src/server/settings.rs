@@ -16,7 +16,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::sync::Arc;
@@ -433,6 +433,61 @@ pub(crate) struct RawConfigPayload {
     raw_toml: String,
 }
 
+#[derive(Serialize)]
+pub(crate) struct ConfigValidationSummary {
+    output_codec: String,
+    replace_strategy: String,
+    output_root_set: bool,
+    delete_source: bool,
+    watch_dirs: usize,
+    notification_targets: usize,
+    schedule_windows: usize,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ConfigValidationResponse {
+    valid: bool,
+    warnings: Vec<String>,
+    summary: ConfigValidationSummary,
+}
+
+fn config_validation_warnings(config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if config.files.delete_source {
+        warnings.push(
+            "delete_source is enabled; successful future transcodes can remove originals."
+                .to_string(),
+        );
+    }
+    if config.files.replace_strategy == "replace" {
+        warnings.push(
+            "replace_strategy is replace; existing outputs can be replaced after verification."
+                .to_string(),
+        );
+    }
+    if config.scanner.directories.is_empty() && config.scanner.extra_watch_dirs.is_empty() {
+        warnings.push("No library directories are configured.".to_string());
+    }
+    warnings
+}
+
+fn config_validation_response(mut config: Config) -> ConfigValidationResponse {
+    config.canonicalize_for_save();
+    ConfigValidationResponse {
+        valid: true,
+        warnings: config_validation_warnings(&config),
+        summary: ConfigValidationSummary {
+            output_codec: config.transcode.output_codec.as_str().to_string(),
+            replace_strategy: config.files.replace_strategy.clone(),
+            output_root_set: config.files.output_root.is_some(),
+            delete_source: config.files.delete_source,
+            watch_dirs: config.scanner.directories.len() + config.scanner.extra_watch_dirs.len(),
+            notification_targets: config.notifications.targets.len(),
+            schedule_windows: config.schedule.windows.len(),
+        },
+    }
+}
+
 pub(crate) async fn get_settings_config_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
@@ -442,6 +497,23 @@ pub(crate) async fn get_settings_config_handler(
     };
     let normalized = state.config.read().await.clone();
     axum::Json(crate::settings::config_response(raw_toml, normalized)).into_response()
+}
+
+pub(crate) async fn validate_settings_config_handler(
+    axum::Json(payload): axum::Json<RawConfigPayload>,
+) -> impl IntoResponse {
+    let config = match crate::settings::parse_raw_config(&payload.raw_toml) {
+        Ok(config) => config,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "RAW_CONFIG_INVALID",
+                err.to_string(),
+            );
+        }
+    };
+
+    axum::Json(config_validation_response(config)).into_response()
 }
 
 pub(crate) async fn update_settings_config_handler(

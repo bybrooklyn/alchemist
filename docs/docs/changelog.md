@@ -3,6 +3,56 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
+## [0.3.3-rc.4] - 2026-05-19
+
+### Performance & Reliability
+
+- Stats top-reason trends now use dedicated indexes on `decisions(created_at, action)` and `job_failure_explanations(updated_at)` (schema 16), preventing full table scans on the Statistics page that could leave it loading indefinitely on large libraries.
+- The Statistics page now uses `Promise.allSettled` so a slow or failed endpoint never freezes the whole view; partial results render alongside a visible error state.
+- The media analyzer now emits a typed factual report with deterministic labels and optional metrics for BPP density, remux-like density, heavy/lossless audio, image/styled subtitles, HDR/color metadata, Dolby Vision side data, interlacing, VFR hints, and missing metadata warnings. This is analyzer-only evidence for future explanations and Library Intelligence; planner decisions are unchanged.
+- Analyzer metadata now records source chapter counts, and finalization logs a non-fatal job warning if the promoted output has fewer chapters than the source.
+
+### Frontend Platform
+
+- Frontend dependencies were refreshed for the Astro 6 / React 19 / Tailwind 4 generation. Tailwind now uses the official Vite plugin, Vite is allowed to resolve to Astro 6's required major version, and Recharts tooltip typings were updated for Recharts 3.
+- Docs dependencies now force the patched `ws` 8.20.1 transitive resolution used by Docusaurus' webpack tooling, keeping the release audit clean.
+
+### UX & UI
+
+- Selected color profile persists across all pages and survives navigation. A first-paint script reads a localStorage cache, and a global `ThemeBootstrap` island syncs the server preference and writes it back to the cache.
+- About dialog motion now matches the System modal and animates out of the About button position when triggered from the header.
+- `AboutDialog` `titleCase` now tolerates missing channel/install-type/verification fields instead of crashing on undefined.
+- Jobs now support first-pass keyboard shortcuts: `/` focuses job search, `?` opens the shortcut reference, and `Esc` closes it without intercepting text-entry fields.
+- Jobs search now matches decision and failure explanation text in addition to file paths, making skip/failure reasons discoverable from the table search box.
+- The mobile Dashboard now prioritizes an Active Now panel with active job progress and hides the desktop stats strip on narrow screens.
+- The Dashboard now includes a queue-wide ETA panel backed by recent completed encode samples and the current concurrency limit.
+- Statistics now includes a Storage reclaimed panel that keeps the raw saved bytes visible and adds an approximate 4 GB movie equivalent.
+- Dense job timestamps now use a shared relative-time display with exact local and UTC timestamps available on hover/focus.
+- Job rows now expose the existing action menu on right-click, including a Copy input path action for power-user workflows.
+- File Settings now shows a conservative Impact panel that summarizes staged output naming, output root, replace-policy, and delete-source changes before save.
+- Failure explanations now use a reusable FFmpeg stderr classifier for common disk-full, NVENC resource, pixel-format, corrupt-input, and encoder-parameter signatures.
+
+### Operations
+
+- Schema migration coverage now asserts schema 16 and verifies the trend indexes against the v0.2.5 upgrade fixture.
+- Dashboard e2e coverage was refreshed for the About dialog payload shape and hardened version selectors.
+- Database backup restore planning now has a dry-run validation endpoint that inspects uploaded `.db.gz` snapshots without mutating the live database.
+- Direct binary users can run `--install` or `--install-directory <PATH>` to copy the current executable into a target install directory.
+- The raw config editor now has a no-persistence validation endpoint and UI preview with redacted summary counts and high-risk warnings.
+- Watch Folders plan preview is covered end-to-end and exposes an accessible preview action per folder.
+
+### Source-Device Engine Mode
+
+- Source-device tracking (PERF-2, schema 14) now drives the Balanced engine mode: a second concurrent job is never claimed from the same physical disk while one is in flight.
+
+### Incremental Scan
+
+- Incremental scan (PERF-3, schema 15) records `watch_dirs.last_scanned_at` and a `media_probe_cache.file_id` identity hint so unchanged files skip re-analysis when path, size, mtime, and inode/volume index all match.
+
+### Data Safety
+
+- `POST /api/jobs/clear-history?status=…` now rejects or refuses to delete when the filter parses to no recognized values; previously a mistyped query parameter could wipe the entire jobs table.
+
 ## [0.3.2-rc.2] - 2026-04-29
 
 ### Integrations & Automation

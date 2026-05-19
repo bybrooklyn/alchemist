@@ -212,7 +212,13 @@ fn frame_hash(path: &Path) -> Result<String> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(format!("{:x}", Sha256::digest(output.stdout)))
+    let digest = Sha256::digest(output.stdout);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    Ok(out)
 }
 
 fn ffprobe_json(path: &Path) -> Result<serde_json::Value> {

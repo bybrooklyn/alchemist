@@ -8,13 +8,13 @@ keywords:
   - remux vs transcode
 ---
 
-The planner runs once per job during the analysis phase and produces one of three decisions:
+The planner runs once per job after the [Media Analyzer](/analyzer) has normalized the FFprobe result. It produces one of three decisions:
 
 - **Transcode** — re-encode the video stream.
 - **Remux** — copy streams into a different container (lossless, fast).
 - **Skip** — mark the file as not worth processing.
 
-Decisions are deterministic and based solely on file metadata and settings.
+Decisions are deterministic and based solely on stable media metadata and settings. Analyzer labels and metrics are factual evidence for explanations and future Library Intelligence work; they do not currently change planner policy.
 
 ---
 
@@ -127,6 +127,8 @@ Files smaller than `min_file_size_mb` (default: 50 MB) are skipped. Small files 
 ### incomplete_metadata
 
 FFprobe could not determine resolution (width or height is zero). Without resolution, BPP cannot be computed and no valid decision can be made.
+
+The analyzer also records warning labels for missing video bitrate, container bitrate, duration, frame rate, bit depth, and unrecognized pixel formats so future UI surfaces can explain the missing evidence directly.
 
 **Diagnose:** run Library Doctor on the file.
 

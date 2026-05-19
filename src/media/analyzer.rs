@@ -1,7 +1,8 @@
 use crate::error::{AlchemistError, Result};
 use crate::media::pipeline::{
-    AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, AudioStreamMetadata,
-    DynamicRange, MediaAnalysis, MediaMetadata, SubtitleStreamMetadata, TranscodeDecision,
+    AnalysisConfidence, AnalysisWarning, Analyzer as AnalyzerTrait, AnalyzerLabel, AnalyzerMetrics,
+    AnalyzerReport, AudioStreamMetadata, DynamicRange, MediaAnalysis, MediaMetadata,
+    SubtitleStreamMetadata, TranscodeDecision,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -20,8 +21,9 @@ const FFPROBE_ANALYZE_ARGS: &[&str] = &[
     "-print_format",
     "json",
     "-show_entries",
-    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
+    "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range,field_order:stream_side_data=side_data_type:stream_tags=language,title:chapter=id",
 ];
+const ANALYZER_REPORT_CACHE_SCHEMA: &str = "analysis_report_v1";
 static FFPROBE_VERSION_MARKER: OnceCell<String> = OnceCell::const_new();
 
 async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output> {
@@ -70,9 +72,12 @@ async fn ffprobe_version_marker() -> String {
                         .next()
                         .map(|line| line.trim().to_string())
                         .filter(|line| !line.is_empty())
-                        .unwrap_or_else(|| "ffprobe:unknown".to_string())
+                        .map(|line| format!("{line}|{ANALYZER_REPORT_CACHE_SCHEMA}"))
+                        .unwrap_or_else(|| {
+                            format!("ffprobe:unknown|{ANALYZER_REPORT_CACHE_SCHEMA}")
+                        })
                 }
-                _ => "ffprobe:unknown".to_string(),
+                _ => format!("ffprobe:unknown|{ANALYZER_REPORT_CACHE_SCHEMA}"),
             }
         })
         .await
@@ -116,6 +121,13 @@ fn file_id_marker(metadata: &std::fs::Metadata) -> Option<String> {
 pub struct FfprobeMetadata {
     pub streams: Vec<Stream>,
     pub format: Format,
+    #[serde(default)]
+    pub chapters: Vec<Chapter>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Chapter {
+    pub id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -141,6 +153,14 @@ pub struct Stream {
     pub color_transfer: Option<String>,
     pub color_space: Option<String>,
     pub color_range: Option<String>,
+    pub field_order: Option<String>,
+    #[serde(default)]
+    pub side_data_list: Vec<SideData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SideData {
+    pub side_data_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -246,25 +266,13 @@ impl AnalyzerTrait for FfmpegAnalyzer {
 
             let mut warnings = Vec::new();
 
-            let fps = Analyzer::parse_fps(
-                video_stream
-                    .avg_frame_rate
-                    .as_deref()
-                    .or(video_stream.r_frame_rate.as_deref())
-                    .unwrap_or(""),
-            )
-            .or_else(|| {
-                let stream_duration = video_stream.duration.as_deref().and_then(parse_f64);
-                let format_duration = parse_f64(&metadata.format.duration);
-                let duration = stream_duration.or(format_duration)?;
-                let frames = video_stream.nb_frames.as_deref().and_then(parse_f64)?;
-                if duration > 0.0 {
-                    Some(frames / duration)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0.0);
+            let fps_from_average_rate = video_stream
+                .avg_frame_rate
+                .as_deref()
+                .and_then(Analyzer::parse_fps);
+            let fps_from_frame_count =
+                fps_from_frame_count(video_stream, parse_f64(&metadata.format.duration));
+            let fps = selected_metadata_fps(video_stream, fps_from_frame_count);
 
             let duration_secs = parse_f64(&metadata.format.duration)
                 .or_else(|| video_stream.duration.as_deref().and_then(parse_f64))
@@ -305,7 +313,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 AnalysisConfidence::Medium
             };
 
-            let metadata = MediaMetadata {
+            let media_metadata = MediaMetadata {
                 path: path.clone(),
                 duration_secs,
                 codec_name: video_stream.codec_name.clone(),
@@ -331,12 +339,23 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 audio_is_heavy,
                 subtitle_streams,
                 audio_streams,
+                chapter_count: u32::try_from(metadata.chapters.len()).unwrap_or(u32::MAX),
             };
 
+            let analysis_report = build_analyzer_report(
+                &media_metadata,
+                &warnings,
+                &metadata.streams,
+                video_stream,
+                fps_from_average_rate,
+                fps_from_frame_count,
+            );
+
             Ok(MediaAnalysis {
-                metadata,
+                metadata: media_metadata,
                 warnings,
                 confidence,
+                analysis_report,
             })
         })
         .await
@@ -460,7 +479,7 @@ impl Analyzer {
                 "-print_format",
                 "json",
                 "-show_entries",
-                "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range:stream_tags=language,title",
+                "format=duration,size,bit_rate,format_name,format_long_name:stream=codec_type,codec_name,pix_fmt,width,height,coded_width,coded_height,bit_rate,bits_per_raw_sample,channel_layout,channels,avg_frame_rate,r_frame_rate,nb_frames,duration,disposition,color_primaries,color_transfer,color_space,color_range,field_order:stream_side_data=side_data_type:stream_tags=language,title:chapter=id",
             ],
             path,
         )
@@ -471,6 +490,33 @@ impl Analyzer {
         })?;
 
         Ok(metadata)
+    }
+
+    pub async fn probe_chapter_count(path: &Path) -> Result<u32> {
+        #[derive(Deserialize)]
+        struct ChapterProbe {
+            #[serde(default)]
+            chapters: Vec<Chapter>,
+        }
+
+        let output = run_ffprobe(
+            &[
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "chapter=id",
+            ],
+            path,
+        )
+        .await?;
+
+        let parsed: ChapterProbe = serde_json::from_slice(&output.stdout).map_err(|e| {
+            AlchemistError::Analyzer(format!("Failed to parse ffprobe JSON: {}", e))
+        })?;
+
+        Ok(u32::try_from(parsed.chapters.len()).unwrap_or(u32::MAX))
     }
 
     pub async fn probe_video_codec(path: &Path) -> Result<String> {
@@ -730,6 +776,277 @@ fn detect_dynamic_range(
     }
 }
 
+// Density labels are factual buckets for later UI/intelligence evidence.
+// They are intentionally not transcode/skip policy thresholds.
+const HIGH_NORMALIZED_BPP_THRESHOLD: f64 = 0.12;
+const LOW_NORMALIZED_BPP_THRESHOLD: f64 = 0.03;
+// Container bitrate within 8% of video bitrate usually means little mux overhead.
+const REMUX_LIKE_CONTAINER_OVERHEAD_RATIO: f64 = 1.08;
+
+fn build_analyzer_report(
+    metadata: &MediaMetadata,
+    warnings: &[AnalysisWarning],
+    streams: &[Stream],
+    video_stream: &Stream,
+    fps_from_average_rate: Option<f64>,
+    fps_from_frame_count: Option<f64>,
+) -> AnalyzerReport {
+    let mut labels = Vec::new();
+    let estimated_container_bitrate_bps = estimated_container_bitrate_bps(metadata);
+    let raw_bpp = bpp(
+        metadata.video_bitrate_bps,
+        metadata.width,
+        metadata.height,
+        metadata.fps,
+    );
+    let normalized_bpp = raw_bpp.map(|value| normalize_bpp(value, metadata.width));
+    let report_audio_bitrate_bps = total_audio_bitrate_bps(streams).or(metadata.audio_bitrate_bps);
+    let audio_bitrate_share = match (report_audio_bitrate_bps, estimated_container_bitrate_bps) {
+        (Some(audio), Some(total)) if total > 0 => {
+            Some((audio as f64 / total as f64).clamp(0.0, 1.0))
+        }
+        _ => None,
+    };
+
+    if normalized_bpp.is_some_and(|value| value >= HIGH_NORMALIZED_BPP_THRESHOLD) {
+        push_label(&mut labels, AnalyzerLabel::HighBppDensity);
+    }
+    if normalized_bpp.is_some_and(|value| value <= LOW_NORMALIZED_BPP_THRESHOLD) {
+        push_label(&mut labels, AnalyzerLabel::LowBppDensity);
+    }
+    if remux_like_density(metadata.video_bitrate_bps, estimated_container_bitrate_bps) {
+        push_label(&mut labels, AnalyzerLabel::RemuxLikeDensity);
+    }
+    if metadata.audio_is_heavy
+        || streams
+            .iter()
+            .filter(|stream| stream.codec_type == "audio")
+            .any(Analyzer::should_transcode_audio)
+    {
+        push_label(&mut labels, AnalyzerLabel::HeavyAudio);
+    }
+    if metadata
+        .audio_codec
+        .as_deref()
+        .is_some_and(audio_codec_is_lossless)
+        || streams
+            .iter()
+            .filter(|stream| stream.codec_type == "audio")
+            .any(|stream| audio_codec_is_lossless(&stream.codec_name))
+    {
+        push_label(&mut labels, AnalyzerLabel::LosslessAudio);
+    }
+
+    let image_subtitle_count = metadata
+        .subtitle_streams
+        .iter()
+        .filter(|stream| subtitle_codec_is_image(&stream.codec_name))
+        .count() as u32;
+    let text_subtitle_count = metadata
+        .subtitle_streams
+        .iter()
+        .filter(|stream| subtitle_codec_is_text(&stream.codec_name))
+        .count() as u32;
+    if image_subtitle_count > 0 {
+        push_label(&mut labels, AnalyzerLabel::ImageSubtitle);
+    }
+    if metadata
+        .subtitle_streams
+        .iter()
+        .any(|stream| subtitle_codec_is_styled(&stream.codec_name))
+    {
+        push_label(&mut labels, AnalyzerLabel::StyledSubtitle);
+    }
+
+    let hdr_metadata_present = metadata.dynamic_range.is_hdr();
+    let has_bt2020_metadata = metadata
+        .color_primaries
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("bt2020"));
+    let has_missing_color_transfer = metadata.color_transfer.is_none();
+    if hdr_metadata_present {
+        push_label(&mut labels, AnalyzerLabel::HdrMetadata);
+    }
+    if has_bt2020_metadata && has_missing_color_transfer {
+        push_label(&mut labels, AnalyzerLabel::Bt2020WithoutTransfer);
+    }
+    if has_dolby_vision_metadata(video_stream) {
+        push_label(&mut labels, AnalyzerLabel::DolbyVisionMetadata);
+    }
+    if video_stream
+        .field_order
+        .as_deref()
+        .is_some_and(field_order_is_interlaced)
+    {
+        push_label(&mut labels, AnalyzerLabel::InterlacedMetadata);
+    }
+    if variable_frame_rate_hint(fps_from_average_rate, fps_from_frame_count) {
+        push_label(&mut labels, AnalyzerLabel::VariableFrameRateHint);
+    }
+
+    for warning in warnings {
+        push_label(&mut labels, warning_label(warning));
+    }
+
+    AnalyzerReport {
+        labels,
+        metrics: AnalyzerMetrics {
+            raw_bpp,
+            normalized_bpp,
+            estimated_container_bitrate_bps,
+            audio_bitrate_share,
+            video_stream_count: Some(
+                streams.iter().filter(|s| s.codec_type == "video").count() as u32
+            ),
+            audio_stream_count: Some(
+                streams.iter().filter(|s| s.codec_type == "audio").count() as u32
+            ),
+            subtitle_stream_count: Some(metadata.subtitle_streams.len() as u32),
+            image_subtitle_count: Some(image_subtitle_count),
+            text_subtitle_count: Some(text_subtitle_count),
+            hdr_metadata_present: Some(hdr_metadata_present),
+            has_bt2020_metadata: Some(has_bt2020_metadata),
+            has_missing_color_transfer: Some(has_missing_color_transfer),
+            fps_from_average_rate,
+            fps_from_frame_count,
+        },
+    }
+}
+
+fn push_label(labels: &mut Vec<AnalyzerLabel>, label: AnalyzerLabel) {
+    if !labels.contains(&label) {
+        labels.push(label);
+    }
+}
+
+fn estimated_container_bitrate_bps(metadata: &MediaMetadata) -> Option<u64> {
+    metadata.container_bitrate_bps.or_else(|| {
+        if metadata.duration_secs > 0.0 && metadata.size_bytes > 0 {
+            Some(((metadata.size_bytes as f64 * 8.0) / metadata.duration_secs).round() as u64)
+        } else {
+            None
+        }
+    })
+}
+
+fn selected_metadata_fps(video_stream: &Stream, fps_from_frame_count: Option<f64>) -> f64 {
+    video_stream
+        .avg_frame_rate
+        .as_deref()
+        .or(video_stream.r_frame_rate.as_deref())
+        .and_then(Analyzer::parse_fps)
+        .or(fps_from_frame_count)
+        .unwrap_or(0.0)
+}
+
+fn fps_from_frame_count(video_stream: &Stream, format_duration: Option<f64>) -> Option<f64> {
+    let stream_duration = video_stream.duration.as_deref().and_then(parse_f64);
+    let duration = stream_duration.or(format_duration);
+    let frames = video_stream.nb_frames.as_deref().and_then(parse_f64);
+    match (frames, duration) {
+        (Some(frames), Some(duration)) if duration > 0.0 => Some(frames / duration),
+        _ => None,
+    }
+}
+
+fn bpp(video_bitrate_bps: Option<u64>, width: u32, height: u32, fps: f64) -> Option<f64> {
+    let bitrate = video_bitrate_bps?;
+    if bitrate == 0 || width == 0 || height == 0 || fps <= 0.0 {
+        return None;
+    }
+    Some(bitrate as f64 / (width as f64 * height as f64 * fps))
+}
+
+fn total_audio_bitrate_bps(streams: &[Stream]) -> Option<u64> {
+    let total = streams
+        .iter()
+        .filter(|stream| stream.codec_type == "audio")
+        .filter_map(|stream| stream.bit_rate.as_deref().and_then(parse_u64))
+        .sum::<u64>();
+    (total > 0).then_some(total)
+}
+
+fn normalize_bpp(raw_bpp: f64, width: u32) -> f64 {
+    let correction = if width >= 3840 {
+        0.6
+    } else if width >= 1920 {
+        0.8
+    } else {
+        1.0
+    };
+    raw_bpp * correction
+}
+
+fn remux_like_density(video_bitrate_bps: Option<u64>, container_bitrate_bps: Option<u64>) -> bool {
+    match (video_bitrate_bps, container_bitrate_bps) {
+        (Some(video), Some(container)) if video > 0 && container >= video => {
+            (container as f64 / video as f64) <= REMUX_LIKE_CONTAINER_OVERHEAD_RATIO
+        }
+        _ => false,
+    }
+}
+
+fn audio_codec_is_lossless(codec_name: &str) -> bool {
+    matches!(
+        codec_name.to_ascii_lowercase().as_str(),
+        "truehd" | "mlp" | "flac" | "alac" | "pcm_s24le" | "pcm_s16le" | "pcm_s32le" | "pcm_f32le"
+    )
+}
+
+fn subtitle_codec_is_image(codec_name: &str) -> bool {
+    matches!(
+        codec_name.to_ascii_lowercase().as_str(),
+        "hdmv_pgs_subtitle" | "pgs" | "dvd_subtitle" | "dvb_subtitle" | "xsub"
+    )
+}
+
+fn subtitle_codec_is_text(codec_name: &str) -> bool {
+    subtitle_codec_is_burnable(codec_name)
+}
+
+fn subtitle_codec_is_styled(codec_name: &str) -> bool {
+    matches!(codec_name.to_ascii_lowercase().as_str(), "ass" | "ssa")
+}
+
+fn has_dolby_vision_metadata(stream: &Stream) -> bool {
+    stream.side_data_list.iter().any(|side_data| {
+        side_data.side_data_type.as_deref().is_some_and(|value| {
+            value.to_ascii_lowercase().contains("dovi")
+                || value.to_ascii_lowercase().contains("dolby vision")
+        })
+    })
+}
+
+fn field_order_is_interlaced(field_order: &str) -> bool {
+    matches!(
+        field_order.to_ascii_lowercase().as_str(),
+        "tt" | "bb" | "tb" | "bt" | "interlaced" | "tff" | "bff"
+    )
+}
+
+fn variable_frame_rate_hint(
+    fps_from_average_rate: Option<f64>,
+    fps_from_frame_count: Option<f64>,
+) -> bool {
+    match (fps_from_average_rate, fps_from_frame_count) {
+        (Some(avg), Some(counted)) if avg > 0.0 && counted > 0.0 => {
+            ((avg - counted).abs() / avg.max(counted)) > 0.01
+        }
+        _ => false,
+    }
+}
+
+fn warning_label(warning: &AnalysisWarning) -> AnalyzerLabel {
+    match warning {
+        AnalysisWarning::MissingVideoBitrate => AnalyzerLabel::MissingVideoBitrate,
+        AnalysisWarning::MissingContainerBitrate => AnalyzerLabel::MissingContainerBitrate,
+        AnalysisWarning::MissingDuration => AnalyzerLabel::MissingDuration,
+        AnalysisWarning::MissingFps => AnalyzerLabel::MissingFps,
+        AnalysisWarning::MissingBitDepth => AnalyzerLabel::MissingBitDepth,
+        AnalysisWarning::UnrecognizedPixelFormat => AnalyzerLabel::UnrecognizedPixelFormat,
+    }
+}
+
 fn select_video_stream(streams: &[Stream]) -> Option<&Stream> {
     let mut best: Option<&Stream> = None;
     let mut best_pixels = 0u64;
@@ -762,6 +1079,63 @@ fn select_video_stream(streams: &[Stream]) -> Option<&Stream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn stream(codec_type: &str, codec_name: &str) -> Stream {
+        Stream {
+            codec_name: codec_name.to_string(),
+            codec_type: codec_type.to_string(),
+            pix_fmt: None,
+            width: None,
+            height: None,
+            coded_width: None,
+            coded_height: None,
+            bit_rate: None,
+            bits_per_raw_sample: None,
+            channel_layout: None,
+            channels: None,
+            avg_frame_rate: None,
+            r_frame_rate: None,
+            nb_frames: None,
+            duration: None,
+            disposition: None,
+            tags: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            field_order: None,
+            side_data_list: Vec::new(),
+        }
+    }
+
+    fn metadata() -> MediaMetadata {
+        MediaMetadata {
+            path: PathBuf::from("/media/test.mkv"),
+            duration_secs: 100.0,
+            codec_name: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            bit_depth: Some(8),
+            color_primaries: None,
+            color_transfer: None,
+            color_space: None,
+            color_range: None,
+            size_bytes: 100_000_000,
+            video_bitrate_bps: Some(8_000_000),
+            container_bitrate_bps: Some(8_400_000),
+            fps: 24.0,
+            container: "matroska".to_string(),
+            audio_codec: Some("aac".to_string()),
+            audio_bitrate_bps: Some(192_000),
+            audio_channels: Some(2),
+            audio_is_heavy: false,
+            subtitle_streams: Vec::new(),
+            audio_streams: Vec::new(),
+            dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
+        }
+    }
 
     #[test]
     fn test_parse_fps() {
@@ -796,6 +1170,8 @@ mod tests {
             color_transfer: None,
             color_space: None,
             color_range: None,
+            field_order: None,
+            side_data_list: Vec::new(),
         };
         assert!(Analyzer::should_transcode_audio(&heavy));
 
@@ -821,6 +1197,8 @@ mod tests {
             color_transfer: None,
             color_space: None,
             color_range: None,
+            field_order: None,
+            side_data_list: Vec::new(),
         };
         assert!(!Analyzer::should_transcode_audio(&standard));
 
@@ -846,6 +1224,8 @@ mod tests {
             color_transfer: None,
             color_space: None,
             color_range: None,
+            field_order: None,
+            side_data_list: Vec::new(),
         };
         assert!(!Analyzer::should_transcode_audio(&atmos_eac3));
 
@@ -871,7 +1251,330 @@ mod tests {
             color_transfer: None,
             color_space: None,
             color_range: None,
+            field_order: None,
+            side_data_list: Vec::new(),
         };
         assert!(Analyzer::should_transcode_audio(&lossless_pcm));
+    }
+
+    #[test]
+    fn analyzer_report_labels_high_bpp_and_bitrate_fallback() {
+        let mut metadata = metadata();
+        metadata.container_bitrate_bps = None;
+        metadata.video_bitrate_bps = Some(20_000_000);
+        let streams = vec![stream("video", "h264")];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert!(report.labels.contains(&AnalyzerLabel::HighBppDensity));
+        assert_eq!(
+            report.metrics.estimated_container_bitrate_bps,
+            Some(8_000_000)
+        );
+        assert!(report.metrics.normalized_bpp.is_some());
+    }
+
+    #[test]
+    fn analyzer_report_labels_low_bpp_and_remux_like_density() {
+        let mut metadata = metadata();
+        metadata.video_bitrate_bps = Some(1_000_000);
+        metadata.container_bitrate_bps = Some(1_050_000);
+        let streams = vec![stream("video", "h264")];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert!(report.labels.contains(&AnalyzerLabel::LowBppDensity));
+        assert!(report.labels.contains(&AnalyzerLabel::RemuxLikeDensity));
+    }
+
+    #[test]
+    fn analyzer_report_omits_density_labels_without_video_bitrate() {
+        let mut metadata = metadata();
+        metadata.video_bitrate_bps = None;
+        metadata.container_bitrate_bps = None;
+        let streams = vec![stream("video", "h264")];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert_eq!(
+            report.metrics.estimated_container_bitrate_bps,
+            Some(8_000_000)
+        );
+        assert!(report.metrics.raw_bpp.is_none());
+        assert!(!report.labels.contains(&AnalyzerLabel::HighBppDensity));
+        assert!(!report.labels.contains(&AnalyzerLabel::LowBppDensity));
+    }
+
+    #[test]
+    fn metadata_fps_preserves_legacy_rate_selection() {
+        let mut video = stream("video", "h264");
+        video.avg_frame_rate = Some("0/0".to_string());
+        video.r_frame_rate = Some("24/1".to_string());
+        video.nb_frames = Some("240".to_string());
+        video.duration = Some("10".to_string());
+
+        assert_eq!(fps_from_frame_count(&video, None), Some(24.0));
+        assert_eq!(selected_metadata_fps(&video, Some(24.0)), 24.0);
+        assert_eq!(selected_metadata_fps(&video, None), 0.0);
+    }
+
+    #[test]
+    fn analyzer_report_labels_audio_and_subtitle_facts() {
+        let mut metadata = metadata();
+        metadata.audio_codec = Some("flac".to_string());
+        metadata.audio_is_heavy = true;
+        metadata.subtitle_streams = vec![
+            SubtitleStreamMetadata {
+                stream_index: 2,
+                codec_name: "hdmv_pgs_subtitle".to_string(),
+                language: Some("eng".to_string()),
+                title: None,
+                default: false,
+                forced: false,
+                burnable: false,
+            },
+            SubtitleStreamMetadata {
+                stream_index: 3,
+                codec_name: "ass".to_string(),
+                language: Some("eng".to_string()),
+                title: Some("Signs".to_string()),
+                default: false,
+                forced: true,
+                burnable: true,
+            },
+        ];
+        let streams = vec![stream("video", "h264")];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert!(report.labels.contains(&AnalyzerLabel::HeavyAudio));
+        assert!(report.labels.contains(&AnalyzerLabel::LosslessAudio));
+        assert!(report.labels.contains(&AnalyzerLabel::ImageSubtitle));
+        assert!(report.labels.contains(&AnalyzerLabel::StyledSubtitle));
+        assert_eq!(report.metrics.image_subtitle_count, Some(1));
+        assert_eq!(report.metrics.text_subtitle_count, Some(1));
+    }
+
+    #[test]
+    fn analyzer_report_labels_hdr_structure_and_warning_facts() {
+        let mut metadata = metadata();
+        metadata.dynamic_range = DynamicRange::Hdr10;
+        metadata.color_primaries = Some("bt2020".to_string());
+        metadata.color_transfer = None;
+        let mut video = stream("video", "hevc");
+        video.field_order = Some("tt".to_string());
+        video.side_data_list = vec![SideData {
+            side_data_type: Some("DOVI configuration record".to_string()),
+        }];
+        let warnings = vec![
+            AnalysisWarning::MissingVideoBitrate,
+            AnalysisWarning::MissingContainerBitrate,
+            AnalysisWarning::MissingDuration,
+            AnalysisWarning::MissingFps,
+            AnalysisWarning::MissingBitDepth,
+            AnalysisWarning::UnrecognizedPixelFormat,
+        ];
+        let streams = vec![video];
+        let report = build_analyzer_report(
+            &metadata,
+            &warnings,
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(23.0),
+        );
+
+        assert!(report.labels.contains(&AnalyzerLabel::HdrMetadata));
+        assert!(report.labels.contains(&AnalyzerLabel::DolbyVisionMetadata));
+        assert!(report.labels.contains(&AnalyzerLabel::InterlacedMetadata));
+        assert!(
+            report
+                .labels
+                .contains(&AnalyzerLabel::Bt2020WithoutTransfer)
+        );
+        assert!(
+            report
+                .labels
+                .contains(&AnalyzerLabel::VariableFrameRateHint)
+        );
+        assert!(report.labels.contains(&AnalyzerLabel::MissingVideoBitrate));
+        assert!(
+            report
+                .labels
+                .contains(&AnalyzerLabel::MissingContainerBitrate)
+        );
+        assert!(report.labels.contains(&AnalyzerLabel::MissingDuration));
+        assert!(report.labels.contains(&AnalyzerLabel::MissingFps));
+        assert!(report.labels.contains(&AnalyzerLabel::MissingBitDepth));
+        assert!(
+            report
+                .labels
+                .contains(&AnalyzerLabel::UnrecognizedPixelFormat)
+        );
+    }
+
+    #[test]
+    fn analyzer_report_metrics_count_streams_and_audio_share() {
+        let mut metadata = metadata();
+        metadata.container_bitrate_bps = Some(10_000_000);
+        metadata.audio_bitrate_bps = Some(192_000);
+        metadata.subtitle_streams = vec![SubtitleStreamMetadata {
+            stream_index: 2,
+            codec_name: "subrip".to_string(),
+            language: Some("eng".to_string()),
+            title: None,
+            default: true,
+            forced: false,
+            burnable: true,
+        }];
+        let mut first_audio = stream("audio", "aac");
+        first_audio.bit_rate = Some("2000000".to_string());
+        let mut second_audio = stream("audio", "ac3");
+        second_audio.bit_rate = Some("1000000".to_string());
+        let streams = vec![
+            stream("video", "h264"),
+            first_audio,
+            second_audio,
+            stream("subtitle", "subrip"),
+        ];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert_eq!(report.metrics.video_stream_count, Some(1));
+        assert_eq!(report.metrics.audio_stream_count, Some(2));
+        assert_eq!(report.metrics.subtitle_stream_count, Some(1));
+        assert_eq!(report.metrics.audio_bitrate_share, Some(0.3));
+    }
+
+    #[test]
+    fn analyzer_report_labels_secondary_heavy_and_lossless_audio() {
+        let mut metadata = metadata();
+        metadata.audio_codec = Some("aac".to_string());
+        metadata.audio_is_heavy = false;
+        let mut lossless_audio = stream("audio", "truehd");
+        lossless_audio.channel_layout = Some("7.1".to_string());
+        let streams = vec![
+            stream("video", "h264"),
+            stream("audio", "aac"),
+            lossless_audio,
+        ];
+        let report = build_analyzer_report(
+            &metadata,
+            &[],
+            &streams,
+            &streams[0],
+            Some(24.0),
+            Some(24.0),
+        );
+
+        assert!(report.labels.contains(&AnalyzerLabel::HeavyAudio));
+        assert!(report.labels.contains(&AnalyzerLabel::LosslessAudio));
+    }
+
+    #[test]
+    fn legacy_media_analysis_json_defaults_report() {
+        let json = r#"{
+            "metadata": {
+                "path": "/media/test.mkv",
+                "duration_secs": 60.0,
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "bit_depth": 8,
+                "color_primaries": null,
+                "color_transfer": null,
+                "color_space": null,
+                "color_range": null,
+                "size_bytes": 1000000,
+                "video_bitrate_bps": 4000000,
+                "container_bitrate_bps": 4200000,
+                "fps": 24.0,
+                "container": "matroska",
+                "audio_codec": null,
+                "audio_bitrate_bps": null,
+                "audio_channels": null,
+                "audio_is_heavy": false,
+                "subtitle_streams": [],
+                "audio_streams": [],
+                "dynamic_range": "sdr"
+            },
+            "warnings": [],
+            "confidence": "high"
+        }"#;
+
+        let analysis: MediaAnalysis = match serde_json::from_str(json) {
+            Ok(analysis) => analysis,
+            Err(err) => panic!("legacy analysis json failed to decode: {err}"),
+        };
+        assert!(analysis.analysis_report.labels.is_empty());
+        assert_eq!(analysis.analysis_report.metrics, AnalyzerMetrics::default());
+        assert_eq!(analysis.metadata.chapter_count, 0);
+    }
+
+    #[test]
+    fn ffprobe_metadata_counts_chapters_when_present() {
+        let json = r#"{
+            "streams": [],
+            "format": {
+                "format_name": "matroska",
+                "format_long_name": "Matroska",
+                "duration": "60.0",
+                "size": "1000",
+                "bit_rate": "1000"
+            },
+            "chapters": [{ "id": 0 }, { "id": 1 }]
+        }"#;
+
+        let metadata: FfprobeMetadata = match serde_json::from_str(json) {
+            Ok(metadata) => metadata,
+            Err(err) => panic!("ffprobe metadata json failed to decode: {err}"),
+        };
+        assert_eq!(metadata.chapters.len(), 2);
+    }
+
+    #[test]
+    fn partial_analysis_report_json_defaults_nested_fields() {
+        let report: AnalyzerReport = match serde_json::from_str(r#"{"labels":["heavy_audio"]}"#) {
+            Ok(report) => report,
+            Err(err) => panic!("partial analyzer report json failed to decode: {err}"),
+        };
+        assert_eq!(report.labels, vec![AnalyzerLabel::HeavyAudio]);
+        assert_eq!(report.metrics, AnalyzerMetrics::default());
+
+        let serialized = match serde_json::to_string(&AnalyzerReport::default()) {
+            Ok(value) => value,
+            Err(err) => panic!("default analyzer report failed to encode: {err}"),
+        };
+        assert_eq!(serialized, "{}");
     }
 }

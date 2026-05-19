@@ -1,16 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
-import tailwind from '@astrojs/tailwind';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  integrations: [
-    react(),
-    tailwind({
-      applyBaseStyles: false, // We will include our own global.css
-    }),
-  ],
+  integrations: [react()],
   vite: {
+    plugins: [tailwindcss()],
     resolve: {
       alias: {
         'eventemitter3': fileURLToPath(new URL('./src/vendor/eventemitter3.ts', import.meta.url)),

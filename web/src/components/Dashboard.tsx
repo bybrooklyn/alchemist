@@ -6,6 +6,7 @@ import {
     HardDrive,
     Database,
     Zap,
+    Clock3,
     type LucideIcon,
 } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
@@ -18,7 +19,9 @@ interface Job {
     id: number;
     input_path: string;
     status: string;
+    progress?: number;
     created_at: string;
+    updated_at?: string;
 }
 
 interface SettingsBundleResponse {
@@ -38,6 +41,12 @@ interface DailyStat {
     date: string;
     jobs_completed: number;
     bytes_saved: number;
+}
+
+interface QueueEtaResponse {
+    remaining_jobs: number;
+    est_seconds_remaining: number | null;
+    sample_size: number;
 }
 
 interface StatCardProps {
@@ -77,15 +86,36 @@ function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     );
 }
 
+function isActiveStatus(status: string): boolean {
+    return ["analyzing", "encoding", "remuxing", "resuming"].includes(status.toLowerCase());
+}
+
+function formatDuration(seconds: number): string {
+    const totalMinutes = Math.max(1, Math.round(seconds / 60));
+    if (totalMinutes < 60) return `${totalMinutes}m`;
+
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours < 24) return `${hours}h ${minutes}m`;
+
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return `${days}d ${remainingHours}h`;
+}
+
 function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
+    const [activeJobs, setActiveJobs] = useState<Job[]>([]);
     const [jobsLoading, setJobsLoading] = useState(true);
+    const [activeJobsLoading, setActiveJobsLoading] = useState(true);
     const [bundle, setBundle] = useState<SettingsBundleResponse | null>(null);
     const [weekStats, setWeekStats] = useState<{
         bytesSaved: number;
         jobsCompleted: number;
         avgCompression: number;
     } | null>(null);
+    const [queueEta, setQueueEta] = useState<QueueEtaResponse | null>(null);
+    const [queueEtaLoading, setQueueEtaLoading] = useState(true);
     const [engineStatus, setEngineStatus] = useState<"paused" | "running" | "draining">("paused");
     const { stats: sharedStats, error: statsError } = useSharedStats();
     const stats = sharedStats ?? DEFAULT_STATS;
@@ -104,19 +134,31 @@ function Dashboard() {
     useEffect(() => {
         const fetchJobs = async () => {
             try {
-                const data = await apiJson<Job[]>(
-                    `/api/jobs/table?${new URLSearchParams({
-                        limit: "5",
-                        sort: "created_at",
-                        sort_desc: "true",
-                    })}`
-                );
-                setJobs(data);
+                const [recent, active] = await Promise.all([
+                    apiJson<Job[]>(
+                        `/api/jobs/table?${new URLSearchParams({
+                            limit: "5",
+                            sort: "created_at",
+                            sort_desc: "true",
+                        })}`
+                    ),
+                    apiJson<Job[]>(
+                        `/api/jobs/table?${new URLSearchParams({
+                            limit: "8",
+                            status: "analyzing,encoding,remuxing,resuming",
+                            sort: "updated_at",
+                            sort_desc: "true",
+                        })}`
+                    ),
+                ]);
+                setJobs(recent);
+                setActiveJobs(active.filter((job) => isActiveStatus(job.status)));
             } catch (error) {
                 const message = isApiError(error) ? error.message : "Failed to fetch jobs";
                 showToast({ kind: "error", title: "Dashboard", message });
             } finally {
                 setJobsLoading(false);
+                setActiveJobsLoading(false);
             }
         };
 
@@ -182,7 +224,17 @@ function Dashboard() {
                 // not critical — panel just won't show
             }
         };
+        const fetchQueueEta = async () => {
+            try {
+                setQueueEta(await apiJson<QueueEtaResponse>("/api/stats/queue-eta"));
+            } catch {
+                // Non-critical estimate; dashboard still renders without it.
+            } finally {
+                setQueueEtaLoading(false);
+            }
+        };
         void fetchWeekStats();
+        void fetchQueueEta();
     }, []);
 
     const formatRelativeTime = (iso?: string) => {
@@ -214,8 +266,65 @@ function Dashboard() {
                 </div>
             )}
 
+            <section
+                aria-labelledby="dashboard-active-now-title"
+                className="md:hidden rounded-lg bg-helios-surface border border-helios-line/30 overflow-hidden"
+            >
+                <div className="flex items-center justify-between px-4 py-3 border-b border-helios-line/20">
+                    <h3 id="dashboard-active-now-title" className="text-sm font-semibold text-helios-ink flex items-center gap-2">
+                        <Zap size={16} className="text-helios-solar" />
+                        Active Now
+                    </h3>
+                    <a href="/jobs" className="text-xs font-medium text-helios-solar hover:underline">
+                        Jobs
+                    </a>
+                </div>
+                <div className="p-3">
+                    {activeJobsLoading ? (
+                        <div className="space-y-2">
+                            {Array.from({ length: 3 }).map((_, i) => (
+                                <div key={i} className="h-14 w-full rounded-lg bg-helios-surface-soft/60 animate-pulse" />
+                            ))}
+                        </div>
+                    ) : activeJobs.length === 0 ? (
+                        <div className="py-8 text-center text-sm text-helios-slate/70">
+                            No active jobs
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {activeJobs.map((job) => {
+                                const progress = Math.max(0, Math.min(100, job.progress ?? 0));
+                                return (
+                                    <div key={job.id} className="rounded-lg border border-helios-line/20 bg-helios-surface-soft/40 p-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-semibold text-helios-ink" title={job.input_path}>
+                                                    {job.input_path.split(/[/\\]/).pop()}
+                                                </p>
+                                                <p className="mt-0.5 text-xs capitalize text-helios-slate">
+                                                    {job.status}
+                                                </p>
+                                            </div>
+                                            <span className="font-mono text-xs text-helios-solar">
+                                                {progress.toFixed(0)}%
+                                            </span>
+                                        </div>
+                                        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-helios-line/20">
+                                            <div
+                                                className="h-full rounded-full bg-helios-solar transition-all duration-500"
+                                                style={{ width: `${progress}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </section>
+
             {/* Stat row — compact horizontal strip */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-4 gap-3">
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-helios-solar" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-helios-solar" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />
@@ -316,6 +425,45 @@ function Dashboard() {
                         ) : (
                             <p className="text-xs text-helios-slate/60 italic">
                                 No data yet
+                            </p>
+                        )}
+                    </div>
+
+                    <div className="rounded-lg bg-helios-surface border border-helios-line/30 p-5 space-y-3">
+                        <h3 className="text-sm font-semibold text-helios-ink flex items-center gap-2">
+                            <Clock3 size={15} className="text-helios-solar" />
+                            Queue ETA
+                        </h3>
+                        {queueEtaLoading ? (
+                            <div className="space-y-2">
+                                <div className="h-3 w-28 rounded bg-helios-surface-soft animate-pulse" />
+                                <div className="h-4 w-36 rounded bg-helios-surface-soft animate-pulse" />
+                            </div>
+                        ) : queueEta ? (
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-helios-slate">Remaining</span>
+                                    <span className="font-bold font-mono text-helios-ink">
+                                        {queueEta.remaining_jobs} jobs remaining
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-3 text-xs">
+                                    <span className="text-helios-slate">Estimate</span>
+                                    <span className="text-right font-bold font-mono text-helios-solar">
+                                        {queueEta.remaining_jobs === 0
+                                            ? "Queue is clear"
+                                            : queueEta.est_seconds_remaining !== null
+                                                ? `About ${formatDuration(queueEta.est_seconds_remaining)} left`
+                                                : "Unavailable"}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] leading-4 text-helios-slate/70">
+                                    Based on {queueEta.sample_size} recent completed jobs.
+                                </p>
+                            </div>
+                        ) : (
+                            <p className="text-xs text-helios-slate/60 italic">
+                                ETA unavailable until completed samples exist.
                             </p>
                         )}
                     </div>

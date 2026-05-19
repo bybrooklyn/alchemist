@@ -257,6 +257,15 @@ export function explainFailureLogs(logs: LogEntry[]): ExplanationView | null {
     if (normalized.includes("qscale not available for encoder")) {
         return makeFailure("encoder_parameter_mismatch", "Encoder settings rejected", "FFmpeg rejected the selected encoder parameters for this hardware backend. The command was accepted by Alchemist, but the encoder refused to start with the generated rate-control options.", "Check the FFmpeg output below for the rejected flag and compare it with your current codec and hardware settings.");
     }
+    if (normalized.includes("no space left on device") || normalized.includes("disk quota exceeded") || normalized.includes("cannot write output file")) {
+        return makeFailure("disk_full", "Output disk is full", "FFmpeg could not write the output because the target filesystem ran out of space.", "Free space on the temp/output volume or move the output root to a larger filesystem before retrying.");
+    }
+    if (normalized.includes("nvenc") && (normalized.includes("out of memory") || normalized.includes("cannot allocate memory") || normalized.includes("not enough buffer"))) {
+        return makeFailure("nvenc_resource_exhausted", "NVENC ran out of resources", "The NVIDIA hardware encoder reported a memory or buffer exhaustion error.", "Reduce concurrent jobs, retry under lower GPU load, or enable CPU fallback for this workload.");
+    }
+    if (normalized.includes("unsupported pixel format") || normalized.includes("pixel format is not supported") || normalized.includes("not compatible with pixel format") || normalized.includes("unsupported input format")) {
+        return makeFailure("unsupported_pixel_format", "Unsupported pixel format", "The selected encoder could not accept the source pixel format or color layout.", "Retry with CPU fallback or a different hardware backend, and inspect the source color format in job details.");
+    }
     if (normalized.includes("videotoolbox") || normalized.includes("vt_compression") || normalized.includes("mediaserverd") || normalized.includes("no capable devices") || normalized.includes("could not open encoder before eof")) {
         return makeFailure("hardware_backend_failure", "Hardware backend failed", "The hardware encoder failed to initialize or produce output. This usually points to an unsupported source format, a backend-specific FFmpeg parameter issue, or temporary media-services instability on the host.", "Retry the job first. If it fails again, inspect the backend-specific FFmpeg lines below and verify hardware fallback settings.");
     }

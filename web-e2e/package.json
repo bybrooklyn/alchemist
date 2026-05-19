@@ -1,6 +1,6 @@
 {
   "name": "alchemist-web-e2e",
-  "version": "0.3.2-rc.3",
+  "version": "0.3.3-rc.4",
   "private": true,
   "packageManager": "bun@1",
   "type": "module",
@@ -11,6 +11,6 @@
     "test:reliability": "playwright test tests/settings-nonok.spec.ts tests/setup-recovery.spec.ts tests/setup-happy-path.spec.ts tests/new-user-redirect.spec.ts tests/stats-poller.spec.ts tests/jobs-actions-nonok.spec.ts tests/jobs-stability.spec.ts tests/library-intake-stability.spec.ts tests/intelligence-actions.spec.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.54.2"
+    "@playwright/test": "^1.60.0"
   }
 }

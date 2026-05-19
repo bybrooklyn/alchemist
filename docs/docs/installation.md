@@ -86,6 +86,14 @@ winget install Gyan.FFmpeg    # Windows
 alchemist.exe      # Windows
 ```
 
+Direct binary users can copy the running executable into a
+standard or custom directory:
+
+```bash
+./alchemist --install
+./alchemist --install-directory /opt/alchemist/bin
+```
+
 Native runs bind to port 3000 by default. If that port is
 busy and `ALCHEMIST_SERVER_PORT` is not set, Alchemist tries
 the next available port and prints an `INFO` line with the

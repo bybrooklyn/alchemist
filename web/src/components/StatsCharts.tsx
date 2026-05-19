@@ -59,6 +59,7 @@ interface TopReasonCodesResponse {
 }
 
 type ReasonWindow = "24h" | "7d" | "30d";
+const MOVIE_EQUIVALENT_BYTES = 4 * 1024 * 1024 * 1024;
 
 export default function StatsCharts() {
     const [stats, setStats] = useState<AggregatedStats | null>(null);
@@ -175,6 +176,7 @@ export default function StatsCharts() {
     const savingsPercent = stats.total_input_bytes > 0
         ? ((stats.total_savings_bytes / stats.total_input_bytes) * 100).toFixed(1)
         : "0";
+    const movieEquivalent = Math.floor(stats.total_savings_bytes / MOVIE_EQUIVALENT_BYTES);
 
     // Calculate averages from detailed stats
     const avgCompression = detailedStats.length > 0
@@ -372,6 +374,31 @@ export default function StatsCharts() {
                 />
             </div>
 
+            <div className="rounded-lg bg-helios-surface border border-helios-line/40 p-6">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <h3 className="text-lg font-bold text-helios-ink flex items-center gap-2">
+                            <FileVideo size={20} className="text-helios-solar" />
+                            Storage reclaimed
+                        </h3>
+                        <p className="mt-1 text-sm text-helios-slate">
+                            {formatBytes(stats.total_savings_bytes)} recovered across {stats.total_jobs} jobs
+                        </p>
+                    </div>
+                    <div className="rounded-lg border border-helios-line/30 bg-helios-surface-soft px-4 py-3 text-left md:text-right">
+                        <p className="text-xs font-medium uppercase tracking-wide text-helios-slate">
+                            Approximate equivalent
+                        </p>
+                        <p className="mt-1 text-2xl font-bold text-helios-solar">
+                            {movieEquivalent.toLocaleString()} more 1080p movies
+                        </p>
+                        <p className="mt-1 text-xs text-helios-slate">
+                            at 4 GB each
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Daily Activity Chart */}
@@ -403,7 +430,7 @@ export default function StatsCharts() {
                                     axisLine={false}
                                 />
                                 <Tooltip
-                                    formatter={(value: number) => [value, "Jobs"]}
+                                    formatter={(value) => [Number(value ?? 0), "Jobs"]}
                                     contentStyle={{
                                         background: "rgb(var(--bg-panel, 30 30 30))",
                                         border: "1px solid rgb(var(--border, 60 60 60))",

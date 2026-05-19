@@ -540,6 +540,119 @@ pub fn decision_from_legacy(action: &str, legacy_reason: &str) -> Explanation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownFailure {
+    pub code: &'static str,
+    pub title: &'static str,
+    pub detail: &'static str,
+    pub operator_guidance: &'static str,
+}
+
+struct FailureSignature {
+    all: &'static [&'static str],
+    any: &'static [&'static str],
+    failure: KnownFailure,
+}
+
+impl FailureSignature {
+    fn matches(&self, normalized: &str) -> bool {
+        self.all.iter().all(|needle| normalized.contains(needle))
+            && (self.any.is_empty() || self.any.iter().any(|needle| normalized.contains(needle)))
+    }
+}
+
+impl KnownFailure {
+    fn into_explanation(self, legacy_reason: &str) -> Explanation {
+        Explanation::new(
+            ExplanationCategory::Failure,
+            self.code,
+            self.title,
+            self.detail,
+            Some(self.operator_guidance.to_string()),
+            legacy_reason,
+        )
+    }
+}
+
+pub fn classify_ffmpeg_stderr(stderr: &str) -> Option<KnownFailure> {
+    let normalized = stderr.to_ascii_lowercase();
+    const SIGNATURES: &[FailureSignature] = &[
+        FailureSignature {
+            all: &[],
+            any: &[
+                "no space left on device",
+                "disk quota exceeded",
+                "cannot write output file",
+            ],
+            failure: KnownFailure {
+                code: "disk_full",
+                title: "Output disk is full",
+                detail: "FFmpeg could not write the output because the target filesystem ran out of space.",
+                operator_guidance: "Free space on the temp/output volume or move the output root to a larger filesystem before retrying.",
+            },
+        },
+        FailureSignature {
+            all: &["nvenc"],
+            any: &[
+                "out of memory",
+                "cannot allocate memory",
+                "not enough buffer",
+            ],
+            failure: KnownFailure {
+                code: "nvenc_resource_exhausted",
+                title: "NVENC ran out of resources",
+                detail: "The NVIDIA hardware encoder reported a memory or buffer exhaustion error.",
+                operator_guidance: "Reduce concurrent jobs, retry under lower GPU load, or enable CPU fallback for this workload.",
+            },
+        },
+        FailureSignature {
+            all: &[],
+            any: &[
+                "unsupported pixel format",
+                "pixel format is not supported",
+                "not compatible with pixel format",
+                "unsupported input format",
+            ],
+            failure: KnownFailure {
+                code: "unsupported_pixel_format",
+                title: "Unsupported pixel format",
+                detail: "The selected encoder could not accept the source pixel format or color layout.",
+                operator_guidance: "Retry with CPU fallback or a different hardware backend, and inspect the source color format in job details.",
+            },
+        },
+        FailureSignature {
+            all: &[],
+            any: &[
+                "invalid data found",
+                "moov atom not found",
+                "error while decoding",
+                "corrupt input packet",
+            ],
+            failure: KnownFailure {
+                code: "corrupt_or_unreadable_media",
+                title: "Media could not be decoded",
+                detail: "FFmpeg hit a read or decode error while processing the source. The file may be corrupt, incomplete, or unsupported.",
+                operator_guidance: "Try playing the file manually or run Library Doctor to confirm whether the source is intact.",
+            },
+        },
+        FailureSignature {
+            all: &[],
+            any: &["qscale not available for encoder"],
+            failure: KnownFailure {
+                code: "encoder_parameter_mismatch",
+                title: "Encoder settings rejected",
+                detail: "FFmpeg rejected one of the generated encoder parameters for the selected backend.",
+                operator_guidance: "Check the FFmpeg log line that names the rejected option, then retry with a different codec, quality profile, or backend.",
+            },
+        },
+    ];
+
+    SIGNATURES
+        .iter()
+        .find(|signature| signature.matches(&normalized))
+        .map(|signature| signature.failure)
+}
+
 pub fn failure_from_summary(summary: &str) -> Explanation {
     let normalized = summary.to_ascii_lowercase();
 
@@ -565,6 +678,10 @@ pub fn failure_from_summary(summary: &str) -> Explanation {
             ),
             summary,
         );
+    }
+
+    if let Some(failure) = classify_ffmpeg_stderr(summary) {
+        return failure.into_explanation(summary);
     }
 
     if normalized.contains("invalid data found")
@@ -754,6 +871,44 @@ mod tests {
         let explanation = failure_from_summary("Transcode failed: Unknown encoder 'missing'");
         assert_eq!(explanation.code, "encoder_unavailable");
         assert_eq!(explanation.category, ExplanationCategory::Failure);
+    }
+
+    #[test]
+    fn classifies_common_ffmpeg_stderr_signatures() {
+        let cases = [
+            ("[out#0/matroska] No space left on device", "disk_full"),
+            (
+                "[h264_nvenc] OpenEncodeSessionEx failed: out of memory",
+                "nvenc_resource_exhausted",
+            ),
+            (
+                "unsupported pixel format yuv444p10le for selected encoder",
+                "unsupported_pixel_format",
+            ),
+            (
+                "corrupt input packet in stream 0",
+                "corrupt_or_unreadable_media",
+            ),
+            (
+                "qscale not available for encoder. Use -q instead.",
+                "encoder_parameter_mismatch",
+            ),
+        ];
+
+        for (stderr, expected_code) in cases {
+            let Some(failure) = classify_ffmpeg_stderr(stderr) else {
+                panic!("expected signature for {stderr}");
+            };
+            assert_eq!(failure.code, expected_code);
+        }
+    }
+
+    #[test]
+    fn failure_summary_uses_ffmpeg_signature_payload() {
+        let explanation =
+            failure_from_summary("FFmpeg failed: No space left on device while writing packet");
+        assert_eq!(explanation.code, "disk_full");
+        assert_eq!(explanation.summary, "Output disk is full");
     }
 
     #[test]

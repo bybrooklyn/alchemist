@@ -508,6 +508,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/scan", post(scan_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/stats/aggregated", get(aggregated_stats_handler))
+        .route("/api/stats/queue-eta", get(queue_eta_handler))
         .route("/api/stats/daily", get(daily_stats_handler))
         .route("/api/stats/detailed", get(detailed_stats_handler))
         .route("/api/stats/savings", get(savings_summary_handler))
@@ -524,26 +525,26 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
         .route("/api/jobs/clear-history", post(clear_history_handler))
-        .route("/api/jobs/:id/cancel", post(cancel_job_handler))
-        .route("/api/jobs/:id/priority", post(update_job_priority_handler))
-        .route("/api/jobs/:id/restart", post(restart_job_handler))
-        .route("/api/jobs/:id/delete", post(delete_job_handler))
-        .route("/api/jobs/:id/details", get(get_job_detail_handler))
+        .route("/api/jobs/{id}/cancel", post(cancel_job_handler))
+        .route("/api/jobs/{id}/priority", post(update_job_priority_handler))
+        .route("/api/jobs/{id}/restart", post(restart_job_handler))
+        .route("/api/jobs/{id}/delete", post(delete_job_handler))
+        .route("/api/jobs/{id}/details", get(get_job_detail_handler))
         .route(
             "/api/conversion/uploads",
             post(upload_conversion_handler).layer(DefaultBodyLimit::disable()),
         )
         .route("/api/conversion/preview", post(preview_conversion_handler))
         .route(
-            "/api/conversion/jobs/:id/start",
+            "/api/conversion/jobs/{id}/start",
             post(start_conversion_job_handler),
         )
         .route(
-            "/api/conversion/jobs/:id",
+            "/api/conversion/jobs/{id}",
             get(get_conversion_job_handler).delete(delete_conversion_job_handler),
         )
         .route(
-            "/api/conversion/jobs/:id/download",
+            "/api/conversion/jobs/{id}/download",
             get(download_conversion_job_handler),
         )
         .route("/api/events", get(sse_handler))
@@ -575,7 +576,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             post(set_setting_preference_handler),
         )
         .route(
-            "/api/settings/preferences/:key",
+            "/api/settings/preferences/{key}",
             get(get_setting_preference_handler),
         )
         .route(
@@ -583,20 +584,24 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(get_settings_config_handler).put(update_settings_config_handler),
         )
         .route(
+            "/api/settings/config/validate",
+            post(validate_settings_config_handler),
+        )
+        .route(
             "/api/settings/watch-dirs",
             get(get_watch_dirs_handler).post(add_watch_dir_handler),
         )
         .route("/api/settings/folders", post(sync_watch_dirs_handler))
         .route(
-            "/api/settings/watch-dirs/:id",
+            "/api/settings/watch-dirs/{id}",
             delete(remove_watch_dir_handler),
         )
         .route(
-            "/api/settings/watch-dirs/:id/reanalyze",
+            "/api/settings/watch-dirs/{id}/reanalyze",
             post(reanalyze_watch_dir_handler),
         )
         .route(
-            "/api/watch-dirs/:id/profile",
+            "/api/watch-dirs/{id}/profile",
             axum::routing::patch(assign_watch_dir_profile_handler),
         )
         .route("/api/profiles/presets", get(get_profile_presets_handler))
@@ -605,7 +610,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(list_profiles_handler).post(create_profile_handler),
         )
         .route(
-            "/api/profiles/:id",
+            "/api/profiles/{id}",
             axum::routing::put(update_profile_handler).delete(delete_profile_handler),
         )
         .route(
@@ -615,7 +620,7 @@ fn app_router(state: Arc<AppState>) -> Router {
                 .post(add_notification_handler),
         )
         .route(
-            "/api/settings/notifications/:id",
+            "/api/settings/notifications/{id}",
             delete(delete_notification_handler),
         )
         .route(
@@ -627,7 +632,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(list_api_tokens_handler).post(create_api_token_handler),
         )
         .route(
-            "/api/settings/api-tokens/:id",
+            "/api/settings/api-tokens/{id}",
             delete(revoke_api_token_handler),
         )
         .route(
@@ -643,7 +648,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             get(get_hardware_settings_handler).post(update_hardware_settings_handler),
         )
         .route(
-            "/api/settings/schedule/:id",
+            "/api/settings/schedule/{id}",
             delete(delete_schedule_handler),
         )
         // Health Check Routes
@@ -664,6 +669,10 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/system/hardware", get(get_hardware_info_handler))
         .route("/api/system/backup", post(backup_database_handler))
         .route(
+            "/api/system/backup/validate-restore",
+            post(validate_restore_backup_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
             "/api/system/hardware/probe-log",
             get(get_hardware_probe_log_handler),
         )
@@ -681,7 +690,7 @@ fn app_router(state: Arc<AppState>) -> Router {
             post(start_library_health_scan_handler),
         )
         .route(
-            "/api/library/health/scan/:id",
+            "/api/library/health/scan/{id}",
             post(rescan_library_health_issue_handler),
         )
         .route(
@@ -704,7 +713,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         )
         // Static Asset Routes
         .route("/", get(index_handler))
-        .route("/*file", get(static_handler))
+        .route("/{*file}", get(static_handler))
         .layer(axum_middleware::from_fn(
             middleware::security_headers_middleware,
         ))
@@ -740,6 +749,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
         .route("/scan", post(scan_handler))
         .route("/stats", get(stats_handler))
         .route("/stats/aggregated", get(aggregated_stats_handler))
+        .route("/stats/queue-eta", get(queue_eta_handler))
         .route("/stats/daily", get(daily_stats_handler))
         .route("/stats/detailed", get(detailed_stats_handler))
         .route("/stats/savings", get(savings_summary_handler))
@@ -751,26 +761,26 @@ fn v1_api_router() -> Router<Arc<AppState>> {
         .route("/jobs/restart-failed", post(restart_failed_handler))
         .route("/jobs/clear-completed", post(clear_completed_handler))
         .route("/jobs/clear-history", post(clear_history_handler))
-        .route("/jobs/:id", delete(delete_job_handler))
-        .route("/jobs/:id/cancel", post(cancel_job_handler))
-        .route("/jobs/:id/priority", post(update_job_priority_handler))
-        .route("/jobs/:id/restart", post(restart_job_handler))
-        .route("/jobs/:id/details", get(get_job_detail_handler))
+        .route("/jobs/{id}", delete(delete_job_handler))
+        .route("/jobs/{id}/cancel", post(cancel_job_handler))
+        .route("/jobs/{id}/priority", post(update_job_priority_handler))
+        .route("/jobs/{id}/restart", post(restart_job_handler))
+        .route("/jobs/{id}/details", get(get_job_detail_handler))
         .route(
             "/conversion/uploads",
             post(upload_conversion_handler).layer(DefaultBodyLimit::disable()),
         )
         .route("/conversion/preview", post(preview_conversion_handler))
         .route(
-            "/conversion/jobs/:id/start",
+            "/conversion/jobs/{id}/start",
             post(start_conversion_job_handler),
         )
         .route(
-            "/conversion/jobs/:id",
+            "/conversion/jobs/{id}",
             get(get_conversion_job_handler).delete(delete_conversion_job_handler),
         )
         .route(
-            "/conversion/jobs/:id/download",
+            "/conversion/jobs/{id}/download",
             get(download_conversion_job_handler),
         )
         .route("/events", get(sse_handler))
@@ -802,7 +812,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             post(set_setting_preference_handler),
         )
         .route(
-            "/settings/preferences/:key",
+            "/settings/preferences/{key}",
             get(get_setting_preference_handler),
         )
         .route(
@@ -810,17 +820,24 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             get(get_settings_config_handler).put(update_settings_config_handler),
         )
         .route(
+            "/settings/config/validate",
+            post(validate_settings_config_handler),
+        )
+        .route(
             "/settings/watch-dirs",
             get(get_watch_dirs_handler).post(add_watch_dir_handler),
         )
         .route("/settings/folders", post(sync_watch_dirs_handler))
-        .route("/settings/watch-dirs/:id", delete(remove_watch_dir_handler))
         .route(
-            "/settings/watch-dirs/:id/reanalyze",
+            "/settings/watch-dirs/{id}",
+            delete(remove_watch_dir_handler),
+        )
+        .route(
+            "/settings/watch-dirs/{id}/reanalyze",
             post(reanalyze_watch_dir_handler),
         )
         .route(
-            "/watch-dirs/:id/profile",
+            "/watch-dirs/{id}/profile",
             patch(assign_watch_dir_profile_handler),
         )
         .route("/profiles/presets", get(get_profile_presets_handler))
@@ -829,7 +846,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             get(list_profiles_handler).post(create_profile_handler),
         )
         .route(
-            "/profiles/:id",
+            "/profiles/{id}",
             put(update_profile_handler).delete(delete_profile_handler),
         )
         .route(
@@ -839,7 +856,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
                 .post(add_notification_handler),
         )
         .route(
-            "/settings/notifications/:id",
+            "/settings/notifications/{id}",
             delete(delete_notification_handler),
         )
         .route(
@@ -850,7 +867,10 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             "/settings/api-tokens",
             get(list_api_tokens_handler).post(create_api_token_handler),
         )
-        .route("/settings/api-tokens/:id", delete(revoke_api_token_handler))
+        .route(
+            "/settings/api-tokens/{id}",
+            delete(revoke_api_token_handler),
+        )
         .route(
             "/settings/files",
             get(get_file_settings_handler).post(update_file_settings_handler),
@@ -863,7 +883,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             "/settings/hardware",
             get(get_hardware_settings_handler).post(update_hardware_settings_handler),
         )
-        .route("/settings/schedule/:id", delete(delete_schedule_handler))
+        .route("/settings/schedule/{id}", delete(delete_schedule_handler))
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/system/resources", get(system_resources_handler))
@@ -877,6 +897,10 @@ fn v1_api_router() -> Router<Arc<AppState>> {
         .route("/system/hardware", get(get_hardware_info_handler))
         .route("/system/backup", post(backup_database_handler))
         .route(
+            "/system/backup/validate-restore",
+            post(validate_restore_backup_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
             "/system/hardware/probe-log",
             get(get_hardware_probe_log_handler),
         )
@@ -889,7 +913,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
             post(start_library_health_scan_handler),
         )
         .route(
-            "/library/health/scan/:id",
+            "/library/health/scan/{id}",
             post(rescan_library_health_issue_handler),
         )
         .route(

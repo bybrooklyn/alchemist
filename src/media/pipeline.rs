@@ -39,6 +39,8 @@ pub struct MediaMetadata {
     pub subtitle_streams: Vec<SubtitleStreamMetadata>,
     pub audio_streams: Vec<AudioStreamMetadata>,
     pub dynamic_range: DynamicRange,
+    #[serde(default)]
+    pub chapter_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,11 +91,82 @@ pub enum AnalysisConfidence {
     Low,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalyzerLabel {
+    HighBppDensity,
+    LowBppDensity,
+    RemuxLikeDensity,
+    HeavyAudio,
+    LosslessAudio,
+    ImageSubtitle,
+    StyledSubtitle,
+    HdrMetadata,
+    Bt2020WithoutTransfer,
+    DolbyVisionMetadata,
+    InterlacedMetadata,
+    VariableFrameRateHint,
+    MissingVideoBitrate,
+    MissingContainerBitrate,
+    MissingDuration,
+    MissingFps,
+    MissingBitDepth,
+    UnrecognizedPixelFormat,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AnalyzerMetrics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_bpp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_bpp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_container_bitrate_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_bitrate_share: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_stream_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_stream_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_stream_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_subtitle_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_subtitle_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hdr_metadata_present: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_bt2020_metadata: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_missing_color_transfer: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps_from_average_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps_from_frame_count: Option<f64>,
+}
+
+impl AnalyzerMetrics {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AnalyzerReport {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<AnalyzerLabel>,
+    #[serde(default, skip_serializing_if = "AnalyzerMetrics::is_empty")]
+    pub metrics: AnalyzerMetrics,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaAnalysis {
     pub metadata: MediaMetadata,
     pub warnings: Vec<AnalysisWarning>,
     pub confidence: AnalysisConfidence,
+    #[serde(default)]
+    pub analysis_report: AnalyzerReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -660,6 +733,35 @@ impl Pipeline {
         }
     }
 
+    async fn verify_chapter_preservation(
+        &self,
+        job_id: i64,
+        metadata: &MediaMetadata,
+        output_path: &Path,
+    ) {
+        if metadata.chapter_count == 0 {
+            return;
+        }
+
+        match crate::media::analyzer::Analyzer::probe_chapter_count(output_path).await {
+            Ok(output_chapters) => {
+                if let Some(message) =
+                    chapter_preservation_warning(metadata.chapter_count, output_chapters)
+                {
+                    tracing::warn!(job_id, "{}", message);
+                    self.record_job_log(job_id, "warn", &message).await;
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    job_id,
+                    output_path = %output_path.display(),
+                    "Failed to verify chapter preservation: {err}"
+                );
+            }
+        }
+    }
+
     async fn purge_resume_session_state(&self, job_id: i64) -> Result<()> {
         let session = self.db.get_resume_session(job_id).await?;
         self.db.delete_resume_session(job_id).await?;
@@ -1189,7 +1291,13 @@ fn plan_hash_for_resume(
     })?;
     let mut hasher = Sha256::new();
     hasher.update(serialized);
-    Ok(format!("{:x}", hasher.finalize()))
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    Ok(out)
 }
 
 fn resumable_plan_supported(plan: &TranscodePlan, metadata: &MediaMetadata) -> bool {
@@ -1197,6 +1305,15 @@ fn resumable_plan_supported(plan: &TranscodePlan, metadata: &MediaMetadata) -> b
         && !plan.is_remux
         && !matches!(plan.subtitles, SubtitleStreamPlan::Extract { .. })
         && metadata.duration_secs > 0.0
+}
+
+fn chapter_preservation_warning(source_chapters: u32, output_chapters: u32) -> Option<String> {
+    if source_chapters > 0 && output_chapters < source_chapters {
+        return Some(format!(
+            "Output has fewer chapters than the source (source: {source_chapters}, output: {output_chapters})."
+        ));
+    }
+    None
 }
 
 fn enumerate_resume_segments(
@@ -2217,6 +2334,9 @@ impl Pipeline {
         })
         .await;
 
+        self.verify_chapter_preservation(job_id, context.metadata, context.output_path)
+            .await;
+
         if let Ok(file_settings) = self.db.get_file_settings().await {
             if file_settings.delete_source {
                 // Safety: verify the promoted output is intact before destroying the source.
@@ -2422,6 +2542,16 @@ mod tests {
         if let Ok(mut guard) = lock.lock() {
             *guard = value;
         }
+    }
+
+    #[test]
+    fn chapter_preservation_warning_only_when_output_loses_chapters() {
+        assert_eq!(
+            chapter_preservation_warning(3, 1),
+            Some("Output has fewer chapters than the source (source: 3, output: 1).".to_string())
+        );
+        assert_eq!(chapter_preservation_warning(3, 3), None);
+        assert_eq!(chapter_preservation_warning(0, 0), None);
     }
 
     fn test_pipeline(db: Arc<Db>, dry_run: bool) -> Pipeline {
@@ -2678,6 +2808,7 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
         };
         let result = ExecutionResult {
             requested_codec: crate::config::OutputCodec::H264,
@@ -3113,6 +3244,7 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
         };
         let result = ExecutionResult {
             requested_codec: crate::config::OutputCodec::H264,
@@ -3259,6 +3391,7 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
         };
         let result = ExecutionResult {
             requested_codec: crate::config::OutputCodec::H264,
@@ -3438,6 +3571,7 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Sdr,
+            chapter_count: 0,
         };
         let result = ExecutionResult {
             requested_codec: crate::config::OutputCodec::H264,

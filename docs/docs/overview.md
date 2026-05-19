@@ -26,8 +26,8 @@ private "pro" build, no license key, and no phone-home check.
 ## What it does
 
 - Scans configured library directories and queues files for analysis
-- Runs FFprobe on each file to extract codec, resolution, bitrate, and HDR metadata
-- Applies BPP (bits-per-pixel) analysis and size thresholds to decide whether transcoding is worth it
+- Runs FFprobe on each file to extract codec, resolution, bitrate, HDR/color data, audio/subtitle facts, and cheap structure metadata
+- Builds factual analyzer labels and metrics, then applies BPP (bits-per-pixel) analysis and size thresholds to decide whether transcoding is worth it
 - Selects the best available encoder automatically (NVIDIA NVENC, Intel QSV, AMD VAAPI/AMF, Apple VideoToolbox, CPU fallback) and caches valid hardware detection across repeat boots
 - Encodes to AV1, HEVC, or H.264 based on your configured target
 - Validates output quality (optional VMAF scoring) before promoting the result

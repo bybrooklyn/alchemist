@@ -2,23 +2,26 @@
 
 use super::{AppState, api_error_response, config_read_error_response};
 use crate::media::pipeline::{Planner as _, TranscodeDecision};
-use async_compression::tokio::bufread::GzipEncoder;
+use async_compression::tokio::bufread::{GzipDecoder, GzipEncoder};
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Multipart, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures::StreamExt;
 use serde::Serialize;
 use std::io::ErrorKind;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info};
 
 const INTELLIGENCE_CACHE_TTL: Duration = Duration::from_secs(30);
 const MAX_INTELLIGENCE_JOBS: i64 = 500;
+const RESTORE_VALIDATION_UPLOAD_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct SystemResources {
@@ -305,6 +308,7 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
             metadata,
             warnings: vec![],
             confidence: crate::media::pipeline::AnalysisConfidence::High,
+            analysis_report: crate::media::pipeline::AnalyzerReport::default(),
         };
 
         let profile: Option<crate::db::LibraryProfile> =
@@ -454,6 +458,89 @@ impl Drop for SnapshotCleanup {
     }
 }
 
+#[derive(Serialize)]
+struct RestoreBackupValidationResponse {
+    valid: bool,
+    schema_version: String,
+    min_compatible_version: String,
+    migration_count: i64,
+    job_count: i64,
+}
+
+fn request_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+async fn decompress_gzip_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let input = tokio::fs::File::open(source).await?;
+    let reader = tokio::io::BufReader::new(input);
+    let mut decoder = GzipDecoder::new(reader);
+    let mut output = tokio::fs::File::create(destination).await?;
+    tokio::io::copy(&mut decoder, &mut output).await?;
+    output.flush().await?;
+    Ok(())
+}
+
+async fn validate_restore_backup_metadata(
+    path: &Path,
+) -> std::result::Result<RestoreBackupValidationResponse, String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|err| format!("Backup could not be opened: {err}"))?;
+    let mut header = [0_u8; 16];
+    file.read_exact(&mut header)
+        .await
+        .map_err(|err| format!("Backup is not a readable SQLite database: {err}"))?;
+    if header.as_slice() != b"SQLite format 3\0" {
+        return Err("Backup is not a SQLite database snapshot.".to_string());
+    }
+    drop(file);
+
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|err| format!("Backup database could not be opened: {err}"))?;
+
+    let schema_version: String =
+        sqlx::query_scalar("SELECT value FROM schema_info WHERE key = 'schema_version'")
+            .fetch_optional(&pool)
+            .await
+            .map_err(|err| format!("Backup is missing Alchemist schema metadata: {err}"))?
+            .ok_or_else(|| "Backup is missing schema_version metadata.".to_string())?;
+    let min_compatible_version: String =
+        sqlx::query_scalar("SELECT value FROM schema_info WHERE key = 'min_compatible_version'")
+            .fetch_optional(&pool)
+            .await
+            .map_err(|err| format!("Backup is missing compatibility metadata: {err}"))?
+            .ok_or_else(|| "Backup is missing min_compatible_version metadata.".to_string())?;
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| format!("Backup migration table could not be read: {err}"))?;
+    let job_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs")
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| format!("Backup jobs table could not be read: {err}"))?;
+
+    pool.close().await;
+
+    Ok(RestoreBackupValidationResponse {
+        valid: true,
+        schema_version,
+        min_compatible_version,
+        migration_count,
+        job_count,
+    })
+}
+
 pub(crate) async fn backup_database_handler(State(state): State<Arc<AppState>>) -> Response {
     let mut snapshot_path = crate::runtime::temp_dir();
     let token: u64 = rand::random();
@@ -509,6 +596,131 @@ pub(crate) async fn backup_database_handler(State(state): State<Arc<AppState>>) 
     );
 
     (headers, body).into_response()
+}
+
+pub(crate) async fn validate_restore_backup_handler(
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    if request_content_length(&headers)
+        .is_some_and(|value| value > RESTORE_VALIDATION_UPLOAD_LIMIT_BYTES)
+    {
+        return api_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "RESTORE_BACKUP_UPLOAD_TOO_LARGE",
+            "Restore validation upload exceeds the 2 GiB safety limit.",
+        );
+    }
+
+    let mut field = match multipart.next_field().await {
+        Ok(Some(field)) => field,
+        Ok(None) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "RESTORE_BACKUP_FILE_MISSING",
+                "missing backup upload",
+            );
+        }
+        Err(err) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "RESTORE_BACKUP_FIELD_FAILED",
+                err.to_string(),
+            );
+        }
+    };
+
+    if field.name().is_some_and(|name| name != "backup") {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "RESTORE_BACKUP_FIELD_INVALID",
+            "backup upload field must be named backup",
+        );
+    }
+
+    let temp_dir = crate::runtime::temp_dir();
+    if let Err(err) = tokio::fs::create_dir_all(&temp_dir).await {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RESTORE_BACKUP_TEMP_DIR_FAILED",
+            format!("Failed to create restore validation temp directory: {err}"),
+        );
+    }
+
+    let token: u64 = rand::random();
+    let compressed_path = temp_dir.join(format!("restore-validate-{token}.db.gz"));
+    let db_path = temp_dir.join(format!("restore-validate-{token}.db"));
+    let _compressed_cleanup = SnapshotCleanup {
+        path: compressed_path.clone(),
+    };
+    let _db_cleanup = SnapshotCleanup {
+        path: db_path.clone(),
+    };
+
+    let mut output = match tokio::fs::File::create(&compressed_path).await {
+        Ok(file) => file,
+        Err(err) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RESTORE_BACKUP_UPLOAD_CREATE_FAILED",
+                format!("Failed to create restore validation upload: {err}"),
+            );
+        }
+    };
+
+    let mut written_bytes = 0_u64;
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                written_bytes = written_bytes.saturating_add(chunk.len() as u64);
+                if written_bytes > RESTORE_VALIDATION_UPLOAD_LIMIT_BYTES {
+                    return api_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "RESTORE_BACKUP_UPLOAD_TOO_LARGE",
+                        "Restore validation upload exceeds the 2 GiB safety limit.",
+                    );
+                }
+                if let Err(err) = output.write_all(&chunk).await {
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "RESTORE_BACKUP_UPLOAD_WRITE_FAILED",
+                        format!("Failed to write restore validation upload: {err}"),
+                    );
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "RESTORE_BACKUP_UPLOAD_CHUNK_FAILED",
+                    err.to_string(),
+                );
+            }
+        }
+    }
+    if let Err(err) = output.flush().await {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RESTORE_BACKUP_UPLOAD_FLUSH_FAILED",
+            format!("Failed to finish restore validation upload: {err}"),
+        );
+    }
+    drop(output);
+
+    if let Err(err) = decompress_gzip_file(&compressed_path, &db_path).await {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "RESTORE_BACKUP_DECOMPRESS_FAILED",
+            format!("Backup upload must be a readable gzip-compressed SQLite snapshot: {err}"),
+        );
+    }
+
+    match validate_restore_backup_metadata(&db_path).await {
+        Ok(metadata) => axum::Json(metadata).into_response(),
+        Err(message) => {
+            api_error_response(StatusCode::BAD_REQUEST, "RESTORE_BACKUP_INVALID", message)
+        }
+    }
 }
 
 /// Query GPU utilization using nvidia-smi (NVIDIA) or other platform-specific tools

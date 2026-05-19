@@ -44,6 +44,24 @@ test("Last 7 Days panel is shown on dashboard", async ({ page }) => {
   await expect(page.getByText("Jobs completed")).toBeVisible();
 });
 
+test("Queue ETA panel shows aggregate estimate", async ({ page }) => {
+  await page.unroute("**/api/stats/queue-eta");
+  await page.route("**/api/stats/queue-eta", async (route) => {
+    await fulfillJson(route, 200, {
+      remaining_jobs: 3,
+      est_seconds_remaining: 3600,
+      sample_size: 4,
+    });
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByText("Queue ETA")).toBeVisible();
+  await expect(page.getByText("3 jobs remaining")).toBeVisible();
+  await expect(page.getByText("About 1h 0m left")).toBeVisible();
+  await expect(page.getByText("Based on 4 recent completed jobs.")).toBeVisible();
+});
+
 test("ENGINE PAUSED banner is shown when engine is paused and mentions auto-analysis", async ({
   page,
 }) => {
@@ -65,6 +83,33 @@ test("ENGINE PAUSED banner is hidden when engine is running", async ({ page }) =
   await page.goto("/");
 
   await expect(page.getByText("ENGINE PAUSED")).not.toBeVisible();
+});
+
+test("mobile dashboard prioritizes active jobs", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.unroute("**/api/jobs/table**");
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [
+      {
+        id: 41,
+        input_path: "/media/active-now.mkv",
+        output_path: "/output/active-now.mkv",
+        status: "encoding",
+        priority: 10,
+        progress: 42,
+        created_at: "2026-05-18T10:00:00Z",
+        updated_at: "2026-05-18T10:05:00Z",
+      },
+    ]);
+  });
+
+  await page.goto("/");
+
+  const activeNow = page.getByRole("region", { name: "Active Now" });
+  await expect(activeNow).toBeVisible();
+  await expect(activeNow.getByText("active-now.mkv")).toBeVisible();
+  await expect(activeNow.getByText("42%")).toBeVisible();
+  await expect(page.getByText("Total Processed")).not.toBeVisible();
 });
 
 test("About modal opens and does not contain Al badge", async ({ page }) => {

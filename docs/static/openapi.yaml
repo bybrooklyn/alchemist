@@ -719,6 +719,14 @@ paths:
           description: Settings config
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/settings/config/validate:
+    post:
+      summary: Validate editable settings config without saving
+      responses:
+        "200":
+          description: Parse and validation summary
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/settings/files:
     get:
       summary: Get file output settings
@@ -943,6 +951,14 @@ paths:
           description: Aggregated stats
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/stats/queue-eta:
+    get:
+      summary: Get aggregate queue ETA estimate
+      responses:
+        "200":
+          description: Queue-wide ETA estimate
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/stats/daily:
     get:
       summary: Get daily encode stats
@@ -1000,6 +1016,14 @@ paths:
       responses:
         "200":
           description: Gzip-compressed SQLite backup
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/backup/validate-restore:
+    post:
+      summary: Validate a compressed database backup before restore
+      responses:
+        "200":
+          description: Backup metadata and schema validation result
         default:
           $ref: "#/components/responses/Problem"
   /api/v1/system/hardware:

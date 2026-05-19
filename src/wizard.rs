@@ -6,11 +6,11 @@ use std::path::Path;
 pub fn hash_password(password: &str) -> Result<String> {
     use argon2::password_hash::SaltString;
     use argon2::{Argon2, PasswordHasher};
-    use rand::TryRngCore;
-    use rand::rngs::OsRng;
+    use rand::TryRng;
+    use rand::rngs::SysRng;
 
     let mut salt_bytes = [0u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut salt_bytes)
         .map_err(|e| AlchemistError::Unknown(format!("Failed to generate salt: {}", e)))?;
 

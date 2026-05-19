@@ -82,6 +82,17 @@ pub(crate) async fn aggregated_stats_handler(
     }
 }
 
+pub(crate) async fn queue_eta_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state
+        .db
+        .get_queue_eta_estimate(state.agent.concurrent_jobs_limit(), 20)
+        .await
+    {
+        Ok(estimate) => axum::Json(estimate).into_response(),
+        Err(err) => config_read_error_response("load queue eta", &err),
+    }
+}
+
 pub(crate) async fn daily_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_daily_stats(30).await {
         Ok(stats) => axum::Json(serde_json::json!(stats)).into_response(),

@@ -58,7 +58,7 @@ Add a "Preview" button on `web/src/components/WatchFolders.tsx` (and in the setu
 
 **First step:**
 
-Wire a new `POST /api/library/preview` endpoint that takes a path and returns planner decisions without side effects. Test it hitting a real folder.
+Shipped first cut: `POST /api/v1/library/preview` returns dry-run planner counts and samples without enqueueing work, and Watch Folders exposes an accessible Preview action with e2e coverage.
 
 **Risks / tradeoffs:**
 
@@ -367,7 +367,7 @@ Introduce a lightweight keyboard map on the jobs page first (`JobManager.tsx`): 
 
 **First step:**
 
-Add a single global key handler for `/` → focus filter input and `?` → shortcuts modal. Ship that and collect feedback before expanding.
+Shipped in `0.3.2-rc.3` WIP: `/` focuses the jobs search field, `?` opens a jobs-page shortcut reference, and `Esc` closes the reference without intercepting text-entry fields. Expand only after collecting feedback.
 
 **Risks / tradeoffs:**
 
@@ -391,7 +391,7 @@ Add a free-text search box on `JobsTable` that matches against the explanation f
 
 **First step:**
 
-Expose a `?q=...` query parameter on the existing jobs list endpoint that matches `explanation ILIKE '%q%'`. Wire the search input to it.
+Shipped in `0.3.2-rc.3` WIP: the existing jobs table `search` parameter now matches file paths, decision explanations, reason codes, and failure explanations. The jobs search placeholder reflects the broader search behavior.
 
 **Risks / tradeoffs:**
 
@@ -415,7 +415,7 @@ Create a dedicated mobile-first view (or a responsive variant of the main dashbo
 
 **First step:**
 
-Create a CSS media query in `Dashboard.tsx` that hides the stats cards and expands the "Active Jobs" list to full width on screens < 768px.
+Shipped in `0.3.2-rc.3` WIP: the Dashboard renders a mobile-only Active Now panel with active job progress and hides the desktop stat strip below `md`.
 **Risks / tradeoffs:**
 
 Maintaining two UI layouts — keep the mobile view as a subset of existing data to minimize state duplication.
@@ -484,7 +484,7 @@ Add a compact "Impact" panel to high-risk settings pages such as `FileSettings.t
 
 **First step:**
 
-Implement the panel for `FileSettings.tsx` only, using existing settings data to show whether the current save changes output naming, output root, or replace behavior.
+Shipped first cut: `FileSettings.tsx` now compares staged values to the last saved settings and summarizes output naming, output root, replace behavior, delete-source risk, and future-job scope before save.
 
 **Risks / tradeoffs:**
 
@@ -508,7 +508,7 @@ Add a compact dashboard widget that translates cumulative savings into tangible 
 
 **First step:**
 
-Add the widget to `StatsCharts.tsx` with one hardcoded equivalence (movies-at-4GB) and verify it reads the existing savings total.
+Shipped in `0.3.2-rc.3` WIP: `StatsCharts` now shows a Storage reclaimed panel with the raw saved bytes and an approximate 4 GB movie equivalent.
 
 **Risks / tradeoffs:**
 
@@ -556,7 +556,7 @@ Compute a rolling queue-wide ETA: take recent completed-job throughput (bytes/se
 
 **First step:**
 
-Add a backend endpoint that returns `{ remaining_jobs, est_seconds_remaining, sample_size }` from recent `encode_stats`, and render it as plain text before adding any band/visualization.
+Shipped first cut: `/api/v1/stats/queue-eta` returns `{ remaining_jobs, est_seconds_remaining, sample_size }` from recent `encode_stats`, and the Dashboard renders the estimate as plain text. Future work can add a confidence band.
 
 **Risks / tradeoffs:**
 
@@ -944,7 +944,7 @@ On row context-menu event, show a small menu with Pause/Resume, Cancel, Restart,
 
 **First step:**
 
-Build the menu with a single action ("Copy input path") and verify positioning, dismissal on click-outside, and selection behavior.
+Shipped in `0.3.2-rc.3` WIP: right-clicking a jobs table row opens the existing action menu at the cursor and includes a Copy input path action.
 
 **Risks / tradeoffs:**
 
@@ -1037,7 +1037,7 @@ Standardize timestamp rendering so compact views show relative time while hover/
 
 **First step:**
 
-Add a small `TimeDisplay` component and replace one timestamp in `JobsTable.tsx` plus one in `JobDetailModal.tsx`.
+Shipped in `0.3.2-rc.3` WIP: added a shared `TimeDisplay` component and replaced the jobs table updated timestamp plus attempt-history finished timestamp.
 
 **Risks / tradeoffs:**
 
@@ -1061,7 +1061,7 @@ Extend the existing failure-explanation classifier with a heuristic pass over FF
 
 **First step:**
 
-Collect a handful of real failing stderr samples, add a `classify_ffmpeg_stderr(&str) -> Option<KnownFailure>` function with table-driven matches and unit tests, and surface the result in the existing failure explanation payload.
+Shipped first cut: `classify_ffmpeg_stderr(&str) -> Option<KnownFailure>` now table-matches common disk-full, NVENC resource, unsupported pixel-format, corrupt-input, and encoder-parameter signatures with unit tests, and `failure_from_summary` surfaces those payloads.
 
 **Risks / tradeoffs:**
 
@@ -1254,7 +1254,7 @@ Add a `--install` or `--install-directory=PATH` flag. When run, Alchemist copies
 
 **First step:**
 
-Implement the logic to copy the current executable to a user-specified path.
+Shipped first cut: `--install` and `--install-directory <PATH>` copy the current executable into the target directory and set executable permissions on Unix.
 
 **Risks / tradeoffs:**
 
@@ -1349,7 +1349,7 @@ Add a restore workflow in **Settings → Runtime** that accepts an uploaded `.db
 
 **First step:**
 
-Implement a dry-run validation endpoint that accepts a backup upload, decompresses it to a temp file, verifies the SQLite header and current migration level, and returns metadata without mutating the live database.
+Shipped first cut: `POST /api/v1/system/backup/validate-restore` accepts a backup upload, decompresses it to a temp file, verifies the SQLite header and Alchemist schema metadata, and returns metadata without mutating the live database.
 
 **Risks / tradeoffs:**
 
@@ -1373,7 +1373,7 @@ Add a validation endpoint that accepts candidate config text and returns parse s
 
 **First step:**
 
-Implement `POST /api/settings/config/validate` for parse-and-normalize only, with no persistence. Add a small UI preview in `ConfigEditorSettings.tsx`.
+Shipped first cut: `POST /api/v1/settings/config/validate` parses and validates candidate TOML without persistence, returns a redacted summary and high-risk warnings, and `ConfigEditorSettings.tsx` shows the preview before apply.
 
 **Risks / tradeoffs:**
 
@@ -1447,7 +1447,7 @@ In the analyzer, record the source chapter count. In the finalizer, count chapte
 
 **First step:**
 
-Record source chapter count on the existing analyzer result struct and log a warning when the delta is non-zero — no DB changes yet. Confirm the detection works across MKV/MP4.
+Shipped first cut: source chapter count is recorded on existing analyzer metadata, and finalization logs a non-fatal job warning when the promoted output has fewer chapters than the source. No DB schema was added.
 
 **Risks / tradeoffs:**
 

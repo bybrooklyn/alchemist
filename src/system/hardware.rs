@@ -210,7 +210,13 @@ impl HardwareDetectionCacheFingerprint {
         let json = self.to_cache_json()?;
         let mut hasher = Sha256::new();
         hasher.update(json.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        let digest = hasher.finalize();
+        let mut out = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(&mut out, "{byte:02x}");
+        }
+        Ok(out)
     }
 }
 

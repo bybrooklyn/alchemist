@@ -12,7 +12,7 @@ use axum::{
     response::IntoResponse,
 };
 use chrono::Utc;
-use rand::Rng;
+use rand::RngExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::error;
