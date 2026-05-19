@@ -70,6 +70,7 @@ const sidebars: SidebarsConfig = {
         'api',
         'mcp',
         'codecs',
+        'analyzer',
         'skip-decisions',
         'engine-lifecycle',
         'engine-modes',

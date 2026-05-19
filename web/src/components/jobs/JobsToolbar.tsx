@@ -18,6 +18,7 @@ interface JobsToolbarProps {
     setSearchInput: (s: string) => void;
     compactSearchOpen: boolean;
     setCompactSearchOpen: (fn: boolean | ((prev: boolean) => boolean)) => void;
+    searchInputRef: RefObject<HTMLInputElement | null>;
     compactSearchRef: RefObject<HTMLDivElement | null>;
     compactSearchInputRef: RefObject<HTMLInputElement | null>;
     sortBy: SortField;
@@ -36,7 +37,7 @@ interface JobsToolbarProps {
 export function JobsToolbar({
     activeTab, setActiveTab, setPage,
     searchInput, setSearchInput,
-    compactSearchOpen, setCompactSearchOpen, compactSearchRef, compactSearchInputRef,
+    compactSearchOpen, setCompactSearchOpen, searchInputRef, compactSearchRef, compactSearchInputRef,
     sortBy, setSortBy, sortDesc, setSortDesc,
     refreshing, fetchJobs, openEnqueueDialog,
     reasonCode, onClearReasonCode, failureCode, onClearFailureCode,
@@ -101,8 +102,9 @@ export function JobsToolbar({
                     <div className="relative hidden xl:block xl:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-helios-slate" size={14} />
                         <input
+                            ref={searchInputRef as React.RefObject<HTMLInputElement>}
                             type="text"
-                            placeholder="Search files..."
+                            placeholder="Search files or explanations..."
                             value={searchInput}
                             onChange={(e) => setSearchInput(e.target.value)}
                             className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
@@ -156,8 +158,8 @@ export function JobsToolbar({
                             type="button"
                             onClick={() => setCompactSearchOpen((open) => (searchInput.trim() ? true : !open))}
                             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface text-helios-ink hover:bg-helios-surface-soft"
-                            title="Search files"
-                            aria-label="Search files"
+                            title="Search jobs"
+                            aria-label="Search jobs"
                         >
                             <Search size={16} />
                         </button>
@@ -174,7 +176,7 @@ export function JobsToolbar({
                                 <input
                                     ref={compactSearchInputRef as React.RefObject<HTMLInputElement>}
                                     type="text"
-                                    placeholder="Search files..."
+                                    placeholder="Search files or explanations..."
                                     value={searchInput}
                                     onChange={(e) => setSearchInput(e.target.value)}
                                     className="ml-2 min-w-0 flex-1 bg-transparent text-sm text-helios-ink outline-none placeholder:text-helios-slate"

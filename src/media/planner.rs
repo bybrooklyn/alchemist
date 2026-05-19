@@ -1207,9 +1207,11 @@ mod tests {
                 }],
                 audio_streams: vec![],
                 dynamic_range: DynamicRange::Sdr,
+                chapter_count: 0,
             },
             warnings: Vec::new(),
             confidence: AnalysisConfidence::High,
+            analysis_report: crate::media::pipeline::AnalyzerReport::default(),
         }
     }
 

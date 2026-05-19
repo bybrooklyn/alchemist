@@ -45,6 +45,12 @@ export interface DashboardStatsResponse {
   total: number;
 }
 
+export interface QueueEtaResponse {
+  remaining_jobs: number;
+  est_seconds_remaining: number | null;
+  sample_size: number;
+}
+
 export interface SystemSettingsResponse {
   monitoring_poll_interval: number;
   enable_telemetry: boolean;
@@ -340,6 +346,7 @@ export async function mockDashboardData(
   options: {
     jobs?: JobFixture[];
     stats?: Partial<DashboardStatsResponse>;
+    queueEta?: Partial<QueueEtaResponse>;
     systemSettings?: Partial<SystemSettingsResponse>;
     resources?: Partial<SystemResourcesResponse>;
     bundle?: Partial<SettingsBundle["settings"]>;
@@ -372,12 +379,21 @@ export async function mockDashboardData(
     gpu_memory_percent: 0,
     ...(options.resources ?? {}),
   };
+  const queueEta: QueueEtaResponse = {
+    remaining_jobs: 0,
+    est_seconds_remaining: null,
+    sample_size: 0,
+    ...(options.queueEta ?? {}),
+  };
 
   await mockJobsTable(page, options.jobs ?? []);
   await mockSettingsBundle(page, options.bundle ?? {});
 
   await page.route("**/api/stats", async (route) => {
     await fulfillJson(route, 200, stats);
+  });
+  await page.route("**/api/stats/queue-eta", async (route) => {
+    await fulfillJson(route, 200, queueEta);
   });
   await page.route("**/api/settings/system", async (route) => {
     await fulfillJson(route, 200, systemSettings);

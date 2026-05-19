@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw, Trash2, Ban, Plus } from "lucide-react";
+import { RefreshCw, Trash2, Ban, Plus, X } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
@@ -108,6 +108,18 @@ function viewMatchesCurrentState(
     );
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+
+    if (target.isContentEditable) {
+        return true;
+    }
+
+    return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
 function JobManager() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
@@ -124,6 +136,7 @@ function JobManager() {
     const [savedViews, setSavedViews] = useState<SavedJobView[]>([]);
     const [activeViewId, setActiveViewId] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const [reasonCode, setReasonCode] = useState<string | null>(() => {
         if (typeof window === "undefined") return null;
         const value = new URLSearchParams(window.location.search).get("reason_code");
@@ -254,10 +267,12 @@ function JobManager() {
         }
     };
     const [menuJobId, setMenuJobId] = useState<number | null>(null);
+    const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
     const [enqueueDialogOpen, setEnqueueDialogOpen] = useState(false);
     const [enqueuePath, setEnqueuePath] = useState("");
     const [enqueueSubmitting, setEnqueueSubmitting] = useState(false);
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
     const compactSearchRef = useRef<HTMLDivElement | null>(null);
     const compactSearchInputRef = useRef<HTMLInputElement | null>(null);
     const encodeStartTimes = useRef<Map<number, number>>(new Map());
@@ -448,6 +463,63 @@ function JobManager() {
     });
 
     useEffect(() => {
+        const focusSearch = () => {
+            setCompactSearchOpen(true);
+            window.requestAnimationFrame(() => {
+                const desktopSearch = searchInputRef.current;
+                if (
+                    desktopSearch &&
+                    window.getComputedStyle(desktopSearch).display !== "none" &&
+                    desktopSearch.offsetParent !== null
+                ) {
+                    desktopSearch.focus();
+                    desktopSearch.select();
+                    return;
+                }
+
+                compactSearchInputRef.current?.focus();
+                compactSearchInputRef.current?.select();
+            });
+        };
+
+        const handleShortcut = (event: KeyboardEvent) => {
+            if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+                return;
+            }
+
+            if (shortcutsOpen) {
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    setShortcutsOpen(false);
+                }
+                return;
+            }
+
+            if (confirmState || enqueueDialogOpen || focusedJob) {
+                return;
+            }
+
+            if (isEditableTarget(event.target)) {
+                return;
+            }
+
+            if (event.key === "/" && !event.shiftKey) {
+                event.preventDefault();
+                focusSearch();
+                return;
+            }
+
+            if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+                event.preventDefault();
+                setShortcutsOpen(true);
+            }
+        };
+
+        document.addEventListener("keydown", handleShortcut);
+        return () => document.removeEventListener("keydown", handleShortcut);
+    }, [confirmState, enqueueDialogOpen, focusedJob, shortcutsOpen]);
+
+    useEffect(() => {
         focusedJobIdRef.current = focusedJob?.job.id ?? null;
     }, [focusedJob?.job.id]);
 
@@ -496,6 +568,7 @@ function JobManager() {
         const handleClick = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
                 setMenuJobId(null);
+                setMenuPosition(null);
             }
         };
         document.addEventListener("mousedown", handleClick);
@@ -587,6 +660,17 @@ function JobManager() {
             await fetchJobs();
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to clear completed jobs";
+            setActionError(message);
+            showToast({ kind: "error", title: "Jobs", message });
+        }
+    };
+
+    const copyInputPath = async (path: string) => {
+        try {
+            await navigator.clipboard.writeText(path);
+            showToast({ kind: "success", title: "Jobs", message: "Input path copied" });
+        } catch {
+            const message = "Failed to copy input path";
             setActionError(message);
             showToast({ kind: "error", title: "Jobs", message });
         }
@@ -697,6 +781,7 @@ function JobManager() {
                 setSearchInput={setSearchInput}
                 compactSearchOpen={compactSearchOpen}
                 setCompactSearchOpen={setCompactSearchOpen}
+                searchInputRef={searchInputRef}
                 compactSearchRef={compactSearchRef}
                 compactSearchInputRef={compactSearchInputRef}
                 sortBy={sortBy}
@@ -790,11 +875,14 @@ function JobManager() {
                 tick={tick}
                 encodeStartTimes={encodeStartTimes}
                 menuJobId={menuJobId}
+                menuPosition={menuPosition}
                 menuRef={menuRef}
                 toggleSelect={toggleSelect}
                 toggleSelectAll={toggleSelectAll}
                 fetchJobDetails={openJobDetails}
                 setMenuJobId={setMenuJobId}
+                setMenuPosition={setMenuPosition}
+                copyInputPath={copyInputPath}
                 openConfirm={openConfirm}
                 handleAction={handleAction}
                 handlePriority={handlePriority}
@@ -854,6 +942,59 @@ function JobManager() {
                     }}
                     onSubmit={handleEnqueuePath}
                 />,
+                document.body,
+            )}
+
+            {typeof document !== "undefined" && shortcutsOpen && createPortal(
+                <div className="fixed inset-0 z-[210]">
+                    <button
+                        type="button"
+                        aria-label="Close shortcuts"
+                        onClick={() => setShortcutsOpen(false)}
+                        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center px-4">
+                        <div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="jobs-shortcuts-title"
+                            className="w-full max-w-sm rounded-lg border border-helios-line/30 bg-helios-surface p-6 shadow-2xl outline-none"
+                        >
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 id="jobs-shortcuts-title" className="text-lg font-bold text-helios-ink">
+                                        Keyboard shortcuts
+                                    </h3>
+                                    <p className="mt-1 text-sm text-helios-slate">
+                                        Jobs page
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShortcutsOpen(false)}
+                                    className="rounded-lg p-2 text-helios-slate hover:bg-helios-surface-soft hover:text-helios-ink"
+                                    aria-label="Close shortcuts"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <div className="mt-5 space-y-3 text-sm">
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-helios-slate">Focus search</span>
+                                    <kbd className="rounded-md border border-helios-line/30 bg-helios-surface-soft px-2 py-1 font-mono text-xs text-helios-ink">/</kbd>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-helios-slate">Show shortcuts</span>
+                                    <kbd className="rounded-md border border-helios-line/30 bg-helios-surface-soft px-2 py-1 font-mono text-xs text-helios-ink">?</kbd>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-helios-slate">Close dialogs</span>
+                                    <kbd className="rounded-md border border-helios-line/30 bg-helios-surface-soft px-2 py-1 font-mono text-xs text-helios-ink">Esc</kbd>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>,
                 document.body,
             )}
 

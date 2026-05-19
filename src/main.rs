@@ -1477,6 +1477,24 @@ mod tests {
         assert!(Args::try_parse_from(["alchemist", "--cli"]).is_err());
     }
 
+    #[tokio::test]
+    async fn install_binary_copies_current_executable_to_custom_directory()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut install_dir = std::env::temp_dir();
+        install_dir.push(format!("alchemist_install_{}", rand::random::<u64>()));
+
+        install_binary(Some(install_dir.clone())).await?;
+
+        let current_exe = std::env::current_exe()?;
+        let exe_name = current_exe
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("missing executable name"))?;
+        assert!(install_dir.join(exe_name).is_file());
+
+        let _ = std::fs::remove_dir_all(install_dir);
+        Ok(())
+    }
+
     #[test]
     fn scan_subcommand_parses() {
         let args = Args::try_parse_from(["alchemist", "scan", "/tmp/media"])

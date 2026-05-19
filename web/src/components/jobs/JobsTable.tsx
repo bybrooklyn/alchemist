@@ -1,4 +1,4 @@
-import { RefreshCw, Ban, Trash2, MoreHorizontal } from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -6,6 +6,7 @@ import type { RefObject, MutableRefObject } from "react";
 import type React from "react";
 import type { Job, ConfirmConfig } from "./types";
 import { isJobActive, retryCountdown } from "./types";
+import TimeDisplay from "../ui/TimeDisplay";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -19,11 +20,14 @@ interface JobsTableProps {
     tick: number;
     encodeStartTimes: MutableRefObject<Map<number, number>>;
     menuJobId: number | null;
+    menuPosition: { x: number; y: number } | null;
     menuRef: RefObject<HTMLDivElement | null>;
     toggleSelect: (id: number, withShift?: boolean) => void;
     toggleSelectAll: () => void;
     fetchJobDetails: (id: number) => Promise<void>;
     setMenuJobId: (id: number | null) => void;
+    setMenuPosition: (position: { x: number; y: number } | null) => void;
+    copyInputPath: (path: string) => Promise<void>;
     openConfirm: (config: ConfirmConfig) => void;
     handleAction: (id: number, action: "cancel" | "restart" | "delete") => Promise<void>;
     handlePriority: (job: Job, priority: number, label: string) => Promise<void>;
@@ -46,10 +50,15 @@ function calcEta(encodeStartTimes: MutableRefObject<Map<number, number>>, jobId:
 
 export function JobsTable({
     jobs, loading, selected, focusedJobId, tick, encodeStartTimes,
-    menuJobId, menuRef, toggleSelect, toggleSelectAll,
-    fetchJobDetails, setMenuJobId, openConfirm, handleAction, handlePriority,
+    menuJobId, menuPosition, menuRef, toggleSelect, toggleSelectAll,
+    fetchJobDetails, setMenuJobId, setMenuPosition, copyInputPath, openConfirm, handleAction, handlePriority,
     getStatusBadge,
 }: JobsTableProps) {
+    const closeMenu = () => {
+        setMenuJobId(null);
+        setMenuPosition(null);
+    };
+
     return (
         <div className="bg-helios-surface/50 border border-helios-line/20 rounded-lg overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
@@ -89,6 +98,11 @@ export function JobsTable({
                             <tr
                                 key={job.id}
                                 onClick={() => void fetchJobDetails(job.id)}
+                                onContextMenu={(event) => {
+                                    event.preventDefault();
+                                    setMenuPosition({ x: event.clientX, y: event.clientY });
+                                    setMenuJobId(job.id);
+                                }}
                                 className={cn(
                                     "group hover:bg-helios-surface/80 transition-all cursor-pointer",
                                     selected.has(job.id) && "bg-helios-surface-soft",
@@ -167,12 +181,15 @@ export function JobsTable({
                                     )}
                                 </td>
                                 <td className="hidden md:table-cell px-6 py-4 text-xs text-helios-slate font-mono">
-                                    {new Date(job.updated_at).toLocaleString()}
+                                    <TimeDisplay value={job.updated_at} />
                                 </td>
                                 <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                                     <div className="relative" ref={menuJobId === job.id ? (menuRef as React.RefObject<HTMLDivElement>) : null}>
                                         <button
-                                            onClick={() => setMenuJobId(menuJobId === job.id ? null : job.id)}
+                                            onClick={() => {
+                                                setMenuPosition(null);
+                                                setMenuJobId(menuJobId === job.id ? null : job.id);
+                                            }}
                                             className="p-2 rounded-lg border border-helios-line/20 hover:bg-helios-surface-soft text-helios-slate"
                                             title="Actions"
                                         >
@@ -184,15 +201,20 @@ export function JobsTable({
                                                     initial={{ opacity: 0, y: 6 }}
                                                     animate={{ opacity: 1, y: 0 }}
                                                     exit={{ opacity: 0, y: 6 }}
-                                                    className="absolute right-0 mt-2 w-44 rounded-lg border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden"
+                                                    style={menuPosition ? { left: menuPosition.x, top: menuPosition.y } : undefined}
+                                                    className={cn(
+                                                        "w-44 rounded-lg border border-helios-line/20 bg-helios-surface shadow-xl z-20 overflow-hidden",
+                                                        menuPosition ? "fixed" : "absolute right-0 mt-2"
+                                                    )}
                                                 >
-                                                    <button onClick={() => { setMenuJobId(null); void fetchJobDetails(job.id); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">View details</button>
-                                                    <button onClick={() => { setMenuJobId(null); void handlePriority(job, job.priority + 10, "Priority boosted"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Boost priority (+10)</button>
-                                                    <button onClick={() => { setMenuJobId(null); void handlePriority(job, job.priority - 10, "Priority lowered"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Lower priority (-10)</button>
-                                                    <button onClick={() => { setMenuJobId(null); void handlePriority(job, 0, "Priority reset"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Reset priority</button>
+                                                    <button onClick={() => { closeMenu(); void fetchJobDetails(job.id); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">View details</button>
+                                                    <button onClick={() => { closeMenu(); void copyInputPath(job.input_path); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Copy input path</button>
+                                                    <button onClick={() => { closeMenu(); void handlePriority(job, job.priority + 10, "Priority boosted"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Boost priority (+10)</button>
+                                                    <button onClick={() => { closeMenu(); void handlePriority(job, job.priority - 10, "Priority lowered"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Lower priority (-10)</button>
+                                                    <button onClick={() => { closeMenu(); void handlePriority(job, 0, "Priority reset"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Reset priority</button>
                                                     {(job.status === "failed" || job.status === "cancelled") && (
                                                         <button
-                                                            onClick={() => { setMenuJobId(null); openConfirm({ title: "Retry job", body: "Retry this job now?", confirmLabel: "Retry", onConfirm: () => handleAction(job.id, "restart") }); }}
+                                                            onClick={() => { closeMenu(); openConfirm({ title: "Retry job", body: "Retry this job now?", confirmLabel: "Retry", onConfirm: () => handleAction(job.id, "restart") }); }}
                                                             className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
                                                         >
                                                             Retry
@@ -200,7 +222,7 @@ export function JobsTable({
                                                     )}
                                                     {["encoding", "analyzing", "remuxing"].includes(job.status) && (
                                                         <button
-                                                            onClick={() => { setMenuJobId(null); openConfirm({ title: "Cancel job", body: "Stop this job immediately?", confirmLabel: "Cancel", confirmTone: "danger", onConfirm: () => handleAction(job.id, "cancel") }); }}
+                                                            onClick={() => { closeMenu(); openConfirm({ title: "Cancel job", body: "Stop this job immediately?", confirmLabel: "Cancel", confirmTone: "danger", onConfirm: () => handleAction(job.id, "cancel") }); }}
                                                             className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft"
                                                         >
                                                             Stop / Cancel
@@ -208,7 +230,7 @@ export function JobsTable({
                                                     )}
                                                     {!isJobActive(job) && (
                                                         <button
-                                                            onClick={() => { setMenuJobId(null); openConfirm({ title: "Delete job", body: "Delete this job from history?", confirmLabel: "Delete", confirmTone: "danger", onConfirm: () => handleAction(job.id, "delete") }); }}
+                                                            onClick={() => { closeMenu(); openConfirm({ title: "Delete job", body: "Delete this job from history?", confirmLabel: "Delete", confirmTone: "danger", onConfirm: () => handleAction(job.id, "delete") }); }}
                                                             className="w-full px-4 py-2 text-left text-xs font-semibold text-red-500 hover:bg-red-500/5"
                                                         >
                                                             Delete

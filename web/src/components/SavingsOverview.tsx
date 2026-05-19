@@ -8,7 +8,6 @@ import {
     ResponsiveContainer,
     BarChart,
     Bar,
-    Cell,
 } from "recharts";
 import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
@@ -227,12 +226,15 @@ export default function SavingsOverview() {
                                     width={52}
                                 />
                                 <Tooltip
-                                    formatter={(value: number) => [
-                                        value >= 1
-                                            ? `${value.toFixed(2)} GB`
-                                            : `${(value * 1024).toFixed(0)} MB`,
-                                        "Saved",
-                                    ]}
+                                    formatter={(value) => {
+                                        const numericValue = Number(value ?? 0);
+                                        return [
+                                            numericValue >= 1
+                                                ? `${numericValue.toFixed(2)} GB`
+                                                : `${(numericValue * 1024).toFixed(0)} MB`,
+                                            "Saved",
+                                        ];
+                                    }}
                                     labelStyle={{
                                         color: "rgb(var(--text-primary))",
                                         fontSize: 12,
@@ -297,14 +299,16 @@ export default function SavingsOverview() {
                                     width={52}
                                 />
                                 <Tooltip
-                                    formatter={(value: number, _: string, props: {
-                                        payload?: { job_count?: number };
-                                    }) => [
-                                        value >= 1
-                                            ? `${value.toFixed(2)} GB`
-                                            : `${(value * 1024).toFixed(0)} MB`,
-                                        `Saved (${props.payload?.job_count ?? 0} jobs)`,
-                                    ]}
+                                    formatter={(value, _name, item) => {
+                                        const numericValue = Number(value ?? 0);
+                                        const payload = item.payload as { job_count?: number } | undefined;
+                                        return [
+                                            numericValue >= 1
+                                                ? `${numericValue.toFixed(2)} GB`
+                                                : `${(numericValue * 1024).toFixed(0)} MB`,
+                                            `Saved (${payload?.job_count ?? 0} jobs)`,
+                                        ];
+                                    }}
                                     contentStyle={{
                                         background: "rgb(var(--bg-panel))",
                                         border: "1px solid rgb(var(--border-subtle))",
@@ -316,15 +320,9 @@ export default function SavingsOverview() {
                                     dataKey="gb_saved"
                                     radius={[4, 4, 0, 0]}
                                     maxBarSize={80}
-                                >
-                                    {codecChartData.map((_, index) => (
-                                        <Cell
-                                            key={index}
-                                            fill="rgb(var(--accent-primary))"
-                                            fillOpacity={0.8}
-                                        />
-                                    ))}
-                                </Bar>
+                                    fill="rgb(var(--accent-primary))"
+                                    fillOpacity={0.8}
+                                />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>

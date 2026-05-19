@@ -862,6 +862,7 @@ mod tests {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: DynamicRange::Hdr10,
+            chapter_count: 0,
         }
     }
 

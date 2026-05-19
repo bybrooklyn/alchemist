@@ -66,6 +66,7 @@ def canonical_v1_from_legacy(path: str) -> str | None:
     aliases = {
         "/api/jobs/table": "/api/v1/jobs",
         "/api/jobs/:id/delete": "/api/v1/jobs/{id}",
+        "/api/jobs/{id}/delete": "/api/v1/jobs/{id}",
     }
     if path in aliases:
         return aliases[path]

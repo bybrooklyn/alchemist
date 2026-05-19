@@ -279,6 +279,7 @@ fn read_only_api_token_allows(method: &Method, path: &str) -> bool {
         || path == "/api/events"
         || path == "/api/stats"
         || path == "/api/stats/aggregated"
+        || path == "/api/stats/queue-eta"
         || path == "/api/stats/daily"
         || path == "/api/stats/detailed"
         || path == "/api/stats/savings"

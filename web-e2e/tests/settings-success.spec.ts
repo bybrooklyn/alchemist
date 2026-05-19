@@ -44,6 +44,90 @@ test.beforeEach(async ({ page }) => {
   await mockEngineStatus(page);
 });
 
+test("file settings impact panel summarizes staged changes", async ({ page }) => {
+  await page.route("**/api/settings/files", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        delete_source: false,
+        output_extension: "mkv",
+        output_suffix: "-alchemist",
+        replace_strategy: "keep",
+        output_root: null,
+      });
+      return;
+    }
+
+    await fulfillJson(route, 200, route.request().postDataJSON());
+  });
+
+  await page.goto("/settings?tab=files");
+
+  await expect(page.getByRole("heading", { name: "Impact" })).toBeVisible();
+  await expect(page.getByText("No file-setting changes are staged.")).toBeVisible();
+
+  await page.getByLabel("Output Suffix").fill("-av1");
+  await page.getByLabel("Output Root").fill("/encoded");
+  await page.getByLabel("Existing Output Policy").selectOption("replace");
+  await page.getByLabel("Delete source file after success").check();
+
+  await expect(
+    page.getByText("Output naming changes apply to future planned jobs only."),
+  ).toBeVisible();
+  await expect(page.getByText("New outputs will be mirrored under /encoded.")).toBeVisible();
+  await expect(
+    page.getByText("Existing output files may be replaced after verified success."),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Delete Source affects future successful transcodes and permanently removes originals.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText("Active jobs keep the plan they already started.")).toBeVisible();
+});
+
+test("config editor validates candidate TOML before apply", async ({ page }) => {
+  await page.route("**/api/settings/config", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {
+        raw_toml: "[files]\ndelete_source = false\nreplace_strategy = \"keep\"\n",
+        source_of_truth: "toml",
+        projection_status: "synced",
+      });
+      return;
+    }
+
+    await fulfillJson(route, 200, {
+      raw_toml: route.request().postDataJSON().raw_toml,
+      source_of_truth: "toml",
+      projection_status: "synced",
+    });
+  });
+  await page.route("**/api/settings/config/validate", async (route) => {
+    await fulfillJson(route, 200, {
+      valid: true,
+      warnings: ["delete_source is enabled; successful future transcodes can remove originals."],
+      summary: {
+        output_codec: "av1",
+        replace_strategy: "replace",
+        output_root_set: false,
+        delete_source: true,
+        watch_dirs: 2,
+        notification_targets: 1,
+        schedule_windows: 0,
+      },
+    });
+  });
+
+  await page.goto("/settings?tab=config");
+  await page.getByLabel("Raw TOML config").fill("[files]\ndelete_source = true\n");
+  await page.getByRole("button", { name: "Validate", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Validation passed" })).toBeVisible();
+  await expect(page.getByText("Codec")).toBeVisible();
+  await expect(page.getByText("av1")).toBeVisible();
+  await expect(page.getByText("delete_source is enabled")).toBeVisible();
+});
+
 test("hardware settings save, device-path blur commit, and rollback on failure", async ({
   page,
 }) => {

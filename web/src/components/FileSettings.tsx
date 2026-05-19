@@ -19,6 +19,7 @@ export default function FileSettings() {
         replace_strategy: "keep",
         output_root: null,
     });
+    const [savedSettings, setSavedSettings] = useState<FileSettings | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -31,6 +32,7 @@ export default function FileSettings() {
         try {
             const data = await apiJson<FileSettings>("/api/settings/files");
             setSettings(data);
+            setSavedSettings(data);
             setError(null);
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to load file settings";
@@ -49,6 +51,7 @@ export default function FileSettings() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings),
             });
+            setSavedSettings(settings);
             showToast({ kind: "success", title: "Files", message: "File settings saved." });
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to save file settings";
@@ -58,6 +61,8 @@ export default function FileSettings() {
             setSaving(false);
         }
     };
+
+    const impactRows = buildImpactRows(savedSettings, settings);
 
     return (
         <div className="space-y-6" aria-live="polite">
@@ -75,6 +80,7 @@ export default function FileSettings() {
                         <div>
                             <label className="block text-xs font-medium text-helios-slate mb-1">Output Suffix</label>
                             <input
+                                aria-label="Output Suffix"
                                 type="text"
                                 value={settings.output_suffix}
                                 onChange={e => setSettings({ ...settings, output_suffix: e.target.value })}
@@ -89,6 +95,7 @@ export default function FileSettings() {
                         <div>
                             <label className="block text-xs font-medium text-helios-slate mb-1">Extension</label>
                             <select
+                                aria-label="Extension"
                                 value={settings.output_extension}
                                 onChange={e => setSettings({ ...settings, output_extension: e.target.value })}
                                 className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink font-mono"
@@ -102,6 +109,7 @@ export default function FileSettings() {
                     <div>
                         <label className="block text-xs font-medium text-helios-slate mb-1">Output Root</label>
                         <input
+                            aria-label="Output Root"
                             type="text"
                             value={settings.output_root ?? ""}
                             onChange={e => setSettings({ ...settings, output_root: e.target.value || null })}
@@ -116,6 +124,7 @@ export default function FileSettings() {
                     <div>
                         <label className="block text-xs font-medium text-helios-slate mb-1">Existing Output Policy</label>
                         <select
+                            aria-label="Existing Output Policy"
                             value={settings.replace_strategy}
                             onChange={e => setSettings({ ...settings, replace_strategy: e.target.value })}
                             className="w-full bg-helios-surface border border-helios-line/20 rounded p-2 text-sm text-helios-ink"
@@ -149,6 +158,23 @@ export default function FileSettings() {
                         </div>
                     </div>
 
+                    <section
+                        aria-labelledby="file-settings-impact-title"
+                        className="rounded-lg border border-helios-line/20 bg-helios-surface/70 p-4"
+                    >
+                        <h3 id="file-settings-impact-title" className="text-sm font-bold text-helios-ink">
+                            Impact
+                        </h3>
+                        <ul className="mt-3 space-y-2">
+                            {impactRows.map((row) => (
+                                <li key={row} className="flex gap-2 text-xs leading-5 text-helios-slate">
+                                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-helios-solar" />
+                                    <span>{row}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </section>
+
                     <div className="flex justify-end pt-2">
                         <button
                             onClick={handleSave}
@@ -163,4 +189,52 @@ export default function FileSettings() {
             )}
         </div>
     );
+}
+
+function buildImpactRows(saved: FileSettings | null, current: FileSettings): string[] {
+    if (!saved) {
+        return ["Impact summary loads after current file settings are available."];
+    }
+
+    const rows: string[] = [];
+
+    if (
+        saved.output_suffix !== current.output_suffix ||
+        saved.output_extension !== current.output_extension
+    ) {
+        rows.push("Output naming changes apply to future planned jobs only.");
+    }
+
+    if (saved.output_root !== current.output_root) {
+        rows.push(
+            current.output_root
+                ? `New outputs will be mirrored under ${current.output_root}.`
+                : "New outputs will be written beside source files."
+        );
+    }
+
+    if (saved.replace_strategy !== current.replace_strategy) {
+        rows.push(
+            current.replace_strategy === "replace"
+                ? "Existing output files may be replaced after verified success."
+                : "Existing output files will be preserved."
+        );
+    }
+
+    if (saved.delete_source !== current.delete_source) {
+        rows.push(
+            current.delete_source
+                ? "Delete Source affects future successful transcodes and permanently removes originals."
+                : "Source files will be preserved after future transcodes."
+        );
+    }
+
+    if (rows.length === 0) {
+        rows.push("No file-setting changes are staged.");
+    }
+
+    rows.push("Active jobs keep the plan they already started.");
+    rows.push("Queued and future jobs use these settings when they are planned; this does not re-analyze existing history.");
+
+    return rows;
 }

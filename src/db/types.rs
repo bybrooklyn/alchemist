@@ -490,6 +490,13 @@ pub struct ReasonCodeCount {
     pub trend: Option<Vec<i64>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct QueueEtaEstimate {
+    pub remaining_jobs: i64,
+    pub est_seconds_remaining: Option<i64>,
+    pub sample_size: i64,
+}
+
 /// Detailed per-job encoding statistics
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct DetailedEncodeStats {

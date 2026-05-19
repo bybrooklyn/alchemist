@@ -166,6 +166,55 @@ impl Db {
         Ok(stats)
     }
 
+    pub async fn get_queue_eta_estimate(
+        &self,
+        concurrent_limit: usize,
+        sample_limit: i64,
+    ) -> Result<QueueEtaEstimate> {
+        let pool = &self.pool;
+        timed_query("get_queue_eta_estimate", || async {
+            let remaining_jobs: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*)
+                 FROM jobs
+                 WHERE archived = 0
+                   AND status IN ('queued', 'analyzing', 'encoding', 'remuxing', 'resuming')",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            let sample = sqlx::query(
+                "SELECT COUNT(*) AS sample_size, AVG(encode_time_seconds) AS avg_seconds
+                 FROM (
+                    SELECT encode_time_seconds
+                    FROM encode_stats
+                    WHERE encode_time_seconds > 0
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                 )",
+            )
+            .bind(sample_limit.max(1))
+            .fetch_one(pool)
+            .await?;
+
+            let sample_size: i64 = sample.get("sample_size");
+            let avg_seconds: Option<f64> = sample.try_get("avg_seconds")?;
+            let est_seconds_remaining = match (remaining_jobs, sample_size, avg_seconds) {
+                (remaining, samples, Some(avg)) if remaining > 0 && samples > 0 && avg > 0.0 => {
+                    let concurrency = concurrent_limit.max(1) as f64;
+                    Some(((remaining as f64 * avg) / concurrency).ceil() as i64)
+                }
+                _ => None,
+            };
+
+            Ok(QueueEtaEstimate {
+                remaining_jobs,
+                est_seconds_remaining,
+                sample_size,
+            })
+        })
+        .await
+    }
+
     pub async fn get_aggregated_stats(&self) -> Result<AggregatedStats> {
         let pool = &self.pool;
         timed_query("get_aggregated_stats", || async {
@@ -729,6 +778,53 @@ mod tests {
             .and_then(|value| value.as_i64())
             .unwrap_or(0);
         assert_eq!(completed, 1, "get_stats should exclude archived jobs");
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_eta_uses_recent_encode_samples_and_concurrency()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_queue_eta_{}.db", token));
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        for i in 0..5 {
+            db.enqueue_job(
+                Path::new(&format!("/tmp/eta-{i}.mkv")),
+                Path::new(&format!("/tmp/eta-{i}.out.mkv")),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        }
+
+        for (path, encode_time) in [("/tmp/eta-0.mkv", 20.0), ("/tmp/eta-1.mkv", 40.0)] {
+            let job = db
+                .get_job_by_input_path(path)
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing completed sample job"))?;
+            db.update_job_status(job.id, JobState::Completed).await?;
+            db.save_encode_stats(EncodeStatsInput {
+                job_id: job.id,
+                input_size: 1000,
+                output_size: 500,
+                compression_ratio: 0.5,
+                encode_time,
+                encode_speed: 1.0,
+                avg_bitrate: 1000.0,
+                vmaf_score: Some(90.0),
+                output_codec: Some("hevc".into()),
+            })
+            .await?;
+        }
+
+        let estimate = db.get_queue_eta_estimate(2, 20).await?;
+        assert_eq!(estimate.remaining_jobs, 3);
+        assert_eq!(estimate.sample_size, 2);
+        assert_eq!(estimate.est_seconds_remaining, Some(45));
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

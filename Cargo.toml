@@ -1,6 +1,6 @@
 [package]
 name = "alchemist"
-version = "0.3.2-rc.3"
+version = "0.3.3-rc.4"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0"
@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 walkdir = "2"
@@ -28,34 +28,34 @@ serde_json = "1.0"
 anyhow = "1.0"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "chrono", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
-num_cpus = "1.16"
-inquire = { version = "0.7" }
+num_cpus = "1.17"
+inquire = { version = "0.9" }
 futures = { version = "0.3" }
-toml = "0.8"
-axum = { version = "0.7", features = ["macros", "multipart"] }
-rayon = "1.10"
+toml = "1.1"
+axum = { version = "0.8", features = ["macros", "multipart"] }
+rayon = "1.12"
 tokio-stream = { version = "0.1", features = ["sync"] }
-thiserror = "2.0.17"
-notify = { version = "6" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+thiserror = "2.0.18"
+notify = { version = "8" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 rust-embed = { version = "8", features = ["axum"] }
 mime_guess = "2.0"
 argon2 = "0.5.3"
-rand = "0.9"
-sysinfo = "0.32"
+rand = "0.10"
+sysinfo = "0.36"
 uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
-ed25519-dalek = "2.1"
+ed25519-dalek = "2.2"
 trait-variant = "0.1.2"
 tokio-util = { version = "0.7", features = ["io"] }
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
-prometheus = "0.13"
-strum = { version = "0.26", features = ["derive"] }
+prometheus = "0.14"
+strum = { version = "0.28", features = ["derive"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-dirs = "5"
+dirs = "6"
 
 [dev-dependencies]
 http-body-util = "0.1"

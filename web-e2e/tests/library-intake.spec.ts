@@ -70,6 +70,60 @@ test("Scan Now button is present on Library & Intake page", async ({ page }) => 
   await expect(page.getByRole("button", { name: /scan now/i })).toBeVisible();
 });
 
+test("watch folder preview shows dry-run counts without enqueueing", async ({ page }) => {
+  await mockSettingsBundle(page, {
+    scanner: {
+      directories: ["/media/movies"],
+      watch_enabled: true,
+      extra_watch_dirs: [],
+    },
+  });
+  await page.route("**/api/settings/watch-dirs**", async (route) => {
+    await fulfillJson(route, 200, [
+      {
+        id: 1,
+        path: "/media/movies",
+        is_recursive: true,
+        profile_id: null,
+      },
+    ]);
+  });
+  await page.route("**/api/v1/library/preview", async (route) => {
+    await fulfillJson(route, 200, {
+      path: "/media/movies",
+      scanned: 3,
+      truncated: false,
+      counts: {
+        skip: 1,
+        remux: 1,
+        encode: 1,
+        error: 0,
+      },
+      bytes_under_consideration: {
+        skip: 100,
+        remux: 200,
+        encode: 300,
+        error: 0,
+      },
+      samples: [
+        {
+          path: "/media/movies/source.mkv",
+          action: "encode",
+          reason: "transcode_recommended",
+        },
+      ],
+    });
+  });
+
+  await page.goto("/settings?tab=watch");
+  await page.getByRole("button", { name: "Preview /media/movies" }).click();
+
+  await expect(page.getByRole("dialog", { name: "Plan preview" })).toBeVisible();
+  await expect(page.getByText("Scanned 3 files")).toBeVisible();
+  await expect(page.getByText("source.mkv")).toBeVisible();
+  await expect(page.getByText("Nothing has been queued.")).toBeVisible();
+});
+
 test("adding a folder via text input calls bundle and watch-dirs APIs", async ({ page }) => {
   let bundlePutCalled = false;
   let watchDirsPostCalled = false;

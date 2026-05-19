@@ -579,6 +579,7 @@ export default function WatchFolders() {
                                     onClick={() => void openPreview(dir.path)}
                                     className="inline-flex items-center justify-center rounded-lg border border-helios-line/20 bg-helios-surface px-3 py-2 text-helios-slate hover:text-helios-ink hover:bg-helios-surface-soft"
                                     title="Preview what Alchemist would do with this folder"
+                                    aria-label={`Preview ${dir.path}`}
                                 >
                                     <Eye size={14} />
                                 </button>

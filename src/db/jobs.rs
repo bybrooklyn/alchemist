@@ -574,9 +574,42 @@ impl Db {
                     .replace('\\', "\\\\")
                     .replace('%', "\\%")
                     .replace('_', "\\_");
-                qb.push(" AND j.input_path LIKE ");
-                qb.push_bind(format!("%{}%", escaped));
+                let pattern = format!("%{}%", escaped);
+                qb.push(" AND (j.input_path LIKE ");
+                qb.push_bind(pattern.clone());
                 qb.push(" ESCAPE '\\'");
+                qb.push(
+                    " OR EXISTS (
+                        SELECT 1 FROM decisions d
+                        WHERE d.job_id = j.id
+                          AND (
+                            d.reason LIKE ",
+                );
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\' OR COALESCE(d.reason_code, d.action, '') LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\' OR COALESCE(d.reason_payload_json, '') LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(
+                    " ESCAPE '\\'
+                          )
+                    ) OR EXISTS (
+                        SELECT 1 FROM job_failure_explanations f
+                        WHERE f.job_id = j.id
+                          AND (
+                            COALESCE(f.legacy_summary, '') LIKE ",
+                );
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\' OR f.code LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\' OR f.payload_json LIKE ");
+                qb.push_bind(pattern);
+                qb.push(
+                    " ESCAPE '\\'
+                          )
+                    )
+                ) ",
+                );
             }
 
             if let Some(ref reason_code) = query.reason_code {
@@ -1657,6 +1690,84 @@ mod tests {
             explanation.measured.get("bpp"),
             Some(&serde_json::json!(0.043))
         );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_jobs_filtered_search_matches_paths_decisions_and_failures()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_job_search_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        db.enqueue_job(
+            Path::new("/media/plain.mkv"),
+            Path::new("/output/plain.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let decision_job = db
+            .get_job_by_input_path("/media/plain.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing decision job"))?;
+        db.add_decision(
+            decision_job.id,
+            "skip",
+            "hdr_metadata|summary=HDR metadata should stay visible",
+        )
+        .await?;
+
+        db.enqueue_job(
+            Path::new("/media/failure.mkv"),
+            Path::new("/output/failure.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let failure_job = db
+            .get_job_by_input_path("/media/failure.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing failure job"))?;
+        db.upsert_job_failure_explanation(
+            failure_job.id,
+            &failure_from_summary("Subtitle burn failed during FFmpeg execution"),
+        )
+        .await?;
+
+        db.enqueue_job(
+            Path::new("/media/path-needle.mkv"),
+            Path::new("/output/path-needle.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let path_job = db
+            .get_job_by_input_path("/media/path-needle.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing path job"))?;
+
+        let query = |search: &str| JobFilterQuery {
+            limit: 50,
+            offset: 0,
+            search: Some(search.to_string()),
+            archived: Some(false),
+            ..Default::default()
+        };
+
+        let hdr_matches = db.get_jobs_filtered(query("HDR metadata")).await?;
+        assert_eq!(hdr_matches.len(), 1);
+        assert_eq!(hdr_matches[0].id, decision_job.id);
+
+        let subtitle_matches = db.get_jobs_filtered(query("subtitle burn")).await?;
+        assert_eq!(subtitle_matches.len(), 1);
+        assert_eq!(subtitle_matches[0].id, failure_job.id);
+
+        let path_matches = db.get_jobs_filtered(query("path-needle")).await?;
+        assert_eq!(path_matches.len(), 1);
+        assert_eq!(path_matches[0].id, path_job.id);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

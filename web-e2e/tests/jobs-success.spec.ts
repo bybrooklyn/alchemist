@@ -180,7 +180,9 @@ test("search requests are debounced and failed job details show summary and logs
   await mockJobDetails(page, { 2: failedDetail });
 
   await page.goto("/jobs");
-  await page.getByPlaceholder("Search files...").first().fill("failed");
+  const updatedTime = page.locator('time[datetime="2025-01-02T00:00:00.000Z"]').first();
+  await expect(updatedTime).toHaveAttribute("title", /UTC: 2025-01-02T00:00:00\.000Z/);
+  await page.getByPlaceholder("Search files or explanations...").first().fill("failed");
 
   await expect
     .poll(() => requests.some((url) => url.searchParams.get("search") === "failed"))
@@ -260,6 +262,32 @@ test("batch cancel, restart, delete, and clear completed update the job table", 
       .getByText("Cleared 1 completed job from the queue. Historical stats were preserved.")
       .first(),
   ).toBeVisible();
+});
+
+test("right-click row menu copies the input path", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          window.localStorage.setItem("copied-input-path", text);
+        },
+      },
+    });
+  });
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [queuedJob]);
+  });
+
+  await page.goto("/jobs");
+  const queuedRow = page.locator("tbody tr").filter({ has: page.getByTitle("/media/queued.mkv") });
+  await queuedRow.click({ button: "right" });
+
+  await page.getByRole("button", { name: "Copy input path" }).click();
+
+  await expect.poll(() =>
+    page.evaluate(() => window.localStorage.getItem("copied-input-path"))
+  ).toBe("/media/queued.mkv");
 });
 
 test("row menu conflicts surface blocked job details from the API", async ({ page }) => {

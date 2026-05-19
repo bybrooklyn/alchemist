@@ -97,6 +97,11 @@ settings UI.
 Persist the full settings bundle. Fails with `409` when
 `ALCHEMIST_CONFIG_MUTABLE=false`.
 
+### `POST /api/v1/settings/config/validate`
+Parse and validate candidate TOML without saving it. Returns a
+redacted summary and conservative warnings for high-risk
+settings.
+
 ### `GET|POST /api/v1/settings/system`
 Read or update runtime-facing system settings:
 conversion upload limit, converted-download retention,
@@ -216,6 +221,7 @@ are safe to remove.
 List jobs with filtering and pagination.
 
 **Params:** `limit`, `page`, `status`, `search`, `sort_by`, `sort_desc`, `archived`.
+The `search` value matches job paths plus stored decision and failure explanation text.
 
 ### `GET /api/v1/jobs/:id/details`
 Fetch full job state, metadata, logs, and stats.
@@ -308,6 +314,18 @@ Switch engine mode or apply manual overrides.
 ### `GET /api/v1/stats/aggregated`
 Total savings, job counts, and global efficiency.
 
+### `GET /api/v1/stats/queue-eta`
+Queue-wide ETA estimate from recent completed encode samples.
+
+Returns:
+```json
+{
+  "remaining_jobs": 3,
+  "est_seconds_remaining": 3600,
+  "sample_size": 4
+}
+```
+
 ### `GET /api/v1/stats/daily`
 Encode activity history for the last 30 days.
 
@@ -346,6 +364,13 @@ guided update instructions instead of replacing files.
 ### `POST /api/v1/system/backup`
 Download a gzip-compressed SQLite backup produced through
 SQLite's online backup path. Requires full access.
+
+### `POST /api/v1/system/backup/validate-restore`
+Validate an uploaded `.db.gz` snapshot before restore. The
+endpoint decompresses the backup to a temporary file, verifies
+that it is an Alchemist SQLite database, and returns schema
+metadata without mutating the live database. Requires full
+access.
 
 ### `GET /api/v1/ready`
 Readiness check. Returns `503` with structured error code

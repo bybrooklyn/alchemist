@@ -51,6 +51,7 @@ integrations/**/obj/
 .claude/settings.local.json
 .claude/skills/duo/
 .agents/settings.local.json
+.pi/
 
 .gemini/
 gha-creds-*.json

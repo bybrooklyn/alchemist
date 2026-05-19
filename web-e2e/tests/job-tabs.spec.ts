@@ -92,6 +92,46 @@ test("sort controls change the request params", async ({ page }) => {
   ).toBe(true);
 });
 
+test("keyboard shortcuts focus jobs search and show shortcut help", async ({ page }) => {
+  const requests: JobsRequestSnapshot[] = [];
+
+  await page.route("**/api/settings/preferences/saved_job_views", async (route) => {
+    await fulfillJson(route, 404, { message: "not found" });
+  });
+  await page.route("**/api/jobs/table**", async (route) => {
+    const url = new URL(route.request().url());
+    requests.push({
+      archived: url.searchParams.get("archived"),
+      search: url.searchParams.get("search"),
+      sortBy: url.searchParams.get("sort_by"),
+      sortDesc: url.searchParams.get("sort_desc"),
+      status: url.searchParams.get("status"),
+    });
+    await fulfillJson(route, 200, []);
+  });
+
+  await page.goto("/jobs");
+  await expect(page.getByText("No jobs found")).toBeVisible();
+
+  await page.keyboard.press("/");
+  const search = page.getByPlaceholder("Search files or explanations...").first();
+  await expect(search).toBeFocused();
+  await search.fill("hdr");
+
+  await expect.poll(() => requests.some((request) => request.search === "hdr")).toBe(true);
+
+  await page.getByRole("button", { name: /^All$/i }).click();
+  await page.keyboard.press("Shift+/");
+
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Focus search")).toBeVisible();
+  await expect(dialog.getByText("Show shortcuts")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("default sort is last updated descending", async ({ page }) => {
   const requests: JobsRequestSnapshot[] = [];
 

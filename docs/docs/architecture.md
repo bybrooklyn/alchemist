@@ -24,10 +24,11 @@ Practical flow:
 1. `Scanner` finds files and enqueues jobs.
 2. `Agent` in `src/media/processor.rs` claims queued jobs
    and applies engine-state and concurrency rules.
-3. `FfmpegAnalyzer` runs `ffprobe` with a 120-second timeout
-   and builds normalized media metadata.
-4. `BasicPlanner` decides skip, remux, or transcode and
-   selects the best available encoder.
+3. `FfmpegAnalyzer` runs `ffprobe` with a 30-second timeout,
+   builds normalized media metadata, and attaches a factual analyzer report
+   with labels and optional metrics for later explanation/intelligence work.
+4. `BasicPlanner` decides skip, remux, or transcode from the stable metadata
+   fields and selects the best available encoder.
 5. `FfmpegExecutor` runs FFmpeg.
 6. Post-encode logic optionally runs VMAF, promotes the temp
    output, records decisions and stats, and updates job state.
@@ -78,7 +79,7 @@ without changing the mode.
 
 - `pipeline.rs`: pipeline interfaces and plan types
 - `planner.rs`: `BasicPlanner`, skip/remux/transcode decisions
-- `analyzer.rs`: FFprobe wrapper with 120-second timeout
+- `analyzer.rs`: FFprobe wrapper, normalized metadata, analyzer labels/metrics
 - `executor.rs`: FFmpeg execution path
 - `processor.rs`: `Agent` loop and engine-state handling
 - `scanner.rs`: filesystem scanning

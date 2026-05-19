@@ -381,9 +381,11 @@ fn sample_media_analysis(path: &Path) -> crate::media::pipeline::MediaAnalysis {
             subtitle_streams: Vec::new(),
             audio_streams: Vec::new(),
             dynamic_range: crate::media::pipeline::DynamicRange::Sdr,
+            chapter_count: 0,
         },
         warnings: Vec::new(),
         confidence: crate::media::pipeline::AnalysisConfidence::High,
+        analysis_report: crate::media::pipeline::AnalyzerReport::default(),
     }
 }
 
@@ -2519,6 +2521,105 @@ async fn conversion_download_marks_downloaded_only_after_full_stream()
 }
 
 #[tokio::test]
+async fn restore_validation_accepts_downloaded_backup_snapshot()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    state
+        .db
+        .enqueue_job(
+            Path::new("/tmp/restore-validation.mkv"),
+            Path::new("/tmp/restore-validation-out.mkv"),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+
+    let backup_response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/system/backup",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(backup_response.status(), StatusCode::OK);
+    let backup_bytes = to_bytes(backup_response.into_body(), usize::MAX)
+        .await?
+        .to_vec();
+
+    let boundary = "alchemist-restore-validation";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"backup\"; filename=\"alchemist.db.gz\"\r\nContent-Type: application/gzip\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&backup_bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = app
+        .clone()
+        .oneshot(auth_multipart_request(
+            Method::POST,
+            "/api/v1/system/backup/validate-restore",
+            &token,
+            boundary,
+            Some(body.len() as u64),
+            body,
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+    assert_eq!(payload["valid"], true);
+    assert_eq!(payload["schema_version"], "16");
+    assert_eq!(payload["min_compatible_version"], "0.2.5");
+    assert_eq!(payload["job_count"], 1);
+    assert!(payload["migration_count"].as_i64().unwrap_or(0) > 0);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn restore_validation_rejects_non_gzip_upload()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+    let boundary = "alchemist-restore-invalid";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"backup\"; filename=\"bad.db.gz\"\r\nContent-Type: application/gzip\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(b"not a gzip sqlite backup");
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = app
+        .clone()
+        .oneshot(auth_multipart_request(
+            Method::POST,
+            "/api/v1/system/backup/validate-restore",
+            &token,
+            boundary,
+            Some(body.len() as u64),
+            body,
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_text(response).await;
+    assert!(body.contains("RESTORE_BACKUP_DECOMPRESS_FAILED"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn settings_bundle_put_projects_extended_settings_to_db()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
@@ -2794,6 +2895,48 @@ async fn raw_config_put_overwrites_divergent_db_projection()
     assert_eq!(file_settings.output_extension, "mp4");
     let theme = state.db.get_preference("active_theme_id").await?;
     assert_eq!(theme.as_deref(), Some("ember"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_config_validate_returns_summary_without_persisting()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let mut payload = crate::config::Config::default();
+    payload.files.delete_source = true;
+    payload.files.replace_strategy = "replace".to_string();
+    payload.scanner.directories = vec!["/media/movies".to_string()];
+    let raw_toml = toml::to_string_pretty(&payload)?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/v1/settings/config/validate",
+            &token,
+            json!({ "raw_toml": raw_toml }),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+    assert_eq!(body["valid"], true);
+    assert_eq!(body["summary"]["output_codec"], "av1");
+    assert_eq!(body["summary"]["replace_strategy"], "replace");
+    assert_eq!(body["summary"]["watch_dirs"], 1);
+    assert!(
+        body["warnings"]
+            .as_array()
+            .is_some_and(|warnings| !warnings.is_empty())
+    );
+
+    let persisted = state.config.read().await.clone();
+    assert!(!persisted.files.delete_source);
+    assert_eq!(persisted.files.replace_strategy, "keep");
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())
