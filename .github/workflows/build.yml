@@ -527,6 +527,7 @@ jobs:
             --assets-dir release-assets \
             --output-dir release-assets/distribution \
             --signing-key-env ALCHEMIST_RELEASE_SIGNING_KEY_PEM
+          find release-assets -maxdepth 4 -type f -print | sort
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -537,6 +538,12 @@ jobs:
           make_latest: ${{ inputs.make_latest }}
           overwrite_files: true
           generate_release_notes: false
-          files: release-assets/*
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.exe
+            release-assets/*.zip
+            release-assets/distribution/alchemist-update-manifest.json
+            release-assets/distribution/homebrew/alchemist.rb
+            release-assets/distribution/aur/PKGBUILD
         env:
           GITHUB_TOKEN: ${{ github.token }}
