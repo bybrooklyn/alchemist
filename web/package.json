@@ -2,7 +2,7 @@
   "name": "alchemist-web",
   "version": "0.3.3-rc.4",
   "private": true,
-  "packageManager": "bun@1",
+  "packageManager": "bun@1.3.5",
   "type": "module",
   "scripts": {
     "dev": "astro dev",
