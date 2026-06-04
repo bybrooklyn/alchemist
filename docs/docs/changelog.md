@@ -16,6 +16,10 @@ Promotes 0.3.3-rc.4 to stable.
 - The jobs table endpoint rejects unknown `status` filter tokens with `400 INVALID_JOB_STATUS_FILTER` rather than silently ignoring them.
 - Gotify daily-summary delivery now posts to `<server>/message`.
 
+### Docs
+
+- Force the patched `qs` 6.15.2 transitive resolution used by Docusaurus' `webpack-dev-server` tooling, keeping the release audit clean.
+
 ### Known Issues
 
 - Login rate limiting keys on the direct socket peer IP. Behind a TLS-terminating reverse proxy this can rate-limit all clients together; configure `trusted_proxies` accordingly. Tracked as P2-33; fix planned for the next release.
