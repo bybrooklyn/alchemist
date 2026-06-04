@@ -1,6 +1,6 @@
 ---
 title: AV1
-description: How Alchemist encodes AV1. Hardware paths (av1_nvenc, av1_qsv, av1_vaapi, av1_amf, av1_videotoolbox), CPU fallback (SVT-AV1, libaom), and when AV1 is the right target codec.
+description: How Alchemist encodes AV1. Hardware paths (av1_nvenc, av1_qsv, av1_vaapi, av1_amf), CPU fallback (SVT-AV1, libaom), and when AV1 is the right target codec. No AV1 hardware encoder exists on macOS.
 keywords:
   - av1 transcoding
   - av1 nvenc
@@ -29,13 +29,17 @@ passes its startup probe. In approximate preference order:
 
 | Encoder | Hardware | Notes |
 |---|---|---|
-| `av1_nvenc` | NVIDIA RTX 30 / 40 series | Fast, GPU-accelerated |
-| `av1_qsv` | Intel 12th gen+ | Fast, power-efficient |
-| `av1_vaapi` | AMD RDNA 2+ (Linux) on compatible driver/FFmpeg | Driver/FFmpeg stack sensitive |
-| `av1_amf` | AMD RDNA 2+ (Windows) | The AMD Windows path |
-| `av1_videotoolbox` | Apple Silicon M3+ | On macOS hosts only |
+| `av1_nvenc` | NVIDIA RTX 40 (Ada) series | Fast, GPU-accelerated; RTX 30 is AV1 decode-only |
+| `av1_qsv` | Intel Arc / Meteor Lake+ | Fast, power-efficient |
+| `av1_vaapi` | AMD RDNA 3+ (Linux) on compatible driver/FFmpeg | Driver/FFmpeg stack sensitive |
+| `av1_amf` | AMD RDNA 3+ (Windows) | The AMD Windows path |
 | `libsvtav1` (CPU) | Any CPU | Alchemist's default CPU AV1 path — fastest of the CPU AV1 encoders |
 | `libaom-av1` (CPU) | Any CPU | Higher quality per bit, much slower |
+
+> **macOS has no AV1 hardware encoder.** Apple's VideoToolbox
+> exposes no AV1 encoder — Apple Silicon can *decode* AV1 (M3
+> and newer) but no Mac chip can encode it. On macOS, AV1
+> output always uses `libsvtav1` (CPU).
 
 Hardware support is detected at startup using a short
 FFmpeg probe. If you want to see what Alchemist found on
@@ -98,9 +102,11 @@ pre-transcoding to the smallest codec on paper.
 
 **AV1 encode requested but Alchemist fell back to CPU.**
 Most likely the hardware AV1 probe failed — open
-**Settings → Hardware → Probe Log**. For NVIDIA, check that
-the card is RTX 30 or 40 series; older cards have NVENC but
-not AV1 NVENC. For Intel, AV1 encode starts at 12th gen.
+**Settings → Hardware → Probe Log**. For NVIDIA, AV1 NVENC
+needs an RTX 40 (Ada) card; RTX 30 and older have NVENC but
+decode AV1 only. For Intel, AV1 encode needs Arc or a Meteor
+Lake / Core Ultra (or newer) iGPU. On macOS, AV1 always
+encodes on the CPU — there is no Mac AV1 hardware encoder.
 See [CPU fallback despite GPU](/troubleshooting#cpu-fallback-despite-gpu).
 
 **VAAPI AV1 errors on Linux.**

@@ -1,6 +1,6 @@
 ---
 title: NVIDIA
-description: Configure NVIDIA NVENC for Alchemist. Supported NVENC generations (Pascal through Ada), nvidia-container-toolkit setup, and AV1 NVENC on RTX 30/40.
+description: Configure NVIDIA NVENC for Alchemist. Supported NVENC generations (Pascal through Ada), nvidia-container-toolkit setup, and AV1 NVENC on RTX 40 (Ada).
 keywords:
   - nvenc
   - nvenc docker
@@ -18,8 +18,8 @@ if you want to pin it instead of using auto detection.
 |-----------|---------------|-------|------|-----|------|
 | Pascal | GTX 10-series | Yes | Yes | No | 2 concurrent encode streams on consumer cards |
 | Turing | GTX 16 / RTX 20 | Yes | Yes | No | Better quality than Pascal |
-| Ampere | RTX 30 | Yes | Yes | Yes | First NVENC generation with AV1 |
-| Ada Lovelace | RTX 40 | Yes | Yes | Yes | Dual AV1 encoders on supported SKUs |
+| Ampere | RTX 30 | Yes | Yes | No | Decodes AV1 but has no AV1 encoder |
+| Ada Lovelace | RTX 40 | Yes | Yes | Yes | First NVENC generation with AV1 encode; dual AV1 encoders on supported SKUs |
 
 ## Docker
 
@@ -96,7 +96,7 @@ Expected encoders:
 
 - `h264_nvenc`
 - `hevc_nvenc`
-- `av1_nvenc` on RTX 30/40 class hardware
+- `av1_nvenc` on RTX 40 (Ada) class hardware (RTX 30 and older decode AV1 but cannot encode it)
 
 ## In Alchemist
 

@@ -21,7 +21,7 @@ H.264 are the recommended AMD paths for `0.3.0`.
 |------|---------|
 | H.264 | Polaris+ |
 | HEVC | Polaris+ |
-| AV1 | RDNA 2+ on compatible driver/FFmpeg stacks; available but not part of the validated `0.3.0` support matrix |
+| AV1 | RDNA 3+ on compatible driver/FFmpeg stacks; available but not part of the validated `0.3.0` support matrix. RDNA 2 decodes AV1 but has no AV1 encoder |
 
 ## Linux
 

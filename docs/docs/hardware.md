@@ -41,10 +41,10 @@ probe refreshes runtime state when needed.
 
 | Vendor | AV1 | HEVC | H.264 | Notes |
 |--------|-----|------|-------|-------|
-| NVIDIA NVENC | RTX 30/40 | Maxwell+ | All | Best for speed |
-| Intel QSV | 12th gen+ | 6th gen+ | All | Best for power efficiency |
-| AMD VAAPI/AMF | RDNA 2+ on compatible driver/FFmpeg stacks | Polaris+ | All | Linux VAAPI / Windows AMF; HEVC/H.264 are the validated AMD paths for `0.3.0` |
-| Apple VideoToolbox | M3+ | M1+/T2 | All | Binary install recommended |
+| NVIDIA NVENC | RTX 40 (Ada) | Maxwell+ | All | Best for speed; RTX 30 (Ampere) decodes AV1 but has no AV1 encoder |
+| Intel QSV | Arc / Meteor Lake+ | 6th gen+ | All | Best for power efficiency; pre-Arc / pre-Meteor-Lake iGPUs have no AV1 encoder |
+| AMD VAAPI/AMF | RDNA 3+ on compatible driver/FFmpeg stacks | Polaris+ | All | Linux VAAPI / Windows AMF; HEVC/H.264 are the validated AMD paths for `0.3.0`. RDNA 2 decodes AV1 but has no AV1 encoder |
+| Apple VideoToolbox | None (CPU only) | M1+/T2 | All | No Mac chip has an AV1 hardware encoder; AV1 output uses the CPU (SVT-AV1) path. Apple Silicon can decode AV1 (M3+). Binary install recommended |
 | CPU | All | All | All | Always available |
 
 ## Hardware probe

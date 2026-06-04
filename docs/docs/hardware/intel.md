@@ -1,6 +1,6 @@
 ---
 title: Intel
-description: Configure Intel Quick Sync (QSV) and VAAPI for Alchemist. Driver install, /dev/dri passthrough, and Intel Arc notes. AV1 on 12th-generation and newer.
+description: Configure Intel Quick Sync (QSV) and VAAPI for Alchemist. Driver install, /dev/dri passthrough, and Intel Arc notes. AV1 encode on Intel Arc and Meteor Lake / Core Ultra and newer.
 keywords:
   - intel quick sync
   - qsv ffmpeg
@@ -17,7 +17,7 @@ fallback path for older Intel hardware and FFmpeg setups.
 
 | Generation | H.264 | HEVC | AV1 | Notes |
 |-----------|-------|------|-----|------|
-| Intel iGPU, all supported generations | Yes | 6th gen+ | 12th gen+ | Alchemist prefers VAAPI, then QSV |
+| Intel iGPU, all supported generations | Yes | 6th gen+ | Arc / Meteor Lake+ | Alchemist prefers VAAPI, then QSV; AV1 encode needs Arc or a Meteor Lake / Core Ultra iGPU |
 
 ## Critical note for Intel Arc
 

@@ -27,10 +27,10 @@ devices are modern enough to handle it.
 
 Hardware support:
 
-- NVIDIA: RTX 30/40 class NVENC
-- Intel: 12th gen+ for AV1 encode
-- AMD: RDNA 2+ depending on driver/FFmpeg stack; HEVC/H.264 are the validated AMD paths, while AV1 remains driver/FFmpeg-stack sensitive
-- Apple: M3+
+- NVIDIA: RTX 40 (Ada) NVENC — RTX 30 (Ampere) decodes AV1 but cannot encode it
+- Intel: Arc, or integrated from Meteor Lake / Core Ultra onward (earlier iGPUs have no AV1 encoder)
+- AMD: RDNA 3+ depending on driver/FFmpeg stack; HEVC/H.264 are the validated AMD paths, while AV1 remains driver/FFmpeg-stack sensitive (RDNA 2 is AV1 decode-only)
+- Apple: no AV1 hardware encoder on any Mac — AV1 output uses the CPU (SVT-AV1); Apple Silicon can decode AV1 (M3+)
 - CPU: always available through SVT-AV1
 
 ## When to choose HEVC
@@ -64,10 +64,10 @@ Hardware support:
 
 | Vendor | AV1 | HEVC | H.264 |
 |--------|-----|------|-------|
-| NVIDIA | RTX 30/40 | Maxwell+ | Yes |
-| Intel | 12th gen+ | 6th gen+ | Yes |
-| AMD | RDNA 2+ on compatible driver/FFmpeg stacks | Polaris+ | Yes |
-| Apple | M3+ | M1+/T2 | Yes |
+| NVIDIA | RTX 40 (Ada) | Maxwell+ | Yes |
+| Intel | Arc / Meteor Lake+ | 6th gen+ | Yes |
+| AMD | RDNA 3+ on compatible driver/FFmpeg stacks | Polaris+ | Yes |
+| Apple | CPU only (no HW encoder) | M1+/T2 | Yes |
 | CPU | Yes | Yes | Yes |
 
 ## BPP
