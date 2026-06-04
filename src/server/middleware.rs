@@ -184,43 +184,64 @@ pub(crate) async fn auth_middleware(
         }
 
         if let Some(t) = token {
-            if let Ok(Some(_session)) = state.db.get_session(&t).await {
-                return next.run(req).await;
+            match state.db.get_session(&t).await {
+                Ok(Some(_session)) => return next.run(req).await,
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::error!(error = %err, "session lookup failed");
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "AUTH_BACKEND_UNAVAILABLE",
+                        "Authentication backend unavailable",
+                    );
+                }
             }
-            if let Ok(Some(api_token)) = state.db.get_active_api_token(&t).await {
-                let _ = state.db.update_api_token_last_used(api_token.id).await;
-                match api_token.access_level {
-                    ApiTokenAccessLevel::FullAccess => return next.run(req).await,
-                    ApiTokenAccessLevel::ReadOnly => {
-                        if read_only_api_token_allows(&method, normalized_path.as_str()) {
-                            return next.run(req).await;
+
+            match state.db.get_active_api_token(&t).await {
+                Ok(Some(api_token)) => {
+                    let _ = state.db.update_api_token_last_used(api_token.id).await;
+                    match api_token.access_level {
+                        ApiTokenAccessLevel::FullAccess => return next.run(req).await,
+                        ApiTokenAccessLevel::ReadOnly => {
+                            if read_only_api_token_allows(&method, normalized_path.as_str()) {
+                                return next.run(req).await;
+                            }
+                            return api_error_response(
+                                StatusCode::FORBIDDEN,
+                                "API_TOKEN_FORBIDDEN",
+                                "Forbidden",
+                            );
                         }
-                        return api_error_response(
-                            StatusCode::FORBIDDEN,
-                            "API_TOKEN_FORBIDDEN",
-                            "Forbidden",
-                        );
-                    }
-                    ApiTokenAccessLevel::ArrWebhook => {
-                        if arr_webhook_api_token_allows(&method, normalized_path.as_str()) {
-                            return next.run(req).await;
+                        ApiTokenAccessLevel::ArrWebhook => {
+                            if arr_webhook_api_token_allows(&method, normalized_path.as_str()) {
+                                return next.run(req).await;
+                            }
+                            return api_error_response(
+                                StatusCode::FORBIDDEN,
+                                "API_TOKEN_FORBIDDEN",
+                                "Forbidden",
+                            );
                         }
-                        return api_error_response(
-                            StatusCode::FORBIDDEN,
-                            "API_TOKEN_FORBIDDEN",
-                            "Forbidden",
-                        );
-                    }
-                    ApiTokenAccessLevel::Jellyfin => {
-                        if jellyfin_api_token_allows(&method, normalized_path.as_str()) {
-                            return next.run(req).await;
+                        ApiTokenAccessLevel::Jellyfin => {
+                            if jellyfin_api_token_allows(&method, normalized_path.as_str()) {
+                                return next.run(req).await;
+                            }
+                            return api_error_response(
+                                StatusCode::FORBIDDEN,
+                                "API_TOKEN_FORBIDDEN",
+                                "Forbidden",
+                            );
                         }
-                        return api_error_response(
-                            StatusCode::FORBIDDEN,
-                            "API_TOKEN_FORBIDDEN",
-                            "Forbidden",
-                        );
                     }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::error!(error = %err, "api token lookup failed");
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "AUTH_BACKEND_UNAVAILABLE",
+                        "Authentication backend unavailable",
+                    );
                 }
             }
         }

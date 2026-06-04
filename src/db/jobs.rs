@@ -677,7 +677,7 @@ impl Db {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id IN (",
+            "UPDATE jobs SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
         );
         let mut separated = qb.separated(", ");
         for id in ids {
@@ -694,7 +694,7 @@ impl Db {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET status = 'queued', progress = 0.0, attempt_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id IN (",
+            "UPDATE jobs SET status = 'queued', progress = 0.0, attempt_count = 0, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
         );
         let mut separated = qb.separated(", ");
         for id in ids {
@@ -1275,7 +1275,9 @@ impl Db {
         let result = sqlx::query(
             "UPDATE jobs
              SET archived = 1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?",
+             WHERE id = ?
+               AND archived = 0
+               AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming')",
         )
         .bind(id)
         .execute(&self.pool)
@@ -1903,6 +1905,77 @@ mod tests {
             .await?
             .get::<i64, _>(0);
         assert_eq!(remaining, 2);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_mutation_safety_predicates()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_batch_mutation_safety_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        // 1. Create a job and mark it encoding (active)
+        db.enqueue_job(
+            Path::new("/tmp/active_a.mkv"),
+            Path::new("/tmp/active_a.out.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let active_job = db
+            .get_job_by_input_path("/tmp/active_a.mkv")
+            .await?
+            .ok_or("active job not found")?;
+        db.update_job_status(active_job.id, JobState::Encoding)
+            .await?;
+
+        // 2. Call batch_restart_jobs and batch_delete_jobs on the active job
+        let restarted = db.batch_restart_jobs(&[active_job.id]).await?;
+        assert_eq!(restarted, 0);
+
+        let deleted = db.batch_delete_jobs(&[active_job.id]).await?;
+        assert_eq!(deleted, 0);
+
+        // 3. Create an archived job and assert restart cannot unarchive/requeue it
+        db.enqueue_job(
+            Path::new("/tmp/archived_b.mkv"),
+            Path::new("/tmp/archived_b.out.mkv"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+        let archived_job = db
+            .get_job_by_input_path("/tmp/archived_b.mkv")
+            .await?
+            .ok_or("archived job not found")?;
+        db.update_job_status(archived_job.id, JobState::Failed)
+            .await?;
+        // Archive it directly
+        db.delete_job(archived_job.id).await?;
+
+        // Assert it is indeed archived
+        let archived_job_check = sqlx::query("SELECT archived, status FROM jobs WHERE id = ?")
+            .bind(archived_job.id)
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(archived_job_check.get::<i64, _>(0), 1);
+
+        // Call batch_restart_jobs on the archived job
+        let restarted_archived = db.batch_restart_jobs(&[archived_job.id]).await?;
+        assert_eq!(restarted_archived, 0);
+
+        // Assert it is still archived
+        let archived_job_check_after =
+            sqlx::query("SELECT archived, status FROM jobs WHERE id = ?")
+                .bind(archived_job.id)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(archived_job_check_after.get::<i64, _>(0), 1);
+        assert_ne!(archived_job_check_after.get::<String, _>(1), "queued");
 
         drop(db);
         let _ = std::fs::remove_file(db_path);

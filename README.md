@@ -6,7 +6,7 @@ Alchemist saves space automatically without asking you to babysit shell commands
 
 ## Why Alchemist?
 
-Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Flow tools can scale and branch, but they also ask you to run more moving parts and model media policy as a graph. Alchemist is built for the self-hoster who wants the boring path: one process, deterministic planning, plain explanations, automatic hardware selection, and public GPLv3 code for every feature it ships.
+Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Flow tools like Tdarr can scale and branch, but they also ask you to run more moving parts and model media policy as a graph. Alchemist is built for the self-hoster who wants the boring path: one process, deterministic planning, plain explanations, automatic hardware selection, and public GPLv3 code for every feature it ships.
 
 ## What It Does
 
@@ -21,7 +21,7 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 ## Features
 
 - Give movies, TV, and home videos different behavior with per-library profiles.
-- Convert or remux a single uploaded file from the **Convert** page using the same pipeline Alchemist uses for library jobs. Experimental utility, not a second product track.
+- Convert or remux a single uploaded file from the **Convert** page using the same pipeline Alchemist uses for library jobs.
 - Catch corrupt or broken files before they surprise you with Library Doctor.
 - See exactly how much storage you have recovered in the savings dashboard.
 - Understand every skipped file immediately with plain-English explanations.
@@ -43,12 +43,12 @@ Everything is visible in the web dashboard. You can see what is running, what wa
 
 Alchemist uses hardware acceleration when it can and falls back to CPU encoding automatically when it cannot. You do not need different workflows for different machines.
 
-| Vendor | Encoders |
-|--------|----------|
-| NVIDIA | AV1, HEVC, H.264 (NVENC) |
-| Intel  | AV1, HEVC, H.264 (QSV) |
-| AMD    | HEVC, H.264 (VAAPI/AMF) |
-| Apple  | AV1 on M3+, HEVC, H.264 (VideoToolbox) |
+| Vendor | Encoders                                 |
+|--------|------------------------------------------|
+| NVIDIA | AV1, HEVC, H.264 (NVENC)                 |
+| Intel  | AV1, HEVC, H.264 (QSV)                   |
+| AMD    | HEVC, H.264 (VAAPI/AMF)                  |
+| Apple  | HEVC, H.264 (VideoToolbox)               |
 | CPU    | AV1 (SVT-AV1), HEVC (x265), H.264 (x264) |
 
 CPU fallback is automatic when no GPU is available.
@@ -62,7 +62,7 @@ If you want the fastest path to a running instance, use the published container:
 ```yaml
 services:
   alchemist:
-    image: ghcr.io/bybrooklyn/alchemist:latest
+    image: ghcr.io/bybrooklyn/alchemist:nightly
     container_name: alchemist
     ports:
       - "3000:3000"
@@ -209,6 +209,16 @@ while encodes are in flight.
 | macOS Intel | ✅ Supported |
 | Docker linux/amd64 | ✅ Supported |
 | Docker linux/arm64 | ✅ Supported |
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=bybrooklyn%2Falchemist&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bybrooklyn/alchemist&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=bybrooklyn/alchemist&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=bybrooklyn/alchemist&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 

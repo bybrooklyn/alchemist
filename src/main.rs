@@ -96,6 +96,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Run the embedded self-test pipeline to verify transcoding components
+    Selftest,
 }
 
 #[derive(Debug, Serialize)]
@@ -1063,6 +1065,26 @@ async fn run() -> Result<()> {
                     );
                 } else {
                     print_cli_plan(&items);
+                }
+            }
+            Commands::Selftest => {
+                info!("Starting system self-test pipeline...");
+                let response = alchemist::system::selftest::run_selftest().await;
+                if response.success {
+                    info!("Self-test succeeded!");
+                } else {
+                    error!("Self-test failed!");
+                }
+                for stage in &response.stages {
+                    let mark = if stage.success { "✓" } else { "✗" };
+                    println!(
+                        "  [{}] {:<12} in {:>4}ms: {}",
+                        mark, stage.name, stage.duration_ms, stage.message
+                    );
+                }
+                if let Some(err) = response.error {
+                    error!("Detailed error: {}", err);
+                    std::process::exit(1);
                 }
             }
         }

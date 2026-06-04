@@ -1234,3 +1234,36 @@ pub(crate) async fn telemetry_payload_handler(State(state): State<Arc<AppState>>
     })
     .into_response()
 }
+
+pub(crate) async fn system_selftest_handler(State(state): State<Arc<AppState>>) -> Response {
+    // Single-flight: each self-test spawns a real ffmpeg encode, so reject
+    // overlapping requests rather than multiplying subprocess load against the
+    // live transcode pipeline. The flag is cleared via the RAII guard.
+    struct SelftestGuard(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for SelftestGuard {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    if state
+        .selftest_in_progress
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "SELFTEST_BUSY",
+            "A system self-test is already running. Try again in a moment.",
+        );
+    }
+    let _selftest_guard = SelftestGuard(state.selftest_in_progress.clone());
+
+    let response = crate::system::selftest::run_selftest().await;
+    axum::Json(response).into_response()
+}

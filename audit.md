@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-05-15
+Last updated: 2026-06-03
 
 ---
 
@@ -674,6 +674,169 @@ The same gap affects `::ffff:127.0.0.1`, `::ffff:10.x`, `::ffff:192.168.x`, etc.
 
 ---
 
+### [P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler
+
+**Files:**
+- `src/server/auth.rs:26–37` — `login_handler` fetches client IP using `ConnectInfo(addr)`.
+- `src/server/middleware.rs:346–370` — `allow_login_attempt` uses the direct socket peer IP.
+
+**Severity:** P2
+
+**Problem:**
+
+`login_handler` relies on Axum's `ConnectInfo<SocketAddr>` to extract the client IP for rate limiting via `addr.ip()`. However, if Alchemist is deployed behind a TLS-terminating reverse proxy (e.g., Nginx, Caddy, or Traefik), `addr.ip()` will always resolve to the proxy's IP (e.g., `127.0.0.1` or the Docker gateway). If an attacker spams invalid login attempts, the proxy's IP gets rate-limited, locking out *all* legitimate users from logging in (Denial of Service).
+
+```rust
+pub(crate) async fn login_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::Json(payload): axum::Json<LoginPayload>,
+) -> impl IntoResponse {
+    if !allow_login_attempt(&state, addr.ip()).await {
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "AUTH_RATE_LIMITED",
+            "Too many requests",
+        );
+    }
+```
+
+**Fix:**
+
+1. In `src/server/auth.rs`, modify `login_handler` to accept `axum::http::HeaderMap` and extract the resolved client IP using `is_trusted_peer` validation:
+   ```rust
+   pub(crate) async fn login_handler(
+       State(state): State<Arc<AppState>>,
+       ConnectInfo(addr): ConnectInfo<SocketAddr>,
+       headers: axum::http::HeaderMap,
+       axum::Json(payload): axum::Json<LoginPayload>,
+   ) -> impl IntoResponse {
+       let mut client_ip = addr.ip();
+       if super::middleware::is_trusted_peer(client_ip, &state.trusted_proxies) {
+           if let Some(xff) = headers.get("X-Forwarded-For") {
+               if let Ok(xff_str) = xff.to_str() {
+                   if let Some(ip_str) = xff_str.split(',').next() {
+                       if let Ok(ip) = ip_str.trim().parse() {
+                           client_ip = ip;
+                       }
+                   }
+               }
+           } else if let Some(xri) = headers.get("X-Real-IP") {
+               if let Ok(xri_str) = xri.to_str() {
+                   if let Ok(ip) = xri_str.trim().parse() {
+                       client_ip = ip;
+                   }
+               }
+           }
+       }
+
+       if !allow_login_attempt(&state, client_ip).await {
+           return api_error_response(
+               StatusCode::TOO_MANY_REQUESTS,
+               "AUTH_RATE_LIMITED",
+               "Too many requests",
+           );
+       }
+   ```
+2. In `src/server/tests.rs`, add an integration test that fires request scenarios with proxy headers to confirm client IP separation works correctly.
+
+---
+
+### [P2-34] Batch delete/restart half-applies the mutation, then returns 409 — leaking resume sessions and silently requeuing jobs
+
+**Status: RESOLVED** — `batch_jobs_handler` now de-duplicates the requested ids and rejects the batch with `409 BATCH_ACTION_CONFLICT` *before* any DB mutation when the eligible-row fetch (`get_jobs_by_ids`, which already filters `archived = 0`) returns fewer rows than the deduped id set. The resume-session purge runs over the deduped set on the delete path. `batch_delete_jobs`/`batch_restart_jobs` additionally gained `archived = 0 AND status NOT IN ('analyzing','encoding','remuxing','resuming')` guards. Test `test_batch_mutation_safety_predicates` added.
+
+**Files:**
+- `src/server/jobs.rs:491–503` — `batch_jobs_handler` delete/restart arm returns `409 BATCH_ACTION_CONFLICT` when `count as usize != payload.ids.len()` *after* the DB mutation has already committed, and before `purge_resume_sessions_for_jobs`.
+- `src/db/jobs.rs:677–711` — `batch_delete_jobs` / `batch_restart_jobs` now skip rows where `archived = 1` or status is active, so `count` is legitimately smaller than `ids.len()` for stale ids.
+- `src/server/jobs.rs:393–397` — `BatchActionPayload.ids: Vec<i64>` is never de-duplicated.
+
+**Severity:** P2
+
+**Problem:**
+
+The new safety predicates on `batch_delete_jobs`/`batch_restart_jobs` (added in this change) make `count` (rows affected) smaller than `payload.ids.len()` whenever the request contains ids that are already-archived, nonexistent, or duplicated. The handler treats *any* such shortfall as a hard conflict:
+
+```rust
+match result {
+    Ok(count) => {
+        if count as usize != payload.ids.len() {
+            return api_error_response(StatusCode::CONFLICT, "BATCH_ACTION_CONFLICT",
+                "Some jobs could not be modified because they are active, archived, or do not exist.");
+        }
+        if payload.action == "delete" {
+            purge_resume_sessions_for_jobs(state.as_ref(), &payload.ids).await;
+        }
+        // ...
+```
+
+But the `UPDATE … WHERE …` already committed — the eligible rows are archived (delete) or requeued (restart). The early `return` then:
+
+1. **Leaks resume sessions** — for delete, `purge_resume_sessions_for_jobs` never runs, so the resume-session DB rows and on-disk temp dirs for the jobs that *were* archived are orphaned (defeats the RG-1/RG-6 cleanup intent).
+2. **Silently requeues** — for restart, the eligible jobs are now `status='queued', progress=0, attempt_count=0` and will be picked up by the processor, even though the client received a 409 implying nothing happened.
+3. **False conflict on duplicates** — `ids = [5, 5]` archives one row (`count = 1`), `1 != 2` → 409, although the job was deleted.
+
+Realistic trigger: the user multi-selects from a stale jobs table where retention cleanup or another tab already archived some rows, clicks *Delete* → 409 plus orphaned resume artifacts for the rows that were deleted.
+
+**Fix:**
+
+1. De-duplicate the ids before comparing counts (and before the DB call) so duplicates can't manufacture a false conflict:
+   ```rust
+   let mut ids = payload.ids.clone();
+   ids.sort_unstable();
+   ids.dedup();
+   ```
+2. Always purge resume sessions for the rows that were actually deleted, *before* deciding whether to report a partial result — move the purge above the conflict check on the delete path:
+   ```rust
+   Ok(count) => {
+       if payload.action == "delete" {
+           purge_resume_sessions_for_jobs(state.as_ref(), &ids).await;
+       }
+       if count as usize != ids.len() {
+           return api_error_response(StatusCode::CONFLICT, "BATCH_ACTION_CONFLICT", /* ... */);
+       }
+       axum::Json(serde_json::json!({ "count": count })).into_response()
+   }
+   ```
+   (`purge_resume_sessions_for_jobs` already no-ops for ids without a session, so purging the full deduped set is safe.)
+3. Prefer reporting partial success over a flat 409: return `200` with `{ "count": count, "requested": ids.len() }` so the UI can show "3 of 5 modified" instead of treating a partial apply as total failure. If all-or-nothing UX is required, do an eligibility pre-check (`get_jobs_by_ids` + filter on `is_active()`/`archived`) *before* mutating and reject atomically without touching the DB.
+4. Add a regression test in `src/server/tests.rs`: enqueue two jobs, archive one, POST `/api/jobs/batch` `{action:"delete", ids:[a, b]}`, and assert the resume session for the successfully-deleted job is purged regardless of the 409/partial response.
+
+---
+
+### [P2-35] `/api/system/selftest` spawns an ffmpeg encode and a full migration run per request with no single-flight or cap
+
+**Status: RESOLVED** — `system_selftest_handler` now takes `State<Arc<AppState>>` and single-flights on a new `selftest_in_progress: Arc<AtomicBool>`, returning `429 SELFTEST_BUSY` when one is already running; an RAII guard clears the flag on drop so it resets even on panic. The self-test pipeline was extracted to `src/system/selftest.rs` and is also exposed as the `alchemist selftest` CLI subcommand. (The optional single-shared-in-memory-DB optimisation from fix step 3 was left out as a non-correctness change now that the endpoint is single-flighted.)
+
+**Files:**
+- `src/server/system.rs:1237–1241` — `system_selftest_handler` calls `run_selftest().await` directly; takes no `State`, has no in-progress guard.
+- `src/system/selftest.rs:35–268` — `run_selftest` runs ffprobe + a real ffmpeg encode (Execute stage) and builds a throwaway `Db::new(":memory:")` (full migration suite) on every call.
+- `src/server/mod.rs:659`, `:891` — route registered at `/api/system/selftest` and `/api/v1/system/selftest` (auth-gated, but only the global 120-token bucket limits it).
+
+**Severity:** P2
+
+**Problem:**
+
+The handler does all of its work synchronously inside the request, and each invocation spawns a real ffmpeg child process (the Execute stage) plus runs the entire SQLite migration suite against a fresh in-memory database:
+
+```rust
+pub(crate) async fn system_selftest_handler() -> impl IntoResponse {
+    let response = crate::system::selftest::run_selftest().await;
+    axum::Json(response)
+}
+```
+
+There is no single-flight guard and no per-route rate cap. The codebase already established the single-flight pattern for exactly this class of endpoint — P2-24 (health scan), P2-26 (update install), and P2-30 (library preview) all gate expensive work behind an `AtomicBool`/`Semaphore` and return `409`/`429` when busy. The self-test endpoint reintroduces the un-gated pattern: a retry storm or a malicious authed client can stack concurrent ffmpeg encodes that contend with the real transcode pipeline, and re-runs every migration per call (wasted CPU/IO). "Spawning subprocesses in response to HTTP requests without rate limiting" is the same defect class as P2-30.
+
+**Fix:**
+
+1. Add `selftest_in_progress: Arc<AtomicBool>` to `AppState` (mirror `library_health_scan_in_progress`) and gate the handler with `compare_exchange`, returning `429 SELFTEST_BUSY` when already running. Clear the flag via an RAII guard so it resets even on panic.
+2. Change `system_selftest_handler` to take `State<Arc<AppState>>` (it currently takes no arguments) so it can consult the flag.
+3. Avoid the per-call full migration run: build the in-memory self-test DB once (e.g. a `OnceCell`/`tokio::sync::OnceCell`) and reuse it — safe once the endpoint is single-flighted, since the fake `Job { id: 1, .. }` insert can no longer collide across concurrent calls. Do **not** reuse `state.db` for the Execute stage; it would write a fake job row into the production database.
+4. Add an integration test that fires two concurrent `POST /api/system/selftest` calls and asserts the second returns 429.
+
+---
+
 ## Technical Debt
 
 ---
@@ -965,6 +1128,116 @@ The full update archive lives in RAM before any verification or filesystem write
 
 ---
 
+### [RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks
+
+**Files:**
+- `src/server/middleware.rs:468–473` — `is_lan_ip` matches on IPv4/IPv6 branches directly.
+- `src/server/middleware.rs:449–466` — `is_trusted_peer` checks loopback and private lists directly.
+
+**Severity:** RG
+
+**Problem:**
+
+On dual-stack systems connected to local or trusted clients, peer/proxy IPs are represented as IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`). In `is_lan_ip` and `is_trusted_peer`, matching branches for `IpAddr::V6` only look for loopback (`::1`), link-local, or unique local addresses and do not normalize mapped addresses. Consequently, connections from `::ffff:127.0.0.1` or `::ffff:192.168.1.1` fail to be recognized as LAN/trusted, locking operators out of the setup wizard or metrics scrapers under dual-stack configurations.
+
+```rust
+fn is_lan_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
+}
+```
+
+**Fix:**
+
+1. In `src/server/middleware.rs`, update `is_lan_ip` to normalize IPv4-mapped IPv6 addresses to IPv4 using `to_ipv4_mapped()` before doing the classifications:
+   ```rust
+   fn is_lan_ip(ip: IpAddr) -> bool {
+       match ip {
+           IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+           IpAddr::V6(v6) => {
+               if let Some(v4) = v6.to_ipv4_mapped() {
+                   return is_lan_ip(IpAddr::V4(v4));
+               }
+               v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local()
+           }
+       }
+   }
+   ```
+2. Mirror the same normalization in `is_trusted_peer`, normalizing both the checked `ip` and the configured `trusted_proxies` so mapped and standard forms compare cleanly:
+   ```rust
+   fn is_trusted_peer(ip: IpAddr, trusted_proxies: &[IpAddr]) -> bool {
+       let normalized_ip = match ip {
+           IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+           _ => ip,
+       };
+
+       let is_loopback = match normalized_ip {
+           IpAddr::V4(v4) => v4.is_loopback(),
+           IpAddr::V6(v6) => v6.is_loopback(),
+       };
+       if is_loopback {
+           return true;
+       }
+
+       if trusted_proxies.is_empty() {
+           match normalized_ip {
+               IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+               IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
+           }
+       } else {
+           trusted_proxies.iter().any(|&proxy| {
+               let normalized_proxy = match proxy {
+                   IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(proxy),
+                   _ => proxy,
+               };
+               normalized_ip == normalized_proxy
+           })
+       }
+   }
+   ```
+3. Add a unit test verifying `::ffff:127.0.0.1` and other mapped IPs are correctly classified in loopback/LAN/trusted functions.
+
+---
+
+### [RG-11] Self-test 'Write Temp' failure leaves the temp directory behind
+
+**Status: RESOLVED** — the Write-Temp error path now calls `cleanup_temp_dir(&temp_dir)` before returning (`src/system/selftest.rs:72`), matching every other stage's failure path.
+
+**Files:**
+- `src/system/selftest.rs:46–78` — the 'Write Temp' stage `create_dir_all`s the temp dir, then on a write failure returns early without calling `cleanup_temp_dir`.
+
+**Severity:** RG
+
+**Problem:**
+
+`run_selftest` creates `temp_dir` via `tokio::fs::create_dir_all(&temp_dir)` and then writes the fixture. If `create_dir_all` succeeds but `tokio::fs::write(&input_path, …)` fails (disk full, permissions, interrupted), the function returns the failure response immediately:
+
+```rust
+Err(e) => {
+    stages.push(/* Write Temp failed */);
+    return SelftestResponse { success: false, stages, error: Some(/* ... */) };
+    // ← no cleanup_temp_dir(&temp_dir) call
+}
+```
+
+Every other stage's failure path (Analyze/Plan/Execute) calls `cleanup_temp_dir` before returning; only the Write-Temp path skips it, orphaning the freshly created `alchemist-selftest-<uuid>` directory in the system temp dir. Each failed self-test under a persistently-failing condition leaves another empty dir behind. Mirrors the leftover-temp-artifact class already tracked in RG-6/RG-9.
+
+**Fix:**
+
+1. Call `cleanup_temp_dir(&temp_dir)` on the Write-Temp failure path before returning (it already no-ops when the path doesn't exist):
+   ```rust
+   Err(e) => {
+       stages.push(/* ... */);
+       let _ = cleanup_temp_dir(&temp_dir).await;
+       return SelftestResponse { success: false, stages, error: Some(/* ... */) };
+   }
+   ```
+2. Alternatively, refactor the pipeline body into a `Result`-returning inner async block and run a single trailing `cleanup_temp_dir` on every exit path. The single-cleanup form removes the per-arm duplication that caused the omission in the first place.
+
+---
+
 ## UX Gaps
 
 ---
@@ -1080,3 +1353,21 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 2. **[TD-12] Dead `_unused_ensure_public_endpoint`** — **RESOLVED.** The ~36-line dead function was deleted.
 
 **The entire 2026-05-15 sweep is now closed.** `just check-rust` and the full lib suite (248 tests) pass.
+
+**The 2026-05-19 sweep (one P2, one RG):**
+
+1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **OPEN.** Vulnerable to reverse-proxy client IP leakage/DoS. Fix: extract the client IP correctly via the configured `trusted_proxies` headers instead of relying on AXUM `ConnectInfo`'s socket peer directly.
+2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **OPEN.** Bypasses LAN checks and fails trusted proxy verification under dual-stack configurations due to missing IPv4-mapped IPv6 address normalization. Fix: apply `to_ipv4_mapped()` normalization inside `is_lan_ip` and `is_trusted_peer`.
+
+**The 2026-05-29 sweep (review of the system self-test branch — two P2, one RG): all three RESOLVED and shipped in 0.3.3.**
+
+1. **[P2-34] Batch delete/restart half-applies then returns 409** — **RESOLVED.** Handler de-dupes ids and pre-checks eligibility (`get_jobs_by_ids`) before any mutation, so the batch is rejected atomically instead of half-committing; resume-session purge runs on the deduped set; DB-layer guards block active/archived rows. Test `test_batch_mutation_safety_predicates` added.
+2. **[P2-35] `/api/system/selftest` un-gated subprocess + per-call migrations** — **RESOLVED.** Single-flighted on a new `selftest_in_progress` atomic (`429 SELFTEST_BUSY` when busy) with an RAII guard; pipeline extracted to `src/system/selftest.rs` and exposed as the `alchemist selftest` CLI.
+3. **[RG-11] Self-test 'Write Temp' failure leaks the temp directory** — **RESOLVED.** The Write-Temp error path now calls `cleanup_temp_dir` before returning.
+
+**Carried into 0.3.3 as known-open (documented in CHANGELOG.md "Known Issues"; fix planned for 0.3.4):**
+
+1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **OPEN.** `login_handler` rate-limits on the raw socket peer IP; behind a reverse proxy this rate-limits all clients together. Fix: extract the client IP via the configured `trusted_proxies` headers (`X-Forwarded-For`/`X-Real-IP`) instead of `ConnectInfo`'s socket peer.
+2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **OPEN.** `is_lan_ip`/`is_trusted_peer` don't normalize `::ffff:a.b.c.d`. Fix: apply `to_ipv4_mapped()` normalization in both.
+
+*Note: the stricter `400` on unknown `/api/jobs/table?status=` tokens (introduced in the same branch) was reviewed and deliberately **not** logged — it matches the convention P1-11's fix established for invalid status filters, and the current frontend only sends valid `JobState`s.*
