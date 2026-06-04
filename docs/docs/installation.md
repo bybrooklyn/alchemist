@@ -149,7 +149,7 @@ alchemist plan /path/to/media --json
 docker pull ghcr.io/bybrooklyn/alchemist:nightly
 ```
 
-Nightly builds publish on every push to `main` after Rust
+Nightly builds publish on every push to `master` after Rust
 checks pass. Use `:latest` for stable releases.
 
 ## See also

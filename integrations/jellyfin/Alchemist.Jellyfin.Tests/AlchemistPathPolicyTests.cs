@@ -1,8 +1,8 @@
-using Alchemist.Jellyfin.Configuration;
-using Alchemist.Jellyfin.Services;
+using dev.bybrooklyn.alchemist.Configuration;
+using dev.bybrooklyn.alchemist.Services;
 using Xunit;
 
-namespace Alchemist.Jellyfin.Tests;
+namespace dev.bybrooklyn.alchemist.tests;
 
 public sealed class AlchemistPathPolicyTests
 {

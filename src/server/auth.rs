@@ -1,6 +1,6 @@
 //! Authentication handlers: login, logout, session management.
 
-use super::middleware::{allow_login_attempt, get_cookie_value};
+use super::middleware::{allow_login_attempt, get_cookie_value, resolved_client_ip};
 use super::{AppState, api_error_response};
 use argon2::{
     Argon2,
@@ -8,7 +8,7 @@ use argon2::{
 };
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
 use chrono::Utc;
@@ -26,9 +26,12 @@ pub(crate) struct LoginPayload {
 pub(crate) async fn login_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     axum::Json(payload): axum::Json<LoginPayload>,
 ) -> impl IntoResponse {
-    if !allow_login_attempt(&state, addr.ip()).await {
+    let client_ip = resolved_client_ip(Some(addr.ip()), &headers, &state.trusted_proxies)
+        .unwrap_or_else(|| addr.ip());
+    if !allow_login_attempt(&state, client_ip).await {
         return api_error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "AUTH_RATE_LIMITED",

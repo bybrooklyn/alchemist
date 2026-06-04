@@ -151,6 +151,23 @@ test("About modal opens and does not contain Al badge", async ({ page }) => {
   await expect(page.getByText(/^Al$/)).toHaveCount(0);
 });
 
+test("System Status modal exits cleanly by close button and Escape", async ({ page }) => {
+  await page.goto("/");
+
+  const engineStatus = page.getByText("Engine Status", { exact: true });
+  const dialog = page.getByRole("dialog", { name: "System Status" });
+
+  await engineStatus.click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "Close system status dialog" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await engineStatus.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("Settings page does not show Setup & Runtime Controls banner", async ({ page }) => {
   await page.goto("/settings");
 

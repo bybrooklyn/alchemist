@@ -45,7 +45,7 @@ Next steps:
   1. Update CHANGELOG.md and docs/docs/changelog.md for ${VERSION}
   2. Run just release-check
   3. Complete the manual RC/stable smoke checklist in RELEASING.md
-  4. Merge the release-prep commit to main so Docker publishes ${VERSION}
+  4. Commit the release prep on master so Docker publishes ${VERSION}
   5. Stable versions also publish latest; prereleases must not
   6. Create annotated tag v${VERSION} on the exact merged commit for binary releases
 

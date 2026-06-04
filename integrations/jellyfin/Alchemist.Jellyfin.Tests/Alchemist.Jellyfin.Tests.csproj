@@ -4,12 +4,15 @@
     <TargetFramework>net9.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <RootNamespace>dev.bybrooklyn.alchemist.tests</RootNamespace>
+    <AssemblyName>dev.bybrooklyn.alchemist.tests</AssemblyName>
+    <PackageId>dev.bybrooklyn.alchemist.tests</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.8" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.8" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.10" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.10" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

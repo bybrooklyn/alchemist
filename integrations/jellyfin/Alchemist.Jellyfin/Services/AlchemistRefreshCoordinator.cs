@@ -1,9 +1,9 @@
 using System;
-using Alchemist.Jellyfin.Configuration;
+using dev.bybrooklyn.alchemist.Configuration;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Refreshes Jellyfin paths after Alchemist completes a job.

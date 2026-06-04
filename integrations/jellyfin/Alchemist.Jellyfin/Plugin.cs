@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using Alchemist.Jellyfin.Configuration;
+using dev.bybrooklyn.alchemist.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
-namespace Alchemist.Jellyfin;
+namespace dev.bybrooklyn.alchemist;
 
 /// <summary>
 /// Jellyfin plugin entrypoint for forwarding library additions to Alchemist.
@@ -29,7 +29,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override string Name => "Alchemist";
 
     /// <inheritdoc />
-    public override Guid Id => Guid.Parse("f8d50e2d-dc99-43ef-b387-052637738f61");
+    public override Guid Id => Guid.Parse("c3637bc0-04ad-58b6-b11c-e840af0b1f6e");
 
     /// <summary>
     /// Gets the active plugin instance.

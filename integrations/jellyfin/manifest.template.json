@@ -1,6 +1,6 @@
 [
   {
-    "guid": "f8d50e2d-dc99-43ef-b387-052637738f61",
+    "guid": "c3637bc0-04ad-58b6-b11c-e840af0b1f6e",
     "name": "Alchemist",
     "description": "Forward Jellyfin media events to Alchemist and refresh Jellyfin after completed jobs.",
     "overview": "Integrates Jellyfin with Alchemist using a narrowed API token, path translations, and completed-job refresh events.",
@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "0.1.0",
-        "changelog": "Initial Jellyfin 10.11 plugin with enqueue hooks, Alchemist event listening, reverse path translation, and containing-directory refresh.",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/bybrooklyn/alchemist/releases/download/v0.3.2/Alchemist.Jellyfin_0.1.0.zip",
-        "checksum": "SHA256_PLACEHOLDER",
-        "timestamp": "2026-05-12T00:00:00Z"
+        "version": "0.3.4.0",
+        "changelog": "First stable Alchemist Jellyfin plugin catalog release.",
+        "targetAbi": "10.11.10.0",
+        "sourceUrl": "https://github.com/bybrooklyn/alchemist/releases/download/v0.3.4/dev.bybrooklyn.alchemist_0.3.4.0.zip",
+        "checksum": "MD5_PLACEHOLDER",
+        "timestamp": "2026-06-04T00:00:00Z"
       }
     ]
   }

@@ -9,7 +9,7 @@ keywords:
 ---
 
 Alchemist is licensed under
-[GPLv3](https://github.com/bybrooklyn/alchemist/blob/main/LICENSE).
+[GPLv3](https://github.com/bybrooklyn/alchemist/blob/master/LICENSE).
 That means:
 
 - **Free to use**, for any purpose, including commercial.

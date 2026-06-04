@@ -4,11 +4,11 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Alchemist.Jellyfin.Configuration;
+using dev.bybrooklyn.alchemist.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Listens to Alchemist job events and refreshes Jellyfin when jobs complete.

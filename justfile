@@ -164,6 +164,10 @@ jellyfin-test:
 # Build + test the Jellyfin plugin
 jellyfin-check: jellyfin-build jellyfin-test
 
+# Build the Jellyfin plugin release zip and checksum assets
+jellyfin-package: jellyfin-check
+    python3 scripts/package_jellyfin_plugin.py --output-dir dist/jellyfin
+
 # ─────────────────────────────────────────
 # CHECKS — mirrors CI exactly
 # ─────────────────────────────────────────

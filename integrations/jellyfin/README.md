@@ -5,25 +5,38 @@ eligible local media file paths to Alchemist. It can also listen to Alchemist
 job events and ask Jellyfin to refresh the containing directory after a job
 completes.
 
-Target Jellyfin version: `10.11.x`.
+Target Jellyfin version: `10.11.10`.
+Plugin catalog version: `0.3.4.0`.
+Canonical plugin/package ID: `dev.bybrooklyn.alchemist`.
+
+Jellyfin requires plugin IDs to be GUIDs, so the canonical ID is represented by
+the deterministic UUID `c3637bc0-04ad-58b6-b11c-e840af0b1f6e`.
 
 ## Build
 
 ```bash
-dotnet build integrations/jellyfin/Alchemist.Jellyfin/Alchemist.Jellyfin.csproj
+just jellyfin-check
 ```
 
 ## Package
 
-The build output is the plugin assembly under:
+Create the release zip plus MD5 and SHA-256 checksum assets with:
 
-```text
-integrations/jellyfin/Alchemist.Jellyfin/bin/Release/net9.0/
+```bash
+just jellyfin-package
 ```
 
-For a manual install, copy the release build output into a Jellyfin plugin
-folder and restart Jellyfin. `manifest.template.json` is a release manifest
-stub; replace the `sourceUrl` and `checksum` placeholders when publishing a zip.
+Release candidates attach a manually installable
+`dev.bybrooklyn.alchemist_0.3.4.0.zip` without changing the stable catalog. Stable
+releases update:
+
+```text
+https://raw.githubusercontent.com/bybrooklyn/alchemist/jellyfin-plugin-repo/manifest.json
+```
+
+Add that URL under **Dashboard → Plugins → Repositories** to install stable
+plugin releases from Jellyfin's catalog. For a manual install, extract the
+release zip into a dedicated Jellyfin plugin folder and restart Jellyfin.
 
 ## Configure
 

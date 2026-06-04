@@ -1,9 +1,9 @@
 using System.Threading;
 using System.Threading.Tasks;
-using Alchemist.Jellyfin.Services;
+using dev.bybrooklyn.alchemist.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Alchemist.Jellyfin.Api;
+namespace dev.bybrooklyn.alchemist.Api;
 
 /// <summary>
 /// Jellyfin dashboard API endpoints for the Alchemist plugin.

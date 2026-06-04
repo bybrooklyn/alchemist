@@ -53,6 +53,8 @@ documentation, or iteration.
   - Windows update-check metadata
 - Release workflow renders package metadata from release assets/checksums
 - Windows in-app update check against GitHub Releases
+- Changelog-backed GitHub release notes and post-publication native/Docker smoke
+- Jellyfin plugin zip, MD5, SHA-256, and stable catalog-feed publishing
 
 ### Expanded Library Intelligence
 - Duplicate groups remain
@@ -87,16 +89,26 @@ documentation, or iteration.
 
 ## Active Priorities
 
-### `0.3.2` RC Stability Follow-Through
-- Keep the current in-flight backend/frontend/test delta focused on reliability, upgrade safety, and release hardening
-- Expand regression coverage for resume/restart/cancel flows, job-detail refresh semantics, settings projection, integration hooks, and intelligence actions
-- Keep release docs, changelog entries, and support wording aligned with what the RC actually ships
+### `0.3.4` Trust and Adoption Cycle
+- Hold major transcoding features until `0.3.4-rc.1` completes a seven-day soak
+  without a new P1/P2 issue
+- Prove users can discover, install, configure, and trust the existing product
+- Validate stable Jellyfin catalog installation and behavior against `10.11.10`
+- Keep release docs, changelog entries, and support wording aligned with the
+  published artifacts
+
+### Setup and Settings Research
+- Keep the unresolved setup and Settings feedback in `feedback.md` active
+- Run user interviews before selecting a redesign direction
+- Prioritize Docker/NAS path comprehension, safe defaults, and settings
+  information architecture
 
 ### AMD AV1 Validation
 - Validate Linux VAAPI and Windows AMF AV1 paths on real hardware
 - Confirm encoder selection, fallback behavior, and defaults
 - Keep support claims conservative until validation is real
-- Deferred from the current `0.3.1-rc.5` automated-stability pass; do not broaden support claims before this work is complete
+- Evidence-gated because the current development machine is Apple M4 hardware;
+  do not broaden support claims before real AMD validation
 
 ---
 
@@ -151,8 +163,11 @@ documentation, or iteration.
 - Only promote these if they become strategically important
 
 ### Jellyfin / Plex Refresh Hook (INT-2)
-- Jellyfin plugin path is implemented: completed Alchemist jobs can trigger a containing-directory refresh through Jellyfin's library monitor
-- Validate against a live Jellyfin 10.11 install and package the plugin release zip/manifest before calling the integration release-ready
+- Jellyfin plugin path and release packaging are implemented: completed
+  Alchemist jobs can trigger a containing-directory refresh through Jellyfin's
+  library monitor
+- Complete stable install-from-feed validation against Jellyfin `10.11.10`
+  before calling the integration release-ready
 - Keep Plex as future work after the Jellyfin pattern is proven
 
 ### Prometheus Metrics (OBS-1)

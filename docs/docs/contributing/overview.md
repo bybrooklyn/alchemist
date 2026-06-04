@@ -8,8 +8,8 @@ Alchemist is GPLv3 open source. Contributions are welcome.
 ## Start here
 
 - [Development Setup](/contributing/development) for local bootstrap and common tasks
-- [`CONTRIBUTING.md`](https://github.com/bybrooklyn/alchemist/blob/main/CONTRIBUTING.md) for licensing and contribution terms
-- [`RELEASING.md`](https://github.com/bybrooklyn/alchemist/blob/main/RELEASING.md) for release and RC checklists
+- [`CONTRIBUTING.md`](https://github.com/bybrooklyn/alchemist/blob/master/CONTRIBUTING.md) for licensing and contribution terms
+- [`RELEASING.md`](https://github.com/bybrooklyn/alchemist/blob/master/RELEASING.md) for release and RC checklists
 
 Windows contributors have a supported path for `just install-w`,
 `just dev`, and `just check`. Other `just` recipes are still Unix-first.
