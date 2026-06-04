@@ -12,7 +12,7 @@ By contributing to this project, you agree that your contributions will be licen
 
 By submitting a contribution (code, documentation, assets, or any other material), you agree that:
 
-- You **grant the project owner (Brooklyn Halmstad)** a **perpetual, irrevocable, worldwide right** to use, modify, relicense, and redistribute your contribution as part of the project.
+- You **grant the project owner** a **perpetual, irrevocable, worldwide right** to use, modify, relicense, and redistribute your contribution as part of the project.
 - You retain copyright to your individual contribution, **but you grant the project owner full rights to incorporate it into Alchemist**, including future relicensing or dual-licensing if desired.
 - You confirm that you have the legal right to submit the contribution and that it is your own original work (or properly attributed and compatible with GPL-3.0).
 
@@ -55,3 +55,5 @@ Low-effort PRs will be closed.
 ## Code of Conduct
 
 Don’t be a jerk. Act in good faith. Respect other contributors.
+
+AI coding and contributions are welcome!

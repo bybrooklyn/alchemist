@@ -1058,6 +1058,14 @@ paths:
           description: Resource metrics
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/system/selftest:
+    post:
+      summary: Run the system pipeline self-test to verify encoding components
+      responses:
+        "200":
+          description: Self-test results
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/system/update:
     get:
       summary: Check configured-channel update status

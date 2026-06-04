@@ -54,4 +54,5 @@ integrations/**/obj/
 .pi/
 
 .gemini/
+.antigravitycli/
 gha-creds-*.json

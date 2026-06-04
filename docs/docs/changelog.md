@@ -3,6 +3,24 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
+## [0.3.3] - 2026-06-03
+
+Promotes 0.3.3-rc.4 to stable.
+
+### Reliability & Safety
+
+- Batch delete/restart now de-duplicates the requested ids and verifies every id is eligible (not active, archived, or missing) before mutating, so a partially-applicable batch can no longer half-commit — preventing orphaned resume sessions on delete and silent requeues on restart. (P2-34)
+- The system self-test now runs a real ffprobe → plan → encode pipeline, exposed both as `POST /api/system/selftest` and the new `alchemist selftest` CLI subcommand; the HTTP path is single-flighted and returns `429 SELFTEST_BUSY` while one is already in progress. (P2-35)
+- The self-test "Write Temp" failure path now cleans up its temporary directory instead of leaking it. (RG-11)
+- Auth middleware now returns `500 AUTH_BACKEND_UNAVAILABLE` when a session or API-token lookup fails at the database layer, instead of masking a backend outage as a `401`.
+- The jobs table endpoint rejects unknown `status` filter tokens with `400 INVALID_JOB_STATUS_FILTER` rather than silently ignoring them.
+- Gotify daily-summary delivery now posts to `<server>/message`.
+
+### Known Issues
+
+- Login rate limiting keys on the direct socket peer IP. Behind a TLS-terminating reverse proxy this can rate-limit all clients together; configure `trusted_proxies` accordingly. Tracked as P2-33; fix planned for the next release.
+- IPv4-mapped IPv6 peers (`::ffff:a.b.c.d`) are not normalized in LAN / trusted-proxy classification, which can affect dual-stack hosts. Tracked as RG-10.
+
 ## [0.3.3-rc.4] - 2026-05-19
 
 ### Performance & Reliability

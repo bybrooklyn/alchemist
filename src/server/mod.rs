@@ -174,6 +174,10 @@ pub struct AppState {
     /// ffprobe many files; without this, concurrent previews would multiply
     /// subprocess load and pool contention. Cleared via RAII guard.
     pub library_preview_in_progress: Arc<AtomicBool>,
+    /// Single-flight guard for `system_selftest_handler`. Each self-test spawns
+    /// a real ffmpeg encode; without this, concurrent requests would multiply
+    /// subprocess load against the live transcode pipeline. Cleared via RAII guard.
+    pub selftest_in_progress: Arc<AtomicBool>,
     /// Set while `install_system_update_handler` is staging and spawning the
     /// helper. Prevents two concurrent installers from racing the running
     /// binary. Cleared via RAII guard on every early return; deliberately
@@ -385,6 +389,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress,
         library_preview_in_progress: Arc::new(AtomicBool::new(false)),
+        selftest_in_progress: Arc::new(AtomicBool::new(false)),
         update_install_in_progress,
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
@@ -656,6 +661,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/ready", get(ready_handler))
         // System Routes
         .route("/api/system/resources", get(system_resources_handler))
+        .route("/api/system/selftest", post(system_selftest_handler))
         .route("/api/system/info", get(get_system_info_handler))
         .route("/api/system/update", get(get_system_update_handler))
         .route(
@@ -887,6 +893,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/system/resources", get(system_resources_handler))
+        .route("/system/selftest", post(system_selftest_handler))
         .route("/system/info", get(get_system_info_handler))
         .route("/system/update", get(get_system_update_handler))
         .route("/system/update/check", post(check_system_update_handler))

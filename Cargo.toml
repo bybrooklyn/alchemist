@@ -1,6 +1,6 @@
 [package]
 name = "alchemist"
-version = "0.3.3-rc.4"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0"

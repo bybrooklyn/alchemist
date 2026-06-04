@@ -118,6 +118,7 @@ where
         update_status_cache: Arc::new(tokio::sync::Mutex::new(None)),
         library_health_scan_in_progress: Arc::new(AtomicBool::new(false)),
         library_preview_in_progress: Arc::new(AtomicBool::new(false)),
+        selftest_in_progress: Arc::new(AtomicBool::new(false)),
         update_install_in_progress: Arc::new(AtomicBool::new(false)),
         login_rate_limiter: Mutex::new(HashMap::new()),
         global_rate_limiter: Mutex::new(HashMap::new()),
@@ -3637,6 +3638,264 @@ async fn library_health_scan_returns_conflict_when_already_running()
         body.contains("HEALTH_SCAN_IN_PROGRESS"),
         "expected HEALTH_SCAN_IN_PROGRESS code, got body: {body}"
     );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_selftest_endpoint_returns_success()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/v1/system/selftest",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    let payload: serde_json::Value = serde_json::from_str(&body)?;
+
+    assert_eq!(payload["success"], true);
+    let stages = payload["stages"]
+        .as_array()
+        .ok_or("Expected stages array")?;
+    assert_eq!(stages.len(), 5);
+
+    let stage_names = ["Write Temp", "Analyze", "Plan", "Execute", "Verify"];
+    for (i, name) in stage_names.iter().enumerate() {
+        assert_eq!(stages[i]["name"], *name);
+        assert_eq!(stages[i]["success"], true);
+    }
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_job_status_filter_returns_bad_request()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/jobs/table?status=not-a-valid-status",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_text(response).await;
+    assert!(body.contains("INVALID_JOB_STATUS_FILTER"));
+    assert!(body.contains("Unknown job status: not-a-valid-status"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_mutation_conflict_returns_conflict()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/batch",
+            &token,
+            json!({
+                "action": "restart",
+                "ids": [99999]
+            }),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_text(response).await;
+    assert!(body.contains("BATCH_ACTION_CONFLICT"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_db_lookup_failure_returns_internal_error()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    // Close the database pool to trigger a connection/lookup error in auth middleware
+    state.db.pool.close().await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/jobs/table",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_text(response).await;
+    assert!(body.contains("AUTH_BACKEND_UNAVAILABLE"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_delete_with_stale_id_is_atomic()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    // Job A is eligible (queued); job B is archived (ineligible).
+    state
+        .db
+        .enqueue_job(
+            Path::new("/tmp/batch_atomic_a.mkv"),
+            Path::new("/tmp/batch_atomic_a.out.mkv"),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let job_a = state
+        .db
+        .get_job_by_input_path("/tmp/batch_atomic_a.mkv")
+        .await?
+        .ok_or("job a not found")?;
+
+    state
+        .db
+        .enqueue_job(
+            Path::new("/tmp/batch_atomic_b.mkv"),
+            Path::new("/tmp/batch_atomic_b.out.mkv"),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let job_b = state
+        .db
+        .get_job_by_input_path("/tmp/batch_atomic_b.mkv")
+        .await?
+        .ok_or("job b not found")?;
+    state
+        .db
+        .update_job_status(job_b.id, JobState::Failed)
+        .await?;
+    state.db.delete_job(job_b.id).await?; // archive B
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/batch",
+            &token,
+            json!({ "action": "delete", "ids": [job_a.id, job_b.id] }),
+        ))
+        .await?;
+
+    // The batch must be rejected atomically: nothing applied.
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_text(response).await;
+    assert!(body.contains("BATCH_ACTION_CONFLICT"));
+
+    // Job A must NOT have been archived (get_jobs_by_ids excludes archived rows).
+    let remaining = state.db.get_jobs_by_ids(&[job_a.id]).await?;
+    assert_eq!(
+        remaining.len(),
+        1,
+        "job A must survive an atomic batch conflict"
+    );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_delete_dedupes_duplicate_ids() -> std::result::Result<(), Box<dyn std::error::Error>>
+{
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    state
+        .db
+        .enqueue_job(
+            Path::new("/tmp/batch_dedup_a.mkv"),
+            Path::new("/tmp/batch_dedup_a.out.mkv"),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let job_a = state
+        .db
+        .get_job_by_input_path("/tmp/batch_dedup_a.mkv")
+        .await?
+        .ok_or("job a not found")?;
+
+    // A repeated id must not manufacture a false conflict.
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/jobs/batch",
+            &token,
+            json!({ "action": "delete", "ids": [job_a.id, job_a.id] }),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    let payload: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(payload["count"], 1);
+
+    // A is now archived → excluded from get_jobs_by_ids.
+    let remaining = state.db.get_jobs_by_ids(&[job_a.id]).await?;
+    assert!(
+        remaining.is_empty(),
+        "job A should be archived after delete"
+    );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_selftest_returns_429_when_busy()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    // Simulate an in-flight self-test; the single-flight guard must reject.
+    state
+        .selftest_in_progress
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::POST,
+            "/api/v1/system/selftest",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = body_text(response).await;
+    assert!(body.contains("SELFTEST_BUSY"));
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())

@@ -319,10 +319,20 @@ pub(crate) async fn jobs_table_handler(
     let offset = (page - 1) * limit;
 
     let statuses = if let Some(s) = status {
-        let list: Vec<JobState> = s
-            .split(',')
-            .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
-            .collect();
+        let mut list = Vec::new();
+        for raw in s.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+            match serde_json::from_value::<JobState>(serde_json::Value::String(raw.to_string())) {
+                Ok(parsed) => list.push(parsed),
+                Err(_) => {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_JOB_STATUS_FILTER",
+                        format!("Unknown job status: {}", raw),
+                    )
+                    .into_response();
+                }
+            }
+        }
         if list.is_empty() { None } else { Some(list) }
     } else {
         None
@@ -469,19 +479,38 @@ pub(crate) async fn batch_jobs_handler(
                 );
             }
 
+            // De-duplicate requested ids so a repeated id can't manufacture a
+            // false count mismatch below.
+            let mut ids = payload.ids.clone();
+            ids.sort_unstable();
+            ids.dedup();
+
+            // Atomic pre-check: `get_jobs_by_ids` already filters `archived = 0`,
+            // and the `blocked` guard above guarantees no job in `jobs` is active,
+            // so every fetched job is eligible to be mutated. If any requested id
+            // is missing (nonexistent or archived), reject before touching the DB
+            // rather than half-applying the batch and orphaning resume sessions.
+            if jobs.len() != ids.len() {
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "BATCH_ACTION_CONFLICT",
+                    "Some jobs could not be modified because they are active, archived, or do not exist.",
+                );
+            }
+
             let result = if payload.action == "delete" {
-                for id in &payload.ids {
+                for id in &ids {
                     state.transcoder.remove_cancel_request(*id).await;
                 }
-                state.db.batch_delete_jobs(&payload.ids).await
+                state.db.batch_delete_jobs(&ids).await
             } else {
-                state.db.batch_restart_jobs(&payload.ids).await
+                state.db.batch_restart_jobs(&ids).await
             };
 
             match result {
                 Ok(count) => {
                     if payload.action == "delete" {
-                        purge_resume_sessions_for_jobs(state.as_ref(), &payload.ids).await;
+                        purge_resume_sessions_for_jobs(state.as_ref(), &ids).await;
                     }
                     axum::Json(serde_json::json!({ "count": count })).into_response()
                 }

@@ -941,8 +941,9 @@ impl NotificationManager {
             }
             "gotify" => {
                 let config = parse_target_config::<GotifyConfig>(target)?;
+                let url = format!("{}/message", config.server_url.trim_end_matches('/'));
                 client
-                    .post(config.server_url)
+                    .post(url)
                     .header("X-Gotify-Key", config.app_token)
                     .json(&json!({
                         "title": "Alchemist Daily Summary",
