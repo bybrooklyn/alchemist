@@ -1,9 +1,9 @@
-using Alchemist.Jellyfin.Services;
+using dev.bybrooklyn.alchemist.Services;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Alchemist.Jellyfin;
+namespace dev.bybrooklyn.alchemist;
 
 /// <summary>
 /// Registers Alchemist plugin services with Jellyfin.

@@ -46,6 +46,11 @@ on:
         type: boolean
         required: false
         default: false
+      publish_jellyfin:
+        description: Whether to attach Jellyfin plugin assets
+        type: boolean
+        required: false
+        default: false
     secrets:
       ALCHEMIST_RELEASE_SIGNING_KEY_PEM:
         required: false
@@ -163,6 +168,36 @@ jobs:
           name: web-dist-${{ github.run_id }}
           path: web/dist
           retention-days: 1
+
+  build-jellyfin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build and test plugin
+        run: |
+          dotnet build integrations/jellyfin/Alchemist.Jellyfin/Alchemist.Jellyfin.csproj
+          dotnet test integrations/jellyfin/Alchemist.Jellyfin.Tests/Alchemist.Jellyfin.Tests.csproj
+
+      - name: Package plugin
+        if: inputs.publish_jellyfin
+        run: python3 scripts/package_jellyfin_plugin.py --output-dir jellyfin-assets
+
+      - name: Upload plugin assets
+        if: inputs.publish_jellyfin
+        uses: actions/upload-artifact@v7
+        with:
+          name: alchemist-jellyfin
+          path: jellyfin-assets/*
 
   build-linux:
     needs: [build-frontend]
@@ -496,7 +531,7 @@ jobs:
 
   publish-release:
     needs:
-      [build-docs, build-linux, build-windows, build-macos, publish-docker-manifest]
+      [build-docs, build-jellyfin, build-linux, build-windows, build-macos, publish-docker-manifest]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: inputs.publish_release
@@ -529,6 +564,15 @@ jobs:
             --signing-key-env ALCHEMIST_RELEASE_SIGNING_KEY_PEM
           find release-assets -maxdepth 4 -type f -print | sort
 
+      - name: Render release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="$(tr -d '\n\r' < VERSION)"
+          python3 scripts/extract_release_notes.py \
+            --version "${BASE_VERSION}" \
+            --output release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -538,12 +582,58 @@ jobs:
           make_latest: ${{ inputs.make_latest }}
           overwrite_files: true
           generate_release_notes: false
+          body_path: release-notes.md
           files: |
             release-assets/*.tar.gz
             release-assets/*.exe
             release-assets/*.zip
+            release-assets/*.md5
+            release-assets/*.sha256
             release-assets/distribution/alchemist-update-manifest.json
             release-assets/distribution/homebrew/alchemist.rb
             release-assets/distribution/aur/PKGBUILD
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Update stable Jellyfin catalog
+        if: inputs.publish_jellyfin && !inputs.prerelease && !contains(inputs.release_tag, 'nightly')
+        shell: bash
+        run: |
+          set -euo pipefail
+          FEED_PARENT="$(mktemp -d)"
+          FEED_DIR="${FEED_PARENT}/feed"
+          if git ls-remote --exit-code --heads origin jellyfin-plugin-repo >/dev/null 2>&1; then
+            git fetch origin jellyfin-plugin-repo
+            git worktree add -B jellyfin-plugin-repo "${FEED_DIR}" origin/jellyfin-plugin-repo
+            EXISTING_ARGS=(--existing "${FEED_DIR}/manifest.json")
+          else
+            git worktree add --detach "${FEED_DIR}" HEAD
+            (
+              cd "${FEED_DIR}"
+              git switch --orphan jellyfin-plugin-repo
+              git rm -rf . || true
+            )
+            EXISTING_ARGS=()
+          fi
+
+          PLUGIN_ID="$(tr -d '\n\r' < integrations/jellyfin/PLUGIN_ID)"
+          PLUGIN_VERSION="$(tr -d '\n\r' < integrations/jellyfin/PLUGIN_VERSION)"
+          python3 scripts/render_jellyfin_manifest.py \
+            --plugin-version "${PLUGIN_VERSION}" \
+            --release-tag "${{ inputs.release_tag }}" \
+            --zip "release-assets/${PLUGIN_ID}_${PLUGIN_VERSION}.zip" \
+            --output "${FEED_DIR}/manifest.json" \
+            "${EXISTING_ARGS[@]}"
+
+          (
+            cd "${FEED_DIR}"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add manifest.json
+            if git diff --cached --quiet; then
+              echo "Stable Jellyfin catalog already current."
+              exit 0
+            fi
+            git commit -m "chore: publish Jellyfin plugin ${PLUGIN_VERSION}"
+            git push origin HEAD:jellyfin-plugin-repo
+          )

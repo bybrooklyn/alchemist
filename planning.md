@@ -1,19 +1,48 @@
 # Planning
 
-Last updated: 2026-05-19
+Last updated: 2026-06-04
 
 This file tracks current coordination notes only. Detailed historical execution logs belong in git history, `CHANGELOG.md`, and release notes.
 
 ## Current Baseline
 
-- Version: `0.3.3-rc.4`
-- Release line: 0.3.3 release-candidate hardening
+- Stable version: `0.3.3`
+- Active version: `0.3.4-rc.1`
+- Release line: 0.3.4 trust, distribution, and onboarding
 - Required orientation files: `CHANGELOG.md`, `VERSION`, `CLAUDE.md`
 - Living planning sources:
   - `backlog.md` for active and future product work
   - `audit.md` for verified bugs/security/correctness findings
   - `ideas.md` for optional future ideas
   - `native/mac/Docs/swift.md` for the native macOS client specification
+
+## 0.3.4 Trust and Adoption Cycle
+
+Status: implementation complete for RC cut; the seven-day soak starts only
+after `v0.3.4-rc.1` is published and its post-publication smoke is green.
+
+Release focus:
+
+- Resolve P2-33 and RG-10 with one normalized, trusted-proxy-aware client-IP
+  resolver used by login/global rate limiting and LAN/trusted-proxy checks.
+- Prove published native and Docker artifacts with automated version,
+  `selftest`, isolated-start, and readiness checks.
+- Publish changelog-backed GitHub release notes and correct the stable Docker
+  quick start.
+- Package the Jellyfin `10.11.10` plugin as `0.3.4.0`, attach RC/stable assets,
+  and update the stable repository feed only for stable releases.
+- Keep setup and Settings redesign as research work until user interviews
+  produce a concrete design brief.
+
+Release gates:
+
+- `just release-check` must pass before the RC tag.
+- GitHub CI, Nightly, Release, and Release Smoke must be green.
+- Stable promotion requires a seven-day RC soak without a new P1/P2 issue and
+  a successful install-from-feed Jellyfin validation.
+- AMD AV1 remains evidence-gated on real AMD hardware.
+- Native macOS expansion, crop detection, VMAF pre-flight, rules engines, and
+  undo remain deferred.
 
 ## Package Refresh / Release Check Pass
 
@@ -201,8 +230,10 @@ These items are implemented and should be treated as product surface needing mai
 
 ## Near-Term Candidates
 
-- Finish current WIP verification and release-readiness cleanup.
-- Keep native macOS work isolated under `native/mac` and preserve `native/mac/Docs/swift.md` as the product spec.
-- Harden the new MCP surface and validate the Jellyfin plugin against a live Jellyfin install before packaging release artifacts.
-- Continue AMD AV1 validation only with real hardware evidence.
-- Promote backlog items only when they support the automation-first transcoding mission.
+- Complete the `0.3.4-rc.1` soak and capture real install/configuration feedback.
+- Validate the stable Jellyfin feed against `jellyfin/jellyfin:10.11.10` before
+  promoting `0.3.4`.
+- Keep setup and Settings research open; do not redesign either surface from
+  assumptions alone.
+- If feedback does not reveal a higher-priority problem, implement `AUTO-3`
+  disk-space guardrails after 0.3.4.

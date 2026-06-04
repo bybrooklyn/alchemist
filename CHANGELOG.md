@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.4-rc.1] - 2026-06-04
+
+Begins the focused 0.3.4 trust and adoption cycle. Stable promotion requires a
+seven-day RC soak without a new P1/P2 issue.
+
+### Reliability & Safety
+
+- Login and global rate limiting, LAN checks, and trusted-proxy checks now share
+  one normalized client-IP resolver. Forwarded headers remain accepted only
+  from trusted peers, proxied clients receive independent login buckets, and
+  IPv4-mapped IPv6 addresses are normalized consistently. (P2-33, RG-10)
+
+### Distribution
+
+- GitHub releases now populate their body from the matching changelog section.
+- A post-publication Release Smoke workflow verifies version output, `selftest`,
+  isolated server readiness, published Docker images, and Jellyfin plugin
+  loading across available native runners.
+- The recommended Docker quick start now uses the stable `latest` image.
+
+### Jellyfin
+
+- The plugin now targets Jellyfin `10.11.10` and is versioned `0.3.4.0`.
+- The canonical package and Jellyfin plugin identifier is
+  `dev.bybrooklyn.alchemist`.
+- RC and stable releases attach `dev.bybrooklyn.alchemist_0.3.4.0.zip`, MD5, and
+  SHA-256 assets. Stable releases additionally update the dedicated Jellyfin
+  repository feed; RC releases leave the stable feed unchanged.
+- Plugin tests now cover scoped connection checks, dry-run enqueue behavior,
+  real enqueue requests, event-stream access, path translation, completion
+  event parsing, and containing-directory selection.
+
 ## [0.3.3] - 2026-06-03
 
 Promotes 0.3.3-rc.4 to stable.
@@ -320,7 +352,7 @@ post-rc.5 audit remediation work.
 - All databases from v0.2.5 onwards upgrade automatically; no manual migration required.
 
 ### CI/CD & Tooling
-- Nightly workflow: runs on every push to `main` after checks pass, builds all platforms, publishes `ghcr.io/bybrooklyn/alchemist:nightly` with `{VERSION}-nightly+{short-sha}` versioning.
+- Nightly workflow: runs on every push to `master` after checks pass, builds all platforms, publishes `ghcr.io/bybrooklyn/alchemist:nightly` with `{VERSION}-nightly+{short-sha}` versioning.
 - Shared reusable `build.yml` workflow so nightly and release builds use identical pipelines.
 - `actionlint` added to `just release-check`.
 - E2E reliability suite (`just test-e2e`) runs in CI after the frontend check passes.

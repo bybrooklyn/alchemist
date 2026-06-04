@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "alchemist-docs",
+      "name": "dev.bybrooklyn.alchemist",
       "dependencies": {
         "@docusaurus/core": "^3.10.1",
         "@docusaurus/faster": "^3.10.1",

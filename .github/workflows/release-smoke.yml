@@ -1,0 +1,232 @@
+name: Release Smoke
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
+      plugin_version:
+        type: string
+        required: true
+      verify_stable_feed:
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published Alchemist version
+        type: string
+        required: true
+      release_tag:
+        description: Published GitHub release tag
+        type: string
+        required: true
+      plugin_version:
+        description: Published Jellyfin plugin version
+        type: string
+        required: true
+        default: 0.3.4.0
+      verify_stable_feed:
+        description: Verify the stable Jellyfin catalog
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  IMAGE_NAME: ghcr.io/bybrooklyn/alchemist
+
+jobs:
+  native-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os_name: linux
+          - runner: macos-latest
+            os_name: macos
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Install FFmpeg on Linux
+        if: matrix.os_name == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install FFmpeg on macOS
+        if: matrix.os_name == 'macos'
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
+
+      - name: Download native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.os_name }}" == "linux" ]]; then
+            ASSET="alchemist-linux-x86_64.tar.gz"
+          elif [[ "$(uname -m)" == "arm64" ]]; then
+            ASSET="alchemist-macos-arm64.tar.gz"
+          else
+            ASSET="alchemist-macos-x86_64.tar.gz"
+          fi
+          gh release download "${{ inputs.release_tag }}" --pattern "${ASSET}"
+          tar -xzf "${ASSET}"
+          chmod +x alchemist
+
+      - name: Smoke native artifact
+        run: python3 scripts/release_smoke.py --binary ./alchemist --expected-version "${{ inputs.version }}"
+
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Install FFmpeg
+        shell: powershell
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Download native artifact
+        shell: powershell
+        run: gh release download "${{ inputs.release_tag }}" --pattern "alchemist-windows-x86_64.exe"
+
+      - name: Smoke native artifact
+        shell: powershell
+        run: python scripts/release_smoke.py --binary ./alchemist-windows-x86_64.exe --expected-version "${{ inputs.version }}"
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Smoke published image
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${IMAGE_NAME}:${{ inputs.version }}"
+          docker pull "${IMAGE}"
+          docker run --rm "${IMAGE}" --version | grep -F "${{ inputs.version }}"
+
+          CONTAINER="$(docker run -d --tmpfs /app/config --tmpfs /app/data -p 127.0.0.1::3000 "${IMAGE}")"
+          trap 'docker logs "${CONTAINER}" || true; docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true' EXIT
+          PORT="$(docker port "${CONTAINER}" 3000/tcp | awk -F: '{print $NF}')"
+          for _ in $(seq 1 120); do
+            if curl --fail --silent "http://127.0.0.1:${PORT}/api/ready" | grep -q '"ready":true'; then
+              curl --fail --silent "http://127.0.0.1:${PORT}/api/health" | grep -F "\"version\":\"${{ inputs.version }}\""
+              curl --fail --silent \
+                -H 'Content-Type: application/json' \
+                -d '{"username":"release-smoke","password":"release-smoke-password","size_reduction_threshold":0.3,"min_bpp_threshold":0.1,"min_file_size_mb":50,"concurrent_jobs":1,"output_codec":"av1","quality_profile":"balanced","directories":["/tmp"],"allow_cpu_encoding":true,"enable_telemetry":false}' \
+                "http://127.0.0.1:${PORT}/api/setup/complete"
+              docker exec "${CONTAINER}" alchemist selftest
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+  jellyfin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Download and verify plugin assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLUGIN_ID="$(tr -d '\n\r' < integrations/jellyfin/PLUGIN_ID)"
+          BASE="${PLUGIN_ID}_${{ inputs.plugin_version }}.zip"
+          gh release download "${{ inputs.release_tag }}" \
+            --pattern "${BASE}" \
+            --pattern "${BASE}.md5" \
+            --pattern "${BASE}.sha256"
+          md5sum -c "${BASE}.md5"
+          sha256sum -c "${BASE}.sha256"
+          mkdir -p "jellyfin-config/plugins/${PLUGIN_ID}_${{ inputs.plugin_version }}"
+          unzip -q "${BASE}" -d "jellyfin-config/plugins/${PLUGIN_ID}_${{ inputs.plugin_version }}"
+
+      - name: Verify stable catalog
+        if: inputs.verify_stable_feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 \
+            https://raw.githubusercontent.com/bybrooklyn/alchemist/jellyfin-plugin-repo/manifest.json \
+            -o manifest.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          version = "${{ inputs.plugin_version }}"
+          plugin_id = Path("integrations/jellyfin/PLUGIN_ID").read_text().strip()
+          manifest = json.loads(Path("manifest.json").read_text())
+          entry = next(
+              item
+              for plugin in manifest
+              if plugin["guid"] == "c3637bc0-04ad-58b6-b11c-e840af0b1f6e"
+              for item in plugin["versions"]
+              if item["version"] == version
+          )
+          checksum = hashlib.md5(
+              Path(f"{plugin_id}_{version}.zip").read_bytes(),
+              usedforsecurity=False,
+          ).hexdigest()
+          assert entry["checksum"] == checksum
+          assert entry["targetAbi"] == "10.11.10.0"
+          PY
+
+      - name: Load plugin in Jellyfin 10.11.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p jellyfin-cache
+          CONTAINER="$(docker run -d \
+            -v "${PWD}/jellyfin-config:/config" \
+            -v "${PWD}/jellyfin-cache:/cache" \
+            -p 127.0.0.1::8096 \
+            jellyfin/jellyfin:10.11.10)"
+          trap 'docker logs "${CONTAINER}" || true; docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true' EXIT
+          PORT="$(docker port "${CONTAINER}" 8096/tcp | awk -F: '{print $NF}')"
+          READY=false
+          for _ in $(seq 1 120); do
+            if curl --fail --silent "http://127.0.0.1:${PORT}/System/Info/Public" | grep -q '"Version":"10.11.10"'; then
+              READY=true
+              break
+            fi
+            sleep 1
+          done
+          [ "${READY}" = true ] || exit 1
+
+          for _ in $(seq 1 120); do
+            if docker logs "${CONTAINER}" 2>&1 | grep -F "dev.bybrooklyn.alchemist"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1

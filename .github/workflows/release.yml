@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
+      plugin_version: ${{ steps.plugin-version.outputs.version }}
       prerelease: ${{ steps.channel.outputs.prerelease }}
       make_latest: ${{ steps.channel.outputs.make_latest }}
       docker_tags: ${{ steps.docker.outputs.tags }}
@@ -35,6 +36,10 @@ jobs:
       - name: Read VERSION
         id: version
         run: echo "version=$(tr -d '\n\r' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Read Jellyfin plugin version
+        id: plugin-version
+        run: echo "version=$(tr -d '\n\r' < integrations/jellyfin/PLUGIN_VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Validate tag matches VERSION
         if: startsWith(github.ref, 'refs/tags/')
@@ -87,8 +92,19 @@ jobs:
       push_docker: ${{ startsWith(github.ref, 'refs/tags/') }}
       docker_tags: ${{ needs.release-meta.outputs.docker_tags }}
       publish_release: ${{ startsWith(github.ref, 'refs/tags/') }}
+      publish_jellyfin: ${{ startsWith(github.ref, 'refs/tags/') }}
       release_tag: ${{ github.ref_name }}
       release_name: >-
         Alchemist ${{ needs.release-meta.outputs.version }}
       prerelease: ${{ needs.release-meta.outputs.prerelease == 'true' }}
       make_latest: ${{ needs.release-meta.outputs.make_latest == 'true' }}
+
+  smoke:
+    needs: [release-meta, build]
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/release-smoke.yml
+    with:
+      version: ${{ needs.release-meta.outputs.version }}
+      release_tag: ${{ github.ref_name }}
+      plugin_version: ${{ needs.release-meta.outputs.plugin_version }}
+      verify_stable_feed: ${{ needs.release-meta.outputs.prerelease != 'true' }}

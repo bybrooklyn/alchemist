@@ -1,7 +1,7 @@
 using System;
 using System.Text.Json;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Parses Alchemist server-sent events used by the Jellyfin plugin.

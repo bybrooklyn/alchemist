@@ -75,7 +75,7 @@ updates remain owned by your Docker/Compose workflow.
 image: ghcr.io/bybrooklyn/alchemist:nightly
 ```
 
-Published on every push to `main` that passes Rust checks.
+Published on every push to `master` that passes Rust checks.
 
 ## See also
 

@@ -4,7 +4,7 @@ use super::{API_REQUEST_CONTEXT, ApiRequestContext, AppState, api_error_response
 use crate::db::ApiTokenAccessLevel;
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{HeaderName, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -269,7 +269,7 @@ fn request_is_lan(req: &Request, trusted_proxies: &[IpAddr]) -> bool {
     let direct_peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip());
+        .map(|info| normalize_ip(info.0.ip()));
     let resolved = request_ip(req, trusted_proxies);
 
     // If resolved IP differs from direct peer, forwarded headers were used.
@@ -370,7 +370,7 @@ pub(crate) async fn allow_login_attempt(state: &AppState, ip: IpAddr) -> bool {
     let cleanup_after = Duration::from_secs(60 * 60);
     limiter.retain(|_, entry| now.duration_since(entry.last_refill) <= cleanup_after);
 
-    let entry = limiter.entry(ip).or_insert(RateLimitEntry {
+    let entry = limiter.entry(normalize_ip(ip)).or_insert(RateLimitEntry {
         tokens: LOGIN_RATE_LIMIT_CAPACITY,
         last_refill: now,
     });
@@ -395,7 +395,7 @@ async fn allow_global_request(state: &AppState, ip: IpAddr) -> bool {
     let now = Instant::now();
     let cleanup_after = Duration::from_secs(60 * 60);
     limiter.retain(|_, entry| now.duration_since(entry.last_refill) <= cleanup_after);
-    let entry = limiter.entry(ip).or_insert(RateLimitEntry {
+    let entry = limiter.entry(normalize_ip(ip)).or_insert(RateLimitEntry {
         tokens: GLOBAL_RATE_LIMIT_CAPACITY,
         last_refill: now,
     });
@@ -434,25 +434,35 @@ pub(crate) fn request_ip(req: &Request, trusted_proxies: &[IpAddr]) -> Option<Ip
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
 
+    resolved_client_ip(peer_ip, req.headers(), trusted_proxies)
+}
+
+pub(crate) fn resolved_client_ip(
+    peer_ip: Option<IpAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &[IpAddr],
+) -> Option<IpAddr> {
+    let peer_ip = peer_ip.map(normalize_ip);
+
     // Only trust proxy headers (X-Forwarded-For, X-Real-IP) when the direct
     // TCP peer is a trusted reverse proxy. When trusted_proxies is non-empty,
     // only those exact IPs (plus loopback) are trusted. Otherwise, fall back
     // to trusting all RFC-1918 private ranges (legacy behaviour).
     if let Some(peer) = peer_ip {
         if is_trusted_peer(peer, trusted_proxies) {
-            if let Some(xff) = req.headers().get("X-Forwarded-For") {
+            if let Some(xff) = headers.get("X-Forwarded-For") {
                 if let Ok(xff_str) = xff.to_str() {
                     if let Some(ip_str) = xff_str.split(',').next() {
                         if let Ok(ip) = ip_str.trim().parse() {
-                            return Some(ip);
+                            return Some(normalize_ip(ip));
                         }
                     }
                 }
             }
-            if let Some(xri) = req.headers().get("X-Real-IP") {
+            if let Some(xri) = headers.get("X-Real-IP") {
                 if let Ok(xri_str) = xri.to_str() {
                     if let Ok(ip) = xri_str.trim().parse() {
-                        return Some(ip);
+                        return Some(normalize_ip(ip));
                     }
                 }
             }
@@ -468,6 +478,7 @@ pub(crate) fn request_ip(req: &Request, trusted_proxies: &[IpAddr]) -> Option<Ip
 /// explicitly configured IPs are trusted, tightening the default which
 /// previously trusted all RFC-1918 private ranges.
 fn is_trusted_peer(ip: IpAddr, trusted_proxies: &[IpAddr]) -> bool {
+    let ip = normalize_ip(ip);
     let is_loopback = match ip {
         IpAddr::V4(v4) => v4.is_loopback(),
         IpAddr::V6(v6) => v6.is_loopback(),
@@ -482,13 +493,82 @@ fn is_trusted_peer(ip: IpAddr, trusted_proxies: &[IpAddr]) -> bool {
             IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
         }
     } else {
-        trusted_proxies.contains(&ip)
+        trusted_proxies
+            .iter()
+            .copied()
+            .map(normalize_ip)
+            .any(|trusted| trusted == ip)
     }
 }
 
 fn is_lan_ip(ip: IpAddr) -> bool {
-    match ip {
+    match normalize_ip(ip) {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn spoofed_forwarding_headers_are_ignored_for_untrusted_peers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-For", HeaderValue::from_static("192.168.1.25"));
+
+        let peer = IpAddr::from([203, 0, 113, 10]);
+        assert_eq!(resolved_client_ip(Some(peer), &headers, &[]), Some(peer));
+    }
+
+    #[test]
+    fn trusted_proxy_forwarding_uses_and_normalizes_the_first_client_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Forwarded-For",
+            HeaderValue::from_static("::ffff:203.0.113.20, 10.0.0.2"),
+        );
+
+        let Ok(peer) = "::ffff:10.0.0.2".parse::<IpAddr>() else {
+            panic!("mapped proxy IP should parse");
+        };
+        let trusted_proxy = IpAddr::from([10, 0, 0, 2]);
+
+        assert_eq!(
+            resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
+            Some(IpAddr::from([203, 0, 113, 20]))
+        );
+    }
+
+    #[test]
+    fn mapped_ipv6_addresses_are_normalized_for_lan_and_proxy_checks() {
+        let Ok(mapped_loopback) = "::ffff:127.0.0.1".parse::<IpAddr>() else {
+            panic!("mapped loopback should parse");
+        };
+        let Ok(mapped_lan) = "::ffff:192.168.1.25".parse::<IpAddr>() else {
+            panic!("mapped LAN address should parse");
+        };
+        let Ok(mapped_public) = "::ffff:203.0.113.10".parse::<IpAddr>() else {
+            panic!("mapped public address should parse");
+        };
+
+        assert!(is_lan_ip(mapped_loopback));
+        assert!(is_lan_ip(mapped_lan));
+        assert!(!is_lan_ip(mapped_public));
+        assert!(is_trusted_peer(
+            mapped_public,
+            &[IpAddr::from([203, 0, 113, 10])]
+        ));
     }
 }

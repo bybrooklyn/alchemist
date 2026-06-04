@@ -7,10 +7,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using Alchemist.Jellyfin.Configuration;
+using dev.bybrooklyn.alchemist.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Minimal Alchemist HTTP client used by Jellyfin plugin services.
@@ -18,7 +18,7 @@ namespace Alchemist.Jellyfin.Services;
 public sealed class AlchemistClient : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient;
     private readonly ILogger<AlchemistClient> _logger;
 
     /// <summary>
@@ -26,7 +26,18 @@ public sealed class AlchemistClient : IDisposable
     /// </summary>
     /// <param name="logger">Logger.</param>
     public AlchemistClient(ILogger<AlchemistClient> logger)
+        : this(new HttpClient(), logger)
     {
+    }
+
+    /// <summary>
+    /// Initializes a new instance with a caller-provided HTTP client.
+    /// </summary>
+    /// <param name="httpClient">HTTP client.</param>
+    /// <param name="logger">Logger.</param>
+    public AlchemistClient(HttpClient httpClient, ILogger<AlchemistClient> logger)
+    {
+        _httpClient = httpClient;
         _logger = logger;
     }
 

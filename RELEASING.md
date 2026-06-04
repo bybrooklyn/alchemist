@@ -22,6 +22,8 @@ Then complete the release-candidate preflight:
 5. Complete the manual smoke checklist:
    - Docker fresh install over plain HTTP, including login and first dashboard load
    - One packaged binary install and first-run setup
+   - Manually install the attached Jellyfin plugin zip on `jellyfin/jellyfin:10.11.10`
+   - Verify connection test, dry-run event handling, enqueue, path translation, SSE completion handling, and containing-directory refresh
    - Upgrade from an existing `0.2.x` instance with data preserved
    - One successful encode, one skip, one intentional failure, and one notification test send
 6. Complete the Windows contributor follow-up on a real Windows machine:
@@ -29,12 +31,17 @@ Then complete the release-candidate preflight:
    - `just dev`
    - `just check`
    - Note that broader utility and release recipes remain Unix-first unless documented otherwise.
-7. Commit the release-prep changes and merge them to `main`.
+7. Commit the release-prep changes on `master`.
 8. Create the annotated tag `v<next-rc-version>` on the exact merged commit.
+9. Verify the `Release Smoke` workflow passes for Linux, Windows, macOS, Docker,
+   and the manually installed Jellyfin plugin artifact.
+10. Keep the RC in soak for at least seven days. Do not start another major
+    transcoding feature or promote stable while any new P1/P2 issue is open.
 
 ## Stable promotion
 
-Promote to stable only after the RC burn-in is complete and the same automated preflight is still green.
+Promote to stable only after a seven-day RC soak completes without a new P1/P2
+issue and the same automated preflight is still green.
 
 1. Run `just bump <stable-version>`.
 2. Update `CHANGELOG.md` and `docs/docs/changelog.md` for the stable cut.
@@ -45,7 +52,22 @@ Promote to stable only after the RC burn-in is complete and the same automated p
    - Packaged binary first-run
    - Upgrade from the most recent supported stable or RC instance
    - Encode, skip, failure, and notification verification
+   - Install the Jellyfin plugin from the stable repository feed and repeat the
+     integration behavior checks against `jellyfin/jellyfin:10.11.10`
 6. Re-run the Windows contributor verification checklist if Windows parity changed after the last RC.
 7. Confirm release notes, docs, and hardware-support wording match the tested release state.
-8. Merge the stable release commit to `main`.
+8. Commit the stable release changes on `master`.
 9. Create the annotated tag `v<stable-version>` on the exact merged commit.
+
+Stable releases publish the Jellyfin plugin zip, MD5, SHA-256, and update:
+
+```text
+https://raw.githubusercontent.com/bybrooklyn/alchemist/jellyfin-plugin-repo/manifest.json
+```
+
+RC releases attach the same manually installable plugin assets but must not
+update the stable feed.
+
+The Jellyfin release archive is named
+`dev.bybrooklyn.alchemist_<plugin-version>.zip`; its MD5 and SHA-256 checksum
+files use the same base name.

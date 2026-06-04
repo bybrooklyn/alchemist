@@ -1,11 +1,15 @@
 # Feedback Investigation
 
 Date: 2026-05-13
-Version context: 0.3.2-rc.3
+Updated: 2026-06-04
+Version context: stable 0.3.3, active 0.3.4
 
 This file records the clarified reports, what was found in the current codebase, likely causes, suggested fixes, and follow-up questions.
 
 ## 1. Appearance theme resets after leaving Settings
+
+**Status: RESOLVED in 0.3.3.** Global theme bootstrap now preserves the selected
+profile across pages while keeping the server preference authoritative.
 
 ### Clarified report
 When a user changes the color profile in Settings, the Settings page reflects the selected theme. After navigating back to Dashboard or any other non-Settings page, the UI returns to the default Helios Orange theme. Returning to Settings reapplies the saved user-selected theme.
@@ -36,6 +40,8 @@ Theme application is scoped to `AppearanceSettings` instead of being a global bo
 
 ## 2. About menu should match the System modal motion
 
+**Status: RESOLVED in 0.3.3.** About motion now follows the System modal style.
+
 ### Clarified report
 The About dialog currently feels like it fades in separately. It should visually fit the System modal pattern, including the same “morph into the screen” feel rather than a plain fade.
 
@@ -65,6 +71,9 @@ About and System modal animations were implemented independently instead of shar
 
 ## 3. Statistics page loads indefinitely
 
+**Status: RESOLVED in 0.3.3.** Stats loading now tolerates partial endpoint
+failures and the supporting queries are indexed.
+
 ### Clarified report
 The Statistics page shows a loading spinner indefinitely and never displays statistics content.
 
@@ -93,6 +102,9 @@ Most likely one of the stats requests is never completing, and the frontend wait
 - Approximately how many jobs/decisions are in your database?
 
 ## 4a. Setup screen is poor and needs research/interviews
+
+**Status: OPEN RESEARCH.** Do not begin a broad setup redesign until interviews
+cover first-time self-hosters, experienced operators, and Docker/NAS users.
 
 ### Clarified report
 The first-run setup experience is not good enough. More research and user interviews are needed before deciding the right redesign.
@@ -125,6 +137,9 @@ The first-run setup experience is not good enough. More research and user interv
 - What does “terrible” mean most here: confusing wording, visual design, too many choices, broken flow, bad defaults, or missing safety explanations?
 
 ## 4b. Settings page is unclear and inconsistent with AlchemistUI
+
+**Status: OPEN RESEARCH.** The current surface works, but its information
+architecture and visual consistency still need user-backed direction.
 
 ### Clarified report
 The Settings page mostly works, but it is unclear and not consistent enough with the rest of AlchemistUI.

@@ -1,0 +1,13 @@
+---
+name: Alchemist
+guid: c3637bc0-04ad-58b6-b11c-e840af0b1f6e
+version: 0.3.4.0
+targetAbi: 10.11.10.0
+framework: net9.0
+overview: Integrates Jellyfin with Alchemist using scoped access and path translations.
+description: Forward Jellyfin media events to Alchemist and refresh completed-job paths.
+changelog: First stable Alchemist Jellyfin plugin catalog release.
+category: General
+owner: bybrooklyn
+artifacts:
+  - dev.bybrooklyn.alchemist.dll

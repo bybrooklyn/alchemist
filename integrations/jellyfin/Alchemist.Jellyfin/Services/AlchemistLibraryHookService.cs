@@ -2,13 +2,13 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
-using Alchemist.Jellyfin.Configuration;
+using dev.bybrooklyn.alchemist.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Subscribes to Jellyfin library events and forwards eligible media paths to Alchemist.

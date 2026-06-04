@@ -1,6 +1,6 @@
 using System;
 
-namespace Alchemist.Jellyfin.Services;
+namespace dev.bybrooklyn.alchemist.Services;
 
 /// <summary>
 /// Stores runtime status shown on the Jellyfin plugin configuration page.

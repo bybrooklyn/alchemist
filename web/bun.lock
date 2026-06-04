@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "alchemist-web",
+      "name": "dev.bybrooklyn.alchemist",
       "dependencies": {
         "@astrojs/react": "5.0.5",
         "astro": "^6.3.4",

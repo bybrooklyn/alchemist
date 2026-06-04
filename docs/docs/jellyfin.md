@@ -87,8 +87,15 @@ The plugin path is intentionally conservative:
   filesystem paths.
 - Reverse path translations map Alchemist output paths back to Jellyfin-visible
   paths for narrow refreshes.
-- Live Jellyfin validation and release packaging are still required before
-  treating the plugin as a packaged release artifact.
+- The supported plugin target is Jellyfin `10.11.10`.
+- Stable plugin releases are published through
+  `https://raw.githubusercontent.com/bybrooklyn/alchemist/jellyfin-plugin-repo/manifest.json`.
+- Release candidates attach a manually installable plugin zip without changing
+  the stable repository feed.
+
+Add the stable manifest URL under **Dashboard → Plugins → Repositories**, then
+install Alchemist from Jellyfin's catalog. Keep dry-run mode enabled for the
+first events so path translations can be checked before enabling enqueue.
 
 ## Codec notes for Jellyfin clients
 

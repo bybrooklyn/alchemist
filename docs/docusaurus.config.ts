@@ -84,7 +84,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/bybrooklyn/alchemist/edit/main/docs/',
+          editUrl: 'https://github.com/bybrooklyn/alchemist/edit/master/docs/',
         },
         pages: false,
         blog: false,
@@ -198,7 +198,7 @@ const config: Config = {
             },
             {
               label: 'GPLv3 License',
-              href: 'https://github.com/bybrooklyn/alchemist/blob/main/LICENSE',
+              href: 'https://github.com/bybrooklyn/alchemist/blob/master/LICENSE',
             },
           ],
         },

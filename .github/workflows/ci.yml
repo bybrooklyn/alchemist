@@ -152,6 +152,26 @@ jobs:
       - name: Build
         run: npm run build
 
+  jellyfin-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build plugin
+        run: dotnet build integrations/jellyfin/Alchemist.Jellyfin/Alchemist.Jellyfin.csproj
+
+      - name: Test plugin
+        run: dotnet test integrations/jellyfin/Alchemist.Jellyfin.Tests/Alchemist.Jellyfin.Tests.csproj
+
   e2e-reliability:
     runs-on: ubuntu-latest
     timeout-minutes: 30

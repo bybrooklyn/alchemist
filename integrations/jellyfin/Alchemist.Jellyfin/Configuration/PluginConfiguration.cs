@@ -1,6 +1,6 @@
 using MediaBrowser.Model.Plugins;
 
-namespace Alchemist.Jellyfin.Configuration;
+namespace dev.bybrooklyn.alchemist.Configuration;
 
 /// <summary>
 /// Alchemist plugin configuration persisted by Jellyfin.

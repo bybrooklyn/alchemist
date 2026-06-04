@@ -62,7 +62,7 @@ If you want the fastest path to a running instance, use the published container:
 ```yaml
 services:
   alchemist:
-    image: ghcr.io/bybrooklyn/alchemist:nightly
+    image: ghcr.io/bybrooklyn/alchemist:latest
     container_name: alchemist
     ports:
       - "3000:3000"

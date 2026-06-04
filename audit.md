@@ -676,6 +676,10 @@ The same gap affects `::ffff:127.0.0.1`, `::ffff:10.x`, `::ffff:192.168.x`, etc.
 
 ### [P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler
 
+**Status: RESOLVED in 0.3.4-rc.1.** Login and global rate limiting now use the
+shared trusted-proxy-aware client-IP resolver, with regression coverage for
+spoofed headers and independent proxied-client login buckets.
+
 **Files:**
 - `src/server/auth.rs:26–37` — `login_handler` fetches client IP using `ConnectInfo(addr)`.
 - `src/server/middleware.rs:346–370` — `allow_login_attempt` uses the direct socket peer IP.
@@ -1130,6 +1134,10 @@ The full update archive lives in RAM before any verification or filesystem write
 
 ### [RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks
 
+**Status: RESOLVED in 0.3.4-rc.1.** IPv4-mapped IPv6 addresses are normalized
+before LAN classification, trusted-proxy comparison, forwarded-client
+resolution, and rate-limit keying.
+
 **Files:**
 - `src/server/middleware.rs:468–473` — `is_lan_ip` matches on IPv4/IPv6 branches directly.
 - `src/server/middleware.rs:449–466` — `is_trusted_peer` checks loopback and private lists directly.
@@ -1356,8 +1364,10 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 
 **The 2026-05-19 sweep (one P2, one RG):**
 
-1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **OPEN.** Vulnerable to reverse-proxy client IP leakage/DoS. Fix: extract the client IP correctly via the configured `trusted_proxies` headers instead of relying on AXUM `ConnectInfo`'s socket peer directly.
-2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **OPEN.** Bypasses LAN checks and fails trusted proxy verification under dual-stack configurations due to missing IPv4-mapped IPv6 address normalization. Fix: apply `to_ipv4_mapped()` normalization inside `is_lan_ip` and `is_trusted_peer`.
+1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **RESOLVED.** Login and global rate limiting now use the same trusted-proxy-aware resolved client IP.
+2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **RESOLVED.** IPv4-mapped IPv6 addresses are normalized across client resolution, LAN checks, proxy checks, and limiter keys.
+
+**The entire 2026-05-19 sweep is now closed in 0.3.4-rc.1.**
 
 **The 2026-05-29 sweep (review of the system self-test branch — two P2, one RG): all three RESOLVED and shipped in 0.3.3.**
 
@@ -1365,9 +1375,9 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 2. **[P2-35] `/api/system/selftest` un-gated subprocess + per-call migrations** — **RESOLVED.** Single-flighted on a new `selftest_in_progress` atomic (`429 SELFTEST_BUSY` when busy) with an RAII guard; pipeline extracted to `src/system/selftest.rs` and exposed as the `alchemist selftest` CLI.
 3. **[RG-11] Self-test 'Write Temp' failure leaks the temp directory** — **RESOLVED.** The Write-Temp error path now calls `cleanup_temp_dir` before returning.
 
-**Carried into 0.3.3 as known-open (documented in CHANGELOG.md "Known Issues"; fix planned for 0.3.4):**
+**Carried into 0.3.3 as known-open and resolved in 0.3.4-rc.1:**
 
-1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **OPEN.** `login_handler` rate-limits on the raw socket peer IP; behind a reverse proxy this rate-limits all clients together. Fix: extract the client IP via the configured `trusted_proxies` headers (`X-Forwarded-For`/`X-Real-IP`) instead of `ConnectInfo`'s socket peer.
-2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **OPEN.** `is_lan_ip`/`is_trusted_peer` don't normalize `::ffff:a.b.c.d`. Fix: apply `to_ipv4_mapped()` normalization in both.
+1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **RESOLVED.** Trusted proxy forwarding now produces per-client login limiter keys without accepting spoofed headers from untrusted peers.
+2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **RESOLVED.** `::ffff:a.b.c.d` is normalized before all relevant classification and keying.
 
 *Note: the stricter `400` on unknown `/api/jobs/table?status=` tokens (introduced in the same branch) was reviewed and deliberately **not** logged — it matches the convention P1-11's fix established for invalid status filters, and the current frontend only sends valid `JobState`s.*

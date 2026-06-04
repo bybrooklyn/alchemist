@@ -2,17 +2,24 @@
 
 *Forward-looking ideas for features, UX, integrations, and polish. Bugs go in `audit.md`.*
 
-**Last updated:** 2026-05-15
+**Last updated:** 2026-06-04
 
 ## Top picks
 
-1. [ENC-5] Sample-based VMAF pre-flight quality gate — bail on a bad profile before spending the full GPU hours, not after.
-2. [F-12] Smart crop / black-bar removal — reclaims bitrate currently spent encoding solid black letterbox bars.
-3. [POL-7] Human-readable FFmpeg error summaries — turns cryptic stderr dumps into actionable failure badges.
-4. [INT-9] Radarr/Sonarr tag synchronization — stops the ARRs from re-downloading files Alchemist already upgraded.
-5. [AUTO-5] Scheduled recurring library rescan — cheap with incremental scan; closes the watcher's coverage gaps.
+1. [AUTO-3] Disk-space guardrails — the default next feature after 0.3.4 if
+   real-user feedback does not reveal a higher-priority trust problem.
+2. [AUTO-5] Scheduled recurring library rescan — cheap with incremental scan;
+   closes the watcher's coverage gaps.
+3. [INT-9] Radarr/Sonarr tag synchronization — stops the ARRs from
+   re-downloading files Alchemist already upgraded.
+4. [ENC-5] Sample-based VMAF pre-flight quality gate — deferred until after the
+   0.3.4 trust/adoption cycle.
+5. [F-12] Smart crop / black-bar removal — deferred until after the 0.3.4
+   trust/adoption cycle.
 
-*Earlier picks still relevant: [OP-6] redacted diagnostics bundle, [OP-3] guided restore, [AUTO-3] disk-space guardrails.*
+*Recently shipped first cuts: [POL-7] human-readable FFmpeg errors, [OP-3]
+restore validation, and [OP-6] config validation. Setup and Settings redesign
+remain research items in `feedback.md`, not implementation-ready ideas.*
 
 ---
 

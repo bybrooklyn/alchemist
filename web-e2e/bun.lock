@@ -3,9 +3,9 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "alchemist-web-e2e",
+      "name": "dev.bybrooklyn.alchemist",
       "devDependencies": {
-        "@playwright/test": "latest",
+        "@playwright/test": "^1.60.0",
       },
     },
   },

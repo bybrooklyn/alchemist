@@ -18,7 +18,7 @@ use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::json;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -1852,6 +1852,40 @@ async fn login_returns_internal_error_when_user_lookup_fails()
 
     let response = app.clone().oneshot(request).await?;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxied_clients_have_independent_login_rate_limits()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, _app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let peer = Some(IpAddr::from([127, 0, 0, 1]));
+
+    let mut first_headers = axum::http::HeaderMap::new();
+    first_headers.insert(
+        "X-Forwarded-For",
+        header::HeaderValue::from_static("203.0.113.20"),
+    );
+    let Some(first_client) = middleware::resolved_client_ip(peer, &first_headers, &[]) else {
+        panic!("trusted proxy should resolve first client");
+    };
+
+    for _ in 0..middleware::LOGIN_RATE_LIMIT_CAPACITY as usize {
+        assert!(middleware::allow_login_attempt(&state, first_client).await);
+    }
+    assert!(!middleware::allow_login_attempt(&state, first_client).await);
+
+    let mut second_headers = axum::http::HeaderMap::new();
+    second_headers.insert(
+        "X-Forwarded-For",
+        header::HeaderValue::from_static("203.0.113.21"),
+    );
+    let Some(second_client) = middleware::resolved_client_ip(peer, &second_headers, &[]) else {
+        panic!("trusted proxy should resolve second client");
+    };
+    assert!(middleware::allow_login_attempt(&state, second_client).await);
 
     cleanup_paths(&[config_path, db_path]);
     Ok(())

@@ -74,7 +74,7 @@ For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup
 docker pull ghcr.io/bybrooklyn/alchemist:nightly
 ```
 
-Published on every push to `main` that passes Rust checks.
+Published on every push to `master` that passes Rust checks.
 Version format: `0.3.0-dev.3-nightly+abc1234`.
 Stable: `ghcr.io/bybrooklyn/alchemist:latest`
 
