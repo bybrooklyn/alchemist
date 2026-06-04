@@ -61,7 +61,7 @@ You should see at least:
 - `h264_nvenc`
 - `hevc_nvenc`
 
-On RTX 30 / 40 series, you should also see `av1_nvenc`. If
+On RTX 40 (Ada) series, you should also see `av1_nvenc`. If
 the list is empty, FFmpeg in that environment was not
 compiled with NVENC. For Docker, use the official Alchemist
 image — it ships FFmpeg with NVENC enabled. For a binary
@@ -86,8 +86,9 @@ Common probe-level failures:
 - **"No capable devices found"** — GPU isn't visible to the
   process (go back to step 1).
 - **`av1_nvenc` fails but `hevc_nvenc` / `h264_nvenc`
-  succeed** — your card is pre-Ampere. AV1 NVENC requires
-  RTX 30 or RTX 40 series. Target HEVC or H.264 instead, or
+  succeed** — your card is pre-Ada. AV1 NVENC requires an
+  RTX 40 (Ada) card; RTX 30 (Ampere) and older decode AV1
+  but cannot encode it. Target HEVC or H.264 instead, or
   see [Codecs](/codecs).
 
 ## 4. Is the right vendor selected?

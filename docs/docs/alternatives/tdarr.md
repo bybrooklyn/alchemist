@@ -155,8 +155,10 @@ on the same scope. See [Installation](/installation) for the
 Both can target AV1. Alchemist treats AV1 as a first-class
 output codec in its [planner](/planner) and will pick an
 AV1-capable hardware encoder when one is present — av1_nvenc
-(RTX 30/40), av1_qsv (Intel 12th gen+), av1_vaapi, av1_amf,
-or av1_videotoolbox (Apple M3+). See [AV1](/av1).
+(RTX 40 / Ada), av1_qsv (Intel Arc / Meteor Lake+), or
+av1_vaapi / av1_amf (AMD RDNA 3+). macOS has no AV1 hardware
+encoder, so AV1 on a Mac uses the CPU (libsvtav1). See
+[AV1](/av1).
 
 **Does Alchemist have a flow editor?**
 No. Configuration is declarative — a TOML file plus

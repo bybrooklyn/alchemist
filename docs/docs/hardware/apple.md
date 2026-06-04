@@ -18,7 +18,11 @@ for production encoding.
 |---------|-------|------|-----|------|
 | Intel + T2 | Yes | Yes | No | HEVC depends on T2-capable hardware |
 | M1 / M2 | Yes | Yes | No | Native media engines |
-| M3+ | Yes | Yes | Yes | AV1 encode support |
+| M3+ | Yes | Yes | No | Decodes AV1 in hardware, but no Mac chip can encode AV1 |
+
+No Apple Silicon has an AV1 hardware encoder — VideoToolbox
+exposes no AV1 encoder. AV1 output on macOS always uses the
+CPU path (`libsvtav1`).
 
 ## Install path
 
@@ -33,7 +37,10 @@ Expected encoders include:
 
 - `h264_videotoolbox`
 - `hevc_videotoolbox`
-- `av1_videotoolbox` on M3+
+
+There is no `av1_videotoolbox` encoder — VideoToolbox cannot
+encode AV1 on any Mac. For AV1 output, Alchemist uses the CPU
+encoder (`libsvtav1`).
 
 ## Critical probe note
 
