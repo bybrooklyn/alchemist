@@ -747,6 +747,14 @@ pub struct SystemConfig {
     pub conversion_upload_limit_gb: u32,
     #[serde(default = "default_conversion_download_retention_hours")]
     pub conversion_download_retention_hours: u32,
+    /// Minimum free space (GiB) required on a job's output filesystem before
+    /// the engine starts it. When free space falls below this, the engine
+    /// holds queued jobs (they stay queued and retry) instead of starting an
+    /// encode that could fail by filling the disk mid-run. Set to 0 to disable
+    /// the guardrail. Fails open: if free space cannot be determined for a
+    /// path, the job is allowed to proceed. (AUTO-3)
+    #[serde(default = "default_min_free_space_gb")]
+    pub min_free_space_gb: u32,
     #[serde(default = "default_telemetry")]
     pub enable_telemetry: bool,
     #[serde(default = "default_log_retention_days")]
@@ -805,6 +813,10 @@ fn default_telemetry() -> bool {
     false
 }
 
+fn default_min_free_space_gb() -> u32 {
+    10
+}
+
 fn default_conversion_upload_limit_gb() -> u32 {
     8
 }
@@ -841,6 +853,7 @@ impl Default for SystemConfig {
             monitoring_poll_interval: default_poll_interval(),
             conversion_upload_limit_gb: default_conversion_upload_limit_gb(),
             conversion_download_retention_hours: default_conversion_download_retention_hours(),
+            min_free_space_gb: default_min_free_space_gb(),
             enable_telemetry: default_telemetry(),
             log_retention_days: default_log_retention_days(),
             metrics_enabled: false,
@@ -965,6 +978,7 @@ impl Default for Config {
                 monitoring_poll_interval: default_poll_interval(),
                 conversion_upload_limit_gb: default_conversion_upload_limit_gb(),
                 conversion_download_retention_hours: default_conversion_download_retention_hours(),
+                min_free_space_gb: default_min_free_space_gb(),
                 enable_telemetry: default_telemetry(),
                 log_retention_days: default_log_retention_days(),
                 metrics_enabled: false,
