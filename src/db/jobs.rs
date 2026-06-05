@@ -11,6 +11,22 @@ use super::Db;
 use super::timed_query;
 use super::types::*;
 
+/// Upsert used by every enqueue path (single watcher insert and batched scan
+/// insert). Keeping it in one place ensures the `ON CONFLICT` change-detection
+/// semantics never drift between the two. Bind order:
+/// `(input_path, output_path, mtime_hash, source_device)`.
+const ENQUEUE_JOB_UPSERT_SQL: &str =
+    "INSERT INTO jobs (input_path, output_path, status, mtime_hash, source_device, updated_at)
+     VALUES (?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(input_path) DO UPDATE SET
+     output_path = excluded.output_path,
+     status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
+     archived = 0,
+     mtime_hash = excluded.mtime_hash,
+     source_device = excluded.source_device,
+     updated_at = CURRENT_TIMESTAMP
+     WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path";
+
 impl Db {
     pub async fn reset_interrupted_jobs(&self) -> Result<u64> {
         let result = sqlx::query(
@@ -44,34 +60,47 @@ impl Db {
             .to_str()
             .ok_or_else(|| crate::error::AlchemistError::Config("Invalid output path".into()))?;
 
-        // Stable mtime representation (seconds + nanos)
-        let mtime_hash = match mtime.duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
-            Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
-        };
-
+        let mtime_hash = mtime_hash_string(mtime);
         let source_device = crate::system::device_id::device_id_for_async(input_path).await;
 
-        let result = sqlx::query(
-            "INSERT INTO jobs (input_path, output_path, status, mtime_hash, source_device, updated_at)
-             VALUES (?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)
-             ON CONFLICT(input_path) DO UPDATE SET
-             output_path = excluded.output_path,
-             status = CASE WHEN mtime_hash != excluded.mtime_hash THEN 'queued' ELSE status END,
-             archived = 0,
-             mtime_hash = excluded.mtime_hash,
-             source_device = excluded.source_device,
-             updated_at = CURRENT_TIMESTAMP
-             WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path",
-        )
-        .bind(input_str)
-        .bind(output_str)
-        .bind(mtime_hash)
-        .bind(source_device)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query(ENQUEUE_JOB_UPSERT_SQL)
+            .bind(input_str)
+            .bind(output_str)
+            .bind(mtime_hash)
+            .bind(source_device)
+            .execute(&self.pool)
+            .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Insert/upsert a batch of already-resolved jobs inside a single
+    /// transaction. The library scan path resolves discovered files (skip
+    /// checks, output paths, device ids) up front, then writes them here in
+    /// chunks — so a large scan no longer issues thousands of individual write
+    /// transactions that monopolize the shared connection pool. Returns the
+    /// number of rows actually inserted or updated, matching `enqueue_job`'s
+    /// `changed` semantics (no-op upserts are not counted).
+    pub async fn enqueue_jobs_batch(&self, jobs: &[PreparedEnqueue]) -> Result<u64> {
+        if jobs.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let mut changed: u64 = 0;
+        for job in jobs {
+            let result = sqlx::query(ENQUEUE_JOB_UPSERT_SQL)
+                .bind(&job.input_path)
+                .bind(&job.output_path)
+                .bind(&job.mtime_hash)
+                .bind(&job.source_device)
+                .execute(&mut *tx)
+                .await?;
+            changed += result.rows_affected();
+        }
+        tx.commit().await?;
+
+        Ok(changed)
     }
 
     pub async fn add_job(&self, job: Job) -> Result<()> {
