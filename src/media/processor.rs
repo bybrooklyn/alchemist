@@ -82,12 +82,45 @@ impl Agent {
         .await
         .map_err(|e| crate::error::AlchemistError::Unknown(format!("scan task failed: {}", e)))?;
 
-        let pipeline = self.pipeline();
+        // Fetch file settings once for the whole scan instead of re-reading
+        // them per file, then resolve files up front and write them in chunked
+        // transactions instead of one transaction per file. Between chunks we
+        // yield so interactive requests (the per-request auth session lookup,
+        // jobs list, settings save) can use the connection pool rather than
+        // starving behind the scan's writer.
+        let settings = self.db.get_file_settings().await.unwrap_or_else(|e| {
+            error!("Failed to fetch file settings, using defaults: {}", e);
+            crate::media::pipeline::default_file_settings()
+        });
 
+        const ENQUEUE_CHUNK: usize = 500;
+        let mut buffer: Vec<crate::db::PreparedEnqueue> = Vec::with_capacity(ENQUEUE_CHUNK);
         for scanned_file in files {
             let path = scanned_file.path.clone();
-            if let Err(e) = pipeline.enqueue_discovered(scanned_file).await {
-                error!("Failed to enqueue job for {:?}: {}", path, e);
+            match crate::media::pipeline::resolve_discovered_for_enqueue(
+                &self.db,
+                &scanned_file,
+                &settings,
+            )
+            .await
+            {
+                Ok(Some(prepared)) => {
+                    buffer.push(prepared);
+                    if buffer.len() >= ENQUEUE_CHUNK {
+                        if let Err(e) = self.db.enqueue_jobs_batch(&buffer).await {
+                            error!("Failed to enqueue scanned job batch: {}", e);
+                        }
+                        buffer.clear();
+                        tokio::task::yield_now().await;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => error!("Failed to enqueue job for {:?}: {}", path, e),
+            }
+        }
+        if !buffer.is_empty() {
+            if let Err(e) = self.db.enqueue_jobs_batch(&buffer).await {
+                error!("Failed to enqueue scanned job batch: {}", e);
             }
         }
 

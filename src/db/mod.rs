@@ -50,6 +50,17 @@ pub(crate) struct NotificationTargetSchemaFlags {
     has_target_type_v2: bool,
 }
 
+/// Maximum SQLite connections in the pool.
+///
+/// WAL mode (enabled in `Db::new`) supports one writer plus multiple
+/// concurrent readers. A single pooled connection serialized *all* database
+/// access — including the per-request session lookup in the auth middleware —
+/// so a large library scan (thousands of per-file inserts) would starve every
+/// interactive request (jobs list, settings save) until it finished. A small
+/// pool lets reads proceed alongside the scan's writer; `busy_timeout`
+/// (also set in `Db::new`) absorbs the brief moments two writers contend.
+const DB_MAX_CONNECTIONS: u32 = 5;
+
 #[derive(Clone, Debug)]
 pub struct Db {
     pub(crate) pool: SqlitePool,
@@ -68,7 +79,7 @@ impl Db {
             .busy_timeout(Duration::from_secs(5));
 
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(DB_MAX_CONNECTIONS)
             .connect_with(options)
             .await?;
         info!(

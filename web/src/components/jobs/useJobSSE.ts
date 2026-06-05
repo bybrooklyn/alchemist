@@ -25,6 +25,21 @@ export function useJobSSE({
         let reconnectTimeout: number | null = null;
         let reconnectAttempts = 0;
 
+        // Coalesce job-list refreshes. Status/decision/lagged events arrive in
+        // bursts during a large library scan (thousands of jobs analyzed back
+        // to back); firing a full `/api/jobs` refetch per event hammered the
+        // backend and froze the UI. Throttle to at most one refetch per window,
+        // with a trailing fire so the final state is always captured.
+        const JOBS_REFRESH_THROTTLE_MS = 300;
+        let jobsRefreshTimer: number | null = null;
+        const scheduleJobsRefresh = () => {
+            if (jobsRefreshTimer !== null) return;
+            jobsRefreshTimer = window.setTimeout(() => {
+                jobsRefreshTimer = null;
+                void fetchJobsRef.current();
+            }, JOBS_REFRESH_THROTTLE_MS);
+        };
+
         const getReconnectDelay = () => {
             const baseDelay = 1000;
             const maxDelay = 30000;
@@ -69,7 +84,7 @@ export function useJobSSE({
                             }
                             : prev
                     );
-                    void fetchJobsRef.current();
+                    scheduleJobsRefresh();
                     if (focusedJobIdRef.current === job_id) {
                         void refreshFocusedJobRef.current();
                     }
@@ -106,12 +121,14 @@ export function useJobSSE({
                 } catch {
                     /* ignore malformed */
                 }
-                void fetchJobsRef.current();
+                scheduleJobsRefresh();
             });
 
             eventSource.addEventListener("lagged", () => {
-                void fetchJobsRef.current();
-                void refreshFocusedJobRef.current();
+                scheduleJobsRefresh();
+                if (focusedJobIdRef.current !== null) {
+                    void refreshFocusedJobRef.current();
+                }
             });
 
             eventSource.onerror = () => {
@@ -131,6 +148,9 @@ export function useJobSSE({
             eventSource?.close();
             if (reconnectTimeout !== null) {
                 window.clearTimeout(reconnectTimeout);
+            }
+            if (jobsRefreshTimer !== null) {
+                window.clearTimeout(jobsRefreshTimer);
             }
         };
     }, []);

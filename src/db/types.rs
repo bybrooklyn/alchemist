@@ -1,6 +1,30 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// A single row prepared for insertion by the scan/enqueue path.
+///
+/// Resolving a discovered file (skip checks, output path, device id) is done
+/// up front so the actual database write can be batched into one transaction
+/// per chunk — see [`Db::enqueue_jobs_batch`](super::Db::enqueue_jobs_batch).
+#[derive(Debug, Clone)]
+pub struct PreparedEnqueue {
+    pub input_path: String,
+    pub output_path: String,
+    pub mtime_hash: String,
+    pub source_device: Option<String>,
+}
+
+/// Stable string representation of a file mtime (`seconds.nanos`), used as the
+/// `mtime_hash` change marker on jobs. Shared by the single-row and batched
+/// enqueue paths so the two never drift.
+pub fn mtime_hash_string(mtime: SystemTime) -> String {
+    match mtime.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
+        Err(_) => "0.0".to_string(), // Fallback for very old files/clocks
+    }
+}
 
 #[derive(
     Debug,

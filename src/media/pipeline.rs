@@ -1154,9 +1154,32 @@ pub async fn enqueue_discovered_with_db(
         }
     };
 
-    if let Some(reason) = skip_reason_for_discovered_path(db, &discovered.path, &settings).await? {
+    match resolve_discovered_for_enqueue(db, &discovered, &settings).await? {
+        Some(prepared) => Ok(db
+            .enqueue_jobs_batch(std::slice::from_ref(&prepared))
+            .await?
+            > 0),
+        None => Ok(false),
+    }
+}
+
+/// Resolve a discovered file into a row ready for insertion, or `None` if it
+/// should be skipped (matches a generated-output pattern, already tracked as a
+/// job output, or its output already exists and `replace_strategy = keep`).
+///
+/// Callers fetch `settings` once and reuse it across many files, avoiding the
+/// per-file `get_file_settings` round-trip the old per-file path incurred. The
+/// returned [`crate::db::PreparedEnqueue`] is written via
+/// [`crate::db::Db::enqueue_jobs_batch`], letting the scan path batch a whole
+/// chunk of files into a single write transaction.
+pub async fn resolve_discovered_for_enqueue(
+    db: &crate::db::Db,
+    discovered: &DiscoveredMedia,
+    settings: &crate::db::FileSettings,
+) -> Result<Option<crate::db::PreparedEnqueue>> {
+    if let Some(reason) = skip_reason_for_discovered_path(db, &discovered.path, settings).await? {
         tracing::info!("Skipping {:?} ({})", discovered.path, reason);
-        return Ok(false);
+        return Ok(None);
     }
 
     let output_path =
@@ -1166,11 +1189,33 @@ pub async fn enqueue_discovered_with_db(
             "Skipping {:?} (output exists, replace_strategy = keep)",
             discovered.path
         );
-        return Ok(false);
+        return Ok(None);
     }
 
-    db.enqueue_job(&discovered.path, &output_path, discovered.mtime)
-        .await
+    if discovered.path == output_path {
+        return Err(crate::error::AlchemistError::Config(
+            "Output path matches input path".into(),
+        ));
+    }
+
+    let input_path = discovered
+        .path
+        .to_str()
+        .ok_or_else(|| crate::error::AlchemistError::Config("Invalid input path".into()))?
+        .to_string();
+    let output_path_str = output_path
+        .to_str()
+        .ok_or_else(|| crate::error::AlchemistError::Config("Invalid output path".into()))?
+        .to_string();
+
+    let source_device = crate::system::device_id::device_id_for_async(&discovered.path).await;
+
+    Ok(Some(crate::db::PreparedEnqueue {
+        input_path,
+        output_path: output_path_str,
+        mtime_hash: crate::db::mtime_hash_string(discovered.mtime),
+        source_device,
+    }))
 }
 
 pub fn default_file_settings() -> crate::db::FileSettings {

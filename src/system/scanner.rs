@@ -185,23 +185,54 @@ impl LibraryScanner {
                 s.current_folder = Some("Processing files...".to_string());
             }
 
-            let mut added = 0;
+            // Fetch file settings once, then resolve files and write them in
+            // chunked transactions. This avoids the per-file settings read and
+            // the thousands of individual write transactions that previously
+            // monopolized the connection pool and stalled the UI during a large
+            // library scan. We yield between chunks so interactive requests can
+            // use the pool alongside the scan's writer.
+            let settings = db.get_file_settings().await.unwrap_or_else(|e| {
+                error!(
+                    "Failed to fetch file settings during scan, using defaults: {}",
+                    e
+                );
+                crate::media::pipeline::default_file_settings()
+            });
+
+            let mut added: usize = 0;
+            const ENQUEUE_CHUNK: usize = 500;
+            let mut buffer: Vec<crate::db::PreparedEnqueue> = Vec::with_capacity(ENQUEUE_CHUNK);
             for file in all_scanned {
-                match crate::media::pipeline::enqueue_discovered_with_db(&db, file).await {
-                    Ok(changed) => {
-                        if changed {
-                            added += 1;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to add job during scan: {}", e);
-                    }
+                match crate::media::pipeline::resolve_discovered_for_enqueue(&db, &file, &settings)
+                    .await
+                {
+                    Ok(Some(prepared)) => buffer.push(prepared),
+                    Ok(None) => {}
+                    Err(e) => error!("Failed to add job during scan: {}", e),
                 }
 
-                if added % 10 == 0 {
-                    let mut s = scanner_self.lock().await;
-                    s.files_added = added;
+                if buffer.len() >= ENQUEUE_CHUNK {
+                    match db.enqueue_jobs_batch(&buffer).await {
+                        Ok(changed) => added += changed as usize,
+                        Err(e) => error!("Failed to add job batch during scan: {}", e),
+                    }
+                    buffer.clear();
+                    {
+                        let mut s = scanner_self.lock().await;
+                        s.files_added = added;
+                    }
+                    tokio::task::yield_now().await;
                 }
+            }
+            if !buffer.is_empty() {
+                match db.enqueue_jobs_batch(&buffer).await {
+                    Ok(changed) => added += changed as usize,
+                    Err(e) => error!("Failed to add job batch during scan: {}", e),
+                }
+            }
+            {
+                let mut s = scanner_self.lock().await;
+                s.files_added = added;
             }
 
             // Record completion timestamps only for roots that finished
