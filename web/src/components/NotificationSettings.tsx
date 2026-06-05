@@ -59,6 +59,7 @@ const EVENT_OPTIONS = [
     "encode.failed",
     "scan.completed",
     "engine.idle",
+    "disk.space_low",
     "daily.summary",
 ];
 

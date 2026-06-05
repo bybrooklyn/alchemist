@@ -99,7 +99,9 @@ keys:
 
 Supported target events: `encode.queued`,
 `encode.started`, `encode.completed`, `encode.failed`,
-`scan.completed`, `engine.idle`, and `daily.summary`.
+`scan.completed`, `engine.idle`, `disk.space_low`, and
+`daily.summary`. `disk.space_low` fires when the disk-space
+guardrail holds jobs (see `min_free_space_gb`).
 
 ## `[files]`
 

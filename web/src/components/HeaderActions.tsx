@@ -11,6 +11,8 @@ interface EngineStatus {
     manual_paused: boolean;
     scheduler_paused: boolean;
     draining: boolean;
+    disk_blocked?: boolean;
+    disk_block_reason?: string | null;
     mode: "background" | "balanced" | "throughput";
     concurrent_limit: number;
     is_manual_override: boolean;
@@ -45,12 +47,23 @@ export default function HeaderActions() {
             label: "Stopping",
             labelColor: "text-helios-solar",
         },
+        disk: {
+            dot: "bg-helios-solar animate-pulse",
+            label: "Low disk",
+            labelColor: "text-helios-solar",
+        },
     } as const;
 
     const status = engineStatus?.status ?? "paused";
     const isIdle = status === "running" && (stats?.active ?? 0) === 0;
     const displayStatus: keyof typeof statusConfig =
-        status === "draining" ? "draining" : isIdle ? "idle" : status;
+        status === "draining"
+            ? "draining"
+            : engineStatus?.disk_blocked
+              ? "disk"
+              : isIdle
+                ? "idle"
+                : status;
 
     const refreshEngineStatus = async () => {
         const data = await apiJson<EngineStatus>("/api/engine/status");
@@ -158,7 +171,15 @@ export default function HeaderActions() {
             <div className="flex items-center gap-2">
 
                 {/* Status pill */}
-                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/60">
+                <div
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-helios-line/20 bg-helios-surface-soft/60"
+                    title={
+                        engineStatus?.disk_blocked
+                            ? (engineStatus.disk_block_reason ??
+                              "Low disk space — the engine is holding jobs until space is reclaimed.")
+                            : undefined
+                    }
+                >
                     <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusConfig[displayStatus].dot}`} />
                     <span className={`text-xs font-medium ${statusConfig[displayStatus].labelColor}`}>
                         {statusConfig[displayStatus].label}

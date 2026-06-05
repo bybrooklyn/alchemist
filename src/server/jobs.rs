@@ -974,6 +974,8 @@ pub(crate) async fn engine_status_handler(State(state): State<Arc<AppState>>) ->
         "manual_paused": state.agent.is_manual_paused(),
         "scheduler_paused": state.agent.is_scheduler_paused(),
         "draining": state.agent.is_draining(),
+        "disk_blocked": state.agent.is_disk_blocked(),
+        "disk_block_reason": state.agent.disk_block_reason(),
         "mode": state.agent.current_mode().await.as_str(),
         "concurrent_limit": state.agent.concurrent_jobs_limit(),
         "is_manual_override": state.agent.is_manual_override(),
