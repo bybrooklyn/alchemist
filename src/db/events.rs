@@ -45,6 +45,12 @@ pub enum SystemEvent {
     EngineIdle,
     EngineStatusChanged,
     HardwareStateChanged,
+    /// AUTO-3: the disk-space guardrail engaged — the engine is holding jobs
+    /// because the next job's output filesystem is below the free-space minimum.
+    /// Carries the human-readable reason for the notification path.
+    DiskSpaceLow {
+        reason: String,
+    },
 }
 
 pub struct EventChannels {

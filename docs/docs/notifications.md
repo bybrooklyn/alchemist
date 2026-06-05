@@ -69,6 +69,7 @@ Targets can subscribe independently to:
 - `encode.failed`
 - `scan.completed`
 - `engine.idle`
+- `disk.space_low`
 - `daily.summary`
 
 Daily summaries are opt-in per target and use the global

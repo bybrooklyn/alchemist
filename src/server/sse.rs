@@ -123,6 +123,10 @@ pub(crate) fn sse_message_for_system_event(event: &SystemEvent) -> SseMessage {
             event_name: "hardware_state_changed",
             data: "{}".to_string(),
         },
+        SystemEvent::DiskSpaceLow { reason } => SseMessage {
+            event_name: "disk_space_low",
+            data: serde_json::json!({ "reason": reason }).to_string(),
+        },
     }
 }
 

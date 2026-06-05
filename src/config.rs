@@ -488,15 +488,17 @@ pub const NOTIFICATION_EVENT_ENCODE_COMPLETED: &str = "encode.completed";
 pub const NOTIFICATION_EVENT_ENCODE_FAILED: &str = "encode.failed";
 pub const NOTIFICATION_EVENT_SCAN_COMPLETED: &str = "scan.completed";
 pub const NOTIFICATION_EVENT_ENGINE_IDLE: &str = "engine.idle";
+pub const NOTIFICATION_EVENT_DISK_SPACE_LOW: &str = "disk.space_low";
 pub const NOTIFICATION_EVENT_DAILY_SUMMARY: &str = "daily.summary";
 
-pub const NOTIFICATION_EVENTS: [&str; 7] = [
+pub const NOTIFICATION_EVENTS: [&str; 8] = [
     NOTIFICATION_EVENT_ENCODE_QUEUED,
     NOTIFICATION_EVENT_ENCODE_STARTED,
     NOTIFICATION_EVENT_ENCODE_COMPLETED,
     NOTIFICATION_EVENT_ENCODE_FAILED,
     NOTIFICATION_EVENT_SCAN_COMPLETED,
     NOTIFICATION_EVENT_ENGINE_IDLE,
+    NOTIFICATION_EVENT_DISK_SPACE_LOW,
     NOTIFICATION_EVENT_DAILY_SUMMARY,
 ];
 
@@ -508,6 +510,7 @@ fn normalize_notification_event(event: &str) -> Option<&'static str> {
         "failed" | "encode.failed" => Some(NOTIFICATION_EVENT_ENCODE_FAILED),
         "scan.completed" => Some(NOTIFICATION_EVENT_SCAN_COMPLETED),
         "engine.idle" => Some(NOTIFICATION_EVENT_ENGINE_IDLE),
+        "disk.space_low" => Some(NOTIFICATION_EVENT_DISK_SPACE_LOW),
         "daily.summary" => Some(NOTIFICATION_EVENT_DAILY_SUMMARY),
         _ => None,
     }

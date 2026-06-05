@@ -95,13 +95,17 @@ impl Agent {
             *current = Some(reason.clone());
         }
         // Only log/notify on the transition into the blocked state so a low
-        // disk doesn't spam the log on every loop iteration.
+        // disk doesn't spam the log (or notifications) on every loop iteration.
         if !self.disk_blocked.swap(true, Ordering::SeqCst) {
             warn!("Engine holding jobs — disk guardrail: {reason}");
             let _ = self
                 .event_channels
                 .system
                 .send(SystemEvent::EngineStatusChanged);
+            let _ = self
+                .event_channels
+                .system
+                .send(SystemEvent::DiskSpaceLow { reason });
         }
     }
 

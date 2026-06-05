@@ -106,6 +106,9 @@ enum NotifiableEvent {
     },
     ScanCompleted,
     EngineIdle,
+    DiskSpaceLow {
+        reason: String,
+    },
 }
 
 fn event_key(event: &NotifiableEvent) -> Option<&'static str> {
@@ -123,6 +126,9 @@ fn event_key(event: &NotifiableEvent) -> Option<&'static str> {
         },
         NotifiableEvent::ScanCompleted => Some(crate::config::NOTIFICATION_EVENT_SCAN_COMPLETED),
         NotifiableEvent::EngineIdle => Some(crate::config::NOTIFICATION_EVENT_ENGINE_IDLE),
+        NotifiableEvent::DiskSpaceLow { .. } => {
+            Some(crate::config::NOTIFICATION_EVENT_DISK_SPACE_LOW)
+        }
     }
 }
 
@@ -266,6 +272,14 @@ impl NotificationManager {
                     Ok(SystemEvent::EngineIdle) => {
                         if let Err(e) = manager_clone
                             .handle_event(NotifiableEvent::EngineIdle)
+                            .await
+                        {
+                            error!("Notification error: {}", e);
+                        }
+                    }
+                    Ok(SystemEvent::DiskSpaceLow { reason }) => {
+                        if let Err(e) = manager_clone
+                            .handle_event(NotifiableEvent::DiskSpaceLow { reason })
                             .await
                         {
                             error!("Notification error: {}", e);
@@ -630,6 +644,11 @@ impl NotificationManager {
             NotifiableEvent::EngineIdle => {
                 "The engine is idle. There are no active jobs and no queued work ready to run."
                     .to_string()
+            }
+            NotifiableEvent::DiskSpaceLow { reason } => {
+                format!(
+                    "Low disk space — the engine is holding jobs until space is reclaimed. {reason}"
+                )
             }
         }
     }
