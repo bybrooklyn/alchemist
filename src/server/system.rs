@@ -44,6 +44,8 @@ pub(crate) struct ProcessorStatusResponse {
     manual_paused: bool,
     scheduler_paused: bool,
     draining: bool,
+    disk_blocked: bool,
+    disk_block_reason: Option<String>,
     active_jobs: i64,
     concurrent_limit: usize,
 }
@@ -171,6 +173,8 @@ pub(crate) async fn processor_status_handler(State(state): State<Arc<AppState>>)
     let manual_paused = state.agent.is_manual_paused();
     let scheduler_paused = state.agent.is_scheduler_paused();
     let draining = state.agent.is_draining();
+    let disk_blocked = state.agent.is_disk_blocked();
+    let disk_block_reason = state.agent.disk_block_reason();
     let active_jobs = stats.active;
 
     let (blocked_reason, message) = if manual_paused {
@@ -188,6 +192,14 @@ pub(crate) async fn processor_status_handler(State(state): State<Arc<AppState>>)
             Some("draining"),
             "The engine is draining and will not start new queued jobs.".to_string(),
         )
+    } else if disk_blocked {
+        (
+            Some("disk_guardrail"),
+            match &disk_block_reason {
+                Some(reason) => format!("The engine is holding jobs — {reason}."),
+                None => "The engine is holding jobs because free disk space is low.".to_string(),
+            },
+        )
     } else if active_jobs >= concurrent_limit as i64 {
         (
             Some("workers_busy"),
@@ -203,6 +215,8 @@ pub(crate) async fn processor_status_handler(State(state): State<Arc<AppState>>)
         manual_paused,
         scheduler_paused,
         draining,
+        disk_blocked,
+        disk_block_reason,
         active_jobs,
         concurrent_limit,
     })

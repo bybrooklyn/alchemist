@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct Agent {
     db: Arc<Db>,
@@ -30,6 +30,10 @@ pub struct Agent {
     idle_notified: Arc<AtomicBool>,
     analyzing_boot: Arc<AtomicBool>,
     analysis_semaphore: Arc<tokio::sync::Semaphore>,
+    /// AUTO-3 disk guardrail: set when the engine is holding jobs because the
+    /// next job's output filesystem is below the configured free-space minimum.
+    disk_blocked: Arc<AtomicBool>,
+    disk_block_reason: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Agent {
@@ -66,6 +70,96 @@ impl Agent {
             idle_notified: Arc::new(AtomicBool::new(false)),
             analyzing_boot: Arc::new(AtomicBool::new(false)),
             analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(concurrent_jobs.clamp(1, 4))),
+            disk_blocked: Arc::new(AtomicBool::new(false)),
+            disk_block_reason: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Whether the engine is currently holding jobs because of the AUTO-3 disk
+    /// guardrail (the next queued job's output filesystem is below the
+    /// configured free-space minimum).
+    pub fn is_disk_blocked(&self) -> bool {
+        self.disk_blocked.load(Ordering::SeqCst)
+    }
+
+    /// The human-readable reason the disk guardrail is engaged, if it is.
+    pub fn disk_block_reason(&self) -> Option<String> {
+        self.disk_block_reason
+            .lock()
+            .ok()
+            .and_then(|reason| reason.clone())
+    }
+
+    fn engage_disk_block(&self, reason: String) {
+        if let Ok(mut current) = self.disk_block_reason.lock() {
+            *current = Some(reason.clone());
+        }
+        // Only log/notify on the transition into the blocked state so a low
+        // disk doesn't spam the log on every loop iteration.
+        if !self.disk_blocked.swap(true, Ordering::SeqCst) {
+            warn!("Engine holding jobs — disk guardrail: {reason}");
+            let _ = self
+                .event_channels
+                .system
+                .send(SystemEvent::EngineStatusChanged);
+        }
+    }
+
+    fn clear_disk_block(&self) {
+        if self.disk_blocked.swap(false, Ordering::SeqCst) {
+            if let Ok(mut current) = self.disk_block_reason.lock() {
+                *current = None;
+            }
+            info!("Disk guardrail cleared — resuming job starts.");
+            let _ = self
+                .event_channels
+                .system
+                .send(SystemEvent::EngineStatusChanged);
+        }
+    }
+
+    /// AUTO-3: returns `true` when the engine should hold this iteration because
+    /// the next queued job's output filesystem has less than
+    /// `system.min_free_space_gb` free. Fails open — a disabled guardrail, no
+    /// queued job, or an undeterminable free-space value never holds.
+    async fn disk_guardrail_should_hold(&self) -> bool {
+        let min_gb = self.config.read().await.system.min_free_space_gb;
+        if min_gb == 0 {
+            self.clear_disk_block();
+            return false;
+        }
+
+        let next = match self.db.get_next_job().await {
+            Ok(Some(job)) => job,
+            Ok(None) => {
+                self.clear_disk_block();
+                return false;
+            }
+            Err(e) => {
+                // A peek failure is a database problem, not a disk one; let the
+                // normal claim path surface it instead of engaging the guard.
+                debug!("Disk guardrail: peek failed: {e}");
+                return false;
+            }
+        };
+
+        let output_dir = std::path::Path::new(&next.output_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let available = crate::system::disk_space::available_bytes_for_path(output_dir);
+
+        if crate::system::disk_space::is_below_min_free(available, min_gb) {
+            let free_gib = available.map_or(0.0, crate::system::disk_space::as_gib);
+            self.engage_disk_block(format!(
+                "low disk space on {}: {:.1} GiB free, {} GiB minimum",
+                output_dir.display(),
+                free_gib,
+                min_gb
+            ));
+            true
+        } else {
+            self.clear_disk_block();
+            false
         }
     }
 
@@ -429,6 +523,15 @@ impl Agent {
             // Block while paused OR while boot analysis runs
             if self.is_paused() || self.is_boot_analyzing() {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+
+            // AUTO-3: hold job starts when the next job's output filesystem is
+            // below the configured free-space minimum, so we never begin an
+            // encode that would fail by filling the disk mid-run. Jobs stay
+            // queued and retry once space is reclaimed.
+            if self.disk_guardrail_should_hold().await {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 continue;
             }
 

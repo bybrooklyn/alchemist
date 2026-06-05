@@ -135,6 +135,7 @@ requires at least one day in every window.
 | `monitoring_poll_interval` | float | `2.0` | Poll interval for system monitoring and dashboard resource refresh |
 | `conversion_upload_limit_gb` | int | `8` | Maximum allowed upload size for the Convert workflow, in GiB. Must be >= 1. Uploads above this size are rejected before the file is written to disk |
 | `conversion_download_retention_hours` | int | `1` | Hours to retain a completed Convert output after the user downloads it, before the cleanup pass removes the upload and output. Must be between 1 and 24 |
+| `min_free_space_gb` | int | `10` | Disk-space guardrail. Before starting a job, the engine checks free space on that job's output filesystem; if it is below this many GiB, the engine holds queued jobs (they stay queued and retry) instead of starting an encode that could fill the disk mid-run. The hold and reason are shown in System Status. Set to `0` to disable. Fails open: if free space cannot be determined for a path, the job proceeds |
 | `enable_telemetry` | bool | `false` | Opt-in anonymous telemetry switch |
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `metrics_enabled` | bool | `false` | Enable the Prometheus `/metrics` endpoint |
@@ -202,6 +203,7 @@ check_interval_hours = 24
 [system]
 monitoring_poll_interval = 2.0
 conversion_upload_limit_gb = 8
+min_free_space_gb = 10
 conversion_download_retention_hours = 1
 enable_telemetry = false
 log_retention_days = 30
