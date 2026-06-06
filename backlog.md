@@ -90,7 +90,7 @@ documentation, or iteration.
 ## Active Priorities
 
 ### `0.3.4` Trust and Adoption Cycle
-- Hold major transcoding features until `0.3.4-rc.1` completes a seven-day soak
+- Hold major transcoding features until `0.3.4-rc.2` completes a seven-day soak
   without a new P1/P2 issue
 - Prove users can discover, install, configure, and trust the existing product
 - Validate stable Jellyfin catalog installation and behavior against `10.11.10`

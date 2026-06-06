@@ -676,7 +676,7 @@ The same gap affects `::ffff:127.0.0.1`, `::ffff:10.x`, `::ffff:192.168.x`, etc.
 
 ### [P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler
 
-**Status: RESOLVED in 0.3.4-rc.1.** Login and global rate limiting now use the
+**Status: RESOLVED in 0.3.4-rc.2.** Login and global rate limiting now use the
 shared trusted-proxy-aware client-IP resolver, with regression coverage for
 spoofed headers and independent proxied-client login buckets.
 
@@ -1134,7 +1134,7 @@ The full update archive lives in RAM before any verification or filesystem write
 
 ### [RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks
 
-**Status: RESOLVED in 0.3.4-rc.1.** IPv4-mapped IPv6 addresses are normalized
+**Status: RESOLVED in 0.3.4-rc.2.** IPv4-mapped IPv6 addresses are normalized
 before LAN classification, trusted-proxy comparison, forwarded-client
 resolution, and rate-limit keying.
 
@@ -1367,7 +1367,7 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **RESOLVED.** Login and global rate limiting now use the same trusted-proxy-aware resolved client IP.
 2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **RESOLVED.** IPv4-mapped IPv6 addresses are normalized across client resolution, LAN checks, proxy checks, and limiter keys.
 
-**The entire 2026-05-19 sweep is now closed in 0.3.4-rc.1.**
+**The entire 2026-05-19 sweep is now closed in 0.3.4-rc.2.**
 
 **The 2026-05-29 sweep (review of the system self-test branch — two P2, one RG): all three RESOLVED and shipped in 0.3.3.**
 
@@ -1375,7 +1375,7 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 2. **[P2-35] `/api/system/selftest` un-gated subprocess + per-call migrations** — **RESOLVED.** Single-flighted on a new `selftest_in_progress` atomic (`429 SELFTEST_BUSY` when busy) with an RAII guard; pipeline extracted to `src/system/selftest.rs` and exposed as the `alchemist selftest` CLI.
 3. **[RG-11] Self-test 'Write Temp' failure leaks the temp directory** — **RESOLVED.** The Write-Temp error path now calls `cleanup_temp_dir` before returning.
 
-**Carried into 0.3.3 as known-open and resolved in 0.3.4-rc.1:**
+**Carried into 0.3.3 as known-open and resolved in 0.3.4-rc.2:**
 
 1. **[P2-33] Rate Limiting DOS via Reverse Proxy IP in Login Handler** — **RESOLVED.** Trusted proxy forwarding now produces per-client login limiter keys without accepting spoofed headers from untrusted peers.
 2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **RESOLVED.** `::ffff:a.b.c.d` is normalized before all relevant classification and keying.

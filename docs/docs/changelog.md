@@ -3,7 +3,7 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
-## [0.3.4-rc.1] - 2026-06-04
+## [0.3.4-rc.2] - 2026-06-06
 
 Begins the focused 0.3.4 trust and adoption cycle. Stable promotion requires a
 seven-day RC soak without a new P1/P2 issue.
@@ -14,6 +14,21 @@ seven-day RC soak without a new P1/P2 issue.
   one normalized client-IP resolver. Forwarded headers remain accepted only
   from trusted peers, proxied clients receive independent login buckets, and
   IPv4-mapped IPv6 addresses are normalized consistently. (P2-33, RG-10)
+- Large library scans no longer stall the UI. The SQLite pool previously used a
+  single shared connection, which serialized every request — including the
+  per-request auth session lookup — behind the scan's writes; the pool now
+  allows several connections. The scan also writes jobs in chunked transactions
+  and reads file settings once per scan instead of once per file, and the jobs
+  view coalesces SSE-driven refreshes into a throttled refetch.
+
+### Engine
+
+- Disk-space guardrail: before starting a job, the engine checks free space on
+  that job's output filesystem and holds queued jobs (they stay queued and
+  retry) when it is below `system.min_free_space_gb` (default 10 GiB; set `0`
+  to disable). The hold and reason show in the engine status badge, and an
+  optional `disk.space_low` notification fires when the guardrail engages. The
+  check fails open when free space cannot be determined. (AUTO-3)
 
 ### Distribution
 
@@ -34,6 +49,13 @@ seven-day RC soak without a new P1/P2 issue.
 - Plugin tests cover scoped connection checks, dry-run enqueue behavior, real
   enqueue requests, event-stream access, path translation, completion event
   parsing, and containing-directory selection.
+
+### Docs
+
+- Corrected the AV1 hardware-encode support matrix across the documentation.
+  AV1 *encode* requires NVIDIA RTX 40 (Ada), AMD RDNA 3, or Intel Arc / Meteor
+  Lake; no Apple Silicon has an AV1 hardware encoder, so macOS encodes AV1 on
+  the CPU (SVT-AV1). HEVC and H.264 support were already accurate and unchanged.
 
 ## [0.3.3] - 2026-06-03
 

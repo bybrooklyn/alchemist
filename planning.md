@@ -7,7 +7,7 @@ This file tracks current coordination notes only. Detailed historical execution 
 ## Current Baseline
 
 - Stable version: `0.3.3`
-- Active version: `0.3.4-rc.1`
+- Active version: `0.3.4-rc.2`
 - Release line: 0.3.4 trust, distribution, and onboarding
 - Required orientation files: `CHANGELOG.md`, `VERSION`, `CLAUDE.md`
 - Living planning sources:
@@ -19,7 +19,7 @@ This file tracks current coordination notes only. Detailed historical execution 
 ## 0.3.4 Trust and Adoption Cycle
 
 Status: implementation complete for RC cut; the seven-day soak starts only
-after `v0.3.4-rc.1` is published and its post-publication smoke is green.
+after `v0.3.4-rc.2` is published and its post-publication smoke is green.
 
 Release focus:
 
@@ -230,7 +230,7 @@ These items are implemented and should be treated as product surface needing mai
 
 ## Near-Term Candidates
 
-- Complete the `0.3.4-rc.1` soak and capture real install/configuration feedback.
+- Complete the `0.3.4-rc.2` soak and capture real install/configuration feedback.
 - Validate the stable Jellyfin feed against `jellyfin/jellyfin:10.11.10` before
   promoting `0.3.4`.
 - Keep setup and Settings research open; do not redesign either surface from
