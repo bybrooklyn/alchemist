@@ -61,6 +61,14 @@ pub(crate) struct NotificationTargetSchemaFlags {
 /// (also set in `Db::new`) absorbs the brief moments two writers contend.
 const DB_MAX_CONNECTIONS: u32 = 5;
 
+/// Whether a SQLite path/URI refers to a private in-memory database. Such a
+/// database exists only for the lifetime of a single connection, so it must be
+/// pinned to a one-connection pool — see `Db::new`.
+fn is_in_memory_db(db_path: &str) -> bool {
+    let trimmed = db_path.trim();
+    trimmed.is_empty() || trimmed == ":memory:" || trimmed.contains("mode=memory")
+}
+
 #[derive(Clone, Debug)]
 pub struct Db {
     pub(crate) pool: SqlitePool,
@@ -78,8 +86,19 @@ impl Db {
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
 
+        // A `:memory:` database is private to each connection, so a multi-
+        // connection pool would hand out several *separate* empty databases —
+        // migrations would run on one connection while later queries hit an
+        // un-migrated one ("no such table"). Pin in-memory databases to a
+        // single shared connection; file-backed databases use the full pool.
+        let max_connections = if is_in_memory_db(db_path) {
+            1
+        } else {
+            DB_MAX_CONNECTIONS
+        };
+
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(DB_MAX_CONNECTIONS)
+            .max_connections(max_connections)
             .connect_with(options)
             .await?;
         info!(
@@ -183,4 +202,36 @@ pub fn hash_api_token(token: &str) -> String {
         let _ = write!(&mut out, "{:02x}", byte);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_in_memory_databases() {
+        assert!(is_in_memory_db(":memory:"));
+        assert!(is_in_memory_db(""));
+        assert!(is_in_memory_db("  :memory:  "));
+        assert!(is_in_memory_db("file::memory:?cache=shared&mode=memory"));
+        assert!(!is_in_memory_db("alchemist.db"));
+        assert!(!is_in_memory_db("/var/lib/alchemist/alchemist.db"));
+    }
+
+    #[tokio::test]
+    async fn in_memory_db_stays_usable_across_queries() -> Result<()> {
+        // Regression: a multi-connection pool over `:memory:` hands out
+        // separate empty databases, so a write on one connection and a read on
+        // another hit "no such table". Pinning in-memory databases to a single
+        // connection keeps every query on the same migrated database (this is
+        // the path `alchemist selftest` exercises).
+        let db = Db::new(":memory:").await?;
+        for i in 0..10 {
+            db.add_log("info", None, &format!("selftest line {i}"))
+                .await?;
+        }
+        let logs = db.get_logs(50, 0).await?;
+        assert_eq!(logs.len(), 10);
+        Ok(())
+    }
 }
