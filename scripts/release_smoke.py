@@ -93,7 +93,14 @@ def main() -> int:
     binary = str(Path(args.binary).resolve())
     run_checked([binary, "--version"], args.expected_version)
 
-    with tempfile.TemporaryDirectory(prefix="alchemist-release-smoke-") as temp:
+    # ignore_cleanup_errors: on Windows the OS can briefly hold the server's
+    # stdout handle (server.log) open after the process exits, so rmtree on
+    # scope exit can raise PermissionError. Every smoke assertion has already
+    # run by then, and the runner's temp dir is ephemeral, so a cleanup failure
+    # must not fail the smoke.
+    with tempfile.TemporaryDirectory(
+        prefix="alchemist-release-smoke-", ignore_cleanup_errors=True
+    ) as temp:
         root = Path(temp)
         media_dir = root / "media"
         media_dir.mkdir()
