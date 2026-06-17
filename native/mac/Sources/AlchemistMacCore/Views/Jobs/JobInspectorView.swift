@@ -63,7 +63,10 @@ struct JobInspectorView: View {
             HStack {
                 Button {
                     confirmation = JobsConfirmation(title: "Retry job", message: "Retry job #\(detail.job.id)?", confirmLabel: "Retry") {
-                        Task { await model.jobs.performAction(id: detail.job.id, action: .restart, apiClient: model.connection.apiClient) }
+                        Task {
+                            let result = await model.jobs.performAction(id: detail.job.id, action: .restart, apiClient: model.connection.apiClient)
+                            if let (type, message) = result { model.showToast(type, message) }
+                        }
                     }
                 } label: {
                     Label("Retry", systemImage: "arrow.counterclockwise")
@@ -73,7 +76,10 @@ struct JobInspectorView: View {
 
                 Button(role: .destructive) {
                     confirmation = JobsConfirmation(title: "Cancel job", message: "Stop job #\(detail.job.id) immediately?", confirmLabel: "Cancel", role: .destructive) {
-                        Task { await model.jobs.performAction(id: detail.job.id, action: .cancel, apiClient: model.connection.apiClient) }
+                        Task {
+                            let result = await model.jobs.performAction(id: detail.job.id, action: .cancel, apiClient: model.connection.apiClient)
+                            if let (type, message) = result { model.showToast(type, message) }
+                        }
                     }
                 } label: {
                     Label("Cancel", systemImage: "xmark.circle")
@@ -83,7 +89,10 @@ struct JobInspectorView: View {
 
                 Button(role: .destructive) {
                     confirmation = JobsConfirmation(title: "Delete job", message: "Delete job #\(detail.job.id) from history?", confirmLabel: "Delete", role: .destructive) {
-                        Task { await model.jobs.performAction(id: detail.job.id, action: .delete, apiClient: model.connection.apiClient) }
+                        Task {
+                            let result = await model.jobs.performAction(id: detail.job.id, action: .delete, apiClient: model.connection.apiClient)
+                            if let (type, message) = result { model.showToast(type, message) }
+                        }
                     }
                 } label: {
                     Label("Delete", systemImage: "trash")

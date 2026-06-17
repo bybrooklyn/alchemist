@@ -11,7 +11,7 @@ public enum SSEConnectionState: Equatable, Sendable {
 @MainActor
 public final class ConnectionState {
     public var apiClient: AlchemistAPIClient?
-    public var baseURLString = "http://127.0.0.1:3000"
+    public var baseURLString = DaemonController.bundledBaseURLString
     public var connectionMode: ConnectionMode = .bundled
     public var sseState: SSEConnectionState = .disconnected
     public var lastError: AlchemistUIError?
@@ -20,6 +20,10 @@ public final class ConnectionState {
     private var pollingTask: Task<Void, Never>?
     private var reconnectAttempt = 0
     private let maxReconnectDelay: UInt64 = 30_000_000_000
+
+    /// In remote mode the app talks only to a configured server it does not manage, so
+    /// Mac-local file paths must not be sent to it (audit FG-6).
+    public var isRemote: Bool { connectionMode == .remote }
 
     public init() {}
 
@@ -51,23 +55,40 @@ public final class ConnectionState {
                     self.sseState = .disconnected
                     return
                 }
-                self.sseState = .connected
-                self.reconnectAttempt = 0
+                // Report the true pre-request state. The previous code flipped to
+                // `.connected` here unconditionally, which made the banner always claim
+                // "connected", reset the backoff every loop (so it never grew past
+                // attempt 1), and hid the real connecting/down state (audit P2-38).
+                self.sseState = self.reconnectAttempt == 0
+                    ? .connecting
+                    : .reconnecting(attempt: self.reconnectAttempt)
                 do {
                     let stream = await client.streamEvents()
                     for try await event in stream {
                         if Task.isCancelled { break }
+                        if case .connected = event {
+                            // Only a real established stream flips us to connected and
+                            // resets the backoff; the synthetic marker isn't forwarded.
+                            self.sseState = .connected
+                            self.reconnectAttempt = 0
+                            self.lastError = nil
+                            continue
+                        }
                         self.lastError = nil
                         onEvent(event)
                     }
                 } catch {
                     if Task.isCancelled { break }
                     if let apiError = error as? AlchemistAPIError, apiError == .unauthorized {
+                        // Dead session: stop hammering the endpoint every ~2s and let
+                        // RootView present login on the lastError change (audit P2-38).
                         self.lastError = .authenticationRequired
-                    } else {
-                        self.lastError = .connectionFailed(error.localizedDescription)
+                        self.stopAll()
+                        return
                     }
+                    self.lastError = .connectionFailed(error.localizedDescription)
                 }
+                if Task.isCancelled { break }
                 self.reconnectAttempt += 1
                 self.sseState = .reconnecting(attempt: self.reconnectAttempt)
                 let delay = min(

@@ -59,6 +59,8 @@ public enum AlchemistAPIRoute {
     public static let events = "/api/v1/events"
     public static let fsRecommendations = "/api/v1/fs/recommendations"
     public static let fsPreview = "/api/v1/fs/preview"
+    public static let selftest = "/api/v1/system/selftest"
+    public static let backup = "/api/v1/system/backup"
 
     public static func job(id: Int64) -> String {
         "/api/v1/jobs/\(id)"
@@ -80,6 +82,10 @@ public enum AlchemistAPIRoute {
         "/api/v1/jobs/\(id)/priority"
     }
 
+    public static func watchDir(id: Int64) -> String {
+        "/api/v1/settings/watch-dirs/\(id)"
+    }
+
     public static func preference(key: String) -> String {
         "/api/v1/settings/preferences/\(key)"
     }
@@ -91,10 +97,21 @@ public actor AlchemistAPIClient {
     private let decoder: JSONDecoder
     private var sessionToken: String?
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL, session: URLSession? = nil) {
         self.baseURL = baseURL
-        self.session = session
+        self.session = session ?? Self.makeDefaultSession()
         self.decoder = JSONDecoder()
+    }
+
+    /// A cookie-free session. `URLSession.shared` stores the backend's
+    /// `Set-Cookie: alchemist_session=…` and can re-inject a stale cookie that overrides
+    /// the manually managed `Cookie`/`Bearer` headers after logout or a user switch,
+    /// making which credential wins undefined (audit RG-12).
+    private static func makeDefaultSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        return URLSession(configuration: config)
     }
 
     public func endpoint(_ path: String, queryItems: [URLQueryItem] = []) throws -> URL {
@@ -202,7 +219,7 @@ public actor AlchemistAPIClient {
         tab: JobTab,
         search: String,
         page: Int,
-        limit: Int = 50,
+        limit: Int = JobState.pageSize,
         sortBy: JobSortField,
         sortDescending: Bool
     ) async throws -> [Job] {
@@ -253,6 +270,29 @@ public actor AlchemistAPIClient {
             AlchemistAPIRoute.watchDirectories,
             body: AddWatchFolderPayload(path: path, isRecursive: recursive)
         )
+    }
+
+    public func deleteWatchFolder(id: Int64) async throws {
+        let _: EmptyResponse = try await deleteJSON(AlchemistAPIRoute.watchDir(id: id))
+    }
+
+    public func fetchWatchDirectories() async throws -> [WatchDirectory] {
+        try await getJSON(AlchemistAPIRoute.watchDirectories)
+    }
+
+    public func runSelftest() async throws -> SelftestResponse {
+        try await postJSON(AlchemistAPIRoute.selftest, body: EmptyPayload())
+    }
+
+    public func backupDatabase() async throws -> Data {
+        var request = URLRequest(url: try endpoint(AlchemistAPIRoute.backup))
+        request.httpMethod = "POST"
+        applyAuth(to: &request)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw AlchemistAPIError.invalidResponse
+        }
+        return data
     }
 
     public func pauseQueue() async throws {
@@ -369,13 +409,22 @@ public actor AlchemistAPIClient {
                     let (stream, response) = try await session.bytes(for: request)
 
                     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                        continuation.finish(throwing: AlchemistAPIError.invalidResponse)
+                        let status = (response as? HTTPURLResponse)?.statusCode
+                        continuation.finish(throwing: status == 401
+                            ? AlchemistAPIError.unauthorized
+                            : AlchemistAPIError.invalidResponse)
                         return
                     }
 
+                    // Signal a live connection so the reconnect state machine can flip to
+                    // `.connected` and reset its backoff only once the stream is real.
+                    continuation.yield(.connected)
+
+                    // Frame over raw bytes: `AsyncBytes.lines` drops the blank-line SSE
+                    // delimiters, which makes the whole live-update layer dead (audit P1-12).
                     var parser = AlchemistSSEParser()
-                    for try await line in stream.lines {
-                        if let event = parser.parse(line: line) {
+                    for try await byte in stream {
+                        if let event = parser.consume(byte: byte) {
                             continuation.yield(event)
                         }
                     }

@@ -3,6 +3,11 @@ import Foundation
 @Observable
 @MainActor
 public final class JobState {
+    /// Server page size for the jobs table. Used for both the fetch limit and the
+    /// "can page forward" heuristic so the two can't drift (audit P2-39). `nonisolated`
+    /// so the non-MainActor API client can use it as a default argument.
+    public nonisolated static let pageSize = 50
+
     public var jobs: [Job] = []
     public var activeTab: JobTab = .all
     public var sortField: JobSortField = .updatedAt
@@ -18,6 +23,7 @@ public final class JobState {
     public var actionMessage: String?
     public var isRefreshing = false
     public var lastError: AlchemistUIError?
+    public var isPerformingAction = false
 
     private var pendingProgressUpdates: [Int64: Double] = [:]
     private var progressFlushTask: Task<Void, Never>?
@@ -35,7 +41,7 @@ public final class JobState {
     }
 
     public var canGoToPreviousPage: Bool { page > 1 }
-    public var canGoToNextPage: Bool { jobs.count == 50 }
+    public var canGoToNextPage: Bool { jobs.count == Self.pageSize }
 
     public var activeCount: Int { jobs.filter(\.isActive).count }
     public var failedCount: Int { jobs.filter { ["failed", "cancelled"].contains($0.status) }.count }
@@ -155,11 +161,13 @@ public final class JobState {
 
     // MARK: - Job Actions
 
-    public func performAction(id: Int64, action: JobBatchAction, apiClient: AlchemistAPIClient?) async {
+    public func performAction(id: Int64, action: JobBatchAction, apiClient: AlchemistAPIClient?) async -> (ToastType, String)? {
         guard let apiClient else {
             actionMessage = "No API connection."
-            return
+            return nil
         }
+        isPerformingAction = true
+        defer { isPerformingAction = false }
         do {
             switch action {
             case .cancel: try await apiClient.cancelJob(id: id)
@@ -170,63 +178,75 @@ public final class JobState {
             }
             lastError = nil
             await refresh(apiClient: apiClient, silent: true)
+            return (.success, "Job #\(id) \(action.rawValue)d.")
         } catch {
             actionMessage = error.localizedDescription
             lastError = mapError(error)
+            return (.error, error.localizedDescription)
         }
     }
 
-    public func performBatch(_ action: JobBatchAction, apiClient: AlchemistAPIClient?) async {
+    public func performBatch(_ action: JobBatchAction, apiClient: AlchemistAPIClient?) async -> (ToastType, String)? {
         let ids = Array(selectedIDs)
-        guard !ids.isEmpty, let apiClient else { return }
+        guard !ids.isEmpty, let apiClient else { return nil }
+        isPerformingAction = true
+        defer { isPerformingAction = false }
         do {
             let response = try await apiClient.batchJobs(ids: ids, action: action)
             selectedIDs.removeAll()
             actionMessage = response.message ?? "\(action.rawValue.capitalized) request sent."
             lastError = nil
             await refresh(apiClient: apiClient, silent: true)
+            return (.success, actionMessage ?? "Done.")
         } catch {
             actionMessage = error.localizedDescription
             lastError = mapError(error)
+            return (.error, error.localizedDescription)
         }
     }
 
-    public func restartFailed(apiClient: AlchemistAPIClient?) async {
-        guard let apiClient else { return }
+    public func restartFailed(apiClient: AlchemistAPIClient?) async -> (ToastType, String)? {
+        guard let apiClient else { return nil }
         do {
             let response = try await apiClient.restartFailedJobs()
             actionMessage = response.message ?? "Retry sent."
             lastError = nil
             await refresh(apiClient: apiClient, silent: true)
+            return (.success, actionMessage ?? "Done.")
         } catch {
             actionMessage = error.localizedDescription
             lastError = mapError(error)
+            return (.error, error.localizedDescription)
         }
     }
 
-    public func clearCompleted(apiClient: AlchemistAPIClient?) async {
-        guard let apiClient else { return }
+    public func clearCompleted(apiClient: AlchemistAPIClient?) async -> (ToastType, String)? {
+        guard let apiClient else { return nil }
         do {
             let response = try await apiClient.clearCompletedJobs()
             actionMessage = response.message ?? "Completed jobs cleared."
             lastError = nil
             await refresh(apiClient: apiClient, silent: true)
+            return (.success, actionMessage ?? "Done.")
         } catch {
             actionMessage = error.localizedDescription
             lastError = mapError(error)
+            return (.error, error.localizedDescription)
         }
     }
 
-    public func clearHistory(apiClient: AlchemistAPIClient?) async {
-        guard let apiClient else { return }
+    public func clearHistory(apiClient: AlchemistAPIClient?) async -> (ToastType, String)? {
+        guard let apiClient else { return nil }
         do {
             let response = try await apiClient.clearHistory()
             actionMessage = "Purged \(response.count) jobs."
             lastError = nil
             await refresh(apiClient: apiClient, silent: true)
+            return (.success, actionMessage ?? "Done.")
         } catch {
             actionMessage = error.localizedDescription
             lastError = mapError(error)
+            return (.error, error.localizedDescription)
         }
     }
 
@@ -369,9 +389,7 @@ public final class JobState {
         if let index = jobs.firstIndex(where: { $0.id == jobID }) {
             jobs[index] = jobs[index].withStatus(status)
         }
-        if focusedDetail?.job.id == jobID {
-            // Reload details for the changed job
-        }
+        // The open inspector is refreshed by AppModel.handleEvent's `.status` case.
     }
 
     private func mapError(_ error: Error) -> AlchemistUIError {

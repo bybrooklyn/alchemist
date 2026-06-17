@@ -87,21 +87,30 @@ struct JobTableRow: View {
                 if ["failed", "cancelled"].contains(job.status) {
                     Button("Retry") {
                         confirmation = JobsConfirmation(title: "Retry job", message: "Retry job #\(job.id)?", confirmLabel: "Retry") {
-                            Task { await model.jobs.performAction(id: job.id, action: .restart, apiClient: model.connection.apiClient) }
+                            Task {
+                                let result = await model.jobs.performAction(id: job.id, action: .restart, apiClient: model.connection.apiClient)
+                                if let (type, message) = result { model.showToast(type, message) }
+                            }
                         }
                     }
                 }
                 if job.isActive || job.status == "queued" {
                     Button("Stop / Cancel", role: .destructive) {
                         confirmation = JobsConfirmation(title: "Cancel job", message: "Stop job #\(job.id) immediately?", confirmLabel: "Cancel", role: .destructive) {
-                            Task { await model.jobs.performAction(id: job.id, action: .cancel, apiClient: model.connection.apiClient) }
+                            Task {
+                                let result = await model.jobs.performAction(id: job.id, action: .cancel, apiClient: model.connection.apiClient)
+                                if let (type, message) = result { model.showToast(type, message) }
+                            }
                         }
                     }
                 }
                 if !job.isActive {
                     Button("Delete", role: .destructive) {
                         confirmation = JobsConfirmation(title: "Delete job", message: "Delete job #\(job.id) from history?", confirmLabel: "Delete", role: .destructive) {
-                            Task { await model.jobs.performAction(id: job.id, action: .delete, apiClient: model.connection.apiClient) }
+                            Task {
+                                let result = await model.jobs.performAction(id: job.id, action: .delete, apiClient: model.connection.apiClient)
+                                if let (type, message) = result { model.showToast(type, message) }
+                            }
                         }
                     }
                 }
@@ -136,14 +145,20 @@ struct JobTableRow: View {
             if job.isActive || job.status == "queued" {
                 Button("Stop / Cancel", role: .destructive) {
                     confirmation = JobsConfirmation(title: "Cancel job", message: "Stop job #\(job.id) immediately?", confirmLabel: "Cancel", role: .destructive) {
-                        Task { await model.jobs.performAction(id: job.id, action: .cancel, apiClient: model.connection.apiClient) }
+                        Task {
+                            let result = await model.jobs.performAction(id: job.id, action: .cancel, apiClient: model.connection.apiClient)
+                            if let (type, message) = result { model.showToast(type, message) }
+                        }
                     }
                 }
             }
             if !job.isActive {
                 Button("Delete", role: .destructive) {
                     confirmation = JobsConfirmation(title: "Delete job", message: "Delete job #\(job.id) from history?", confirmLabel: "Delete", role: .destructive) {
-                        Task { await model.jobs.performAction(id: job.id, action: .delete, apiClient: model.connection.apiClient) }
+                        Task {
+                            let result = await model.jobs.performAction(id: job.id, action: .delete, apiClient: model.connection.apiClient)
+                            if let (type, message) = result { model.showToast(type, message) }
+                        }
                     }
                 }
             }

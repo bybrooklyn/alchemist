@@ -1187,12 +1187,34 @@ public struct CountMessageResponse: Decodable, Equatable, Sendable {
     public let message: String?
 }
 
+public struct SelftestResponse: Decodable, Equatable, Sendable {
+    public let success: Bool
+    public let stages: [SelftestStage]
+    public let error: String?
+}
+
+public struct SelftestStage: Decodable, Equatable, Sendable {
+    public let name: String
+    public let success: Bool
+    public let durationMs: Int64
+    public let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, success, message
+        case durationMs = "duration_ms"
+    }
+}
+
 public struct PreferenceResponse: Decodable, Equatable, Sendable {
     public let key: String
     public let value: String
 }
 
 public enum AlchemistEvent: Decodable, Equatable, Sendable {
+    /// Synthetic marker yielded by `streamEvents()` once the SSE HTTP response is
+    /// established (2xx). It is never produced by `parse`/`init(from:)`; the
+    /// connection state machine uses it to flip to `.connected` and reset backoff.
+    case connected
     case progress(jobID: Int64, percentage: Double, time: Double?)
     case status(jobID: Int64, status: String)
     case decision(jobID: Int64, action: String, reason: String)
@@ -1295,8 +1317,36 @@ public enum AlchemistEvent: Decodable, Equatable, Sendable {
 public struct AlchemistSSEParser: Sendable {
     private var eventName: String?
     private var dataLines: [String] = []
+    private var byteBuffer: [UInt8] = []
 
     public init() {}
+
+    /// Feed a single raw byte from the SSE byte stream. Returns a completed event
+    /// when a line terminator (`\n`) closes a frame. This is the production path:
+    /// `URLSession.AsyncBytes.lines` silently drops the blank lines that delimit SSE
+    /// frames, so framing must be done over raw bytes (see audit P1-12).
+    public mutating func consume(byte: UInt8) -> AlchemistEvent? {
+        if byte == UInt8(ascii: "\n") {
+            var line = String(decoding: byteBuffer, as: UTF8.self)
+            if line.hasSuffix("\r") { line.removeLast() }
+            byteBuffer.removeAll(keepingCapacity: true)
+            return parse(line: line)
+        }
+        byteBuffer.append(byte)
+        return nil
+    }
+
+    /// Convenience for tests and buffered callers: feed a whole `Data` blob and
+    /// collect every event it completes.
+    public mutating func consume(data: Data) -> [AlchemistEvent] {
+        var events: [AlchemistEvent] = []
+        for byte in data {
+            if let event = consume(byte: byte) {
+                events.append(event)
+            }
+        }
+        return events
+    }
 
     public mutating func parse(line: String) -> AlchemistEvent? {
         if line.isEmpty {
@@ -1308,8 +1358,11 @@ public struct AlchemistSSEParser: Sendable {
         }
 
         if line.hasPrefix("event:") {
+            // Defensive: if a previous frame was never closed by a blank line, flush it
+            // before recording the new event name so events can't bleed together.
+            let flushed = (eventName != nil || !dataLines.isEmpty) ? finish() : nil
             eventName = Self.fieldValue(from: line, prefix: "event:")
-            return nil
+            return flushed
         }
 
         if line.hasPrefix("data:") {
