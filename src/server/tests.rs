@@ -3739,6 +3739,64 @@ async fn invalid_job_status_filter_returns_bad_request()
 }
 
 #[tokio::test]
+async fn jobs_table_includes_failure_explanation_for_failed_job()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    state
+        .db
+        .enqueue_job(
+            Path::new("/tmp/table_failure_reason.mkv"),
+            Path::new("/tmp/table_failure_reason.out.mkv"),
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .await?;
+    let job = state
+        .db
+        .get_job_by_input_path("/tmp/table_failure_reason.mkv")
+        .await?
+        .ok_or("job not found")?;
+    state.db.update_job_status(job.id, JobState::Failed).await?;
+    let explanation = crate::explanations::failure_from_summary("Encoder ran out of GPU memory");
+    state
+        .db
+        .upsert_job_failure_explanation(job.id, &explanation)
+        .await?;
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/jobs/table?status=failed",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    let payload: serde_json::Value = serde_json::from_str(&body)?;
+    let rows = payload.as_array().ok_or("Expected jobs array")?;
+    let row = rows
+        .iter()
+        .find(|row| row["id"] == job.id)
+        .ok_or("failed job missing from table response")?;
+    assert_eq!(
+        row["failure_explanation"]["legacy_reason"],
+        "Encoder ran out of GPU memory"
+    );
+    assert!(
+        row["failure_explanation"]["summary"]
+            .as_str()
+            .is_some_and(|summary| !summary.is_empty())
+    );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn batch_mutation_conflict_returns_conflict()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;

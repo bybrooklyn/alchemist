@@ -371,11 +371,22 @@ pub(crate) async fn jobs_table_handler(
                     );
                 }
             };
+            let failure_explanations = match state.db.get_job_failure_explanations(&job_ids).await {
+                Ok(explanations) => explanations,
+                Err(e) => {
+                    return api_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "GET_EXPLANATIONS_FAILED",
+                        e.to_string(),
+                    );
+                }
+            };
 
             let payload = jobs
                 .into_iter()
                 .map(|job| JobResponse {
                     decision_explanation: explanations.get(&job.id).cloned(),
+                    failure_explanation: failure_explanations.get(&job.id).cloned(),
                     job,
                 })
                 .collect::<Vec<_>>();
@@ -766,6 +777,7 @@ pub(crate) struct JobResponse {
     #[serde(flatten)]
     job: Job,
     decision_explanation: Option<Explanation>,
+    failure_explanation: Option<Explanation>,
 }
 
 #[derive(Serialize)]

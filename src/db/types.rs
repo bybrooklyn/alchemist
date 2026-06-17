@@ -635,6 +635,14 @@ pub(crate) struct FailureExplanationRecord {
     pub(crate) payload_json: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct JobFailureExplanationRecord {
+    pub(crate) job_id: i64,
+    pub(crate) legacy_summary: Option<String>,
+    pub(crate) code: String,
+    pub(crate) payload_json: String,
+}
+
 // Auth related structs
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct User {
