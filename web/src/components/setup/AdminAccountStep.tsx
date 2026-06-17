@@ -5,30 +5,32 @@ import {
     TELEMETRY_TEMPORARILY_DISABLED_MESSAGE,
     TELEMETRY_USAGE_COPY,
 } from "../../lib/telemetryAvailability";
-import { ToggleRow } from "./SetupControls";
-import type { StepValidator } from "./types";
+import { LabeledInput, ToggleRow } from "./SetupControls";
 
 interface AdminAccountStepProps {
     username: string;
     password: string;
+    usernameError?: string;
+    passwordError?: string;
     onUsernameChange: (value: string) => void;
     onPasswordChange: (value: string) => void;
-    registerValidator: (validator: StepValidator) => void;
+    onEnter: () => void;
 }
 
 export default function AdminAccountStep({
     username,
     password,
+    usernameError,
+    passwordError,
     onUsernameChange,
     onPasswordChange,
-    registerValidator,
+    onEnter,
 }: AdminAccountStepProps) {
-    registerValidator(async () => {
-        if (!username.trim() || !password.trim()) {
-            return "Please provide an admin username and password.";
+    const handleEnter = (event: { key: string }) => {
+        if (event.key === "Enter") {
+            onEnter();
         }
-        return null;
-    });
+    };
 
     return (
         <motion.div
@@ -51,31 +53,26 @@ export default function AdminAccountStep({
             </div>
 
             <div className="max-w-lg space-y-4">
-                <div>
-                    <label className="block text-xs font-medium text-helios-slate mb-2">
-                        Admin Username
-                    </label>
-                    <input
-                        type="text"
-                        value={username}
-                        onChange={(e) => onUsernameChange(e.target.value)}
-                        className="w-full bg-helios-surface-soft border border-helios-line/40 rounded-md px-4 py-3 text-helios-ink focus:border-helios-solar outline-none"
-                        placeholder="admin"
-                    />
-                </div>
+                <LabeledInput
+                    label="Admin Username"
+                    value={username}
+                    onChange={onUsernameChange}
+                    onKeyDown={handleEnter}
+                    placeholder="admin"
+                    helperText="At least 3 characters."
+                    error={usernameError}
+                />
 
-                <div>
-                    <label className="block text-xs font-medium text-helios-slate mb-2">
-                        Admin Password
-                    </label>
-                    <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => onPasswordChange(e.target.value)}
-                        className="w-full bg-helios-surface-soft border border-helios-line/40 rounded-md px-4 py-3 text-helios-ink focus:border-helios-solar outline-none"
-                        placeholder="Choose a strong password"
-                    />
-                </div>
+                <LabeledInput
+                    label="Admin Password"
+                    type="password"
+                    value={password}
+                    onChange={onPasswordChange}
+                    onKeyDown={handleEnter}
+                    placeholder="Choose a strong password"
+                    helperText="At least 8 characters."
+                    error={passwordError}
+                />
 
                 <ToggleRow
                     title="Anonymous Usage Telemetry"

@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight } from "lucide-react";
+import { AlertCircle, ArrowRight } from "lucide-react";
 import clsx from "clsx";
 import { SETUP_STEP_COUNT } from "./constants";
 import { showToast } from "../../lib/toast";
@@ -8,6 +8,7 @@ import { showToast } from "../../lib/toast";
 interface SetupFrameProps {
     step: number;
     configMutable: boolean;
+    canComplete: boolean;
     error: string | null;
     submitting: boolean;
     onBack: () => void;
@@ -15,7 +16,7 @@ interface SetupFrameProps {
     children: ReactNode;
 }
 
-export default function SetupFrame({ step, configMutable, error, submitting, onBack, onNext, children }: SetupFrameProps) {
+export default function SetupFrame({ step, configMutable, canComplete, error, submitting, onBack, onNext, children }: SetupFrameProps) {
     useEffect(() => {
         if (error) {
             showToast({ kind: "error", title: "Setup", message: error });
@@ -52,6 +53,17 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
             {/* Step content */}
             <div className="flex-1 overflow-y-auto">
                 <div className="max-w-6xl mx-auto px-6 py-8">
+                    {/* Persistent error banner — the scroll/announce target */}
+                    {error && step > 0 && (
+                        <div
+                            role="alert"
+                            aria-live="assertive"
+                            className="mb-6 flex items-start gap-3 rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-status-error"
+                        >
+                            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                            <p className="leading-relaxed">{error}</p>
+                        </div>
+                    )}
                     <AnimatePresence mode="wait">
                         {children}
                     </AnimatePresence>
@@ -84,7 +96,7 @@ export default function SetupFrame({ step, configMutable, error, submitting, onB
                             <button
                                 type="button"
                                 onClick={onNext}
-                                disabled={submitting || !configMutable}
+                                disabled={submitting || !configMutable || !canComplete}
                                 className="flex items-center gap-2 rounded-lg
                                     bg-helios-solar px-6 py-2.5 text-sm
                                     font-semibold text-helios-main
