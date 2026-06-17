@@ -33,6 +33,7 @@ export interface Job {
     vmaf_score?: number;
     decision_reason?: string;
     decision_explanation?: ExplanationPayload | null;
+    failure_explanation?: ExplanationPayload | null;
     encoder?: string;
 }
 
