@@ -67,8 +67,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
@@ -79,15 +79,15 @@ services:
 Then open [http://localhost:3000](http://localhost:3000) in your browser.
 First-time setup is only reachable from the local network.
 
-On Linux and macOS, the default host-side config location is
-`~/.config/alchemist/config.toml`. When you use Docker, the
-recommended bind mount is still `~/.config/alchemist`, mapped
-into `/app/config` and `/app/data` inside the container.
+The setup wizard writes `config.toml` into `./config` on first
+run, and the database lives in `./data`. Mount the directories,
+never `config.toml` itself — a single-file bind mount blocks the
+wizard from saving and restarts setup on every boot.
 
 If you prefer `docker run`, this is the trimmed equivalent:
 
 ```bash
-docker run -d --name alchemist -p 3000:3000 -v ~/.config/alchemist:/app/config -v ~/.config/alchemist:/app/data -v /path/to/media:/media -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml -e ALCHEMIST_DB_PATH=/app/data/alchemist.db --restart unless-stopped ghcr.io/bybrooklyn/alchemist:latest
+docker run -d --name alchemist -p 3000:3000 -v ./config:/app/config -v ./data:/app/data -v /path/to/media:/media -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml -e ALCHEMIST_DB_PATH=/app/data/alchemist.db --restart unless-stopped ghcr.io/bybrooklyn/alchemist:latest
 ```
 
 ### Binary

@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Native macOS app
+
+Closes the 2026-06-11 `native/mac` audit sweep (two P1, five P2, two RG, two UX, one
+TD, one FG). The whole sweep is verified by `just mac-check`.
+
+- Live updates work again. SSE frame parsing moved off `URLSession.AsyncBytes.lines`
+  (which silently drops the blank-line frame delimiters) onto raw-byte framing inside
+  `AlchemistSSEParser`, so progress, status, decision, log, engine, and config events
+  reach the UI without a manual refresh. (P1-12)
+- The bundled daemon no longer freezes. Its stdout/stderr stream to
+  `~/Library/Application Support/Alchemist/daemon.log` instead of undrained pipes that
+  blocked the daemon once the 64 KB buffer filled; the log path appears in System and
+  its tail surfaces on start/crash failures. (P1-13)
+- Daemon lifecycle is supervised: it is terminated when the app quits (no more orphans),
+  a `terminationHandler` reports crashes, and bundled mode binds the private port 41737
+  with a `/api/ready` probe that adopts an already-running daemon and confirms a real
+  bind before reporting Running — instead of trusting whatever owns port 3000. (P2-36,
+  P2-40)
+- Sessions persist across launches. A single readiness-polling bootstrap routine
+  replaces three divergent startup paths and a 700 ms guess; the keychain session token
+  is dropped only on a real authentication rejection, not on a cold-launch connection
+  race. (P2-37, TD-13)
+- The SSE reconnect state machine reports honest state, backs off correctly, and stops
+  retrying a dead session (presenting login) instead of hammering every ~2 seconds.
+  Jobs tab, sort, direction, and page changes now refetch immediately. (P2-38, P2-39)
+- Smaller fixes: a dedicated cookie-free `URLSession` (RG-12), the open job inspector
+  refreshes on status change (RG-13), queue shortcuts rebound to ⌘⌥S/⌘⌥P off
+  Spotlight-owned ⌘Space (UX-6), and cancelled jobs notify "Encode cancelled" with a
+  "Job #id" fallback for off-page jobs (UX-7).
+- Remote connection mode is fully wired: switching modes manages the bundled daemon,
+  and in remote mode local-path import and drop-to-enqueue are disabled (only
+  upload-based Convert reaches the server). (FG-6)
+
 ## [0.3.4-rc.2] - 2026-06-06
 
 Begins the focused 0.3.4 trust and adoption cycle. Stable promotion requires a
