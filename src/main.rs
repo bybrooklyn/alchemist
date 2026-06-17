@@ -306,6 +306,16 @@ fn orphaned_temp_output_path(output_path: &str) -> PathBuf {
 }
 
 fn load_startup_config(config_path: &Path, is_server_mode: bool) -> (config::Config, bool, bool) {
+    if config_path.is_dir() {
+        error!(
+            "Config path {:?} is a directory, not a file. If you bind-mounted \
+             config.toml in Docker, mount its parent directory instead \
+             (e.g. ./config:/app/config) — Docker creates a directory when the \
+             host file does not exist, and setup can never persist.",
+            config_path
+        );
+        std::process::exit(1);
+    }
     let config_exists = config_path.exists();
     let (config, setup_mode) = if !config_exists {
         let cwd = std::env::current_dir().ok();

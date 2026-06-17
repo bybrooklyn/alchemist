@@ -2,10 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
     Palette,
     AlertCircle,
-    Sparkles,
-    CloudMoon,
-    Sun,
-    Zap,
     CheckCircle2,
     Loader2
 } from "lucide-react";
@@ -27,7 +23,7 @@ interface Theme {
 interface ThemeCategory {
     id: string;
     label: string;
-    icon: React.ReactNode;
+    icon?: React.ReactNode;
     themes: Theme[];
 }
 
@@ -35,7 +31,6 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     {
         id: "vibrant",
         label: "Vibrant & Energetic",
-        icon: <Sparkles size={16} className="text-helios-solar" />,
         themes: [
             {
                 id: "helios-orange",
@@ -82,7 +77,6 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     {
         id: "cool",
         label: "Cool & Calm",
-        icon: <CloudMoon size={16} className="text-status-success" />,
         themes: [
             {
                 id: "deep-blue",
@@ -129,7 +123,6 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     {
         id: "soft",
         label: "Soft & Dreamy",
-        icon: <Sun size={16} className="text-status-warning" />,
         themes: [
             {
                 id: "lavender",
@@ -176,7 +169,6 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     {
         id: "light",
         label: "Light & Airy",
-        icon: <Sun size={16} className="text-helios-solar" />,
         themes: [
             {
                 id: "ivory",
@@ -223,7 +215,6 @@ const THEME_CATEGORIES: ThemeCategory[] = [
     {
         id: "dark",
         label: "Dark & Minimal",
-        icon: <Zap size={16} className="text-helios-slate" />,
         themes: [
             {
                 id: "midnight",

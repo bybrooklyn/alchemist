@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import AdminAccountStep from "./setup/AdminAccountStep";
 import LibraryStep from "./setup/LibraryStep";
@@ -16,16 +16,19 @@ import {
 } from "./setup/constants";
 import type {
     FsPreviewResponse,
-    FsRecommendation,
-    FsRecommendationsResponse,
     HardwareInfo,
     NotificationTargetConfig,
     ScheduleWindowConfig,
     SettingsBundleResponse,
     SetupSettings,
     SetupStatusResponse,
-    StepValidator,
 } from "./setup/types";
+
+interface FieldErrors {
+    username?: string;
+    password?: string;
+    directories?: string;
+}
 
 const isHardwarePendingError = (err: unknown) =>
     isApiError(err) &&
@@ -36,6 +39,7 @@ export default function SetupWizard() {
     const [step, setStep] = useState(0);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [configMutable, setConfigMutable] = useState(true);
     const [settings, setSettings] = useState<SetupSettings>(DEFAULT_SETTINGS);
@@ -44,13 +48,9 @@ export default function SetupWizard() {
     const [dirInput, setDirInput] = useState("");
     const [scheduleDraft, setScheduleDraft] = useState<ScheduleWindowConfig>(DEFAULT_SCHEDULE_DRAFT);
     const [notificationDraft, setNotificationDraft] = useState<NotificationTargetConfig>(DEFAULT_NOTIFICATION_DRAFT);
-    const [recommendations, setRecommendations] = useState<FsRecommendation[]>([]);
     const [preview, setPreview] = useState<FsPreviewResponse | null>(null);
-    const validatorRef = useRef<StepValidator>(async () => null);
-
-    const registerValidator = useCallback((validator: StepValidator) => {
-        validatorRef.current = validator;
-    }, []);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
 
     const showError = useCallback((message: string) => {
         const normalized = message.toLowerCase();
@@ -64,10 +64,6 @@ export default function SetupWizard() {
         }
 
         setError(nextMessage);
-        setTimeout(() => {
-            document.querySelector('[role="alert"]')
-                ?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 100);
     }, []);
 
     useEffect(() => {
@@ -79,15 +75,13 @@ export default function SetupWizard() {
                     }
                     throw err;
                 });
-                const [status, bundle, hw, recommendationData] = await Promise.all([
+                const [status, bundle, hw] = await Promise.all([
                     apiJson<SetupStatusResponse>("/api/setup/status"),
                     apiJson<SettingsBundleResponse>("/api/settings/bundle"),
                     hardwareRequest,
-                    apiJson<FsRecommendationsResponse>("/api/fs/recommendations"),
                 ]);
                 setConfigMutable(status.config_mutable ?? true);
                 setHardware(hw);
-                setRecommendations(recommendationData.recommendations);
                 setSettings(mergeSetupSettings(status, bundle));
                 setError(null);
             } catch (err) {
@@ -100,19 +94,109 @@ export default function SetupWizard() {
     }, [showError]);
 
     useEffect(() => {
-        const eventSource = new EventSource("/api/events");
-        eventSource.addEventListener("hardware_state_changed", () => {
-            void apiJson<HardwareInfo>("/api/system/hardware")
-                .then((hw) => setHardware(hw))
-                .catch((err) => {
-                    if (!isHardwarePendingError(err)) {
-                        showError(isApiError(err) ? err.message : "Failed to refresh hardware state.");
-                    }
-                });
-        });
+        if (hardware !== null) {
+            return;
+        }
 
-        return () => eventSource.close();
-    }, [showError]);
+        let cancelled = false;
+        let timeoutId: number | null = null;
+
+        const pollHardware = async () => {
+            try {
+                const hw = await apiJson<HardwareInfo>("/api/system/hardware");
+                if (!cancelled) {
+                    setHardware(hw);
+                }
+            } catch (err) {
+                if (cancelled) {
+                    return;
+                }
+                if (isHardwarePendingError(err)) {
+                    timeoutId = window.setTimeout(() => {
+                        void pollHardware();
+                    }, 500);
+                    return;
+                }
+                showError(isApiError(err) ? err.message : "Failed to refresh hardware state.");
+            }
+        };
+
+        timeoutId = window.setTimeout(() => {
+            void pollHardware();
+        }, 500);
+
+        return () => {
+            cancelled = true;
+            if (timeoutId !== null) {
+                window.clearTimeout(timeoutId);
+            }
+        };
+    }, [hardware, showError]);
+
+    const clearError = useCallback(() => {
+        setError(null);
+        setFieldErrors({});
+    }, []);
+
+    const handleUsernameChange = useCallback((value: string) => {
+        setUsername(value);
+        setFieldErrors((prev) => (prev.username ? { ...prev, username: undefined } : prev));
+    }, []);
+
+    const handlePasswordChange = useCallback((value: string) => {
+        setPassword(value);
+        setFieldErrors((prev) => (prev.password ? { ...prev, password: undefined } : prev));
+    }, []);
+
+    const handleDirectoriesChange = useCallback((directories: string[]) => {
+        setSettings((current) => ({ ...current, scanner: { ...current.scanner, directories } }));
+        if (directories.length === 0) {
+            setPreview(null);
+            setPreviewError(null);
+            setPreviewLoading(false);
+        } else {
+            setPreview(null);
+            setPreviewError(null);
+            setPreviewLoading(true);
+        }
+        if (directories.length > 0) {
+            setFieldErrors((prev) => (prev.directories ? { ...prev, directories: undefined } : prev));
+        }
+    }, []);
+
+    // Pure, parent-owned step validation. Returns the first failing field, if any.
+    const validateStep = useCallback(
+        (target: number): { field: keyof FieldErrors; message: string } | null => {
+            if (target === 1) {
+                if (username.trim().length < 3) {
+                    return { field: "username", message: "Enter an admin username (at least 3 characters)." };
+                }
+                if (password.trim().length < 8) {
+                    return { field: "password", message: "Enter an admin password (at least 8 characters)." };
+                }
+            }
+            if (target === 2 && settings.scanner.directories.length === 0) {
+                return { field: "directories", message: "Select at least one server folder before continuing." };
+            }
+            if (target === 2 && previewLoading) {
+                return {
+                    field: "directories",
+                    message: "Waiting for Alchemist to preview the selected server folders. Stay on the Library step until the preview completes.",
+                };
+            }
+            if (target === 2 && previewError) {
+                return { field: "directories", message: previewError };
+            }
+            if (target === 2 && settings.scanner.directories.length > 0 && preview === null) {
+                return {
+                    field: "directories",
+                    message: "A successful library preview is required before continuing.",
+                };
+            }
+            return null;
+        },
+        [username, password, preview, previewError, previewLoading, settings.scanner.directories.length]
+    );
 
     const handleSubmit = async () => {
         setSubmitting(true);
@@ -123,7 +207,9 @@ export default function SetupWizard() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username, password, settings }),
             });
-            void apiAction("/api/settings/preferences", {
+            // Dashboard reads this preference; write it before navigating away so the
+            // request is not cancelled mid-flight by the redirect.
+            await apiAction("/api/settings/preferences", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "setup_complete", value: "true" }),
@@ -152,31 +238,55 @@ export default function SetupWizard() {
     };
 
     const handleNext = async () => {
-        const validationMessage = await validatorRef.current();
-        if (validationMessage) {
-            showError(validationMessage);
+        const failure = validateStep(step);
+        if (failure) {
+            setFieldErrors({ [failure.field]: failure.message });
+            setError(failure.message);
             return;
         }
-        setError(null);
+        clearError();
         if (step === 5) {
             await handleSubmit();
             return;
         }
-
         setStep((current) => Math.min(current + 1, SETUP_STEP_COUNT));
     };
+
+    const handleBack = () => {
+        clearError();
+        setStep((current) => Math.max(current - 1, 1));
+    };
+
+    // Hardware detection must resolve before the user can finish; the SSE
+    // hardware_state_changed listener refreshes `hardware` and unlocks this.
+    const canComplete =
+        step !== 5 ||
+        (hardware !== null && preview !== null && !previewLoading && previewError === null);
+
+    const previewSummaryValue = previewLoading
+        ? "Previewing"
+        : previewError
+            ? "Preview failed"
+            : preview
+                ? `${preview.total_media_files}`
+                : settings.scanner.directories.length > 0
+                    ? "Preview required"
+                    : "--";
 
     const setupSummary = useMemo(
         () => [
             { label: "Server folders", value: `${settings.scanner.directories.length}` },
-            { label: "Previewed media files", value: preview ? `${preview.total_media_files}` : "--" },
+            { label: "Previewed media files", value: previewSummaryValue },
             { label: "Notification targets", value: `${settings.notifications.targets.length}` },
             { label: "Schedule windows", value: `${settings.schedule.windows.length}` },
         ],
-        [preview, settings.notifications.targets.length, settings.schedule.windows.length, settings.scanner.directories.length]
+        [
+            previewSummaryValue,
+            settings.notifications.targets.length,
+            settings.schedule.windows.length,
+            settings.scanner.directories.length,
+        ]
     );
-
-    validatorRef.current = async () => null;
 
     const currentStep = (() => {
         switch (step) {
@@ -191,9 +301,11 @@ export default function SetupWizard() {
                     <AdminAccountStep
                         username={username}
                         password={password}
-                        onUsernameChange={setUsername}
-                        onPasswordChange={setPassword}
-                        registerValidator={registerValidator}
+                        usernameError={fieldErrors.username}
+                        passwordError={fieldErrors.password}
+                        onUsernameChange={handleUsernameChange}
+                        onPasswordChange={handlePasswordChange}
+                        onEnter={() => void handleNext()}
                     />
                 );
             case 2:
@@ -201,11 +313,13 @@ export default function SetupWizard() {
                     <LibraryStep
                         dirInput={dirInput}
                         directories={settings.scanner.directories}
-                        recommendations={recommendations}
+                        directoriesError={fieldErrors.directories}
+                        previewError={previewError}
                         onDirInputChange={setDirInput}
-                        onDirectoriesChange={(directories) => setSettings((current) => ({ ...current, scanner: { ...current.scanner, directories } }))}
+                        onDirectoriesChange={handleDirectoriesChange}
                         onPreviewChange={setPreview}
-                        registerValidator={registerValidator}
+                        onPreviewErrorChange={setPreviewError}
+                        onPreviewLoadingChange={setPreviewLoading}
                     />
                 );
             case 3:
@@ -236,7 +350,16 @@ export default function SetupWizard() {
                     />
                 );
             case 5:
-                return <ReviewStep setupSummary={setupSummary} settings={settings} preview={preview} error={null} />;
+                return (
+                    <ReviewStep
+                        setupSummary={setupSummary}
+                        settings={settings}
+                        preview={preview}
+                        previewError={previewError}
+                        previewLoading={previewLoading}
+                        hardware={hardware}
+                    />
+                );
             default:
                 return null;
         }
@@ -246,9 +369,10 @@ export default function SetupWizard() {
         <SetupFrame
             step={step}
             configMutable={configMutable}
+            canComplete={canComplete}
             error={error}
             submitting={submitting}
-            onBack={() => setStep((current) => Math.max(current - 1, 1))}
+            onBack={handleBack}
             onNext={() => void handleNext()}
         >
             {currentStep}
