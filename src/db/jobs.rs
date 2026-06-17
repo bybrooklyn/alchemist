@@ -457,6 +457,41 @@ impl Db {
         }))
     }
 
+    pub async fn get_job_failure_explanations(
+        &self,
+        job_ids: &[i64],
+    ) -> Result<HashMap<i64, Explanation>> {
+        if job_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT job_id, legacy_summary, code, payload_json
+             FROM job_failure_explanations
+             WHERE job_id IN (",
+        );
+        let mut separated = qb.separated(", ");
+        for job_id in job_ids {
+            separated.push_bind(job_id);
+        }
+        separated.push_unseparated(")");
+
+        let rows = qb
+            .build_query_as::<JobFailureExplanationRecord>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let explanation = explanation_from_json(&row.payload_json).unwrap_or_else(|| {
+                    failure_from_summary(row.legacy_summary.as_deref().unwrap_or(row.code.as_str()))
+                });
+                (row.job_id, explanation)
+            })
+            .collect())
+    }
+
     /// Update job progress (for resume support)
     pub async fn update_job_progress(&self, id: i64, progress: f64) -> Result<()> {
         let result = sqlx::query(
