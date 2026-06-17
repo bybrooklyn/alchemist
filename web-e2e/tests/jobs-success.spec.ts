@@ -540,7 +540,7 @@ test("skipped job shows humanized skip reason with measured values", async ({ pa
   await page.getByTitle("/media/already-small.mkv").click();
 
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByText("Already efficiently compressed")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("Already efficiently compressed")).toBeVisible();
   await expect(page.getByText("0.043", { exact: true })).toBeVisible();
   await expect(page.getByText("0.050", { exact: true })).toBeVisible();
   await expect(page.getByText("bpp_below_threshold|")).not.toBeVisible();

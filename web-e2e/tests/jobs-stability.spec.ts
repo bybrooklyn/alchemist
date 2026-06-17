@@ -226,6 +226,112 @@ test("queued job detail shows the processor blocked reason", async ({ page }) =>
   await expect(page.getByText("All worker slots are currently busy.")).toBeVisible();
 });
 
+test("job rows never overlap, even across rapid reordering refetches", async ({ page }) => {
+  const longPath = (i: number) =>
+    `/media/television/some-very-long-show-name-season-${String(i).padStart(2, "0")}/Some.Very.Long.Show.Name.S0${i % 9}E${String(i).padStart(2, "0")}.2160p.HDR10.DV.TrueHD.Atmos.7.1.x265-VERYLONGGROUPNAME.mkv`;
+  const statuses = ["queued", "skipped", "completed", "failed", "encoding"];
+  const makeJobs = (offset: number): JobFixture[] =>
+    Array.from({ length: 30 }, (_, i) => ({
+      id: i + 1,
+      input_path: longPath(i),
+      output_path: `/output/job-${i}.mkv`,
+      status: statuses[(i + offset) % statuses.length],
+      priority: 0,
+      progress: statuses[(i + offset) % statuses.length] === "encoding" ? 42 : 100,
+      created_at: "2025-01-01T00:00:00Z",
+      updated_at: `2025-01-02T00:00:${String((i * 7 + offset * 13) % 60).padStart(2, "0")}Z`,
+      decision_reason:
+        statuses[(i + offset) % statuses.length] === "skipped"
+          ? "bpp_below_threshold|bpp=0.043,threshold=0.050"
+          : undefined,
+    })).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+
+  let fetchCount = 0;
+  await page.route("**/api/jobs/table**", async (route) => {
+    fetchCount += 1;
+    await fulfillJson(route, 200, makeJobs(fetchCount));
+  });
+
+  await page.goto("/jobs");
+  await expect(page.locator("tbody tr")).toHaveCount(30);
+
+  const assertNoOverlap = async () => {
+    const boxes = await page.locator("tbody tr").evaluateAll((rows) =>
+      rows.map((row) => {
+        const rect = row.getBoundingClientRect();
+        return { top: rect.top, bottom: rect.bottom };
+      }),
+    );
+    expect(boxes.length).toBe(30);
+    const sorted = [...boxes].sort((a, b) => a.top - b.top);
+    for (let i = 1; i < sorted.length; i += 1) {
+      // Each row must start at or below where the previous one ends
+      // (1px tolerance for collapsed borders).
+      expect(sorted[i].top).toBeGreaterThanOrEqual(sorted[i - 1].bottom - 1);
+    }
+  };
+
+  await assertNoOverlap();
+
+  // Force several reordering refetches in quick succession, the pattern that
+  // previously triggered shared-layout animations sliding cells across rows.
+  for (let i = 0; i < 4; i += 1) {
+    await page.getByRole("button", { name: "Refresh jobs" }).click();
+  }
+  await expect.poll(() => fetchCount).toBeGreaterThanOrEqual(5);
+  await assertNoOverlap();
+
+  // Long names and paths must truncate with ellipsis instead of wrapping.
+  const firstNameCell = page.locator("tbody tr").first().locator("td").nth(1);
+  const overflows = await firstNameCell
+    .locator("span")
+    .first()
+    .evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(overflows).toBe(true);
+});
+
+test("skipped and failed rows surface their reason in the table", async ({ page }) => {
+  const skippedJob: JobFixture = {
+    id: 60,
+    input_path: "/media/skipped-row-reason.mkv",
+    output_path: "/output/skipped-row-reason.mkv",
+    status: "skipped",
+    priority: 0,
+    progress: 0,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-02T00:00:00Z",
+    decision_reason: "bpp_below_threshold|bpp=0.043,threshold=0.050",
+  };
+  const failedJob: JobFixture = {
+    id: 61,
+    input_path: "/media/failed-row-reason.mkv",
+    output_path: "/output/failed-row-reason.mkv",
+    status: "failed",
+    priority: 0,
+    progress: 100,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-02T00:00:00Z",
+    failure_explanation: {
+      category: "failure",
+      code: "encoder_unavailable",
+      summary: "Required encoder unavailable",
+      detail: "The required encoder is not available.",
+      operator_guidance: null,
+      measured: {},
+      legacy_reason: "Unknown encoder 'missing_encoder'",
+    },
+  };
+
+  await page.route("**/api/jobs/table**", async (route) => {
+    await fulfillJson(route, 200, [skippedJob, failedJob]);
+  });
+
+  await page.goto("/jobs");
+
+  await expect(page.getByText("Already efficiently compressed")).toBeVisible();
+  await expect(page.getByText("Required encoder unavailable")).toBeVisible();
+});
+
 test("add file submits the enqueue request and surfaces the response", async ({ page }) => {
   let postedPath = "";
   await page.route("**/api/jobs/table**", async (route) => {

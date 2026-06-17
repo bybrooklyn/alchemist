@@ -10,6 +10,7 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
   page,
 }) => {
   let scanStatusCalls = 0;
+  let previewCalls = 0;
 
   await mockSetupBootstrap(page, {
     recommendations: [
@@ -36,6 +37,7 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
     await fulfillJson(route, 200, { status: "ok" });
   });
   await page.route("**/api/fs/preview", async (route) => {
+    previewCalls += 1;
     await fulfillJson(route, 200, {
       directories: [
         {
@@ -97,6 +99,7 @@ test("setup completes successfully, seeds the first scan, and lands on a paused 
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByPlaceholder("/path/to/media").fill("/srv/media");
   await page.getByRole("button", { name: /^Add$/ }).click();
+  await expect.poll(() => previewCalls).toBe(1);
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
