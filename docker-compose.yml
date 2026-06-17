@@ -5,27 +5,44 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+      # First-run setup is LAN-gated. On Docker Desktop (Mac/Windows) the
+      # host's own connections to a 0.0.0.0-published port can arrive with a
+      # non-private source IP and get rejected — if setup returns
+      # SETUP_ACCESS_FORBIDDEN, bind to loopback instead:
+      #   - "127.0.0.1:3000:3000"
+      # or set ALCHEMIST_SETUP_TOKEN below and open /setup?token=<value>.
     volumes:
-      # Configuration file
-      - ${HOME}/.config/alchemist/config.toml:/app/config/config.toml:ro
-      # Media directories (adjust paths as needed)
+      # Config and database persist here (created next to this file).
+      # Mount the DIRECTORIES, not config.toml itself — the setup wizard
+      # writes config.toml on first run.
+      - ./config:/app/config
+      - ./data:/app/data
+      # Media library and output (adjust paths as needed)
       - /path/to/media:/media
       - /path/to/output:/output
-      # Persistent database
-      - ${HOME}/.config/alchemist:/app/data
     environment:
-      - RUST_LOG=info
       - TZ=America/New_York
+      - RUST_LOG=info
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
-      - ALCHEMIST_CONFIG_MUTABLE=false
-    # For Intel QuickSync (uncomment if needed)
+      # Run as a specific user/group (e.g. your media user) instead of root:
+      # - PUID=1000
+      # - PGID=1000
+
+    # ── Hardware acceleration (opt-in) ─────────────────────────────────
+    # See https://alchemist.bybrooklyn.dev/gpu-passthrough for details.
+    #
+    # Intel QuickSync / AMD VAAPI — uncomment:
     # devices:
     #   - /dev/dri:/dev/dri
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # If driver auto-detection picks wrong, force it via:
+    #   - LIBVA_DRIVER_NAME=iHD   # Intel Broadwell+ (or i965 for older, radeonsi for AMD)
+    #
+    # NVIDIA NVENC — requires the NVIDIA Container Toolkit; uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

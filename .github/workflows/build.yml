@@ -441,6 +441,7 @@ jobs:
           tar -xzf "artifacts/${{ matrix.arch }}/${{ matrix.artifact_name }}.tar.gz" \
             -C "${CONTEXT_DIR}"
           cp Dockerfile.runtime "${CONTEXT_DIR}/Dockerfile"
+          cp entrypoint.sh "${CONTEXT_DIR}/entrypoint.sh"
           chmod +x "${CONTEXT_DIR}/alchemist"
 
       - name: Set up QEMU
