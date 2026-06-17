@@ -52,8 +52,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
     restart: unless-stopped
 ```

@@ -8,9 +8,10 @@ keywords:
   - vaapi docker
 ---
 
-Use `ghcr.io/bybrooklyn/alchemist:latest`. Alchemist does
-not use `PUID` or `PGID`. Handle device permissions with
-Docker device mappings and host groups.
+Use `ghcr.io/bybrooklyn/alchemist:latest`. Set `PUID`/`PGID`
+to run the server as a specific user; for GPU device access,
+make sure that user can open the mapped devices (e.g. is in
+the host's `video`/`render` groups, or use group-add).
 
 ## NVIDIA
 
@@ -40,8 +41,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
@@ -63,8 +64,8 @@ docker run -d \
   --name alchemist \
   --gpus all \
   -p 3000:3000 \
-  -v ~/.config/alchemist:/app/config \
-  -v ~/.config/alchemist:/app/data \
+  -v ./config:/app/config \
+  -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
@@ -104,8 +105,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
@@ -128,8 +129,8 @@ docker run -d \
   --group-add video \
   --group-add render \
   -p 3000:3000 \
-  -v ~/.config/alchemist:/app/config \
-  -v ~/.config/alchemist:/app/data \
+  -v ./config:/app/config \
+  -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
@@ -164,8 +165,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
@@ -188,8 +189,8 @@ docker run -d \
   --group-add video \
   --group-add render \
   -p 3000:3000 \
-  -v ~/.config/alchemist:/app/config \
-  -v ~/.config/alchemist:/app/data \
+  -v ./config:/app/config \
+  -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \

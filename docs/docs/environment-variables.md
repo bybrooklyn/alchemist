@@ -37,10 +37,19 @@ environment:
   - ALCHEMIST_DB_PATH=/app/data/alchemist.db
 ```
 
-Recommended host bind mount:
+Recommended host bind mounts (directories, never `config.toml`
+itself — a single-file mount blocks the setup wizard from
+saving):
 
 ```yaml
 volumes:
-  - ~/.config/alchemist:/app/config
-  - ~/.config/alchemist:/app/data
+  - ./config:/app/config
+  - ./data:/app/data
 ```
+
+Docker-only variables, handled by the container entrypoint:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUID` | `0` | Run the server as this user id; `./config` and `./data` are chowned at start |
+| `PGID` | `0` | Group id for the above (setting only one of the two implies the other) |

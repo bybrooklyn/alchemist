@@ -18,21 +18,33 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ~/.config/alchemist:/app/config
-      - ~/.config/alchemist:/app/data
+      - ./config:/app/config
+      - ./data:/app/data
       - /path/to/media:/media
       - /tmp/alchemist:/tmp   # optional: fast SSD for temp files
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
+      # - PUID=1000
+      # - PGID=1000
     restart: unless-stopped
 ```
+
+The setup wizard writes `config.toml` into `./config` on first
+run. Mount the **directories**, never `config.toml` itself — a
+single-file bind mount blocks the wizard from saving (and if the
+host file doesn't exist, Docker creates a directory named
+`config.toml`), which restarts setup on every boot.
+
+Do not set `ALCHEMIST_CONFIG_MUTABLE=false` until setup has
+completed at least once; the wizard needs to write the config.
 
 ## Volumes
 
 | Mount | Purpose |
 |-------|---------|
-| `~/.config/alchemist` on the host | Mounted into `/app/config` and `/app/data` so `config.toml` and `alchemist.db` persist across restarts |
+| `./config` | `config.toml` — written by the setup wizard, persists across restarts |
+| `./data` | `alchemist.db` (SQLite) — jobs, users, history |
 | `/media` | Your media library — mount read-write |
 | `/tmp` (optional) | Temp dir for in-progress encodes — use a fast SSD |
 
@@ -42,11 +54,27 @@ services:
 |----------|-------------|
 | `ALCHEMIST_CONFIG_PATH` | Path to `config.toml` inside the container |
 | `ALCHEMIST_DB_PATH` | Path to the SQLite database inside the container |
-| `ALCHEMIST_CONFIG_MUTABLE` | Set `false` to block runtime config writes |
+| `ALCHEMIST_CONFIG_MUTABLE` | Set `false` to block runtime config writes (only after setup) |
+| `PUID` / `PGID` | Run as this user/group id; mounted dirs are chowned at start. Unset = root |
 | `RUST_LOG` | Log verbosity: `info`, `debug`, `alchemist=trace` |
 
-Alchemist does not use `PUID`/`PGID`. Handle permissions
-at the host level.
+## Setup returns SETUP_ACCESS_FORBIDDEN
+
+First-run setup is only reachable from the local network. On
+Docker Desktop (Mac/Windows), the host's own connections to a
+`0.0.0.0`-published port can reach the container with a
+non-private source IP, so the gate rejects them. Two fixes:
+
+- Bind the port to loopback while setting up:
+  `"127.0.0.1:3000:3000"`, or
+- Set `ALCHEMIST_SETUP_TOKEN=<secret>` and open
+  `http://host:3000/setup?token=<secret>`.
+
+## Health check
+
+The image ships a `HEALTHCHECK` against `/api/health`, so
+`docker ps` shows `healthy`/`unhealthy` and orchestrators can
+restart a wedged container automatically.
 
 ## Hardware acceleration
 
