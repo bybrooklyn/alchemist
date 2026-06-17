@@ -380,22 +380,7 @@ function JobManager() {
             }
 
             const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
-            setJobs((prev) =>
-                data.map((serverJob) => {
-                    const local = prev.find((j) => j.id === serverJob.id);
-                    const terminal = ["completed", "skipped", "failed", "cancelled"];
-                    const serverIsTerminal = terminal.includes(serverJob.status);
-                    if (
-                        local &&
-                        local.status === serverJob.status &&
-                        terminal.includes(local.status) &&
-                        serverIsTerminal
-                    ) {
-                        return { ...serverJob, status: local.status };
-                    }
-                    return serverJob;
-                })
-            );
+            setJobs(data);
             setActionError(null);
         } catch (e) {
             const message = isApiError(e) ? e.message : "Failed to fetch jobs";
@@ -891,7 +876,26 @@ function JobManager() {
 
             {/* Footer Actions */}
             <div className="flex justify-between items-center pt-2">
-                <p className="text-xs text-helios-slate font-medium">Showing {jobs.length} jobs (Limit 50)</p>
+                <div className="flex items-center gap-3">
+                    <p className="text-xs text-helios-slate font-medium">Showing {jobs.length} jobs (Limit 50)</p>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={() => setPage((p) => Math.max(1, p - 1))}
+                            disabled={page <= 1}
+                            className="px-2 py-1 rounded-md border border-helios-line/20 text-xs font-semibold text-helios-slate hover:border-helios-solar hover:text-helios-solar disabled:opacity-40 disabled:hover:border-helios-line/20 disabled:hover:text-helios-slate transition-all"
+                        >
+                            Prev
+                        </button>
+                        <span className="px-2 text-xs font-mono text-helios-slate">Page {page}</span>
+                        <button
+                            onClick={() => setPage((p) => p + 1)}
+                            disabled={jobs.length < 50}
+                            className="px-2 py-1 rounded-md border border-helios-line/20 text-xs font-semibold text-helios-slate hover:border-helios-solar hover:text-helios-solar disabled:opacity-40 disabled:hover:border-helios-line/20 disabled:hover:text-helios-slate transition-all"
+                        >
+                            Next
+                        </button>
+                    </div>
+                </div>
                 <button
                     onClick={() =>
                         openConfirm({

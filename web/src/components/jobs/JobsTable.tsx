@@ -6,6 +6,7 @@ import type { RefObject, MutableRefObject } from "react";
 import type React from "react";
 import type { Job, ConfirmConfig } from "./types";
 import { isJobActive, retryCountdown } from "./types";
+import { normalizeDecisionExplanation } from "./JobExplanations";
 import TimeDisplay from "../ui/TimeDisplay";
 
 function cn(...inputs: ClassValue[]) {
@@ -61,10 +62,10 @@ export function JobsTable({
 
     return (
         <div className="bg-helios-surface/50 border border-helios-line/20 rounded-lg overflow-hidden shadow-sm">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full table-fixed text-left border-collapse">
                 <thead className="bg-helios-surface border-b border-helios-line/20 text-xs font-medium text-helios-slate">
                     <tr>
-                        <th className="px-6 py-4 w-10">
+                        <th className="px-6 py-4 w-16">
                             <input type="checkbox"
                                 checked={jobs.length > 0 && jobs.every(j => selected.has(j.id))}
                                 onChange={toggleSelectAll}
@@ -72,10 +73,10 @@ export function JobsTable({
                             />
                         </th>
                         <th className="px-6 py-4">File</th>
-                        <th className="px-6 py-4">Status</th>
-                        <th className="px-6 py-4">Progress</th>
-                        <th className="hidden md:table-cell px-6 py-4">Updated</th>
-                        <th className="px-6 py-4 w-14"></th>
+                        <th className="px-6 py-4 w-44">Status</th>
+                        <th className="px-6 py-4 w-36">Progress</th>
+                        <th className="hidden md:table-cell px-6 py-4 w-40">Updated</th>
+                        <th className="px-6 py-4 w-16"></th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-helios-line/10">
@@ -120,25 +121,41 @@ export function JobsTable({
                                         className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
                                     />
                                 </td>
-                                <td className="px-6 py-4 relative">
-                                    <motion.div layoutId={`job-name-${job.id}`} className="flex flex-col">
-                                        <span className="font-medium text-helios-ink truncate max-w-[300px]" title={job.input_path}>
+                                <td className="px-6 py-4">
+                                    <div className="flex flex-col min-w-0">
+                                        <span className="font-medium text-helios-ink truncate" title={job.input_path}>
                                             {job.input_path.split(/[/\\]/).pop()}
                                         </span>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs text-helios-slate truncate max-w-[240px]">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <span className="text-xs text-helios-slate truncate min-w-0">
                                                 {job.input_path}
                                             </span>
-                                            <span className="hidden md:inline rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
+                                            <span className="hidden md:inline shrink-0 rounded-full border border-helios-line/20 px-2 py-0.5 text-xs font-bold text-helios-slate">
                                                 P{job.priority}
                                             </span>
                                         </div>
-                                    </motion.div>
+                                    </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                    <motion.div layoutId={`job-status-${job.id}`}>
+                                    <div>
                                         {getStatusBadge(job.status)}
-                                    </motion.div>
+                                    </div>
+                                    {["failed", "cancelled"].includes(job.status) && job.failure_explanation?.summary && (
+                                        <p className="text-[10px] text-helios-slate mt-1 truncate" title={job.failure_explanation.summary}>
+                                            {job.failure_explanation.summary}
+                                        </p>
+                                    )}
+                                    {job.status === "skipped" && (() => {
+                                        const reason = normalizeDecisionExplanation(
+                                            job.decision_explanation,
+                                            job.decision_reason,
+                                        )?.summary;
+                                        return reason ? (
+                                            <p className="text-[10px] text-helios-slate mt-1 truncate" title={reason}>
+                                                {reason}
+                                            </p>
+                                        ) : null;
+                                    })()}
                                     {job.status === "failed" && (() => {
                                         void tick;
                                         const countdown = retryCountdown(job);
