@@ -121,6 +121,7 @@ export interface JobFixture {
   vmaf_score?: number;
   decision_reason?: string;
   decision_explanation?: ExplanationFixture | null;
+  failure_explanation?: ExplanationFixture | null;
 }
 
 export interface ExplanationFixture {
