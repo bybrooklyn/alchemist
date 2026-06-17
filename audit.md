@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-06-03
+Last updated: 2026-06-13
 
 ---
 
@@ -121,6 +121,85 @@ The resulting SQL is `DELETE FROM jobs WHERE 1=1` (plus the optional `archived` 
    };
    ```
 3. Add a regression test in `src/db/jobs.rs` mod tests that calls `purge_jobs_by_filter(Some(vec![]), None)` on a populated DB and asserts `0` rows affected and the jobs survive.
+
+---
+
+### [P1-12] Native mac app: SSE is dead in production — `AsyncBytes.lines` never yields the blank-line frame delimiter
+
+**Status: RESOLVED** — SSE byte→line framing now lives in `AlchemistSSEParser`
+(`consume(byte:)`/`consume(data:)`) so it survives `.lines` dropping the blank-line
+delimiters; a defensive flush handles servers that omit them. `streamEvents` iterates
+raw bytes, yields a synthetic `.connected` marker on a live 2xx response, and maps a 401
+to `.unauthorized`. Check `sseParserSplitsFramesFromRawBytes` drives two complete frames
+through the real byte path.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/API/AlchemistAPIClient.swift:377` — `for try await line in stream.lines` feeds the parser
+- `native/mac/Sources/AlchemistMacCore/Models/AlchemistModels.swift:1301–1335` — `AlchemistSSEParser.parse(line:)` only flushes an event on an empty line
+- `native/mac/Sources/AlchemistMacChecks/main.swift:60–76` — check passes by feeding `parse(line: "")` manually
+
+**Severity:** P1
+
+**Problem:**
+
+SSE frames end with a blank line, and `AlchemistSSEParser` flushes the pending event only when `line.isEmpty`. But `URLSession.AsyncBytes.lines` (Foundation `AsyncLineSequence`) silently skips empty lines — verified empirically: piping `event: progress\n\ndata: x\n\nlast\n` through `FileHandle.bytes.lines` yields exactly 3 lines, no empties. In production the parser never sees the delimiter, so `eventName` is overwritten by each new `event:` line and `dataLines` accumulates JSON from multiple events (joined with `\n` → undecodable). Net effect: no progress, status, decision, log, engine, or config events ever reach the native UI. Combined with P2-38, the app's entire live-update layer is non-functional; `AlchemistMacChecks` passes because it bypasses the byte path.
+
+**Fix:**
+
+1. In `AlchemistAPIClient.streamEvents()`, stop using `.lines`. Iterate raw bytes and split manually, preserving empty lines:
+   ```swift
+   var parser = AlchemistSSEParser()
+   var buffer: [UInt8] = []
+   for try await byte in stream {
+       if byte == UInt8(ascii: "\n") {
+           var line = String(decoding: buffer, as: UTF8.self)
+           if line.hasSuffix("\r") { line.removeLast() }
+           buffer.removeAll(keepingCapacity: true)
+           if let event = parser.parse(line: line) {
+               continuation.yield(event)
+           }
+       } else {
+           buffer.append(byte)
+       }
+   }
+   ```
+   Keep the existing `parser.finish()` at stream end.
+2. Defensively, also flush the pending frame in `AlchemistSSEParser.parse` when a new `event:` line arrives while `eventName != nil || !dataLines.isEmpty` — return the flushed event before recording the new name.
+3. Update `AlchemistMacChecks.sseParserUsesBackendEventNames` to drive a `Data` fixture of two complete frames through the real byte-splitting path, not hand-fed lines.
+4. Verify with `just mac-run-bundled`: start an encode and confirm progress bars move without pressing Refresh.
+
+---
+
+### [P1-13] Native mac app: bundled daemon stdout/stderr pipes are never drained — daemon freezes once the 64 KB pipe buffer fills
+
+**Status: RESOLVED** — stdout+stderr now stream to
+`~/Library/Application Support/Alchemist/daemon.log` (`FileHandle`, no undrained
+`Pipe()`), so the daemon can't block once the buffer fills. `recentLogLines()` exposes
+the tail (surfaced on start/crash failures) and the log path is shown in SystemView's
+Host Paths card.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/Daemon/DaemonController.swift:52–53` — `process.standardOutput = Pipe(); process.standardError = Pipe()` with no reader
+
+**Severity:** P1
+
+**Problem:**
+
+Two `Pipe()`s are attached and never read. Once alchemistd (running with `RUST_LOG=info`) has written ~64 KB of log output, its next `write(2)` to stdout blocks forever — a library scan or a few encodes is enough. The daemon then hangs mid-operation (jobs stuck in `encoding`, API unresponsive) and the app shows no error. This is a guaranteed-eventual hang, not a race.
+
+**Fix:**
+
+1. In `startBundledDaemon`, drain both pipes. Simplest robust option — stream to a log file under Application Support:
+   ```swift
+   let logURL = AlchemistSupportPaths.root.appendingPathComponent("daemon.log")
+   FileManager.default.createFile(atPath: logURL.path, contents: nil)
+   let handle = try FileHandle(forWritingTo: logURL)
+   process.standardOutput = handle
+   process.standardError = handle
+   ```
+   Or keep `Pipe()` and attach `readabilityHandler`s appending to a ring buffer surfaced in SystemView (better diagnostics; prefer this if cheap).
+2. Expose the last N stderr lines via `DaemonController` so bind failures (see P2-40) become visible.
+3. Add the log path to SystemView's "Host Paths" card.
 
 ---
 
@@ -841,6 +920,181 @@ There is no single-flight guard and no per-route rate cap. The codebase already 
 
 ---
 
+### [P2-36] Native mac app: bundled daemon is orphaned on app quit and never monitored for crashes
+
+**Status: RESOLVED** — an `NSApplicationDelegateAdaptor`'s `applicationShouldTerminate`
+calls `stopBundledDaemon(waitForExit:)` (SIGTERM, bounded wait, SIGKILL fallback) so the
+daemon isn't orphaned. `process.terminationHandler` reports crashes (`Stopped (exit N)`
++ log tail). A pre-spawn `/api/ready` probe adopts an already-running daemon instead of
+spawning a doomed duplicate. Version-strict adoption is deferred (no auth-free version
+endpoint); the private port 41737 carries the anti-collision weight.
+
+**Files:**
+- `native/mac/Sources/AlchemistMac/AlchemistMac.swift:4–127` — no app-termination hook; `stopBundledDaemon()` has zero callers
+- `native/mac/Sources/AlchemistMacCore/Daemon/DaemonController.swift:39–68` — no `terminationHandler`; status string set optimistically
+
+**Severity:** P2
+
+**Problem:**
+
+Nothing calls `stopBundledDaemon()` — quitting the app leaves `alchemistd` (and any in-flight FFmpeg children) running forever. On next launch `process` is nil, so a second daemon is spawned; it fails to bind :3000 and dies, while `status` still reports "Running on 127.0.0.1:3000" and the app silently talks to the stale orphan — which after an app update is an older daemon version. There is also no `terminationHandler`, so a crashed daemon leaves status frozen at "Running".
+
+**Fix:**
+
+1. Add an `NSApplicationDelegateAdaptor` in `AlchemistMac.swift` whose `applicationShouldTerminate` calls `daemon.stopBundledDaemon()` and waits briefly (`waitUntilExit` with timeout) before allowing termination. `Process.terminate()` sends SIGTERM, which the daemon already handles cleanly.
+2. Set `process.terminationHandler` in `startBundledDaemon` to hop to MainActor, set `status = "Stopped (exit \(code))"` / `lastError`, and surface `AlchemistUIError.daemonFailed`.
+3. On startup, before spawning, probe `GET /api/v1/system/info`; if something is already serving, compare `version` — adopt it if it matches the staged daemon version, otherwise report the conflict instead of spawning a doomed duplicate.
+
+---
+
+### [P2-37] Native mac app: cold-launch race deletes the keychain session token and can skip the setup wizard
+
+**Status: RESOLVED** — a single `AppModel.bootstrap()` (readiness poll →
+setup-status → session restore → refresh) replaces the 700 ms guess.
+`restoreSessionIfAvailable` deletes the keychain token only on a real
+`AlchemistAPIError.unauthorized`; transient connection failures keep it.
+`refreshSetupStatus` distinguishes "daemon not ready" from "setup not required" instead
+of defaulting a fresh install to login. (Shared bootstrap routine is [TD-13].)
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:37–49` — `init` starts the daemon then immediately probes, no readiness wait
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:266–283` — `restoreSessionIfAvailable` deletes the token in a blanket `catch`
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:165–179` — `startBundledDaemon` papers over the race with a 700 ms sleep
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:235–250` — `refreshSetupStatus` swallows all errors
+
+**Severity:** P2
+
+**Problem:**
+
+`AppModel.init` spawns the daemon and immediately (no delay on this path) calls `refreshSetupStatus` → error swallowed (`setupRequired` stays false — a fresh install lands on Login instead of the wizard) → `restoreSessionIfAvailable` → `fetchEngineStatus` gets connection-refused because the daemon hasn't bound yet → the `catch` treats any error as auth failure: `clearSessionToken()` + `KeychainHelper.deleteSessionToken()`. The persisted session is destroyed on effectively every cold launch; users must re-login each start. The public `startBundledDaemon()` path "fixes" the same race with `Task.sleep(700ms)` — a guess that loses on slow disks or first-run migrations.
+
+**Fix:**
+
+1. In `restoreSessionIfAvailable`, only clear/delete the token when the error is `AlchemistAPIError.unauthorized`. On any other error keep the token and set `connection.lastError = .connectionFailed(...)`.
+2. Replace the 700 ms sleep with a readiness poll: retry `fetchSetupStatus()` with short backoff for up to ~15 s before declaring the daemon unreachable; share one bootstrap routine across `init`, `startBundledDaemon`, and `reconnect` (see TD-13).
+3. In `refreshSetupStatus`, distinguish "daemon not ready" from "setup not required" instead of silently defaulting to the login flow.
+
+---
+
+### [P2-38] Native mac app: SSE reconnect backoff is dead code; connection state machine lies and loops forever on 401
+
+**Status: RESOLVED** — `startEventStream` no longer flips to `.connected`/resets the
+attempt counter at the top of the loop; it reports `.connecting`/`.reconnecting(attempt:)`
+before each request and flips to `.connected` only on the synthetic `.connected` event
+(yielded by `streamEvents` on a real 2xx). On `.unauthorized` it sets
+`lastError = .authenticationRequired`, calls `stopAll()`, and returns instead of
+hammering every ~2 s. Backoff now actually grows.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/State/ConnectionState.swift:47–79` — `startEventStream` loop
+
+**Severity:** P2
+
+**Problem:**
+
+The top of every `while` iteration runs `self.sseState = .connected; self.reconnectAttempt = 0` before the request is even made. Consequences: (a) the exponential backoff `1 << min(attempt, 5)` can never exceed attempt 1 — the app retries every ~2 s forever and the banner always says "attempt 1"; (b) `sseState` claims connected while connecting or while the server is down (`.connecting` is unreachable after the first iteration); (c) on `.unauthorized` it sets `lastError` but keeps hammering the dead session every 2 s indefinitely instead of stopping and presenting login.
+
+**Fix:**
+
+1. Set `sseState = .connecting` before the request; flip to `.connected` and reset `reconnectAttempt` only after the stream is established (HTTP 200 / first event) — e.g. yield a synthetic connected marker from `streamEvents` or pass an `onConnected` callback.
+2. On `.unauthorized`: `stopAll()`, set `lastError = .authenticationRequired`, and return — RootView's `onChange(of: connection.lastError)` already presents login.
+3. Keep the increment/sleep as-is; the backoff works once the premature reset is removed.
+
+---
+
+### [P2-39] Native mac app: jobs tab, sort, and page changes never refetch — the table silently shows the previous filter's rows
+
+**Status: RESOLVED** — `JobsWorkspaceView` adds `.onChange` refetches for `activeTab`,
+`sortField`, `sortDescending`, and `page` (search keeps its 350 ms debounce). Page size
+is centralized in `JobState.pageSize` (used by both `canGoToNextPage` and the
+`fetchJobs` default), so it can't drift.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/State/JobState.swift:80–105` — `setTab` / `setSortField` / `toggleSortDirection` / `movePage` mutate state only
+- `native/mac/Sources/AlchemistMacCore/Views/Jobs/JobsWorkspaceView.swift:47–65` — refresh wired only to `.task`, the search debounce, and the manual button
+- `native/mac/Sources/AlchemistMacCore/Views/Jobs/JobsComponents.swift` — `JobTabButton` calls `setTab` only
+
+**Severity:** P2
+
+**Problem:**
+
+Clicking the "Failed" tab, changing sort, or paging updates `activeTab`/`sortField`/`page` but nothing calls `refresh`. The fetched rows only change on the next refresh trigger — which, with SSE dead (P1-12), is the manual Refresh button. To the user, tabs/sort/pagination are broken; worse, the next unrelated refresh suddenly applies the pending filter, which reads as data loss.
+
+**Fix:**
+
+1. In `JobsWorkspaceView`, add `.onChange(of: model.jobs.activeTab)`, `.onChange(of: model.jobs.sortField)`, `.onChange(of: model.jobs.sortDescending)`, and `.onChange(of: model.jobs.page)` → `Task { await model.jobs.refresh(apiClient: model.connection.apiClient) }`. Keep the 350 ms debounce for search only.
+2. While here: `canGoToNextPage` (`jobs.count == 50`) hardcodes the page size — extract `static let pageSize = 50` and use it in both the `fetchJobs(limit:)` default and the computed property.
+
+---
+
+### [P2-40] Native mac app: hardcoded port 3000 — bind failure is undetectable and the app trusts whatever is already listening
+
+**Status: RESOLVED** — bundled mode binds the private port 41737
+(`DaemonController.bundledPort`/`bundledBaseURLString`, consumed by `ConnectionState`).
+After spawn, a `/api/ready` readiness poll confirms the daemon actually bound before
+status reads Running; otherwise status flips to Unavailable with the daemon log tail.
+Check `bundledModeUsesPrivatePort` locks the port. Version-strict matching on adopt is
+deferred (no auth-free version endpoint).
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/Daemon/DaemonController.swift:39` — `startBundledDaemon(port: Int = 3000)`
+- `native/mac/Sources/AlchemistMacCore/State/ConnectionState.swift:14` — `baseURLString = "http://127.0.0.1:3000"`
+
+**Severity:** P2
+
+**Problem:**
+
+Port 3000 is the single most common dev-server port. `try process.run()` succeeding only means the binary launched; if the bind fails the daemon exits (silently — see P1-13/P2-36) while status reports "Running on 127.0.0.1:3000", and every API call — including login with admin credentials — goes to whatever foreign process owns the port. The setup flow would even POST the new admin password there.
+
+**Fix:**
+
+1. Default bundled mode to an uncommon fixed port (e.g. 41737); keep 3000 only as the remote-mode suggestion.
+2. After spawn, health-check `GET /api/v1/system/info` and require `version` to match the staged daemon's version before marking status Running (pairs with P2-36 step 3).
+3. Surface daemon exit + stderr (P1-13) so a bind failure is visible within a second of launch.
+
+---
+
+### [P2-41] Setup wizard can deadlock waiting for hardware because it subscribes to an authenticated SSE stream during setup
+
+**Status: RESOLVED** — setup no longer depends on authenticated SSE during first-run
+hardware detection. `SetupWizard` polls `/api/system/hardware` directly while the
+hardware state is unresolved, treats `503 HARDWARE_STATE_UNAVAILABLE` as pending, and
+unlocks Review once a real payload arrives. Setup preview failures are also now surfaced
+and block progression, so the completion path is deterministic. Covered by the new
+`setup polls hardware until the review step can complete` and
+`setup surfaces preview failures inline and blocks leaving the library step` Playwright
+cases.
+
+**Files:**
+- `web/src/components/SetupWizard.tsx:67–106` — initial hardware bootstrap tolerates `503 HARDWARE_STATE_UNAVAILABLE` by setting `hardware = null`, then relies on `new EventSource("/api/events")` to hear `hardware_state_changed`.
+- `web/src/components/SetupWizard.tsx:209–211` — `canComplete` blocks final submission until `hardware !== null`.
+- `web/src/components/setup/SetupFrame.tsx:96–104` — the final "Complete Setup" button is disabled when `!canComplete`.
+- `src/server/middleware.rs:151–184` — `/api/events` is not in the setup-mode allowlist, so it still requires a session/API token after the LAN/token gate.
+
+**Severity:** P2
+
+**Validation:** Code inspection. Current setup E2E covers the ready-hardware path and
+does not exercise the `503 HARDWARE_STATE_UNAVAILABLE` -> wait-for-update flow.
+
+**Problem:**
+
+On first boot, `/api/system/hardware` is allowed during setup but can legitimately return `503 HARDWARE_STATE_UNAVAILABLE` until probing finishes. The new setup flow treats that as "pending", disables completion, and waits for a `hardware_state_changed` event:
+
+```ts
+const eventSource = new EventSource("/api/events");
+const canComplete = step !== 5 || hardware !== null;
+```
+
+But setup users are not authenticated yet, and `/api/events` is still protected by `auth_middleware`. On any machine where hardware probing is slower than the first page load, the Review step can become a permanent spinner with a disabled "Complete Setup" button. If `ALCHEMIST_SETUP_TOKEN` is set, the SSE URL also omits `?token=...`, so token-gated setup deadlocks the same way.
+
+**Fix:**
+
+1. Do not depend on authenticated SSE for first-run setup. Preferred fix: replace the setup-time `EventSource("/api/events")` with bounded polling of `/api/system/hardware` every few hundred milliseconds while `hardware === null`, and stop polling once a real payload arrives.
+2. If you keep SSE, explicitly allow `/api/events` during setup in `auth_middleware` and append the setup token query parameter when `ALCHEMIST_SETUP_TOKEN` mode is active.
+3. Add an end-to-end test that makes the first `/api/system/hardware` call return `503`, later returns a valid payload, and asserts the Review step eventually enables "Complete Setup" without a page reload.
+
+---
+
 ## Technical Debt
 
 ---
@@ -1035,6 +1289,27 @@ The same pattern was the basis for TD-9 (`std::fs::canonicalize` in enqueue path
 1. Delete `_unused_ensure_public_endpoint` outright. `build_safe_client` is the live guard.
 2. Confirm nothing references it (`grep _unused_ensure_public_endpoint src/`) before removal — expected: zero hits outside the definition.
 3. This is a good candidate for the next `/hygiene deadcode` pass if a broader sweep is preferred.
+
+---
+
+### [TD-13] Native mac app: three divergent bootstrap paths (init / startBundledDaemon / reconnect), one with a magic 700 ms sleep
+
+**Status: RESOLVED** — `init`, `startBundledDaemon()`, and `reconnect()` all call a single
+`AppModel.bootstrap()` (readiness poll → setup status → session restore → refresh). The
+700 ms sleep is gone.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:37–49, 165–179, 223–233` — three near-identical async bootstrap sequences
+
+**Severity:** TD
+
+**Problem:**
+
+`init`, `startBundledDaemon()`, and `reconnect()` each hand-roll `refreshSetupStatus → restoreSessionIfAvailable → refreshAll` with subtle differences (only one sleeps 700 ms; init also requests notification permission). The divergence already produced P2-37; every future startup fix must be applied three times.
+
+**Fix:**
+
+1. Extract a single `private func bootstrap() async` containing the readiness poll (P2-37 step 2) + setup check + session restore + refresh; call it from all three entry points.
 
 ---
 
@@ -1246,6 +1521,91 @@ Every other stage's failure path (Analyze/Plan/Execute) calls `cleanup_temp_dir`
 
 ---
 
+### [RG-12] Native mac app: shared URLSession cookie jar fights the manually managed session token
+
+**Status: RESOLVED** — `AlchemistAPIClient` now builds a dedicated ephemeral session
+(`httpShouldSetCookies = false`, `httpCookieAcceptPolicy = .never`) by default instead of
+`URLSession.shared`; the injectable `session:` parameter is retained. Login still reads
+`Set-Cookie` off the response.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/API/AlchemistAPIClient.swift:94–98` — uses `URLSession.shared`
+- `native/mac/Sources/AlchemistMacCore/API/AlchemistAPIClient.swift:460–464` — sets the `Cookie` header manually
+
+**Severity:** RG
+
+**Problem:**
+
+`URLSession.shared` has `httpShouldSetCookies = true` and a persistent cookie jar, so the backend's `Set-Cookie: alchemist_session=...` is stored and auto-attached by the session — and per URLSession documentation, cookie storage can override a manually set `Cookie` header. After logout/`clearSessionToken` or login as a different user, the jar can still inject the old cookie; which credential wins (jar cookie vs. manual cookie vs. `Bearer` header) is undefined from the app's perspective. Works today mostly by luck; violates the deterministic-behavior design rule.
+
+**Fix:**
+
+1. In `init`, build a dedicated session: `let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false; config.httpCookieAcceptPolicy = .never; self.session = URLSession(configuration: config)` (keep the injectable `session:` parameter for checks).
+2. Cookie extraction from the login response keeps working — `Set-Cookie` is still present on the response even when not stored.
+
+---
+
+### [RG-13] Native mac app: status-change handler for the focused job is an empty placeholder — open inspector goes stale
+
+**Status: RESOLVED** — the empty `if` block in `JobState.handleStatusChange` is gone;
+`AppModel.handleEvent`'s `.status` case now reloads `focusedDetail` via
+`tasks.run("job-detail-refresh")` when the changed job is the open one, mirroring the
+`.decision`/`.log` path.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/State/JobState.swift:368–375` — `handleStatusChange` contains `if focusedDetail?.job.id == jobID { … }` with an empty body
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:88–94` — the `.status` event path never reloads `focusedDetail`
+
+**Severity:** RG
+
+**Problem:**
+
+When the job open in the inspector changes status (e.g. encoding → completed), the table row updates but `focusedDetail` keeps the stale status, encode stats, and logs; only a later `.decision`/`.log` event happens to trigger a detail reload. The dead `if` block documents the intent and does nothing.
+
+**Fix:**
+
+1. In `AppModel.handleEvent`'s `.status` case, mirror the `.decision`/`.log` path: if `jobs.focusedDetail?.job.id == jobID`, `tasks.run("job-detail-refresh") { await self.jobs.loadDetails(...) }`.
+2. Delete the empty `if` block in `handleStatusChange` (keep the row update).
+
+---
+
+### [RG-14] Windows release smoke can fail after all assertions pass because `server.log` is still locked during temp-dir cleanup
+
+**Status: RESOLVED** — `release_smoke.py` now uses an explicit temp-root lifecycle
+(`mkdtemp` + `try/finally`) instead of `TemporaryDirectory` cleanup, writes logs outside
+the auto-deleted temp root, and retries cleanup on Windows `PermissionError`s before
+downgrading cleanup failure to a warning. Local validation:
+`python3 scripts/release_smoke.py --binary ./target/debug/alchemist --expected-version 0.3.4-rc.2`
+passed end to end on 2026-06-13.
+
+**Files:**
+- `scripts/release_smoke.py:75–83` — `stop()` terminates the server and waits, but the harness has no Windows-specific retry/release logic for the inherited log handle.
+- `scripts/release_smoke.py:101–142` — the smoke runs two server launches inside one `TemporaryDirectory`, reuses `server.log`, and relies on context-manager cleanup to succeed after the final stop.
+
+**Severity:** RG
+
+**Validation:** Remote release evidence. Confirmed in GitHub Release run `27072707398`,
+job `79905069761` (`smoke / native-windows`) on 2026-06-06.
+
+**Problem:**
+
+The latest published RC proves this path is still flaky. GitHub Actions release run `27072707398` (job `79905069761`, June 6, 2026) completed the native Windows version check, server boot, setup, and `alchemist selftest`, then failed only when Python tried to delete `server.log` from the temp directory:
+
+```text
+PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: '...\\server.log'
+```
+
+That means the release gate can fail even when the artifact itself passes the smoke. The current `ignore_cleanup_errors=True` mitigation is demonstrably insufficient on the hosted Windows runner, so release promotion remains fragile.
+
+**Fix:**
+
+1. Stop relying on `TemporaryDirectory` cleanup for the Windows path. Create the temp root with `tempfile.mkdtemp()`, wrap the whole flow in `try/finally`, and perform explicit `shutil.rmtree(...)` cleanup after all assertions.
+2. In the `finally` block, add a short retry loop on Windows (`PermissionError` with 50–250 ms backoff for a few seconds) before giving up on deletion. Cleanup failure after a successful smoke should log a warning, not fail the release.
+3. Keep `server.log` outside the temp root, or rotate to a per-launch log file and close/flush it before teardown, so the temp-root delete is not coupled to Windows file-handle timing.
+4. Add a regression step in CI that exercises the exact Windows smoke path after `stop(process)` and asserts the harness exits `0` even when log cleanup needs retries.
+
+---
+
 ## UX Gaps
 
 ---
@@ -1335,6 +1695,86 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 
 ---
 
+### [UX-6] Native mac app: ⌘Space "Start Queue" shortcut belongs to Spotlight — it can never fire
+
+**Status: RESOLVED** — Start/Pause Queue are rebound to ⌘⌥S / ⌘⌥P, off the
+Spotlight-owned ⌘Space / ⌘⇧Space.
+
+**Files:**
+- `native/mac/Sources/AlchemistMac/AlchemistMac.swift:91–99` — `.keyboardShortcut(.space, modifiers: [.command])` and `[.command, .shift]`
+
+**Severity:** UX
+
+**Problem:**
+
+⌘Space is reserved system-wide by Spotlight (and ⌘⇧Space is commonly bound too); macOS swallows it before the app sees it. The menu items work by click only, and the displayed shortcut is a lie.
+
+**Fix:**
+
+1. Rebind Start/Pause Queue to free combos, e.g. `.keyboardShortcut("s", modifiers: [.command, .option])` for Start and `.keyboardShortcut("p", modifiers: [.command, .option])` for Pause.
+
+---
+
+### [UX-7] Native mac app: cancelled jobs notify "Encode failed"; notifications miss jobs outside the loaded page
+
+**Status: RESOLVED** — `postStatusNotification` gives `cancelled` its own "Encode
+cancelled" copy (distinct from `failed`) and falls back to "Job #\(id)" when the job
+isn't in the loaded page, so notifications are no longer filter-dependent.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:295–305` — `postStatusNotification`
+
+**Severity:** UX
+
+**Problem:**
+
+`"cancelled"` (a user action) posts the title "Encode failed" — alarming and wrong. And the `jobs.jobs.first(where:)` guard means any job not in the currently loaded 50-row page produces no notification at all, so completion notifications are filter-dependent.
+
+**Fix:**
+
+1. Give `cancelled` its own copy ("Encode cancelled") or skip notifying for user-initiated cancels.
+2. When the job isn't in the loaded page, fetch its name (`fetchJobDetails`) or fall back to "Job #\(id)" instead of dropping the notification.
+
+---
+
+### [UX-8] Setup library preview failures are swallowed, so invalid folders look accepted until the final submit fails
+
+**Status: RESOLVED** — preview failures are now kept in setup state, shown inline on the
+Library step, and treated as validation failures before the wizard can leave the Library
+step or complete setup. Review also shows explicit preview-state messaging instead of a
+silent `--`. Covered by the same new Playwright cases that validate the setup
+completion gate.
+
+**Files:**
+- `web/src/components/setup/LibraryStep.tsx:53–79` — `fetchPreview()` throws a detailed error, but the debounce effect immediately drops it with `.catch(() => undefined)`.
+- `web/src/components/SetupWizard.tsx:213–220` — Review shows previewed-media count as `--`, but there is no inline explanation and the user can continue.
+
+**Severity:** UX
+
+**Validation:** Code inspection. Current setup E2E does not inject a failing
+`/api/fs/preview` response for this path.
+
+**Problem:**
+
+The Library step does perform a server-side preview, but when that preview fails the user sees no feedback at all:
+
+```ts
+const handle = window.setTimeout(() => {
+    void fetchPreview().catch(() => undefined);
+}, 350);
+```
+
+So a mistyped or unreadable folder can sit in the selected list looking valid, the Review step just shows `Previewed media files: --`, and the first explicit error may not appear until `POST /api/setup/complete` rejects the config. This makes the setup flow feel arbitrary, especially for Docker/NAS users already struggling with path semantics.
+
+**Fix:**
+
+1. Keep the preview failure in component state and render it inline under the directory list, next to the existing `directoriesError`.
+2. Treat "preview failed" as a step-level warning or validation failure for Next/Complete until the user fixes or removes the offending path.
+3. In Review, replace the bare `--` with an explicit warning such as "Preview failed; verify server path access" so the missing preview is legible.
+4. Add an e2e test where `/api/fs/preview` returns a path-access error and assert the Library step surfaces that message without waiting for final submit.
+
+---
+
 ## Feature Gaps
 
 ---
@@ -1348,6 +1788,32 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 ### [FG-5] Duplicate intelligence misses same-title files when the container or extension differs
 
 **Status: RESOLVED**
+
+---
+
+### [FG-6] Native mac app: remote connection mode is half-wired — picker does nothing, local paths sent to remote servers
+
+**Status: RESOLVED** — remote mode is fully wired. `AppModel.setConnectionMode` stops the
+bundled daemon and reconnects when switching to remote, and restarts it when switching
+back. `ConnectionState.isRemote` guards `enqueueFiles`/`addWatchFolders` (clear error
+instead of sending Mac-local paths), and `SettingsView`/`ConvertView` disable local-path
+import + drop-to-enqueue in remote mode while keeping upload-based Convert.
+
+**Files:**
+- `native/mac/Sources/AlchemistMacCore/Views/Settings/SettingsView.swift` — Mode picker only sets `connectionMode`
+- `native/mac/Sources/AlchemistMacCore/AppModel.swift:193–219` — `enqueueFiles`/`addWatchFolders` send Mac-local paths
+- `native/mac/Sources/AlchemistMacCore/Views/Convert/ConvertView.swift` — drag-drop and pickers likewise
+
+**Severity:** FG
+
+**Problem:**
+
+The README scopes remote mode as "later", but the UI already exposes the picker and it changes nothing (the bundled daemon keeps running; base-URL edits work regardless of mode). In remote mode, Enqueue / Watch Folder / drop send Mac-local filesystem paths to a server that can't see them — guaranteed confusing failures. Only Convert (upload) is remote-safe.
+
+**Fix:**
+
+1. Until remote mode is real: hide the Mode picker or mark Remote as disabled/experimental.
+2. When wiring it: switching to remote should `stopBundledDaemon()` + reconnect; in remote mode disable local-path features (Enqueue Files, Watch Folder, drop-to-enqueue) and keep upload-based Convert; switching back to bundled should restart the daemon.
 
 ---
 
@@ -1381,3 +1847,46 @@ The standard dark-mode-flash mitigation is to place the inline script in `<head>
 2. **[RG-10] IPv4-Mapped IPv6 Addresses Bypass/Lockout in LAN and Trusted Proxy Checks** — **RESOLVED.** `::ffff:a.b.c.d` is normalized before all relevant classification and keying.
 
 *Note: the stricter `400` on unknown `/api/jobs/table?status=` tokens (introduced in the same branch) was reviewed and deliberately **not** logged — it matches the convention P1-11's fix established for invalid status filters, and the current frontend only sends valid `JobState`s.*
+
+**The 2026-06-11 sweep (native mac app, `native/mac` — two P1, five P2, two RG, two UX, one TD, one FG): all RESOLVED.**
+
+The entire native-mac sweep is closed. `just mac-check` (the `AlchemistMacChecks`
+harness — including the new `sseParserSplitsFramesFromRawBytes` and
+`bundledModeUsesPrivatePort` checks — then `swift build`) passes.
+
+1. **[P1-12] SSE framing** — **RESOLVED.** Byte→line framing moved into
+   `AlchemistSSEParser`; `streamEvents` iterates raw bytes, yields a synthetic
+   `.connected` marker, and maps 401→`.unauthorized`.
+2. **[P1-13] Undrained daemon pipes** — **RESOLVED.** stdout/stderr stream to
+   `daemon.log`; `recentLogLines()` surfaced in SystemView.
+3. **[P2-37] + [TD-13]** — **RESOLVED.** One `bootstrap()` with a readiness poll; keychain
+   token dropped only on real `.unauthorized`.
+4. **[P2-36] + [P2-40]** — **RESOLVED.** Quit-time daemon termination, crash
+   `terminationHandler`, private port 41737, `/api/ready` adopt/readiness probe.
+5. **[P2-38] + [P2-39]** — **RESOLVED.** Honest reconnect state machine (stops on 401,
+   real backoff) and tab/sort/page `.onChange` refetch.
+6. **[RG-12], [RG-13], [UX-6], [UX-7], [FG-6]** — **RESOLVED.** Cookie-free session, live
+   inspector refresh, ⌘⌥S/P shortcuts, cancelled-notification copy, and fully wired
+   remote mode.
+
+*Deferred follow-up (not blocking): strict daemon version-matching on adopt needs an
+auth-free version field on `/api/ready`; until then the private port 41737 carries the
+anti-collision weight.*
+
+**Current release gate status, 2026-06-13:** local `just release-verify` passes with the
+installed toolchain (`~/.bun/bin/bun`, `/usr/local/share/dotnet/dotnet`,
+`/opt/homebrew/bin/{just,gh,ffmpeg,ffprobe,actionlint}`). `docs` is cleared outright; the
+remaining `web` `esbuild` advisories are temporarily ignored in `run_bun_audit.py`
+because the current compatible Astro/Vite line still pins `esbuild ^0.27.x` and the
+broader build-chain migration is deferred.
+
+**The 2026-06-13 readiness sweep (one P2, one RG, one UX): all RESOLVED in the current
+worktree.**
+
+1. **[P2-41] Setup wizard hardware wait can deadlock** — **RESOLVED.** Setup now polls
+   `/api/system/hardware` directly and the pending hardware path is covered by Playwright.
+2. **[RG-14] Windows release smoke cleanup is still flaky** — **RESOLVED.** The smoke
+   harness no longer depends on context-manager temp cleanup and local smoke passes end to
+   end after the rewrite.
+3. **[UX-8] Library preview errors are swallowed** — **RESOLVED.** Preview failures are
+   shown inline and block progression until fixed.
