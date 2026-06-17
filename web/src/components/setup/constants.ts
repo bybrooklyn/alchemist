@@ -8,15 +8,6 @@ import type {
 
 export const SETUP_STEP_COUNT = 5;
 
-export const THEME_OPTIONS = [
-    { id: "helios-orange", name: "Helios Orange" },
-    { id: "sunset", name: "Sunset" },
-    { id: "midnight", name: "Midnight" },
-    { id: "emerald", name: "Emerald" },
-    { id: "deep-blue", name: "Deep Blue" },
-    { id: "lavender", name: "Lavender" },
-];
-
 export const EVENT_OPTIONS = ["completed", "failed", "queued"] as const;
 export const WEEKDAY_OPTIONS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 

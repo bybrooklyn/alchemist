@@ -2,16 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Folder, FolderOpen, X } from "lucide-react";
 import { apiJson, isApiError } from "../../lib/api";
-import type { FsPreviewResponse, FsRecommendation, StepValidator } from "./types";
+import type { FsPreviewResponse } from "./types";
 
 interface LibraryStepProps {
     dirInput: string;
     directories: string[];
-    recommendations: FsRecommendation[];
+    directoriesError?: string;
+    previewError?: string | null;
     onDirInputChange: (value: string) => void;
     onDirectoriesChange: (value: string[]) => void;
     onPreviewChange: (value: FsPreviewResponse | null) => void;
-    registerValidator: (validator: StepValidator) => void;
+    onPreviewErrorChange: (value: string | null) => void;
+    onPreviewLoadingChange: (value: boolean) => void;
 }
 
 interface FsBreadcrumb {
@@ -36,11 +38,13 @@ interface FsBrowseResponse {
 export default function LibraryStep({
     dirInput,
     directories,
-    recommendations: _recommendations,
+    directoriesError,
+    previewError,
     onDirInputChange,
     onDirectoriesChange,
     onPreviewChange,
-    registerValidator,
+    onPreviewErrorChange,
+    onPreviewLoadingChange,
 }: LibraryStepProps) {
     const [pickerOpen, setPickerOpen] = useState(false);
     const [browse, setBrowse] = useState<FsBrowseResponse | null>(null);
@@ -65,29 +69,31 @@ export default function LibraryStep({
                 body: JSON.stringify({ directories }),
             });
             onPreviewChange(data);
+            onPreviewErrorChange(null);
+            onPreviewLoadingChange(false);
             return data;
         } catch (err) {
+            const message = previewFailureMessage(err);
             onPreviewChange(null);
-            throw new Error(previewFailureMessage(err));
+            onPreviewErrorChange(message);
+            onPreviewLoadingChange(false);
+            throw new Error(message);
         }
-    }, [directories, onPreviewChange]);
-
-    registerValidator(async () => {
-        if (directories.length === 0) {
-            return "Select at least one server folder before continuing.";
-        }
-        return null;
-    });
+    }, [directories, onPreviewChange, onPreviewErrorChange, onPreviewLoadingChange]);
 
     useEffect(() => {
         if (directories.length === 0) {
+            onPreviewErrorChange(null);
+            onPreviewLoadingChange(false);
             return;
         }
+        onPreviewErrorChange(null);
+        onPreviewLoadingChange(true);
         const handle = window.setTimeout(() => {
             void fetchPreview().catch(() => undefined);
         }, 350);
         return () => window.clearTimeout(handle);
-    }, [directories, fetchPreview]);
+    }, [directories, fetchPreview, onPreviewErrorChange, onPreviewLoadingChange]);
 
     const addDirectory = (path: string) => {
         const normalized = path.trim();
@@ -186,11 +192,24 @@ export default function LibraryStep({
                 <button
                     type="button"
                     onClick={() => addDirectory(dirInput)}
-                    className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90"
+                    disabled={dirInput.trim().length === 0}
+                    className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     Add
                 </button>
             </div>
+
+            {directoriesError && (
+                <p role="alert" className="text-xs font-medium text-status-error">
+                    {directoriesError}
+                </p>
+            )}
+
+            {!directoriesError && previewError && (
+                <p role="alert" className="text-xs font-medium text-status-error">
+                    {previewError}
+                </p>
+            )}
 
             {pickerOpen ? (
                 <div className="flex h-[540px] flex-col gap-4 overflow-hidden rounded-lg border border-helios-line/30 bg-helios-surface p-4">

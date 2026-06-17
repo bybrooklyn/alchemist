@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, type KeyboardEvent, type ReactNode } from "react";
 import clsx from "clsx";
 
 interface RangeControlProps {
@@ -21,6 +21,8 @@ interface LabeledInputProps {
     type?: string;
     disabled?: boolean;
     helperText?: string;
+    error?: string;
+    onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
 }
 
 interface LabeledSelectProps {
@@ -47,15 +49,18 @@ interface ReviewCardProps {
 }
 
 export function RangeControl({ label, min, max, step, value, onChange, valueLabel, helperText, disabled = false }: RangeControlProps) {
+    const inputId = useId();
+    const helperId = useId();
     return (
         <div className={clsx("space-y-2", disabled && "opacity-60")}>
             <div className="flex items-center justify-between gap-3">
-                <label className="text-xs font-medium text-helios-slate">{label}</label>
+                <label htmlFor={inputId} className="text-xs font-medium text-helios-slate">{label}</label>
                 <span className="rounded-md border border-helios-line/20 bg-helios-surface-soft px-2 py-1 text-xs font-semibold text-helios-ink">
                     {valueLabel ?? value}
                 </span>
             </div>
             <input
+                id={inputId}
                 type="range"
                 min={min}
                 max={max}
@@ -63,38 +68,56 @@ export function RangeControl({ label, min, max, step, value, onChange, valueLabe
                 value={value}
                 onChange={(e) => onChange(parseFloat(e.target.value))}
                 disabled={disabled}
+                aria-describedby={helperText ? helperId : undefined}
                 className="h-1.5 w-full cursor-pointer accent-helios-solar disabled:cursor-not-allowed"
             />
-            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
+            {helperText && <p id={helperId} className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }
 
-export function LabeledInput({ label, value, onChange, placeholder, type = "text", disabled = false, helperText }: LabeledInputProps) {
+export function LabeledInput({ label, value, onChange, placeholder, type = "text", disabled = false, helperText, error, onKeyDown }: LabeledInputProps) {
+    const inputId = useId();
+    const helperId = useId();
+    const errorId = useId();
     return (
         <div className={clsx("space-y-2", disabled && "opacity-60")}>
-            <label className="text-xs font-medium text-helios-slate">{label}</label>
+            <label htmlFor={inputId} className="text-xs font-medium text-helios-slate">{label}</label>
             <input
+                id={inputId}
                 type={type}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
+                onKeyDown={onKeyDown}
                 placeholder={placeholder}
                 disabled={disabled}
-                className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar focus:ring-1 focus:ring-helios-solar disabled:cursor-not-allowed"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={clsx(error && errorId, helperText && helperId) || undefined}
+                className={clsx(
+                    "w-full rounded-md border bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:ring-1 disabled:cursor-not-allowed",
+                    error
+                        ? "border-status-error/60 focus:border-status-error focus:ring-status-error"
+                        : "border-helios-line/20 focus:border-helios-solar focus:ring-helios-solar"
+                )}
             />
-            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
+            {error && <p id={errorId} className="text-xs font-medium text-status-error">{error}</p>}
+            {helperText && <p id={helperId} className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }
 
 export function LabeledSelect({ label, value, onChange, options, disabled = false, helperText }: LabeledSelectProps) {
+    const inputId = useId();
+    const helperId = useId();
     return (
         <div className={clsx("space-y-2", disabled && "opacity-60")}>
-            <label className="text-xs font-medium text-helios-slate">{label}</label>
+            <label htmlFor={inputId} className="text-xs font-medium text-helios-slate">{label}</label>
             <select
+                id={inputId}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 disabled={disabled}
+                aria-describedby={helperText ? helperId : undefined}
                 className="w-full rounded-md border border-helios-line/20 bg-helios-surface-soft px-4 py-3 text-helios-ink outline-none focus:border-helios-solar focus:ring-1 focus:ring-helios-solar disabled:cursor-not-allowed"
             >
                 {options.map((option) => (
@@ -103,7 +126,7 @@ export function LabeledSelect({ label, value, onChange, options, disabled = fals
                     </option>
                 ))}
             </select>
-            {helperText && <p className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
+            {helperText && <p id={helperId} className="text-xs leading-relaxed text-helios-slate">{helperText}</p>}
         </div>
     );
 }

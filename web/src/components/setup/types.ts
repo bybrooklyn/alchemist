@@ -90,17 +90,6 @@ export interface ScanStatus {
     current_folder: string | null;
 }
 
-export interface FsRecommendation {
-    path: string;
-    label: string;
-    reason: string;
-    media_hint: "high" | "medium" | "low" | "unknown";
-}
-
-export interface FsRecommendationsResponse {
-    recommendations: FsRecommendation[];
-}
-
 export interface FsPreviewDirectory {
     path: string;
     exists: boolean;
@@ -121,5 +110,3 @@ export interface SetupSummaryItem {
     label: string;
     value: string;
 }
-
-export type StepValidator = () => Promise<string | null>;
