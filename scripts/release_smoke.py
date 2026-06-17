@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -83,6 +84,55 @@ def stop(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=10)
 
 
+def make_log_path() -> Path:
+    fd, raw_path = tempfile.mkstemp(
+        prefix="alchemist-release-smoke-",
+        suffix=".log",
+    )
+    os.close(fd)
+    return Path(raw_path)
+
+
+def cleanup_dir(path: Path) -> None:
+    delay = 0.05
+    for _ in range(12 if os.name == "nt" else 1):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError as error:
+            if os.name != "nt":
+                print(f"warning: failed to remove {path}: {error}", file=sys.stderr)
+                return
+            time.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+    print(
+        f"warning: failed to remove {path} after retrying; continuing",
+        file=sys.stderr,
+    )
+
+
+def cleanup_file(path: Path) -> None:
+    delay = 0.05
+    for _ in range(12 if os.name == "nt" else 1):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError as error:
+            if os.name != "nt":
+                print(f"warning: failed to remove {path}: {error}", file=sys.stderr)
+                return
+            time.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+    print(
+        f"warning: failed to remove {path} after retrying; continuing",
+        file=sys.stderr,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", required=True)
@@ -93,15 +143,9 @@ def main() -> int:
     binary = str(Path(args.binary).resolve())
     run_checked([binary, "--version"], args.expected_version)
 
-    # ignore_cleanup_errors: on Windows the OS can briefly hold the server's
-    # stdout handle (server.log) open after the process exits, so rmtree on
-    # scope exit can raise PermissionError. Every smoke assertion has already
-    # run by then, and the runner's temp dir is ephemeral, so a cleanup failure
-    # must not fail the smoke.
-    with tempfile.TemporaryDirectory(
-        prefix="alchemist-release-smoke-", ignore_cleanup_errors=True
-    ) as temp:
-        root = Path(temp)
+    root = Path(tempfile.mkdtemp(prefix="alchemist-release-smoke-"))
+    log_path = make_log_path()
+    try:
         media_dir = root / "media"
         media_dir.mkdir()
         port = free_port()
@@ -115,7 +159,6 @@ def main() -> int:
                 "RUST_LOG": "info",
             }
         )
-        log_path = root / "server.log"
         with log_path.open("wb") as log:
             process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
             try:
@@ -127,7 +170,11 @@ def main() -> int:
                 raise
             stop(process)
 
-        subprocess.run([binary, "selftest"], env=env, check=True)
+        try:
+            subprocess.run([binary, "selftest"], env=env, check=True)
+        except Exception:
+            print(log_path.read_text(encoding="utf-8", errors="replace"))
+            raise
 
         with log_path.open("ab") as log:
             process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -138,6 +185,9 @@ def main() -> int:
                 print(log_path.read_text(encoding="utf-8", errors="replace"))
                 raise
             stop(process)
+    finally:
+        cleanup_dir(root)
+        cleanup_file(log_path)
 
     print(f"release smoke passed for {args.expected_version}")
     return 0
