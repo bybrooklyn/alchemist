@@ -28,7 +28,12 @@ COPY --from=frontend-builder /app/dist ./web/dist
 RUN cargo build --release
 
 # Stage 4: Runtime
-FROM debian:testing-slim AS runtime
+FROM debian:trixie-slim AS runtime
+
+LABEL org.opencontainers.image.source="https://github.com/bybrooklyn/alchemist" \
+      org.opencontainers.image.description="Alchemist — self-hosted media transcoding pipeline" \
+      org.opencontainers.image.licenses="GPL-3.0"
+
 WORKDIR /app
 RUN mkdir -p /app/config /app/data
 
@@ -44,6 +49,7 @@ RUN apt-get update && \
     libsqlite3-0 \
     ca-certificates \
     gosu \
+    tini \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
     apt-get install -y --no-install-recommends \
     intel-media-va-driver-non-free \
@@ -87,5 +93,8 @@ RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${ALCHEMIST_SERVER_PORT:-3000}/api/health" >/dev/null || exit 1
+
+ENTRYPOINT ["tini", "--", "/app/entrypoint.sh"]
 CMD ["alchemist"]

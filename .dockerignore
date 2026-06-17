@@ -7,7 +7,10 @@ alchemist.db
 config.toml
 docs
 redoc
+# tests/ is excluded except fixtures: src/system/selftest.rs embeds
+# tests/fixtures/test_h264_with_audio.mp4 via include_bytes! at compile time.
 tests
+!tests/fixtures
 web-e2e
 static
 src/css
@@ -20,6 +23,11 @@ tsconfig.json
 .claude
 .idea
 .runtime
+native
+dist
+deploy
+packaging
+integrations
 web/node_modules
 web/dist
 web/.astro

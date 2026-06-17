@@ -1,6 +1,10 @@
-FROM debian:testing-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 ARG TARGETARCH
+
+LABEL org.opencontainers.image.source="https://github.com/bybrooklyn/alchemist" \
+      org.opencontainers.image.description="Alchemist — self-hosted media transcoding pipeline" \
+      org.opencontainers.image.licenses="GPL-3.0"
 
 WORKDIR /app
 
@@ -16,6 +20,8 @@ RUN apt-get update && \
     va-driver-all \
     libsqlite3-0 \
     ca-certificates \
+    gosu \
+    tini \
     && if [ "${TARGETARCH}" = "amd64" ]; then \
     apt-get install -y --no-install-recommends \
     intel-media-va-driver-non-free \
@@ -44,12 +50,20 @@ RUN set -e; \
     rm -rf "${ARCHIVE}" ffmpeg-*-static
 
 COPY alchemist /usr/local/bin/alchemist
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-ENV LIBVA_DRIVER_NAME=iHD
+# VA-API driver auto-detection: do NOT hardcode LIBVA_DRIVER_NAME here.
+# Users can override via: docker run -e LIBVA_DRIVER_NAME=iHD ...
+# Common values: iHD (Intel ≥ Broadwell), i965 (older Intel), radeonsi (AMD)
 ENV RUST_LOG=info
 ENV ALCHEMIST_CONFIG_PATH=/app/config/config.toml
 ENV ALCHEMIST_DB_PATH=/app/data/alchemist.db
 
 EXPOSE 3000
 
-ENTRYPOINT ["alchemist"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${ALCHEMIST_SERVER_PORT:-3000}/api/health" >/dev/null || exit 1
+
+ENTRYPOINT ["tini", "--", "/app/entrypoint.sh"]
+CMD ["alchemist"]
