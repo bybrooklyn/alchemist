@@ -120,6 +120,10 @@ public struct RootView: View {
         }
         .preferredColorScheme(model.theme.theme.colorScheme)
         .accentColor(model.theme.accent.color)
+        .toast(Binding(
+            get: { model.toast },
+            set: { model.toast = $0 }
+        ))
     }
 
     @ViewBuilder

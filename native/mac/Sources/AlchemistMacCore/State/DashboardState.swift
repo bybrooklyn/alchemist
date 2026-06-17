@@ -10,6 +10,7 @@ public final class DashboardState {
     public var settingsBundle: SettingsBundleResponse?
     public var systemInfo: SystemInfo?
     public var profiles: [LibraryProfile] = []
+    public var watchDirectories: [WatchDirectory] = []
     public var isRefreshing = false
     public var lastError: AlchemistUIError?
 
@@ -27,6 +28,7 @@ public final class DashboardState {
             async let profiles = apiClient.fetchProfiles()
             async let dailyStats = apiClient.fetchDailyStats()
             async let settingsBundle = apiClient.fetchSettingsBundle()
+            async let watchDirs = apiClient.fetchWatchDirectories()
 
             self.stats = try await stats
             self.savings = try await savings
@@ -34,6 +36,7 @@ public final class DashboardState {
             self.profiles = try await profiles
             if let loaded = try? await dailyStats { self.dailyStats = loaded }
             if let loaded = try? await settingsBundle { self.settingsBundle = loaded }
+            if let loaded = try? await watchDirs { self.watchDirectories = loaded }
             lastError = nil
         } catch {
             lastError = mapError(error)

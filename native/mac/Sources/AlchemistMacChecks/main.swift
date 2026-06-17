@@ -24,6 +24,7 @@ struct AlchemistMacChecks {
         try await endpointComposesVersionedAPIPath()
         try await endpointSupportsNestedBasePathForFutureAPIProxy()
         try sseParserUsesBackendEventNames()
+        try sseParserSplitsFramesFromRawBytes()
         try themeMapsColorSchemes()
         try sidebarMatchesWebUISurface()
         try supportPathsUseNativeApplicationSupport()
@@ -35,6 +36,7 @@ struct AlchemistMacChecks {
         try savedJobViewsDecodeFromPreferencePayload()
         try await sessionTokenRoundTripsThroughActor()
         try connectionStateRejectsInvalidURL()
+        try bundledModeUsesPrivatePort()
         try navigationRouterTogglesPresentationState()
         try jobStateAppliesSavedViews()
         print("AlchemistMacChecks passed")
@@ -73,6 +75,37 @@ struct AlchemistMacChecks {
         _ = systemParser.parse(line: "event: engine_status_changed")
         _ = systemParser.parse(line: "data: {}")
         try expect(systemParser.parse(line: "") == .engineStatusChanged, "system event name was ignored")
+    }
+
+    static func sseParserSplitsFramesFromRawBytes() throws {
+        // Drive two complete frames through the real byte-splitting path. The blank
+        // lines between frames are the delimiters `AsyncBytes.lines` used to drop.
+        var parser = AlchemistSSEParser()
+        let fixture = Data(
+            (
+                "event: progress\n" +
+                #"data: {"job_id":7,"percentage":50}"# + "\n" +
+                "\n" +
+                "event: status\n" +
+                #"data: {"job_id":7,"status":"completed"}"# + "\n" +
+                "\n"
+            ).utf8
+        )
+
+        let events = parser.consume(data: fixture)
+        try expect(events.count == 2, "two SSE frames should decode from raw bytes, got \(events.count)")
+
+        guard case .progress(let jobID, let percentage, _) = events.first else {
+            throw CheckFailure.failed("first raw-byte frame should be a progress event")
+        }
+        try expect(jobID == 7, "raw-byte progress job id did not parse")
+        try expect(percentage == 50, "raw-byte progress percentage did not parse")
+
+        guard case .status(let statusJobID, let status) = events.last else {
+            throw CheckFailure.failed("second raw-byte frame should be a status event")
+        }
+        try expect(statusJobID == 7, "raw-byte status job id did not parse")
+        try expect(status == "completed", "raw-byte status value did not parse")
     }
 
     static func themeMapsColorSchemes() throws {
@@ -327,6 +360,21 @@ struct AlchemistMacChecks {
         state.rebuildClient()
         try expect(state.apiClient == nil, "invalid base URL should not create client")
         try expect(state.lastError == .connectionFailed("not a url"), "invalid base URL should produce connection error")
+    }
+
+    @MainActor
+    static func bundledModeUsesPrivatePort() throws {
+        try expect(DaemonController.bundledPort == 41737, "bundled daemon port changed from the private 41737")
+        try expect(
+            DaemonController.bundledBaseURLString == "http://127.0.0.1:41737",
+            "bundled base URL changed"
+        )
+        let state = ConnectionState()
+        try expect(
+            state.baseURLString == DaemonController.bundledBaseURLString,
+            "default base URL drifted from the bundled port"
+        )
+        try expect(!state.isRemote, "default connection mode should be bundled")
     }
 
     @MainActor

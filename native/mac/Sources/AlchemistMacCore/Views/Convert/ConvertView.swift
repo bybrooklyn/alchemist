@@ -25,12 +25,20 @@ struct ConvertView: View {
                     ImportActionCard(title: "Enqueue Files", detail: "Add files directly to the Jobs queue.", symbol: "film.stack") {
                         Task { await model.enqueueFiles(selectFiles()) }
                     }
+                    .disabled(model.connection.isRemote)
                     ImportActionCard(title: "Watch Folder", detail: "Monitor a directory for new media automatically.", symbol: "folder.badge.plus") {
                         Task { await model.addWatchFolders(selectFolders()) }
                     }
+                    .disabled(model.connection.isRemote)
                 }
 
-                DropZone(isTargeted: $isTargeted) { providers in
+                if model.connection.isRemote {
+                    Text("Connected to a remote server. Local file import and watch folders are unavailable — only Convert (upload) can reach the server.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                DropZone(isTargeted: $isTargeted, isEnabled: !model.connection.isRemote) { providers in
                     Task { await handleDrop(providers) }
                 }
 
@@ -83,6 +91,7 @@ struct ConvertView: View {
 
 struct DropZone: View {
     @Binding var isTargeted: Bool
+    var isEnabled: Bool = true
     var onDrop: ([NSItemProvider]) -> Void
 
     var body: some View {
@@ -92,15 +101,19 @@ struct DropZone: View {
                 .foregroundStyle(isTargeted ? Color.heliosAccent : .secondary)
             Text("Drop media here")
                 .font(.headline)
-            Text("Files are enqueued; folders are added as watched folders.")
+            Text(isEnabled
+                ? "Files are enqueued; folders are added as watched folders."
+                : "Unavailable for remote servers.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
+        .opacity(isEnabled ? 1 : 0.5)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isTargeted ? Color.heliosAccent : .white.opacity(0.1), style: StrokeStyle(lineWidth: 1.5, dash: isTargeted ? [] : [6, 4])))
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            guard isEnabled else { return false }
             onDrop(providers)
             return true
         }

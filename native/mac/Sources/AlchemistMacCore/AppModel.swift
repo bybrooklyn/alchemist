@@ -19,6 +19,7 @@ public final class AppModel {
     public let daemon = DaemonController()
     public var theme = ThemeModel.prototypeDefault
     public var setupRequired = false
+    public var toast: ToastMessage?
 
     // MARK: - Convenience accessors (backward compat during migration)
 
@@ -39,13 +40,45 @@ public final class AppModel {
         daemon.startBundledDaemon()
         Task {
             await notifications.requestAuthorizationIfNeeded()
-            await refreshSetupStatus()
-            guard !setupRequired else { return }
-            await restoreSessionIfAvailable()
-            if auth.isAuthenticated {
-                await refreshAll()
-            }
+            await bootstrap()
         }
+    }
+
+    // MARK: - Bootstrap
+
+    /// Single startup/reconnect routine shared by `init`, `startBundledDaemon`, and
+    /// `reconnect` (audit TD-13). Waits for the daemon to actually answer before
+    /// checking setup/session, replacing three divergent hand-rolled sequences and the
+    /// magic 700 ms sleep that lost on slow disks / first-run migrations.
+    public func bootstrap() async {
+        await waitForDaemonReady()
+        await refreshSetupStatus()
+        guard !setupRequired else { return }
+        await restoreSessionIfAvailable()
+        if auth.isAuthenticated {
+            await refreshAll()
+        }
+    }
+
+    /// Poll setup status with short backoff until the daemon responds (or we give up).
+    private func waitForDaemonReady() async {
+        guard let client = connection.apiClient else { return }
+        let deadline = Date().addingTimeInterval(15)
+        var delay: UInt64 = 150_000_000
+        while Date() < deadline {
+            if Task.isCancelled { return }
+            if (try? await client.fetchSetupStatus()) != nil {
+                return
+            }
+            try? await Task.sleep(nanoseconds: delay)
+            delay = min(delay * 2, 1_500_000_000)
+        }
+    }
+
+    // MARK: - Toast
+
+    public func showToast(_ type: ToastType, _ message: String) {
+        withAnimation { toast = ToastMessage(type: type, message: message) }
     }
 
     // MARK: - Top-level refresh
@@ -88,6 +121,13 @@ public final class AppModel {
         case .status(let jobID, let status):
             jobs.handleStatusChange(jobID: jobID, status: status)
             postStatusNotification(jobID: jobID, status: status)
+            if jobs.focusedDetail?.job.id == jobID {
+                // Keep the open inspector's status/stats/logs current (audit RG-13).
+                tasks.run("job-detail-refresh") { [weak self] in
+                    guard let self else { return }
+                    await self.jobs.loadDetails(id: jobID, apiClient: self.connection.apiClient)
+                }
+            }
             tasks.run("jobs-refresh") { [weak self] in
                 guard let self else { return }
                 await self.jobs.refresh(apiClient: self.connection.apiClient, silent: true)
@@ -164,17 +204,26 @@ public final class AppModel {
 
     public func startBundledDaemon() {
         connection.connectionMode = .bundled
+        connection.baseURLString = DaemonController.bundledBaseURLString
         daemon.startBundledDaemon()
-        connection.baseURLString = "http://127.0.0.1:3000"
         connection.rebuildClient()
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            await refreshSetupStatus()
-            guard !setupRequired else { return }
-            await restoreSessionIfAvailable()
-            if auth.isAuthenticated {
-                await refreshAll()
-            }
+        Task { await bootstrap() }
+    }
+
+    /// Switch between the bundled daemon and a remote server (audit FG-6). Bundled mode
+    /// owns the local daemon lifecycle; remote mode stops it and talks only to the
+    /// configured URL.
+    public func setConnectionMode(_ mode: ConnectionMode) {
+        guard connection.connectionMode != mode else { return }
+        switch mode {
+        case .bundled:
+            startBundledDaemon()
+        case .remote:
+            connection.connectionMode = .remote
+            daemon.stopBundledDaemon()
+            connection.stopAll()
+            connection.rebuildClient()
+            Task { await bootstrap() }
         }
     }
 
@@ -191,12 +240,26 @@ public final class AppModel {
     // MARK: - File import
 
     public func enqueueFiles(_ urls: [URL]) async {
+        guard !connection.isRemote else {
+            jobs.lastError = .apiError(
+                code: "remote_local_path",
+                message: "Local file paths can't be sent to a remote server. Use Convert (upload) instead."
+            )
+            return
+        }
         for url in urls {
             await jobs.enqueuePath(url.path, apiClient: connection.apiClient)
         }
     }
 
     public func addWatchFolders(_ urls: [URL]) async {
+        guard !connection.isRemote else {
+            jobs.lastError = .apiError(
+                code: "remote_local_path",
+                message: "Watch folders use Mac-local paths a remote server can't see."
+            )
+            return
+        }
         guard let client = connection.apiClient else { return }
         for url in urls {
             do {
@@ -222,14 +285,7 @@ public final class AppModel {
 
     public func reconnect() {
         connection.rebuildClient()
-        Task {
-            await refreshSetupStatus()
-            guard !setupRequired else { return }
-            await restoreSessionIfAvailable()
-            if auth.isAuthenticated {
-                await refreshAll()
-            }
-        }
+        Task { await bootstrap() }
     }
 
     public func refreshSetupStatus() async {
@@ -238,6 +294,7 @@ public final class AppModel {
             let status = try await client.fetchSetupStatus()
             setupRequired = status.setupRequired
             setup.setupStatus = status
+            connection.lastError = nil
             if setupRequired {
                 auth.isAuthenticated = false
                 connection.stopAll()
@@ -245,7 +302,10 @@ public final class AppModel {
                 await setup.loadBootstrap(apiClient: client)
             }
         } catch {
-            // Ignore setup status failures. Normal auth flow will surface errors.
+            // The daemon isn't reachable yet — surface a connection error and leave
+            // setupRequired unchanged rather than silently defaulting a fresh install
+            // to the login screen instead of the wizard (audit P2-37).
+            connection.lastError = .connectionFailed(error.localizedDescription)
         }
     }
 
@@ -276,9 +336,16 @@ public final class AppModel {
             startEventStream()
             startResourcePolling()
         } catch {
-            await client.clearSessionToken()
-            try? KeychainHelper.deleteSessionToken()
-            handleSessionError(error)
+            if let apiError = error as? AlchemistAPIError, apiError == .unauthorized {
+                // Only a real auth rejection should drop the persisted session.
+                await client.clearSessionToken()
+                try? KeychainHelper.deleteSessionToken()
+                handleSessionError(error)
+            } else {
+                // Daemon not ready / transient connection failure — keep the token so the
+                // user isn't forced to re-login on every cold launch (audit P2-37).
+                connection.lastError = .connectionFailed(error.localizedDescription)
+            }
         }
     }
 
@@ -293,12 +360,16 @@ public final class AppModel {
     }
 
     private func postStatusNotification(jobID: Int64, status: String) {
-        guard let job = jobs.jobs.first(where: { $0.id == jobID }) else { return }
+        // Don't drop notifications for jobs outside the loaded page (audit UX-7).
+        let name = jobs.jobs.first(where: { $0.id == jobID })?.fileName ?? "Job #\(jobID)"
         switch status {
         case "completed":
-            notifications.postJobNotification(title: "Encode completed", body: job.fileName)
-        case "failed", "cancelled":
-            notifications.postJobNotification(title: "Encode failed", body: job.fileName)
+            notifications.postJobNotification(title: "Encode completed", body: name)
+        case "failed":
+            notifications.postJobNotification(title: "Encode failed", body: name)
+        case "cancelled":
+            // A user-initiated cancel is not a failure.
+            notifications.postJobNotification(title: "Encode cancelled", body: name)
         default:
             break
         }

@@ -1,15 +1,31 @@
 import AlchemistMacCore
+import AppKit
 import SwiftUI
+
+/// Terminates the bundled daemon when the app quits so `alchemistd` (and any in-flight
+/// FFmpeg children) aren't orphaned, which would otherwise leave a stale daemon bound to
+/// the port that the next launch silently talks to (audit P2-36).
+@MainActor
+final class AlchemistAppDelegate: NSObject, NSApplicationDelegate {
+    weak var appModel: AppModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        appModel?.daemon.stopBundledDaemon(waitForExit: true)
+        return .terminateNow
+    }
+}
 
 @main
 struct AlchemistMac: App {
     @State private var appModel = AppModel()
+    @NSApplicationDelegateAdaptor(AlchemistAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(appModel)
                 .frame(minWidth: 1100, minHeight: 720)
+                .onAppear { appDelegate.appModel = appModel }
         }
         .windowStyle(.titleBar)
         .commands {
@@ -88,15 +104,17 @@ struct AlchemistMac: App {
 
                 Divider()
 
+                // ⌘Space / ⌘⇧Space are owned by Spotlight and never reach the app, so
+                // bind queue control to free combos instead (audit UX-6).
                 Button("Start Queue") {
                     Task { await appModel.resumeQueue() }
                 }
-                .keyboardShortcut(.space, modifiers: [.command])
+                .keyboardShortcut("s", modifiers: [.command, .option])
 
                 Button("Pause Queue") {
                     Task { await appModel.pauseQueue() }
                 }
-                .keyboardShortcut(.space, modifiers: [.command, .shift])
+                .keyboardShortcut("p", modifiers: [.command, .option])
             }
 
             CommandMenu("View") {

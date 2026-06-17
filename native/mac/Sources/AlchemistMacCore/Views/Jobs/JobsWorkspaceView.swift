@@ -63,6 +63,20 @@ struct JobsWorkspaceView: View {
                 }
             }
         }
+        // Tab/sort/page changes mutate state only; without these the table silently keeps
+        // the previous filter's rows until some other refresh fires (audit P2-39).
+        .onChange(of: model.jobs.activeTab) { _, _ in
+            Task { await model.jobs.refresh(apiClient: model.connection.apiClient) }
+        }
+        .onChange(of: model.jobs.sortField) { _, _ in
+            Task { await model.jobs.refresh(apiClient: model.connection.apiClient) }
+        }
+        .onChange(of: model.jobs.sortDescending) { _, _ in
+            Task { await model.jobs.refresh(apiClient: model.connection.apiClient) }
+        }
+        .onChange(of: model.jobs.page) { _, _ in
+            Task { await model.jobs.refresh(apiClient: model.connection.apiClient) }
+        }
         .onDisappear {
             searchTask?.cancel()
         }
@@ -205,7 +219,10 @@ struct JobsWorkspaceView: View {
             .buttonStyle(.glass)
 
             Button {
-                Task { await model.jobs.restartFailed(apiClient: model.connection.apiClient) }
+                Task {
+                    let result = await model.jobs.restartFailed(apiClient: model.connection.apiClient)
+                    if let (type, message) = result { model.showToast(type, message) }
+                }
             } label: {
                 Label("Retry Failed", systemImage: "arrow.counterclockwise")
             }
@@ -218,7 +235,10 @@ struct JobsWorkspaceView: View {
                     confirmLabel: "Clear",
                     role: .destructive
                 ) {
-                    Task { await model.jobs.clearCompleted(apiClient: model.connection.apiClient) }
+                    Task {
+                        let result = await model.jobs.clearCompleted(apiClient: model.connection.apiClient)
+                        if let (type, message) = result { model.showToast(type, message) }
+                    }
                 }
             } label: {
                 Label("Clear Completed", systemImage: "archivebox")
@@ -308,7 +328,10 @@ struct JobsWorkspaceView: View {
                     message: "Restart \(model.jobs.selectedIDs.count) selected jobs?",
                     confirmLabel: "Restart"
                 ) {
-                    Task { await model.jobs.performBatch(.restart, apiClient: model.connection.apiClient) }
+                    Task {
+                        let result = await model.jobs.performBatch(.restart, apiClient: model.connection.apiClient)
+                        if let (type, message) = result { model.showToast(type, message) }
+                    }
                 }
             } label: {
                 Label("Restart", systemImage: "arrow.counterclockwise")
@@ -323,7 +346,10 @@ struct JobsWorkspaceView: View {
                     confirmLabel: "Cancel",
                     role: .destructive
                 ) {
-                    Task { await model.jobs.performBatch(.cancel, apiClient: model.connection.apiClient) }
+                    Task {
+                        let result = await model.jobs.performBatch(.cancel, apiClient: model.connection.apiClient)
+                        if let (type, message) = result { model.showToast(type, message) }
+                    }
                 }
             } label: {
                 Label("Cancel", systemImage: "xmark.circle")
@@ -337,7 +363,10 @@ struct JobsWorkspaceView: View {
                     confirmLabel: "Delete",
                     role: .destructive
                 ) {
-                    Task { await model.jobs.performBatch(.delete, apiClient: model.connection.apiClient) }
+                    Task {
+                        let result = await model.jobs.performBatch(.delete, apiClient: model.connection.apiClient)
+                        if let (type, message) = result { model.showToast(type, message) }
+                    }
                 }
             } label: {
                 Label("Delete", systemImage: "trash")
@@ -425,7 +454,10 @@ struct JobsWorkspaceView: View {
                     confirmLabel: "Clear History",
                     role: .destructive
                 ) {
-                    Task { await model.jobs.clearHistory(apiClient: model.connection.apiClient) }
+                    Task {
+                        let result = await model.jobs.clearHistory(apiClient: model.connection.apiClient)
+                        if let (type, message) = result { model.showToast(type, message) }
+                    }
                 }
             } label: {
                 Label("Clear History", systemImage: "trash")
