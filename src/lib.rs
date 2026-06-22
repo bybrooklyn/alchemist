@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod media;
 pub mod notifications;
 pub mod orchestrator;
+pub mod redact;
 pub mod runtime;
 pub mod scheduler;
 pub mod server;

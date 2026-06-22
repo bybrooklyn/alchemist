@@ -1,4 +1,4 @@
-import { X, Clock, Info, Activity, Database, Zap, Maximize2, AlertCircle, RefreshCw, Ban, Trash2 } from "lucide-react";
+import { X, Clock, Info, Activity, Database, Zap, Maximize2, AlertCircle, RefreshCw, Ban, Trash2, ExternalLink } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -8,6 +8,25 @@ import { apiJson } from "../../lib/api";
 import TimeDisplay from "../ui/TimeDisplay";
 import type { JobDetail, EncodeStats, ExplanationView, LogEntry, ConfirmConfig, Job, ProcessorStatus } from "./types";
 import { formatBytes, formatDuration, logLevelClass, isJobActive } from "./types";
+import { docsUrlForCode } from "./JobExplanations";
+
+/** Renders a small "Error code · Learn more" docs link for an explanation. */
+function DocsCodeLink({ explanation }: { explanation: ExplanationView }) {
+    const url = explanation.docs_url ?? docsUrlForCode(explanation.code);
+    return (
+        <a
+            href={url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1 text-xs font-medium text-helios-solar hover:underline"
+        >
+            <span className="font-mono">{explanation.code}</span>
+            <span aria-hidden>·</span>
+            Learn more
+            <ExternalLink size={11} />
+        </a>
+    );
+}
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -400,6 +419,7 @@ export function JobDetailModal({
                                                         {focusedFailure.legacy_reason}
                                                     </p>
                                                 )}
+                                                <DocsCodeLink explanation={focusedFailure} />
                                             </>
                                         ) : (
                                             <p className="text-sm text-helios-slate">

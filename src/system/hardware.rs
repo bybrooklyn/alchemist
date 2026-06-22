@@ -411,10 +411,14 @@ fn probe_args_for_backend(
 
     args.extend(["-c:v".to_string(), encoder.to_string()]);
 
-    if backend == HardwareBackend::Videotoolbox {
-        args.push("-allow_sw".to_string());
-        args.push("1".to_string());
-    }
+    // VideoToolbox: probe the *hardware* path only. We deliberately do NOT pass
+    // `-allow_sw 1` here. With software fallback enabled the probe succeeds even
+    // when no hardware VideoToolbox session can be created (headless/daemon/SSH
+    // context), which made detection report the encoder "available" while every
+    // real encode then died with "Could not open encoder ... -22". The real
+    // transcode command also omits `-allow_sw`, so the probe must match it: if a
+    // hardware session cannot be opened, VideoToolbox is correctly treated as
+    // unavailable and the planner falls back to CPU. See errors#encoder_open_failed.
 
     args.extend([
         "-frames:v".to_string(),
@@ -1680,10 +1684,14 @@ mod tests {
     }
 
     #[test]
-    fn videotoolbox_probe_uses_yuv420p_filter_and_software_fallback() {
+    fn videotoolbox_probe_is_hardware_only_and_matches_real_command() {
         let args = probe_args_for_backend(HardwareBackend::Videotoolbox, "hevc_videotoolbox", None);
+        // Still uploads a yuv420p frame the encoder accepts...
         assert!(args.contains(&"format=yuv420p".to_string()));
-        assert!(args.contains(&"-allow_sw".to_string()));
+        // ...but must NOT allow software fallback, otherwise detection would pass
+        // on hosts where no hardware session can be created while the real encode
+        // (which never passes -allow_sw) fails. Probe and runtime must agree.
+        assert!(!args.contains(&"-allow_sw".to_string()));
     }
 
     #[test]

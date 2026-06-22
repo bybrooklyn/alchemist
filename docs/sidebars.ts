@@ -78,6 +78,7 @@ const sidebars: SidebarsConfig = {
         'observability',
         'database-schema',
         'architecture',
+        'errors',
         'troubleshooting',
         'troubleshooting/nvenc-not-detected',
         'troubleshooting/vaapi-not-detected',

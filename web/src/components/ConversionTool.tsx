@@ -12,7 +12,7 @@ import {
     Trash2,
     Upload,
 } from "lucide-react";
-import { apiAction, apiFetch, apiJson, isApiError } from "../lib/api";
+import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 
 interface SubtitleStreamMetadata {
@@ -166,8 +166,63 @@ const QUALITY_VALUES = {
 
 type QualityKey = keyof typeof QUALITY_VALUES | "custom";
 
+const TERMINAL_CONVERSION_STATES = new Set(["completed", "failed", "cancelled"]);
+
+/** Uploads a file via XHR so we get real upload progress and no client-side
+ *  timeout (a large video easily outlasts the default fetch ceiling). Mirrors
+ *  `apiFetch`'s cookie auth + 401 handling. */
+function uploadConversionFile(
+    file: File,
+    onProgress: (percent: number) => void,
+): Promise<UploadResponse> {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/conversion/uploads");
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+                onProgress(Math.round((event.loaded / event.total) * 100));
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    resolve(JSON.parse(xhr.responseText) as UploadResponse);
+                } catch {
+                    reject(new Error("The server returned a malformed upload response."));
+                }
+                return;
+            }
+            if (xhr.status === 401 && typeof window !== "undefined") {
+                window.location.href = "/login";
+                return;
+            }
+            reject(new Error(parseXhrError(xhr)));
+        };
+        xhr.onerror = () => reject(new Error("Upload failed: network error."));
+        xhr.onabort = () => reject(new Error("Upload was cancelled."));
+        const formData = new FormData();
+        formData.append("file", file);
+        xhr.send(formData);
+    });
+}
+
+/** Extracts a human message from an XHR error body (problem+json or text). */
+function parseXhrError(xhr: XMLHttpRequest): string {
+    const fallback = `Upload failed (${xhr.status})`;
+    const text = xhr.responseText?.trim();
+    if (!text) return fallback;
+    try {
+        const body = JSON.parse(text) as { detail?: string; message?: string; error?: { message?: string } };
+        return body.detail ?? body.message ?? body.error?.message ?? fallback;
+    } catch {
+        return text.length < 300 ? text : fallback;
+    }
+}
+
 export function ConversionTool() {
     const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const [previewing, setPreviewing] = useState(false);
     const [starting, setStarting] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -182,13 +237,27 @@ export function ConversionTool() {
 
     useEffect(() => {
         if (!conversionJobId) return;
+        // Stop polling once the job reaches a terminal state — there is nothing
+        // left to learn, and an idle Convert tab otherwise hits the API forever.
+        if (status && TERMINAL_CONVERSION_STATES.has(status.status)) return;
+        let consecutiveErrors = 0;
         const id = window.setInterval(() => {
             void apiJson<JobStatusResponse>(`/api/conversion/jobs/${conversionJobId}`)
-                .then(setStatus)
-                .catch(() => undefined);
+                .then((next) => {
+                    consecutiveErrors = 0;
+                    setStatus(next);
+                })
+                .catch((err) => {
+                    consecutiveErrors += 1;
+                    // Surface a persistent problem instead of silently swallowing it.
+                    if (consecutiveErrors === 3) {
+                        const message = isApiError(err) ? err.message : "Lost contact with the conversion job.";
+                        showToast({ kind: "warning", title: "Conversion", message });
+                    }
+                });
         }, 2000);
         return () => window.clearInterval(id);
-    }, [conversionJobId]);
+    }, [conversionJobId, status?.status]);
 
     const runPreview = useCallback(
         async (
@@ -252,19 +321,11 @@ export function ConversionTool() {
 
     const uploadFile = async (file: File) => {
         setUploading(true);
+        setUploadProgress(0);
         setError(null);
         setPreviewError(null);
         try {
-            const formData = new FormData();
-            formData.append("file", file);
-            const response = await apiFetch("/api/conversion/uploads", {
-                method: "POST",
-                body: formData,
-            });
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
-            const payload = (await response.json()) as UploadResponse;
+            const payload = await uploadConversionFile(file, setUploadProgress);
             setConversionJobId(payload.conversion_job_id);
             setProbe(payload.probe);
             setSettings(payload.normalized_settings);
@@ -282,6 +343,7 @@ export function ConversionTool() {
             showToast({ kind: "error", title: "Conversion", message });
         } finally {
             setUploading(false);
+            setUploadProgress(0);
         }
     };
 
@@ -389,8 +451,16 @@ export function ConversionTool() {
                         disabled={uploading}
                     />
                     <span className="rounded-lg bg-helios-solar px-4 py-2 text-sm font-bold text-helios-main">
-                        {uploading ? "Uploading..." : "Choose File"}
+                        {uploading ? `Uploading... ${uploadProgress}%` : "Choose File"}
                     </span>
+                    {uploading && (
+                        <div className="mt-1 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-helios-line/20">
+                            <div
+                                className="h-full rounded-full bg-helios-solar transition-all duration-200"
+                                style={{ width: `${uploadProgress}%` }}
+                            />
+                        </div>
+                    )}
                 </label>
             )}
 

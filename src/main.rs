@@ -363,7 +363,9 @@ fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bo
 
 async fn run() -> Result<()> {
     let args = Args::parse();
-    init_logging(args.debug_flags);
+    // Held for the lifetime of `run()` so the non-blocking file writer keeps
+    // flushing; dropped on shutdown.
+    let _log_guard = init_logging(args.debug_flags);
 
     if args.install {
         return install_binary(args.install_directory).await;
@@ -1408,7 +1410,15 @@ fn print_cli_plan(items: &[CliPlanItem]) {
     }
 }
 
-fn init_logging(debug_flags: bool) {
+/// Initialise logging. Returns a `WorkerGuard` that must be kept alive for the
+/// duration of the program — dropping it flushes the non-blocking file writer.
+/// `None` is returned only when the log directory could not be created, in which
+/// case logging still works on stdout.
+#[must_use]
+fn init_logging(debug_flags: bool) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     let default_level = if debug_flags {
         tracing::Level::DEBUG
     } else {
@@ -1416,41 +1426,71 @@ fn init_logging(debug_flags: bool) {
     };
     let env_filter = EnvFilter::from_default_env().add_directive(default_level.into());
 
+    // Daily-rotating file beside the DB so logs survive restart and are
+    // downloadable. Best-effort: if the directory can't be created we log to
+    // stdout only rather than failing startup.
+    let (file_layer, guard) = match std::fs::create_dir_all(runtime::log_dir()) {
+        Ok(()) => {
+            let appender = tracing_appender::rolling::daily(runtime::log_dir(), "alchemist.log");
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_target(true)
+                .with_timer(time());
+            (Some(layer), Some(guard))
+        }
+        Err(err) => {
+            eprintln!("alchemist: could not open log directory, logging to stdout only: {err}");
+            (None, None)
+        }
+    };
+
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(file_layer);
+
     match runtime::log_format() {
         config::LogFormat::Json => {
-            tracing_subscriber::fmt()
-                .with_env_filter(env_filter)
-                .with_target(true)
-                .with_thread_ids(debug_flags)
-                .with_thread_names(debug_flags)
-                .with_timer(time())
-                .json()
-                .flatten_event(true)
-                .with_current_span(false)
-                .with_span_list(false)
+            registry
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_target(true)
+                        .with_thread_ids(debug_flags)
+                        .with_thread_names(debug_flags)
+                        .with_timer(time())
+                        .json()
+                        .flatten_event(true)
+                        .with_current_span(false)
+                        .with_span_list(false),
+                )
                 .init();
         }
         config::LogFormat::Text => {
             if debug_flags {
-                tracing_subscriber::fmt()
-                    .with_env_filter(env_filter)
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .with_timer(time())
+                registry
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_target(true)
+                            .with_thread_ids(true)
+                            .with_thread_names(true)
+                            .with_timer(time()),
+                    )
                     .init();
             } else {
-                tracing_subscriber::fmt()
-                    .with_env_filter(env_filter)
-                    .without_time()
-                    .with_target(false)
-                    .with_thread_ids(false)
-                    .with_thread_names(false)
-                    .compact()
+                registry
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .without_time()
+                            .with_target(false)
+                            .compact(),
+                    )
                     .init();
             }
         }
     }
+
+    guard
 }
 
 #[cfg(test)]

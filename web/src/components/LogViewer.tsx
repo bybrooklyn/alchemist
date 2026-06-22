@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal, Pause, Play, Trash2, RefreshCw, Search } from "lucide-react";
+import { Terminal, Pause, Play, Trash2, RefreshCw, Search, Download } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
@@ -279,6 +279,14 @@ export default function LogViewer() {
                     >
                         {paused ? <Play size={13} /> : <Pause size={13} />}
                     </button>
+                    <a
+                        href="/api/logs/download"
+                        download="alchemist.log"
+                        className="p-1.5 rounded-lg hover:bg-helios-line/10 text-helios-slate transition-colors"
+                        title="Download full log file"
+                    >
+                        <Download size={13} />
+                    </a>
                     <button
                         onClick={() => setConfirmClear(true)}
                         className="p-1.5 rounded-lg hover:bg-status-error/10 text-helios-slate hover:text-status-error transition-colors"

@@ -5,10 +5,42 @@ export interface ApiErrorShape {
     url: string;
 }
 
+/** Pulls the machine-readable `code` from an RFC7807 problem+json body. */
+function bodyCode(body: unknown): string | undefined {
+    if (body && typeof body === "object") {
+        const known = body as { code?: unknown; error?: { code?: unknown } };
+        if (typeof known.code === "string" && known.code.length > 0) {
+            return known.code;
+        }
+        if (typeof known.error?.code === "string" && known.error.code.length > 0) {
+            return known.error.code;
+        }
+    }
+    return undefined;
+}
+
+/** Pulls the `docs_url` from an RFC7807 problem+json body. */
+function bodyDocsUrl(body: unknown): string | undefined {
+    if (body && typeof body === "object") {
+        const known = body as { docs_url?: unknown; error?: { docs_url?: unknown } };
+        if (typeof known.docs_url === "string" && known.docs_url.length > 0) {
+            return known.docs_url;
+        }
+        if (typeof known.error?.docs_url === "string" && known.error.docs_url.length > 0) {
+            return known.error.docs_url;
+        }
+    }
+    return undefined;
+}
+
 export class ApiError extends Error implements ApiErrorShape {
     status: number;
     body?: unknown;
     url: string;
+    /** Stable error code from the API problem document, when present. */
+    code?: string;
+    /** Docs link for `code`, when the API supplied one. */
+    docsUrl?: string;
 
     constructor({ status, message, body, url }: ApiErrorShape) {
         super(message);
@@ -16,6 +48,8 @@ export class ApiError extends Error implements ApiErrorShape {
         this.status = status;
         this.body = body;
         this.url = url;
+        this.code = bodyCode(body);
+        this.docsUrl = bodyDocsUrl(body);
     }
 }
 
@@ -87,21 +121,37 @@ export function isApiError(error: unknown): error is ApiError {
     return error instanceof ApiError;
 }
 
+/** A `RequestInit` plus an optional per-call timeout override. */
+export interface ApiFetchOptions extends RequestInit {
+    /**
+     * Abort the request after this many milliseconds. Defaults to 30s.
+     * Pass `null` to disable the timeout entirely — required for long-running
+     * transfers like Convert uploads, where a fixed ceiling would abort a large
+     * file mid-upload.
+     */
+    timeoutMs?: number | null;
+}
+
+const DEFAULT_TIMEOUT_MS = 30000;
+
 /**
  * Authenticated fetch utility using cookie auth.
  */
-export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
     const resolvedUrl = url;
-    const headers = new Headers(options.headers);
+    const { timeoutMs: timeoutOption, ...requestInit } = options;
+    const headers = new Headers(requestInit.headers);
 
-    if (!headers.has("Content-Type") && typeof options.body === "string") {
+    if (!headers.has("Content-Type") && typeof requestInit.body === "string") {
         headers.set("Content-Type", "application/json");
     }
 
     const controller = new AbortController();
-    // 30s timeout: hardware detection and large scans can take time
-    const timeoutMs = 30000;
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    // 30s default covers hardware detection and large scans; callers that stream
+    // big bodies (uploads) pass `timeoutMs: null` to opt out.
+    const timeoutMs = timeoutOption === undefined ? DEFAULT_TIMEOUT_MS : timeoutOption;
+    const timeoutId =
+        timeoutMs === null ? null : setTimeout(() => controller.abort(), timeoutMs);
 
     const abortHandler = () => controller.abort();
 
@@ -115,9 +165,9 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
 
     try {
         const response = await fetch(resolvedUrl, {
-            ...options,
+            ...requestInit,
             headers,
-            credentials: options.credentials ?? "same-origin",
+            credentials: requestInit.credentials ?? "same-origin",
             signal: controller.signal,
         });
 
@@ -132,9 +182,11 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
 
         return response;
     } finally {
-        clearTimeout(timeoutId);
-        if (options.signal) {
-            options.signal.removeEventListener("abort", abortHandler);
+        if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+        }
+        if (requestInit.signal) {
+            requestInit.signal.removeEventListener("abort", abortHandler);
         }
     }
 }

@@ -24,8 +24,12 @@ pub fn append_args(
 
     match rate_control {
         Some(RateControl::Cq { value }) => {
-            // VideoToolbox -q:v: 1 (best) to 100 (worst). Config value is CRF-style
-            // where lower = better quality. Clamp to 1-51 range matching x264/x265.
+            // VideoToolbox constant quality. The config supplies a CRF-style value
+            // (lower = better quality); clamp it to the 1-51 band we use for
+            // x264/x265 so profiles stay comparable across encoders. Constant
+            // quality only opens on a real hardware VideoToolbox session — when no
+            // session is available the encoder fails to open and the pipeline
+            // falls back to CPU (see errors#encoder_open_failed).
             let q = (*value).clamp(1, 51);
             args.extend(["-q:v".to_string(), q.to_string()]);
         }

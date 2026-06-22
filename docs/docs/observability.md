@@ -96,3 +96,31 @@ To watch a specific job:
 ```logql
 {job="alchemist"} | json | job_id="1234"
 ```
+
+Every job log line carries its `job_id` (via a `tracing` span), so a single
+encode is traceable end-to-end across analyze → plan → encode → finalize.
+
+## Log file
+
+In addition to stdout, Alchemist writes a **daily-rotating log file** so logs
+survive a restart:
+
+```
+~/.config/alchemist/logs/alchemist.log        # rotates to alchemist.log.YYYY-MM-DD
+```
+
+- Override the directory with `ALCHEMIST_LOG_DIR` (it otherwise follows
+  `ALCHEMIST_DATA_DIR`, beside the database).
+- Download the current log from the web UI (**Logs → Download**) or
+  `GET /api/logs/download`.
+- **Secrets are redacted** before logs are stored: API tokens, `Authorization`
+  headers, session cookies, and Discord/Slack webhook tokens are masked as `***`.
+
+## Updating safely
+
+The self-updater takes a complete pre-update backup before applying anything — an
+online database snapshot **and** a copy of `config.toml` — under
+`~/.config/alchemist/temp/updates/` (the five most recent sets are retained). It
+also pre-flights free disk space and install-directory writability, and swaps the
+binary with an atomic same-filesystem rename plus a co-located rollback that is
+restored automatically if the new binary fails to start.

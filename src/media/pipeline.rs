@@ -259,6 +259,25 @@ impl Encoder {
         }
     }
 
+    /// Whether this encoder runs on a hardware backend (vs. a CPU encoder).
+    pub fn is_hardware(self) -> bool {
+        self.backend() != EncoderBackend::Cpu
+    }
+
+    /// The CPU/software encoder producing the same output codec, used for the
+    /// one-time runtime fallback when a hardware encoder fails to open. Returns
+    /// `None` if this is already a CPU encoder.
+    pub fn cpu_equivalent(self) -> Option<Encoder> {
+        if !self.is_hardware() {
+            return None;
+        }
+        Some(match self.output_codec() {
+            crate::config::OutputCodec::Av1 => Encoder::Av1Svt,
+            crate::config::OutputCodec::Hevc => Encoder::HevcX265,
+            crate::config::OutputCodec::H264 => Encoder::H264X264,
+        })
+    }
+
     pub fn output_codec(self) -> crate::config::OutputCodec {
         match self {
             Encoder::Av1Qsv
@@ -1865,6 +1884,61 @@ impl Pipeline {
             Ok(None) => executor.execute(&job, &plan, &analysis).await,
             Err(err) => Err(err),
         };
+
+        // One-time CPU fallback: a hardware encoder that fails to *open* its
+        // session (e.g. macOS VideoToolbox in a headless/daemon context) is a
+        // deterministic failure — retrying the same command never recovers. When
+        // CPU fallback is allowed, re-plan onto the CPU encoder and run once more
+        // before treating the job as failed. See errors#encoder_open_failed.
+        let execution_result = match execution_result {
+            Err(crate::error::AlchemistError::FFmpeg(ref detail))
+                if plan.allow_fallback
+                    && config_snapshot.hardware.allow_cpu_fallback
+                    && plan.encoder.is_some_and(Encoder::is_hardware)
+                    && crate::explanations::is_encoder_open_failure(detail) =>
+            {
+                match cpu_fallback_plan(&plan, &config_snapshot) {
+                    Some(cpu_plan) => {
+                        let message = format!(
+                            "Hardware encoder failed to open ({}); retrying once on CPU ({}).",
+                            plan.encoder
+                                .map(Encoder::ffmpeg_encoder_name)
+                                .unwrap_or("hardware"),
+                            cpu_plan
+                                .encoder
+                                .map(Encoder::ffmpeg_encoder_name)
+                                .unwrap_or("cpu"),
+                        );
+                        tracing::warn!(job_id = job.id, "{message}");
+                        self.record_job_log(job.id, "warn", &message).await;
+                        // Discard the partial hardware output and any resume state
+                        // so the CPU attempt starts clean.
+                        if temp_output_path.exists() {
+                            if let Err(err) = tokio::fs::remove_file(&temp_output_path).await {
+                                tracing::warn!(
+                                    job_id = job.id,
+                                    "Failed to remove partial hardware output before CPU fallback: {err}"
+                                );
+                            }
+                        }
+                        if let Err(err) = self.purge_resume_session_state(job.id).await {
+                            tracing::warn!(
+                                job_id = job.id,
+                                "Failed to purge resume session before CPU fallback: {err}"
+                            );
+                        }
+                        plan = cpu_plan;
+                        self.update_job_progress(job.id, 0.0).await;
+                        executor.execute(&job, &plan, &analysis).await
+                    }
+                    None => Err(crate::error::AlchemistError::EncoderUnavailable(
+                        detail.clone(),
+                    )),
+                }
+            }
+            other => other,
+        };
+
         match execution_result {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
@@ -2550,12 +2624,74 @@ async fn cleanup_temp_subtitle_output(job_id: i64, plan: &TranscodePlan) {
 }
 
 fn map_failure(error: &crate::error::AlchemistError) -> JobFailure {
+    use crate::error::AlchemistError;
     match error {
-        crate::error::AlchemistError::EncoderUnavailable(_) => JobFailure::EncoderUnavailable,
-        crate::error::AlchemistError::Analyzer(_) => JobFailure::MediaCorrupt,
-        crate::error::AlchemistError::Config(_) => JobFailure::PlannerBug,
+        AlchemistError::EncoderUnavailable(_) => JobFailure::EncoderUnavailable,
+        AlchemistError::Analyzer(_) => JobFailure::MediaCorrupt,
+        AlchemistError::Config(_) => JobFailure::PlannerBug,
+        // A hardware encoder that cannot open its session is deterministic, not
+        // transient: retrying the identical command just fails again. Classify it
+        // as EncoderUnavailable so it stops retrying and surfaces an actionable,
+        // coded explanation (errors#encoder_open_failed). The pipeline attempts a
+        // one-time CPU fallback before this is ever reached.
+        AlchemistError::FFmpeg(detail) if crate::explanations::is_encoder_open_failure(detail) => {
+            JobFailure::EncoderUnavailable
+        }
         _ => JobFailure::Transient,
     }
+}
+
+/// Builds a CPU-encoder variant of `plan` for the one-time runtime fallback when
+/// a hardware encoder fails to open its session. Returns `None` when the plan has
+/// no hardware encoder to fall back from. CRF/preset mirror the planner's CPU
+/// arms (`encoder_runtime_settings` in `planner.rs`).
+fn cpu_fallback_plan(
+    plan: &TranscodePlan,
+    config: &crate::config::Config,
+) -> Option<TranscodePlan> {
+    use crate::config::CpuPreset;
+    let hw_encoder = plan.encoder?;
+    let cpu_encoder = hw_encoder.cpu_equivalent()?;
+    let cpu_preset = config.hardware.cpu_preset;
+    let (preset_str, crf): (String, u8) = match cpu_encoder {
+        Encoder::Av1Svt => {
+            let (preset, crf) = cpu_preset.params();
+            (preset.to_string(), crf.parse().unwrap_or(28))
+        }
+        Encoder::HevcX265 => {
+            let crf = match cpu_preset {
+                CpuPreset::Slow => 20,
+                CpuPreset::Medium => 24,
+                CpuPreset::Fast => 26,
+                CpuPreset::Faster => 28,
+            };
+            (cpu_preset.as_str().to_string(), crf)
+        }
+        Encoder::H264X264 => {
+            let crf = match cpu_preset {
+                CpuPreset::Slow => 18,
+                CpuPreset::Medium => 21,
+                CpuPreset::Fast => 23,
+                CpuPreset::Faster => 25,
+            };
+            (cpu_preset.as_str().to_string(), crf)
+        }
+        _ => return None,
+    };
+
+    let mut cpu_plan = plan.clone();
+    cpu_plan.encoder = Some(cpu_encoder);
+    cpu_plan.encoder_preset = Some(preset_str);
+    cpu_plan.rate_control = Some(RateControl::Crf { value: crf });
+    cpu_plan.fallback = Some(PlannedFallback {
+        kind: FallbackKind::Cpu,
+        reason: format!(
+            "Hardware encoder {} failed to open; fell back to {}",
+            hw_encoder.ffmpeg_encoder_name(),
+            cpu_encoder.ffmpeg_encoder_name()
+        ),
+    });
+    Some(cpu_plan)
 }
 
 #[cfg(test)]
@@ -2668,6 +2804,79 @@ mod tests {
             )),
             JobFailure::EncoderUnavailable
         ));
+        // A hardware encoder-open failure must NOT be treated as transient.
+        assert!(matches!(
+            map_failure(&crate::error::AlchemistError::FFmpeg(
+                "[hevc_videotoolbox] Could not open encoder before EOF\nInvalid argument"
+                    .to_string()
+            )),
+            JobFailure::EncoderUnavailable
+        ));
+    }
+
+    #[test]
+    fn encoder_cpu_equivalent_and_is_hardware() {
+        assert!(Encoder::HevcVideotoolbox.is_hardware());
+        assert!(!Encoder::HevcX265.is_hardware());
+        assert_eq!(
+            Encoder::HevcVideotoolbox.cpu_equivalent(),
+            Some(Encoder::HevcX265)
+        );
+        assert_eq!(Encoder::Av1Nvenc.cpu_equivalent(), Some(Encoder::Av1Svt));
+        assert_eq!(Encoder::H264Qsv.cpu_equivalent(), Some(Encoder::H264X264));
+        // A CPU encoder has no further CPU fallback.
+        assert_eq!(Encoder::HevcX265.cpu_equivalent(), None);
+    }
+
+    #[test]
+    fn cpu_fallback_plan_swaps_hardware_encoder_for_cpu_crf() {
+        let config = crate::config::Config::default();
+        let plan = TranscodePlan {
+            decision: TranscodeDecision::Transcode {
+                reason: "test".to_string(),
+            },
+            is_remux: false,
+            copy_video: false,
+            output_path: None,
+            container: "mkv".to_string(),
+            requested_codec: crate::config::OutputCodec::Hevc,
+            output_codec: Some(crate::config::OutputCodec::Hevc),
+            encoder: Some(Encoder::HevcVideotoolbox),
+            backend: Some(EncoderBackend::Videotoolbox),
+            rate_control: Some(RateControl::Cq { value: 28 }),
+            encoder_preset: None,
+            threads: 0,
+            audio: AudioStreamPlan::Copy,
+            audio_stream_indices: None,
+            subtitles: SubtitleStreamPlan::CopyAllCompatible,
+            filters: Vec::new(),
+            allow_fallback: true,
+            fallback: None,
+        };
+
+        let Some(fallback) = cpu_fallback_plan(&plan, &config) else {
+            panic!("hardware plan should fall back to CPU");
+        };
+        assert_eq!(fallback.encoder, Some(Encoder::HevcX265));
+        assert!(matches!(
+            fallback.rate_control,
+            Some(RateControl::Crf { .. })
+        ));
+        assert!(fallback.encoder_preset.is_some());
+        assert!(matches!(
+            fallback.fallback,
+            Some(PlannedFallback {
+                kind: FallbackKind::Cpu,
+                ..
+            })
+        ));
+
+        // A plan that is already CPU has no fallback.
+        let cpu_plan = TranscodePlan {
+            encoder: Some(Encoder::HevcX265),
+            ..plan
+        };
+        assert!(cpu_fallback_plan(&cpu_plan, &config).is_none());
     }
 
     #[tokio::test]

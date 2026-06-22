@@ -974,6 +974,16 @@ pub(crate) async fn install_system_update_handler(State(state): State<Arc<AppSta
         );
     };
 
+    // Fail fast on insufficient disk space or an unwritable install directory,
+    // before we drain jobs, take a backup, or download anything.
+    if let Err(err) = crate::update::preflight_update_environment(asset.size) {
+        return api_error_response(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "UPDATE_PREFLIGHT_FAILED",
+            err.to_string(),
+        );
+    }
+
     state.agent.drain();
     let backup_path = match create_update_backup(&state, &version).await {
         Ok(path) => path,
@@ -981,7 +991,7 @@ pub(crate) async fn install_system_update_handler(State(state): State<Arc<AppSta
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "UPDATE_BACKUP_FAILED",
-                format!("Database backup failed before update: {err}"),
+                format!("Backup failed before update: {err}"),
             );
         }
     };
@@ -1062,6 +1072,9 @@ async fn resolve_update_status(
     Ok(status)
 }
 
+/// Number of pre-update backup sets (DB + config) to retain.
+const PRE_UPDATE_BACKUP_RETENTION: usize = 5;
+
 async fn create_update_backup(
     state: &AppState,
     version: &str,
@@ -1079,12 +1092,72 @@ async fn create_update_backup(
             }
         })
         .collect::<String>();
-    let backup_path = backup_dir.join(format!(
-        "alchemist-pre-update-{safe_version}-{}.db",
+    let stem = format!(
+        "alchemist-pre-update-{safe_version}-{}",
         rand::random::<u64>()
-    ));
+    );
+
+    // Database snapshot (online backup, consistent with the running daemon).
+    let backup_path = backup_dir.join(format!("{stem}.db"));
     state.db.create_online_backup(&backup_path).await?;
+
+    // Config snapshot alongside the DB so a rollback can restore both. Best
+    // effort: a missing/unreadable config must not block the update.
+    let config_path = crate::runtime::config_path();
+    if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
+        let config_backup = backup_dir.join(format!("{stem}.config.toml"));
+        if let Err(err) = tokio::fs::copy(&config_path, &config_backup).await {
+            tracing::warn!(
+                "Pre-update config backup failed (continuing): {err} ({} -> {})",
+                config_path.display(),
+                config_backup.display(),
+            );
+        }
+    }
+
+    // Prune old pre-update backups so the directory does not grow unbounded.
+    if let Err(err) = prune_pre_update_backups(&backup_dir, PRE_UPDATE_BACKUP_RETENTION).await {
+        tracing::warn!("Failed to prune old pre-update backups (continuing): {err}");
+    }
+
     Ok(backup_path)
+}
+
+/// Keeps the newest `keep` `.db` pre-update snapshots (and their sibling
+/// `.config.toml`), deleting older ones.
+async fn prune_pre_update_backups(dir: &std::path::Path, keep: usize) -> anyhow::Result<()> {
+    let mut db_backups: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("alchemist-pre-update-") && name.ends_with(".db") {
+            let modified = entry
+                .metadata()
+                .await
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            db_backups.push((modified, path));
+        }
+    }
+    if db_backups.len() <= keep {
+        return Ok(());
+    }
+    // Newest first; drop everything past `keep`.
+    db_backups.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    for (_, db_path) in db_backups.into_iter().skip(keep) {
+        let _ = tokio::fs::remove_file(&db_path).await;
+        // Remove the sibling config snapshot if present. The version can contain
+        // dots, so derive the name by stripping the `.db` suffix rather than using
+        // `with_extension`, which would split on a dot inside the version.
+        if let Some(name) = db_path.file_name().and_then(|n| n.to_str()) {
+            let config_sibling = dir.join(format!("{}.config.toml", name.trim_end_matches(".db")));
+            let _ = tokio::fs::remove_file(&config_sibling).await;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn get_hardware_info_handler(
@@ -1280,4 +1353,51 @@ pub(crate) async fn system_selftest_handler(State(state): State<Arc<AppState>>) 
 
     let response = crate::system::selftest::run_selftest().await;
     axum::Json(response).into_response()
+}
+
+#[cfg(test)]
+mod update_backup_tests {
+    use super::prune_pre_update_backups;
+
+    fn count_with_suffix(dir: &std::path::Path, suffix: &str) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            panic!("read backup dir");
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn prune_retains_keep_count_and_drops_config_siblings() {
+        let dir = std::env::temp_dir().join(format!("alchemist-prune-{}", rand::random::<u64>()));
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            panic!("mkdir: {e}");
+        }
+
+        // Six backup sets (DB + config). The version contains dots to exercise the
+        // sibling-name derivation that must not split on a dot inside the version.
+        for i in 0..6 {
+            let stem = format!("alchemist-pre-update-0.3.5-{i}");
+            if let Err(e) = tokio::fs::write(dir.join(format!("{stem}.db")), b"db").await {
+                panic!("write db: {e}");
+            }
+            if let Err(e) = tokio::fs::write(dir.join(format!("{stem}.config.toml")), b"cfg").await
+            {
+                panic!("write cfg: {e}");
+            }
+        }
+
+        if let Err(e) = prune_pre_update_backups(&dir, 5).await {
+            panic!("prune: {e}");
+        }
+
+        // Exactly `keep` DB snapshots remain, and the pruned set's config sibling
+        // was removed alongside it (so configs track DBs 1:1).
+        assert_eq!(count_with_suffix(&dir, ".db"), 5);
+        assert_eq!(count_with_suffix(&dir, ".config.toml"), 5);
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 }

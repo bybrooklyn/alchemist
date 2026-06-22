@@ -91,6 +91,7 @@ pub(crate) fn api_error_response(
     let instance = context.map(|context| context.path);
     let problem_type = format!("urn:alchemist:problem:{}", problem_slug(&code));
     let title = status.canonical_reason().unwrap_or("API Error").to_string();
+    let docs_url = crate::explanations::docs_url_for_code(&code);
 
     let mut response = (
         status,
@@ -101,10 +102,12 @@ pub(crate) fn api_error_response(
             "detail": message.clone(),
             "instance": instance,
             "code": code.clone(),
+            "docs_url": docs_url.clone(),
             "request_id": request_id.clone(),
             "error": {
                 "code": code,
                 "message": message,
+                "docs_url": docs_url,
             }
         })),
     )
@@ -526,6 +529,7 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/webhooks/arr", post(arr_webhook_handler))
         .route("/api/jobs/batch", post(batch_jobs_handler))
         .route("/api/logs/history", get(logs_history_handler))
+        .route("/api/logs/download", get(download_logs_handler))
         .route("/api/logs", delete(clear_logs_handler))
         .route("/api/jobs/restart-failed", post(restart_failed_handler))
         .route("/api/jobs/clear-completed", post(clear_completed_handler))
@@ -941,6 +945,7 @@ fn v1_api_router() -> Router<Arc<AppState>> {
         )
         .route("/webhooks/arr", post(arr_webhook_handler))
         .route("/logs/history", get(logs_history_handler))
+        .route("/logs/download", get(download_logs_handler))
         .route("/logs", delete(clear_logs_handler))
 }
 

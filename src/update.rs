@@ -315,6 +315,49 @@ pub async fn stage_update_asset(asset: &UpdateAssetStatus, version: &str) -> Res
     })
 }
 
+/// Pre-flight checks before downloading and applying an update: confirm there is
+/// enough free disk space for the archive + extracted binary + headroom, and
+/// that the install directory is writable. Failing here is far better than
+/// failing part-way through a download or after the old binary has been moved.
+pub fn preflight_update_environment(asset_size: u64) -> Result<()> {
+    // Room for the compressed archive, the extracted binary (~3x the archive),
+    // and headroom, with a sane floor for tiny/unknown assets.
+    const FLOOR_BYTES: u64 = 512 * 1024 * 1024;
+    let required = asset_size.saturating_mul(4).max(FLOOR_BYTES);
+    let temp = crate::runtime::temp_dir();
+    if let Some(available) = crate::system::disk_space::available_bytes_for_path(&temp) {
+        if available < required {
+            return Err(anyhow!(
+                "not enough free disk space to apply the update: {:.1} GiB available at {}, need ~{:.1} GiB",
+                crate::system::disk_space::as_gib(available),
+                temp.display(),
+                crate::system::disk_space::as_gib(required),
+            ));
+        }
+    }
+
+    // For in-place binary updates, confirm the install directory is writable now
+    // so we don't discover it only after staging.
+    if direct_binary_updates_supported() {
+        let exe = std::env::current_exe().context("resolve current executable")?;
+        if let Some(dir) = exe.parent() {
+            let probe = dir.join(format!(".alchemist-write-probe-{}", rand::random::<u64>()));
+            match fs::File::create(&probe) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&probe);
+                }
+                Err(err) => {
+                    return Err(anyhow!(
+                        "install directory {} is not writable for self-update: {err}",
+                        dir.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn spawn_update_helper(staged: &StagedUpdate, backup_path: &Path) -> Result<PathBuf> {
     if !direct_binary_updates_supported() {
         return Err(anyhow!(
@@ -670,6 +713,9 @@ fn verify_staged_binary_version(binary_path: &Path, version: &str) -> Result<()>
 
 fn write_helper_script(path: &Path) -> Result<()> {
     let mut file = fs::File::create(path)?;
+    // The `$4` (rollback) argument is retained for positional compatibility but
+    // is no longer used: the swap now keeps a co-located rollback beside the
+    // current binary so it is always on the same filesystem as the install path.
     file.write_all(
         br#"set -eu
 parent_pid="$1"
@@ -679,28 +725,54 @@ rollback="$4"
 log="$5"
 backup="$6"
 shift 6
+
+# Wait for the old daemon to exit so the binary file is no longer in use.
 while kill -0 "$parent_pid" 2>/dev/null; do
   sleep 1
 done
+
+new="${current}.update-new.$$"
+prev="${current}.update-previous"
+
 {
   echo "Applying Alchemist update"
   echo "Backup snapshot: $backup"
+
+  # Stage the new binary *beside* the current one so the swap is an atomic,
+  # same-filesystem rename. The staged copy lives in a temp dir that may be on a
+  # different filesystem, where mv would be a non-atomic copy+unlink.
+  cp "$staged" "$new"
+  chmod +x "$new"
+
+  # Keep a co-located rollback copy of the current binary (same filesystem, so
+  # restoring it later is also atomic). -p preserves mode/ownership where possible.
   if [ -f "$current" ]; then
-  mv "$current" "$rollback"
+    cp -p "$current" "$prev" 2>/dev/null || cp "$current" "$prev"
   fi
-  mv "$staged" "$current"
+
+  # Atomic replace.
+  mv -f "$new" "$current"
   chmod +x "$current"
+
+  # Launch the new binary and confirm it survives startup for 15s.
   "$current" "$@" &
   child="$!"
   sleep 15
-  if ! kill -0 "$child" 2>/dev/null; then
+  if kill -0 "$child" 2>/dev/null; then
+    echo "Update applied successfully; new binary is running"
+    rm -f "$prev"
+  else
     wait "$child" || true
-    echo "Updated Alchemist exited during startup; restoring previous binary"
-    failed="${current}.failed-update"
-    mv "$current" "$failed" || true
-    mv "$rollback" "$current"
-    chmod +x "$current"
-    "$current" "$@" &
+    echo "Updated Alchemist exited during startup; rolling back to previous binary"
+    mv -f "$current" "${current}.failed-update" 2>/dev/null || true
+    if [ -f "$prev" ]; then
+      mv -f "$prev" "$current"
+      chmod +x "$current"
+      "$current" "$@" &
+      echo "Previous binary restored and relaunched"
+    else
+      echo "ERROR: no rollback copy available; manual recovery required (backup: $backup)"
+    fi
   fi
 } >> "$log" 2>&1
 "#,
@@ -774,6 +846,38 @@ fn command_args_without_binary() -> Vec<OsString> {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn helper_script_is_valid_sh_and_does_atomic_rollback() {
+        let dir = std::env::temp_dir().join(format!("alchemist-helper-{}", rand::random::<u64>()));
+        if let Err(e) = fs::create_dir_all(&dir) {
+            panic!("create temp dir: {e}");
+        }
+        let script = dir.join("helper.sh");
+        if let Err(e) = write_helper_script(&script) {
+            panic!("write helper script: {e}");
+        }
+
+        let Ok(body) = fs::read_to_string(&script) else {
+            panic!("read helper script");
+        };
+        // Same-filesystem atomic swap + co-located rollback markers.
+        assert!(body.contains("${current}.update-new."));
+        assert!(body.contains("${current}.update-previous"));
+        assert!(body.contains("mv -f \"$new\" \"$current\""));
+        assert!(body.contains("rolling back to previous binary"));
+
+        // The generated script must be valid POSIX sh.
+        if let Ok(output) = Command::new("sh").arg("-n").arg(&script).output() {
+            assert!(
+                output.status.success(),
+                "sh -n rejected helper script: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn version_compare_handles_rc_progression() {

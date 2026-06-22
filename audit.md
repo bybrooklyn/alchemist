@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-06-13
+Last updated: 2026-06-22
 
 ---
 
@@ -200,6 +200,52 @@ Two `Pipe()`s are attached and never read. Once alchemistd (running with `RUST_L
    Or keep `Pipe()` and attach `readabilityHandler`s appending to a ring buffer surfaced in SystemView (better diagnostics; prefer this if cheap).
 2. Expose the last N stderr lines via `DaemonController` so bind failures (see P2-40) become visible.
 3. Add the log path to SystemView's "Host Paths" card.
+
+---
+
+### [P1-14] VideoToolbox is reported "available" by a probe that allows software fallback, but the real encode forbids it and requests an unsupported `-q:v` mode — every hardware encode fails on session-less hosts, then retries forever
+
+**Status: RESOLVED (2026-06-22).** Probe honesty: `probe_args_for_backend` no longer
+passes `-allow_sw 1`, so detection matches the real (hardware-only) command and VT is not
+selected when no hardware session can open (`hardware.rs`, test
+`videotoolbox_probe_is_hardware_only_and_matches_real_command`). One-time runtime CPU
+fallback: on an encoder-open FFmpeg failure the pipeline re-plans onto the CPU encoder
+(`cpu_fallback_plan`) and re-runs once before failing (`pipeline.rs`, tests
+`cpu_fallback_plan_swaps_hardware_encoder_for_cpu_crf`,
+`encoder_cpu_equivalent_and_is_hardware`). Reclassification: `map_failure` now maps
+encoder-open failures to `EncoderUnavailable` (not `Transient`) via
+`explanations::is_encoder_open_failure` (new `encoder_open_failed` stderr signature), so
+they stop retrying and surface a coded, docs-linked explanation. The misleading `-q:v`
+clamp comment was corrected.
+
+**Files:**
+- `src/system/hardware.rs:407–417` — the capability probe adds `-vf format=yuv420p`, **`-allow_sw 1`**, and no rate-control flag, then encodes one frame.
+- `src/media/ffmpeg/videotoolbox.rs:3–47` — `append_args` emits `-c:v hevc_videotoolbox` + `-q:v <n>` (constant quality) and **never emits `-allow_sw`**.
+- `src/media/pipeline.rs:2552–2558` — `map_failure` maps any `AlchemistError::FFmpeg(_)` to `JobFailure::Transient` (catch-all `_ =>`).
+
+**Severity:** P1
+
+**Problem:**
+
+Reproduced on this host (Apple M4, arm64) and matches the user's daemon log (`hevc_videotoolbox … Could not open encoder before EOF … error code: -22 (Invalid argument)`, job retried as `Transient`). Three compounding defects:
+
+1. **Detection/runtime mismatch.** The probe validates VideoToolbox *with software fallback enabled* (`-allow_sw 1`) and no rate control, so it succeeds even in a context that cannot create a hardware VT session (LaunchDaemon / SSH / headless / sandboxed). The real encode command (`videotoolbox.rs`) **omits `-allow_sw`**, so it requires a hardware session. On any host where the daemon runs without GUI/WindowServer access, detection reports "VideoToolbox available", the planner selects `hevc_videotoolbox`, and **every** encode then dies with `-22`. Verified directly:
+   ```
+   probe   : ffmpeg … -c:v hevc_videotoolbox -allow_sw 1 -frames:v 1 -f null -   → exit 0 (PASS)
+   encode  : ffmpeg … -c:v hevc_videotoolbox -q:v 28 -f null -                   → "Conversion failed!"
+   ```
+2. **Unsupported constant-quality mode.** Even with `-allow_sw 1`, the software VideoToolbox encoder rejects `-q:v` (constant quality): `-allow_sw 1 -q:v 28` fails, while `-allow_sw 1 -b:v 1500k` succeeds (25 frames). The CQ path introduced by the P1-2 fix produces a command this build/encoder cannot open; bitrate mode is the working path. The code comment ("VideoToolbox -q:v: 1 (best) to 100 (worst)") is also inaccurate.
+3. **Misclassified as Transient → infinite retry, no CPU fallback.** A VideoToolbox "Could not open encoder / Invalid argument" is deterministic — the identical command fails identically on every attempt. `map_failure`'s catch-all marks it `Transient`, so the job is re-queued and re-run forever instead of either falling back to CPU (the project's stated "hardware acceleration … with CPU fallback") or being marked a permanent encoder failure.
+
+Net user-visible effect: on an affected host the entire library "encodes" but produces nothing, the queue churns failed→queued→failed, and the logs fill with `-22`. This breaks the core transcode promise and contradicts the "deterministic behavior / explicit error handling over implicit fallbacks" design rule.
+
+**Fix:**
+
+1. Make detection represent the real command. Either drop `-allow_sw 1` from `probe_args_for_backend` (so the probe fails exactly when the production encoder would and the planner correctly falls back to CPU), **or** add `-allow_sw 1` to the real `videotoolbox.rs` command so software VT is a legal fallback. Recommend the former for hardware-accel hosts and exposing the latter as an explicit "allow software VideoToolbox" setting — but the two must agree.
+2. In `src/media/ffmpeg/videotoolbox.rs::append_args`, stop emitting constant-quality `-q:v` for VideoToolbox unless validated on the target. Default to bitrate-based rate control (`-b:v`/`-maxrate`/`-bufsize`, already implemented in the `RateControl::Bitrate` arm) derived from the CRF target, and only keep `-q:v` behind a capability check that actually opened a CQ session during probing. Fix the misleading scale comment.
+3. In `src/media/pipeline.rs`, detect encoder-open failures from FFmpeg stderr ("Could not open encoder", "Error while opening encoder", "Invalid argument" at session create) and route them to a non-Transient outcome: trigger the planned CPU fallback if `allow_fallback`, else classify `JobFailure::EncoderUnavailable` so the job stops retrying and the UI surfaces an actionable reason.
+4. Add a probe-time CQ validation: when constant-quality is requested for VideoToolbox, run a one-frame `-q:v` probe and cache whether it opened; only emit `-q:v` when it did.
+5. Tests: a unit test asserting probe args and real-encode args use the same `-allow_sw` policy; a `map_failure`/stderr-classifier test that an encoder-open failure is not `Transient`.
 
 ---
 
@@ -1095,6 +1141,47 @@ But setup users are not authenticated yet, and `/api/events` is still protected 
 
 ---
 
+### [P2-42] Convert tool uploads are aborted after 30 s by the shared `apiFetch` timeout — any realistically sized file fails mid-transfer
+
+**Status: RESOLVED (2026-06-22).** `apiFetch` takes a per-call `timeoutMs` (default 30 s,
+`null` disables the abort timer). `ConversionTool` now uploads via a dedicated XHR
+(`uploadConversionFile`) with no client timeout and a real upload-progress bar, and
+distinguishes timeout/abort from other failures.
+
+**Files:**
+- `web/src/lib/api.ts:101–104` — `apiFetch` unconditionally arms `controller.abort()` after `timeoutMs = 30000`.
+- `web/src/lib/api.ts:134–139` — the timeout fires regardless of how the call is used; there is no per-call opt-out.
+- `web/src/components/ConversionTool.tsx:253–286` — `uploadFile` POSTs a `FormData` video body through `apiFetch` with no signal/override.
+
+**Severity:** P2
+
+**Problem:**
+
+The Convert feature uploads a whole source video to `/api/conversion/uploads`. It goes through `apiFetch`, which aborts every request after a hardcoded 30 seconds:
+
+```ts
+const timeoutMs = 30000; // 30s timeout: hardware detection and large scans can take time
+const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+```
+
+The abort kills the entire request, including the in-flight upload body. A 30 s ceiling covers only a small file on a fast link — e.g. ~2 GB at 50 MB/s already needs ~40 s, and any multi-GB file over a normal home uplink needs minutes. So uploading a typical movie aborts partway through and surfaces as a generic "Upload failed" (the `catch` falls back to `"Upload failed"` because an `AbortError` has no useful `.message`). The backend already streams the upload to disk (P2-13 resolved), so the only thing stopping large uploads is this client timeout. Convert is effectively unusable for real media.
+
+**Fix:**
+
+1. Give `apiFetch` a per-call timeout override instead of a fixed 30 s. Add an option (e.g. `apiFetchOptions.timeoutMs?: number | null`) and skip arming the timer when it is `null`:
+   ```ts
+   export async function apiFetch(url: string, options: RequestInit & { timeoutMs?: number | null } = {}) {
+       const timeoutMs = options.timeoutMs === undefined ? 30000 : options.timeoutMs;
+       const timeoutId = timeoutMs == null ? null : setTimeout(() => controller.abort(), timeoutMs);
+       // …clearTimeout(timeoutId) guarded by `if (timeoutId !== null)`
+   }
+   ```
+2. In `ConversionTool.uploadFile`, pass `{ timeoutMs: null }` (rely on the browser/server for upload duration) or a generous bound, and prefer `XMLHttpRequest`/`fetch` with an upload-progress indicator so the user sees movement instead of a frozen "Uploading…".
+3. Distinguish abort/timeout from other failures in the `catch` so the user sees "Upload timed out" rather than a bare "Upload failed".
+4. Add a client unit/e2e test that a request whose body outlasts the default window is not aborted when `timeoutMs: null` is passed.
+
+---
+
 ## Technical Debt
 
 ---
@@ -1606,6 +1693,49 @@ That means the release gate can fail even when the artifact itself passes the sm
 
 ---
 
+### [RG-15] Convert tool polls the conversion-status endpoint every 2 s forever — it never stops once the job reaches a terminal state
+
+**Status: RESOLVED (2026-06-22).** The status-poll effect is now keyed on `status?.status`
+and returns early once the state is terminal (`completed`/`failed`/`cancelled`); repeated
+poll errors surface a warning toast instead of being silently swallowed.
+
+**Files:**
+- `web/src/components/ConversionTool.tsx:183–191` — the status-poll `useEffect` is keyed only on `conversionJobId`; the interval is cleared on id change/unmount but never when `status.status` becomes terminal.
+
+**Severity:** RG
+
+**Problem:**
+
+```ts
+useEffect(() => {
+    if (!conversionJobId) return;
+    const id = window.setInterval(() => {
+        void apiJson<JobStatusResponse>(`/api/conversion/jobs/${conversionJobId}`)
+            .then(setStatus).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(id);
+}, [conversionJobId]);
+```
+
+Once a conversion job id is set, the component hits `/api/conversion/jobs/{id}` every 2 s for as long as the Convert page stays mounted — including after the job is `completed`, `failed`, or `cancelled`, when there is nothing left to learn. A user who converts a file and leaves the tab open generates an indefinite 0.5 req/s stream against the API (and each request runs a DB read). Errors are swallowed (`.catch(() => undefined)`), so a backend hiccup is invisible too. Not data loss, but needless sustained load that scales with idle Convert tabs.
+
+**Fix:**
+
+1. Stop polling when the status is terminal. Track terminal states and clear/skip:
+   ```ts
+   useEffect(() => {
+       if (!conversionJobId) return;
+       const terminal = new Set(["completed", "failed", "cancelled"]);
+       if (status && terminal.has(status.status)) return;
+       const id = window.setInterval(/* …poll… */, 2000);
+       return () => window.clearInterval(id);
+   }, [conversionJobId, status?.status]);
+   ```
+2. Optionally back the live status off the existing SSE stream instead of a fixed 2 s poll, matching how the Jobs page reconciles state.
+3. Surface repeated poll failures (e.g. after N consecutive errors) instead of silently swallowing them.
+
+---
+
 ## UX Gaps
 
 ---
@@ -1775,6 +1905,29 @@ So a mistyped or unreadable folder can sit in the selected list looking valid, t
 
 ---
 
+### [UX-9] "Save View" uses a native `window.prompt`, bypassing the app's dialog system — no validation, no styling, blockable by the browser
+
+**Status: RESOLVED (2026-06-22).** Replaced with a themed, focus-trapped `SaveViewDialog`
+(modeled on `EnqueuePathDialog`): Esc/Enter handling, inline required + duplicate-name
+validation, and consistent styling. No native `window.prompt` remains.
+
+**Files:**
+- `web/src/components/JobManager.tsx:750–758` — the Save View button calls `window.prompt("View name")`.
+
+**Severity:** UX
+
+**Problem:**
+
+Every other interactive flow in the app uses the in-app primitives — `ConfirmDialog`, portal modals, and toasts (the Jobs page alone wires up `ConfirmDialog`, `EnqueuePathDialog`, and a shortcuts modal). Saving a job view is the one exception: it pops a native `window.prompt`. That dialog ignores the Helios theme, can be suppressed entirely by the browser ("prevent this page from creating additional dialogs"), offers no inline validation (empty/duplicate names are only caught after the fact by a toast in `saveCurrentView`), and is jarring next to the rest of the polished UI. On the convert/jobs surface this is the only place a user meets a raw browser dialog.
+
+**Fix:**
+
+1. Replace `window.prompt` with a small in-app input dialog (reuse the `EnqueuePathDialog` pattern or a generic prompt modal) bound to component state, with the existing trim/duplicate validation shown inline before submit.
+2. Keep the keyboard affordances the rest of the app has (Esc to cancel, Enter to confirm, focus trap) for consistency.
+3. Optional: prevent saving a view whose (tab, sort, search) signature already matches an existing saved view, surfacing it inline rather than creating a duplicate.
+
+---
+
 ## Feature Gaps
 
 ---
@@ -1890,3 +2043,32 @@ worktree.**
    end after the rewrite.
 3. **[UX-8] Library preview errors are swallowed** — **RESOLVED.** Preview failures are
    shown inline and block progression until fixed.
+
+**The 2026-06-22 sweep (frontend audit + live VideoToolbox failure log — one P1, one P2,
+one RG, one UX): all RESOLVED.**
+
+1. **[P1-14] VideoToolbox probe/runtime mismatch + unsupported `-q:v` + Transient retry** —
+   **RESOLVED.** Probe is now hardware-only (matches the real command), a one-time CPU
+   fallback recovers encoder-open failures, and `map_failure` reclassifies them as
+   `EncoderUnavailable` (not Transient). New tests cover the probe, the CPU fallback plan,
+   and the classifier.
+2. **[P2-42] Convert uploads aborted at 30 s by `apiFetch`** — **RESOLVED.** Per-call
+   `timeoutMs` on `apiFetch`; `ConversionTool` uploads via XHR with no timeout + progress.
+3. **[RG-15] Convert status polls every 2 s forever** — **RESOLVED.** Poll stops on
+   terminal status; persistent errors surface a toast.
+4. **[UX-9] Save View uses `window.prompt`** — **RESOLVED.** Replaced with `SaveViewDialog`.
+
+**Beyond the four findings, this round also delivered the user's error-handling and logging
+overhaul (not previously tracked as audit entries):**
+
+- **Central error-code catalog + docs links.** Every `Explanation` and `AlchemistError`
+  now carries a stable code and a `docs_url` (`{base}/errors#<code>`), surfaced in API
+  problem+json (`code`/`docs_url`), `ApiError`, and a "Learn more" link in the job-detail
+  failure panel. New docs page `docs/docs/errors.md` documents every code.
+- **Logging:** daily-rotating file via `tracing-appender` (`runtime::log_dir()`), per-job
+  `info_span!("job", job_id)` so logs are traceable end-to-end, a secret-redaction pass on
+  the log store (`src/redact.rs`, applied in `db.add_log`), and a "Download logs" button +
+  `/api/logs/download` endpoint.
+- **Errors:** bounded transient retry with capped backoff in the processor (deterministic
+  failures fail fast via `AlchemistError::is_retryable`), and the opaque
+  "Unknown error: Transient" log replaced with a coded message.
