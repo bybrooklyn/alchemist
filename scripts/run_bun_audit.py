@@ -27,6 +27,12 @@ AUDIT_IGNORES = {
         "GHSA-96hv-2xvq-fx4p",
         # js-yaml quadratic DoS in merge key handling — moderate, build-time only.
         "GHSA-h67p-54hq-rp68",
+        # http-proxy-middleware router host+path bypass — moderate, webpack-dev-server only.
+        # Reachable solely through the Docusaurus dev server's proxy, and only with a `router`
+        # host+path config we don't use; the static `bun run build` output is unaffected.
+        # webpack-dev-server 5.x still pins http-proxy-middleware 2.x, so no patched version is
+        # reachable via bun update without a breaking major bump.
+        "GHSA-64mm-vxmg-q3vj",
     ],
     "web": [
         # Astro 5 is flagged for define:vars script sanitization, but this web app does not use define:vars.

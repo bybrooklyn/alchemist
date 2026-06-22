@@ -1,22 +1,23 @@
 ---
 title: Open Source
-description: Alchemist is licensed under GPLv3. There is no commercial tier, no paywalled features, and no telemetry on by default. Source, issues, and releases are on GitHub.
+description: Alchemist is licensed under AGPLv3. There is no commercial tier, no paywalled features, and no telemetry on by default. Source, issues, and releases are on GitHub.
 keywords:
   - open source transcoding
-  - gpl transcoder
+  - agpl transcoder
   - foss media tools
   - self-hosted transcoding open source
 ---
 
 Alchemist is licensed under
-[GPLv3](https://github.com/bybrooklyn/alchemist/blob/master/LICENSE).
+[AGPLv3](https://github.com/bybrooklyn/alchemist/blob/master/LICENSE).
 That means:
 
 - **Free to use**, for any purpose, including commercial.
 - **Free to modify.** Fork it, patch it, ship your own
   variant.
 - **Free to redistribute**, as long as derivative works stay
-  under GPLv3.
+  under AGPLv3 — including when you run a modified version as
+  a network service.
 
 The entire codebase lives in one repository:
 [github.com/bybrooklyn/alchemist](https://github.com/bybrooklyn/alchemist).
@@ -32,12 +33,13 @@ source-available terms that are not the same thing as a
 copyleft open-source project. Alchemist does neither:
 
 - There is no paid tier. Every feature in Alchemist is in
-  the GPLv3 source tree.
+  the AGPLv3 source tree.
 - There is no account, no license key, no phone-home check.
 - The binary you install is built from the same code in the
   repository you can read.
-- Commercial use is allowed under GPLv3. If you distribute a
-  modified build, you keep it GPLv3 and ship the source.
+- Commercial use is allowed under AGPLv3. If you distribute a
+  modified build — or offer a modified Alchemist to users over
+  a network — you keep it AGPLv3 and ship the source.
 
 That is the line Alchemist draws: no "community edition"
 that exists to upsell the real one, and no operational
@@ -64,17 +66,21 @@ setup.
 ## FAQ
 
 **Can I use Alchemist commercially?**
-Yes. GPLv3 permits commercial use. Derivative works you
-distribute must remain under GPLv3 and ship their source.
+Yes. AGPLv3 permits commercial use. Derivative works you
+distribute — or run as a network service — must remain under
+AGPLv3 and ship their source.
 
 **Is there a paid or enterprise tier?**
 No. There is no closed source, no private feature set, no
 license key system, and no intent to add one.
 
 **Do I have to share my modifications?**
-Only if you distribute modified binaries to others. Private
-modifications for internal use don't require publication.
-See the [GPLv3 text](https://www.gnu.org/licenses/gpl-3.0.html)
+Yes if you distribute a modified build, **and also** if you
+make a modified Alchemist available to users over a network —
+AGPLv3 section 13 requires you to offer those users the
+modified source. Genuinely private, single-operator use with
+no other network users does not require publication.
+See the [AGPLv3 text](https://www.gnu.org/licenses/agpl-3.0.html)
 for the specifics.
 
 **Does Alchemist phone home?**

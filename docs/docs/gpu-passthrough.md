@@ -8,10 +8,45 @@ keywords:
   - vaapi docker
 ---
 
-Use `ghcr.io/bybrooklyn/alchemist:latest`. Set `PUID`/`PGID`
-to run the server as a specific user; for GPU device access,
-make sure that user can open the mapped devices (e.g. is in
-the host's `video`/`render` groups, or use group-add).
+Use `ghcr.io/bybrooklyn/alchemist:latest`. The image bundles
+an FFmpeg with VAAPI, QSV, and NVENC encoders built in, so once
+the GPU device is visible inside the container, Alchemist detects
+and uses it.
+
+## Device permissions (`/dev/dri`)
+
+The container runs as **root by default**. Root can open the
+`/dev/dri` render nodes regardless of their group, so for Intel
+and AMD you only need to pass the device in — **no `group_add`
+is required**.
+
+You only need group access when you set `PUID`/`PGID` to run as
+an unprivileged user. In that case, **do not** use group *names*
+like `render` — those groups don't exist inside the container and
+Docker fails to start with:
+
+```
+Error response from daemon: unable to find group render: no matching entries in group file
+```
+
+Pass the host's **numeric** render group id instead. Find it on
+the host:
+
+```bash
+getent group render | cut -d: -f3      # e.g. 105
+# or, equivalently, the group that owns the render node:
+stat -c '%g' /dev/dri/renderD128
+```
+
+Then add that id (quote it so YAML keeps it a string):
+
+```yaml
+environment:
+  - PUID=1000
+  - PGID=1000
+group_add:
+  - "105"   # numeric GID of the host 'render' group
+```
 
 ## NVIDIA
 
@@ -92,9 +127,12 @@ cards `av1_nvenc`.
 
 ## Intel
 
-Intel passthrough on Linux uses `/dev/dri`. Pass the device
-into the container and add the `video` and `render` groups.
-For modern Intel iGPUs, set `LIBVA_DRIVER_NAME=iHD`.
+Intel passthrough on Linux uses `/dev/dri`. Pass the device into
+the container — that's all the default (root) container needs.
+Driver auto-detection handles modern Intel iGPUs; only set
+`LIBVA_DRIVER_NAME=iHD` if detection picks the wrong driver.
+If you run with `PUID`/`PGID`, also add the numeric render GID
+(see [Device permissions](#device-permissions-devdri)).
 
 ### Docker Compose
 
@@ -110,13 +148,11 @@ services:
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
-      - LIBVA_DRIVER_NAME=iHD
+      # Optional — only if auto-detection picks the wrong driver:
+      # - LIBVA_DRIVER_NAME=iHD
     restart: unless-stopped
 ```
 
@@ -126,15 +162,12 @@ services:
 docker run -d \
   --name alchemist \
   --device /dev/dri:/dev/dri \
-  --group-add video \
-  --group-add render \
   -p 3000:3000 \
   -v ./config:/app/config \
   -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
-  -e LIBVA_DRIVER_NAME=iHD \
   --restart unless-stopped \
   ghcr.io/bybrooklyn/alchemist:latest
 ```
@@ -145,16 +178,22 @@ Inside the container:
 
 ```bash
 vainfo --display drm --device /dev/dri/renderD128
+ffmpeg -hide_banner -encoders | grep -E 'vaapi|qsv'
 ```
 
-If the device is exposed correctly, `vainfo` reports the
-Intel VAAPI driver and supported profiles. Alchemist tries
-VAAPI first for Intel, then QSV as fallback.
+`vainfo` should report the Intel VAAPI driver and supported
+profiles, and FFmpeg should list `h264_vaapi`, `hevc_vaapi`, and
+the `*_qsv` encoders (the bundled FFmpeg ships with them).
+Alchemist tries VAAPI first for Intel, then QSV as fallback.
 
 ## AMD
 
 AMD on Linux uses the same `/dev/dri` passthrough model as
-Intel, but the VAAPI driver should be `radeonsi`.
+Intel. Auto-detection usually selects the `radeonsi` driver;
+set `LIBVA_DRIVER_NAME=radeonsi` only if it doesn't. As with
+Intel, the default (root) container needs no `group_add` — add
+the numeric render GID only when running with `PUID`/`PGID`
+(see [Device permissions](#device-permissions-devdri)).
 
 ### Docker Compose
 
@@ -170,13 +209,11 @@ services:
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
-      - LIBVA_DRIVER_NAME=radeonsi
+      # Optional — only if auto-detection picks the wrong driver:
+      # - LIBVA_DRIVER_NAME=radeonsi
     restart: unless-stopped
 ```
 
@@ -186,15 +223,12 @@ services:
 docker run -d \
   --name alchemist \
   --device /dev/dri:/dev/dri \
-  --group-add video \
-  --group-add render \
   -p 3000:3000 \
   -v ./config:/app/config \
   -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
-  -e LIBVA_DRIVER_NAME=radeonsi \
   --restart unless-stopped \
   ghcr.io/bybrooklyn/alchemist:latest
 ```
@@ -215,6 +249,7 @@ automatically when FFmpeg exposes the AMF encoders.
 
 | Problem | Cause | Fix |
 |--------|-------|-----|
-| Permission denied on `/dev/dri` | Container can see the device but lacks group access | Add `group_add: [video, render]` or the equivalent `--group-add` flags |
-| No encoder found | FFmpeg in the container does not expose the backend | Check `ffmpeg -encoders` inside the container; confirm the host driver/toolkit is installed |
+| `unable to find group render` on start | `group_add: render` uses a group *name* that doesn't exist inside the container | Drop `group_add` entirely when running as root; for `PUID`/`PGID`, use the host's numeric render GID — see [Device permissions](#device-permissions-devdri) |
+| Permission denied on `/dev/dri` | Running unprivileged (`PUID`/`PGID`) without render-group access | Add the numeric render GID via `group_add: ["<gid>"]` (`getent group render | cut -d: -f3`) |
+| No encoder found | The GPU was found but FFmpeg couldn't use it (custom/system FFmpeg without the backend) | The bundled FFmpeg ships VAAPI/QSV/NVENC; if you replaced it, check `ffmpeg -encoders` and confirm the host driver/toolkit is installed |
 | CPU fallback despite GPU | Device passthrough or toolkit missing, or probe failed | Check **Settings → Hardware → Probe Log**, verify `/dev/dri` or NVIDIA toolkit, then restart the container |

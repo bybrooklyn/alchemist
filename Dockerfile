@@ -32,7 +32,7 @@ FROM debian:trixie-slim AS runtime
 
 LABEL org.opencontainers.image.source="https://github.com/bybrooklyn/alchemist" \
       org.opencontainers.image.description="Alchemist — self-hosted media transcoding pipeline" \
-      org.opencontainers.image.licenses="GPL-3.0"
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
 WORKDIR /app
 RUN mkdir -p /app/config /app/data
@@ -42,7 +42,6 @@ RUN apt-get update && \
     sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    xz-utils \
     libva-drm2 \
     libva2 \
     va-driver-all \
@@ -57,27 +56,33 @@ RUN apt-get update && \
     fi \
     && rm -rf /var/lib/apt/lists/*
 
-# Download stable FFmpeg static build (v7.1)
+# Install FFmpeg via jellyfin-ffmpeg.
+# Generic static builds (e.g. johnvansickle) ship WITHOUT the hardware encoders
+# (no --enable-vaapi/--enable-libvpl/--enable-nvenc), so VAAPI/QSV/NVENC probes fail
+# with "Unknown encoder" and every GPU silently falls back to CPU. jellyfin-ffmpeg
+# bundles the Intel (VAAPI + QSV via oneVPL), AMD (VAAPI), and NVIDIA (NVENC) encoders
+# plus the matching runtime, so /dev/dri passthrough works. Pinned + checksum-verified.
 RUN set -e; \
+    JF_VERSION="7.1.4-3"; \
     ARCH=$(dpkg --print-architecture); \
     if [ "$ARCH" = "amd64" ]; then \
-      ARCHIVE="ffmpeg-release-amd64-static.tar.xz"; \
-      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
-      SHA256="abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67"; \
+      DEB="jellyfin-ffmpeg7_${JF_VERSION}-trixie_amd64.deb"; \
+      SHA256="8e30f9f7f3958c524bec8334540e4241145ad4300b328a08a55783c619187225"; \
     elif [ "$ARCH" = "arm64" ]; then \
-      ARCHIVE="ffmpeg-release-arm64-static.tar.xz"; \
-      URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
-      SHA256="f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1"; \
+      DEB="jellyfin-ffmpeg7_${JF_VERSION}-trixie_arm64.deb"; \
+      SHA256="a8fa3ec7cf8fbaf06bb4fdb768d4dd7798277fe4c4b66884c777dc7d575877fb"; \
     else \
       echo "Unsupported architecture: $ARCH" >&2; \
       exit 1; \
     fi; \
-    wget -O "$ARCHIVE" "$URL"; \
-    echo "${SHA256}  ${ARCHIVE}" | sha256sum -c -; \
-    tar xf "$ARCHIVE"; \
-    mv ffmpeg-*-static/ffmpeg /usr/local/bin/; \
-    mv ffmpeg-*-static/ffprobe /usr/local/bin/; \
-    rm -rf "$ARCHIVE" ffmpeg-*-static
+    wget -O "$DEB" "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JF_VERSION}/${DEB}"; \
+    echo "${SHA256}  ${DEB}" | sha256sum -c -; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "./${DEB}"; \
+    rm -f "$DEB"; \
+    rm -rf /var/lib/apt/lists/*; \
+    ln -sf /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg; \
+    ln -sf /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe
 
 COPY --from=builder /app/target/release/alchemist /usr/local/bin/alchemist
 

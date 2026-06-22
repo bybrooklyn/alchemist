@@ -36,7 +36,7 @@ struct AboutView: View {
 
             Spacer()
 
-            Text("(c) 2026 Brooklyn. Distributed under GPLv3.")
+            Text("(c) 2026 Brooklyn. Distributed under AGPLv3.")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.tertiary)
         }

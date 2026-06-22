@@ -13,7 +13,7 @@ This is a step-by-step guide for moving a working Tdarr
 deployment to Alchemist. It assumes you're comfortable
 editing a config file and have an existing Tdarr setup you
 want to replace, not supplement. The goal is to move from a
-server/node/plugin model to a single GPLv3 application with
+server/node/plugin model to a single AGPLv3 application with
 declarative profiles and plain skip reasons.
 
 There is no direct import. The two tools use different

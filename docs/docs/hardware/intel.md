@@ -45,9 +45,13 @@ For newer systems, `renderD129` may be the Intel node. Check
 
 ## Docker
 
-Pass `/dev/dri` into the container and add the `video` and
-`render` groups. Set `LIBVA_DRIVER_NAME=iHD` for modern
-Intel media drivers.
+Pass `/dev/dri` into the container. The image bundles an FFmpeg
+with the Intel VAAPI and QSV encoders, and the default (root)
+container can open the render nodes without any `group_add`.
+Driver auto-detection handles modern Intel iGPUs; only set
+`LIBVA_DRIVER_NAME=iHD` if it picks the wrong driver. Running
+with `PUID`/`PGID`? Also add the host's numeric render GID — see
+[Device permissions](/gpu-passthrough#device-permissions-devdri).
 
 ### Docker Compose
 
@@ -63,13 +67,11 @@ services:
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
-      - LIBVA_DRIVER_NAME=iHD
+      # Optional — only if auto-detection picks the wrong driver:
+      # - LIBVA_DRIVER_NAME=iHD
     restart: unless-stopped
 ```
 
@@ -79,15 +81,12 @@ services:
 docker run -d \
   --name alchemist \
   --device /dev/dri:/dev/dri \
-  --group-add video \
-  --group-add render \
   -p 3000:3000 \
   -v ./config:/app/config \
   -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
-  -e LIBVA_DRIVER_NAME=iHD \
   --restart unless-stopped \
   ghcr.io/bybrooklyn/alchemist:latest
 ```
@@ -96,11 +95,13 @@ docker run -d \
 
 ```bash
 vainfo --display drm --device /dev/dri/renderD128
-ffmpeg -encoders | grep -E 'vaapi|qsv'
+ffmpeg -hide_banner -encoders | grep -E 'vaapi|qsv'
 ```
 
-If VAAPI is healthy, Alchemist should probe `av1_vaapi`,
-`hevc_vaapi`, and `h264_vaapi` first, then the QSV encoders.
+FFmpeg lists `h264_vaapi`, `hevc_vaapi`, `av1_vaapi`, and the
+`*_qsv` encoders out of the box. If VAAPI is healthy, Alchemist
+probes `av1_vaapi`, `hevc_vaapi`, and `h264_vaapi` first, then
+the QSV encoders.
 
 ## In Alchemist
 

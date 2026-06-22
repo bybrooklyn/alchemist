@@ -31,12 +31,18 @@ services:
 
     # ── Hardware acceleration (opt-in) ─────────────────────────────────
     # See https://alchemist.bybrooklyn.dev/gpu-passthrough for details.
+    # The bundled FFmpeg already includes VAAPI/QSV/NVENC encoders.
     #
-    # Intel QuickSync / AMD VAAPI — uncomment:
+    # Intel QuickSync / AMD VAAPI — pass the render device (root needs no
+    # group_add). Uncomment:
     # devices:
     #   - /dev/dri:/dev/dri
-    # If driver auto-detection picks wrong, force it via:
+    # If driver auto-detection picks wrong, force it in `environment:` via:
     #   - LIBVA_DRIVER_NAME=iHD   # Intel Broadwell+ (or i965 for older, radeonsi for AMD)
+    # Running as PUID/PGID? Add the host's numeric render GID (NOT the name
+    # 'render', which doesn't exist in the container):
+    # group_add:
+    #   - "105"                   # getent group render | cut -d: -f3
     #
     # NVIDIA NVENC — requires the NVIDIA Container Toolkit; uncomment:
     # deploy:

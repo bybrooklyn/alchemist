@@ -41,8 +41,11 @@ vainfo --display drm --device /dev/dri/renderD128
 
 ### Docker
 
-Pass `/dev/dri` into the container and set the AMD VAAPI
-driver name to `radeonsi`.
+Pass `/dev/dri` into the container. The default (root) container
+needs no `group_add`. Auto-detection usually selects `radeonsi`;
+set `LIBVA_DRIVER_NAME=radeonsi` only if it doesn't. Running with
+`PUID`/`PGID`? Also add the host's numeric render GID — see
+[Device permissions](/gpu-passthrough#device-permissions-devdri).
 
 ```yaml
 services:
@@ -56,13 +59,11 @@ services:
       - /path/to/media:/media
     devices:
       - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     environment:
       - ALCHEMIST_CONFIG_PATH=/app/config/config.toml
       - ALCHEMIST_DB_PATH=/app/data/alchemist.db
-      - LIBVA_DRIVER_NAME=radeonsi
+      # Optional — only if auto-detection picks the wrong driver:
+      # - LIBVA_DRIVER_NAME=radeonsi
     restart: unless-stopped
 ```
 
@@ -72,15 +73,12 @@ services:
 docker run -d \
   --name alchemist \
   --device /dev/dri:/dev/dri \
-  --group-add video \
-  --group-add render \
   -p 3000:3000 \
   -v ./config:/app/config \
   -v ./data:/app/data \
   -v /path/to/media:/media \
   -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
   -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
-  -e LIBVA_DRIVER_NAME=radeonsi \
   --restart unless-stopped \
   ghcr.io/bybrooklyn/alchemist:latest
 ```
@@ -89,7 +87,7 @@ docker run -d \
 
 ```bash
 vainfo --display drm --device /dev/dri/renderD128
-ffmpeg -encoders | grep vaapi
+ffmpeg -hide_banner -encoders | grep vaapi
 ```
 
 ## Windows

@@ -35,7 +35,7 @@ pedaling paid tiers or architectural overhead.
 The short version, so the comparison pages don't have to
 repeat it:
 
-- **GPLv3, no paid tier.** Every feature lives in the public
+- **AGPLv3, no paid tier.** Every feature lives in the public
   source tree. No license key, no private feature unlock. See
   [Open Source](/open-source).
 - **One process.** A single binary with the web UI embedded —

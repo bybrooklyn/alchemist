@@ -45,15 +45,22 @@ In Docker, the device must be passed in:
 ```yaml
 devices:
   - /dev/dri:/dev/dri
-group_add:
-  - video
-  - render
 ```
 
-The `group_add` entries matter — without them, the
-container user can see the device nodes but not open them.
+The default (root) container can open the render nodes with
+just this. **Don't** add `group_add: render` — that group name
+doesn't exist inside the container and Docker refuses to start
+(`unable to find group render`). Only when you run unprivileged
+(`PUID`/`PGID`) does the container user need group access, and
+then you pass the host's **numeric** render GID:
 
-See [GPU Passthrough](/gpu-passthrough) for full examples.
+```yaml
+group_add:
+  - "105"   # getent group render | cut -d: -f3
+```
+
+See [GPU Passthrough](/gpu-passthrough#device-permissions-devdri)
+for full examples.
 
 ## 2. Does `vainfo` report profiles?
 
@@ -92,9 +99,12 @@ ffmpeg -encoders | grep vaapi
 
 You should see at least `h264_vaapi`, `hevc_vaapi`, and — on
 sufficiently new Intel/AMD hardware with a compatible
-driver/FFmpeg stack — `av1_vaapi`. If the list is empty,
-FFmpeg wasn't built with VAAPI. Use the Alchemist Docker
-image or install an FFmpeg package that enables VAAPI.
+driver/FFmpeg stack — `av1_vaapi`. The Alchemist Docker image
+ships these encoders out of the box. If the list is empty, the
+FFmpeg on your `PATH` wasn't built with VAAPI (common with
+generic static builds) — the probe log will show
+*"Encoder unavailable in current FFmpeg build"*. Use the
+Alchemist Docker image or install an FFmpeg built with VAAPI.
 
 ## 4. Read the probe log
 
@@ -105,8 +115,10 @@ patterns:
 - **"Failed to get any profile / no valid profile"** —
   `vainfo` would show the same thing. Driver is missing or
   mis-selected (step 2).
-- **"Permission denied" on `/dev/dri/renderD128`** — the
-  container user isn't in the `render` group (step 1).
+- **"Permission denied" on `/dev/dri/renderD128`** — you're
+  running unprivileged (`PUID`/`PGID`) without the render
+  group. Add the host's numeric render GID via `group_add`
+  (step 1). The default root container doesn't hit this.
 - **`av1_vaapi` fails but `hevc_vaapi` works** — the driver
   or FFmpeg version lacks AV1 VAAPI encode. This is driver
   and FFmpeg-stack sensitive. Either update the stack or

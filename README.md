@@ -2,11 +2,11 @@
 
 Point it at your media library. Walk away. Come back to a smaller, better-encoded collection.
 
-Alchemist saves space automatically without asking you to babysit shell commands or risk your originals. It is GPLv3 open source, self-hosted, and ships as one application with a web UI for setup, monitoring, and day-to-day control. No paid tier, no private "pro" feature tree, no license key.
+Alchemist saves space automatically without asking you to babysit shell commands or risk your originals. It is AGPLv3 open source, self-hosted, and ships as one application with a web UI for setup, monitoring, and day-to-day control. No paid tier, no private "pro" feature tree, no license key.
 
 ## Why Alchemist?
 
-Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Flow tools like Tdarr can scale and branch, but they also ask you to run more moving parts and model media policy as a graph. Alchemist is built for the self-hoster who wants the boring path: one process, deterministic planning, plain explanations, automatic hardware selection, and public GPLv3 code for every feature it ships.
+Running `ffmpeg` by hand works when you only have a few files and a lot of patience. Flow tools like Tdarr can scale and branch, but they also ask you to run more moving parts and model media policy as a graph. Alchemist is built for the self-hoster who wants the boring path: one process, deterministic planning, plain explanations, automatic hardware selection, and public AGPLv3 code for every feature it ships.
 
 ## What It Does
 
@@ -182,7 +182,7 @@ alchemist plan /path/to/media --json
 
 ## Open Source
 
-Alchemist is GPLv3. The public repository is the product:
+Alchemist is AGPLv3. The public repository is the product:
 there is no commercial unlock, no separate enterprise build,
 no license-key gate, and telemetry is opt-in/off by default.
 See [Open Source](docs/docs/open-source.md) for the details.
@@ -222,7 +222,7 @@ while encodes are in flight.
 
 ## License
 
-Licensed under GPLv3. See [LICENSE](LICENSE) for details.
+Licensed under AGPLv3. See [LICENSE](LICENSE) for details.
 
 ## Contributing
 

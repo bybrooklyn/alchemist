@@ -3,7 +3,7 @@ title: Contributing Overview
 description: How to report bugs, suggest features, and contribute to Alchemist.
 ---
 
-Alchemist is GPLv3 open source. Contributions are welcome.
+Alchemist is AGPLv3 open source. Contributions are welcome.
 
 ## Start here
 
@@ -30,7 +30,7 @@ Explain why the feature is useful, not just what you want.
 ## License and CLA
 
 By submitting a pull request or patch, you agree that your
-contribution will be licensed under GPLv3 and you grant
+contribution will be licensed under AGPLv3 and you grant
 Brooklyn Halmstad (the project owner) a perpetual,
 irrevocable right to use, modify, and redistribute your
 contribution as part of Alchemist.

@@ -1,6 +1,6 @@
 ---
 title: Alchemist
-description: Alchemist is a self-hosted, GPLv3 transcoding pipeline that scans your media library and encodes only what's worth encoding, using NVENC, Intel Quick Sync, VAAPI, AMF, or Apple VideoToolbox.
+description: Alchemist is a self-hosted, AGPLv3 transcoding pipeline that scans your media library and encodes only what's worth encoding, using NVENC, Intel Quick Sync, VAAPI, AMF, or Apple VideoToolbox.
 slug: /
 keywords:
   - self-hosted video transcoding
@@ -20,7 +20,7 @@ hardware you have, on your schedule.
 Your originals are never touched until the new file passes
 quality validation. Nothing is deleted until you say so.
 
-Alchemist is GPLv3 open source. There is no paid tier, no
+Alchemist is AGPLv3 open source. There is no paid tier, no
 private "pro" build, no license key, and no phone-home check.
 
 ## What it does
@@ -62,7 +62,7 @@ For detailed codec support matrices (AV1, HEVC, H.264) and vendor-specific setup
 | Get your GPU working | [Hardware](/hardware) |
 | Using Jellyfin | [Alchemist for Jellyfin](/jellyfin) |
 | Comparing to Tdarr or FileFlows | [Alchemist vs Tdarr](/alternatives/tdarr) · [Alchemist vs FileFlows](/alternatives/fileflows) |
-| Why it's GPLv3 | [Open Source](/open-source) |
+| Why it's AGPLv3 | [Open Source](/open-source) |
 | Automate with tokens | [API](/api) |
 | Connect local assistants | [MCP Server](/mcp) |
 | Understand skip decisions | [Skip Decisions](/skip-decisions) |
@@ -80,5 +80,5 @@ Stable: `ghcr.io/bybrooklyn/alchemist:latest`
 
 ## License
 
-GPLv3. Free to use, modify, and distribute under the same
+AGPLv3. Free to use, modify, and distribute under the same
 license. Genuinely open source — not source-available.

@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-22
+
+### Docker & hardware acceleration
+
+- **Intel, AMD, and NVIDIA hardware encoding now works in the Docker image.** The bundled
+  FFmpeg was a generic static build compiled without `--enable-vaapi` / `--enable-libvpl` /
+  `--enable-nvenc`, so every GPU probe failed with `Unknown encoder` and silently fell back to
+  CPU — even when the host's `vainfo` reported a healthy driver. The image now ships
+  **jellyfin-ffmpeg**, which bundles the Intel (VAAPI + QSV via oneVPL), AMD (VAAPI), and
+  NVIDIA (NVENC) encoders plus the matching runtime. Passing `/dev/dri` (or the NVIDIA
+  Container Toolkit) into the container is now enough. (#4)
+- Hardware detection now distinguishes "no GPU" from "GPU found but this FFmpeg build can't use
+  it." When a render node is discovered but every probe fails with a missing-encoder error, the
+  startup logs and **Settings → Hardware** say so explicitly and point at the fix, instead of a
+  bare "NO GPU DETECTED."
+- Corrected the GPU-passthrough docs. The old examples told everyone to add
+  `group_add: [video, render]`, which crashes the container on start (`unable to find group
+  render` — that group name doesn't exist inside it) and is unnecessary for the default root
+  user. The docs now explain device permissions: the default root container needs only the
+  device passed in, and unprivileged (`PUID`/`PGID`) runs use the host's **numeric** render GID.
+
+### Licensing
+
+- Relicensed from GPL-3.0 to **AGPL-3.0-or-later**. Alchemist's web UI, API, and
+  daemon are network-facing, so AGPL section 13 now requires anyone running a
+  modified Alchemist as a network service to offer that modified source to its
+  users — closing the hosted-fork gap GPL-3.0 left open. Nothing changes for
+  self-hosters: still free, no paid tier, no license key, no phone-home. The
+  `LICENSE` file, `Cargo.toml`, Docker/Homebrew packaging metadata, web and macOS
+  About screens, and all documentation were updated to AGPLv3.
+
 ### Native macOS app
 
 Closes the 2026-06-11 `native/mac` audit sweep (two P1, five P2, two RG, two UX, one

@@ -25,7 +25,7 @@ publicly.
 
 | | Alchemist | FileFlows |
 |---|---|---|
-| License | GPLv3, no paid tier, no license key | Free / Personal / Commercial license tiers |
+| License | AGPLv3, no paid tier, no license key | Free / Personal / Commercial license tiers |
 | Config model | Declarative — TOML file and UI settings | Flow editor (node-based) |
 | Deployment | Single binary (also a single Docker container) | Server + optional additional processing nodes |
 | AV1 target | First-class in the planner | Supported (see FileFlows docs) |
@@ -46,7 +46,7 @@ publicly.
 
 ## Choose Alchemist if
 
-- **Licensing matters to you.** Alchemist is GPLv3 source,
+- **Licensing matters to you.** Alchemist is AGPLv3 source,
   binary, and distribution. No paid tier, no license key,
   no commercial-use gate. See [Open Source](/open-source).
 - **You prefer declarative config over a flow editor.** The
@@ -90,7 +90,7 @@ types, paid support, commercial use, and advanced features.
 Its license page documents license email/key entry and
 features that depend on license level.
 
-Alchemist does not have that layer. It is GPLv3 with no paid
+Alchemist does not have that layer. It is AGPLv3 with no paid
 tier, no license key, no private unlock, and no separate
 commercial feature set. Everything in Alchemist is in the
 public source tree and stays that way. See
@@ -124,7 +124,7 @@ migration:
 ## FAQ
 
 **Is Alchemist free?**
-Yes. GPLv3, no paid tier, no license key. Every feature
+Yes. AGPLv3, no paid tier, no license key. Every feature
 lives in the public source tree. See
 [Open Source](/open-source).
 

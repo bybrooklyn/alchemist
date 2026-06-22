@@ -276,7 +276,7 @@ export default function AboutDialog({ isOpen, onClose, originRect }: AboutDialog
                                 <div className="mt-8 pt-6 border-t border-helios-line/10 text-center">
                                     <p className="text-xs text-helios-slate/60">
                                         &copy; {new Date().getFullYear()} Alchemist Contributors. <br />
-                                        Released under GPL-3.0 License.
+                                        Released under AGPL-3.0 License.
                                     </p>
                                 </div>
                             </div>
