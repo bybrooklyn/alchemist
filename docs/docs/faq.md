@@ -5,7 +5,7 @@ description: Common questions from self-hosters running Alchemist.
 
 ## 1. Is Alchemist free?
 
-Yes. Alchemist is GPLv3 open source. There is no paid tier,
+Yes. Alchemist is AGPLv3 open source. There is no paid tier,
 license key, private pro build, or commercial-use unlock.
 
 ## 2. Will it ruin my quality?

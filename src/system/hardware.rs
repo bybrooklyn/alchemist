@@ -664,6 +664,22 @@ fn enumerate_linux_render_nodes() -> Vec<LinuxRenderNode> {
     enumerate_linux_render_nodes_under(Path::new("/sys/class/drm"), Path::new("/dev/dri"))
 }
 
+/// Probe summary used when FFmpeg reports `Unknown encoder` — the hardware exists but the
+/// FFmpeg build was compiled without the matching encoder. Shared so detection-note logic
+/// can recognise this specific failure mode.
+const ENCODER_UNAVAILABLE_SUMMARY: &str = "Encoder unavailable in current FFmpeg build";
+
+/// Human-readable name for the encoder families a vendor's hardware path needs from FFmpeg.
+fn vendor_backend_hint(vendor: Vendor) -> &'static str {
+    match vendor {
+        Vendor::Intel => "VAAPI/QSV",
+        Vendor::Amd => "VAAPI",
+        Vendor::Nvidia => "NVENC",
+        Vendor::Apple => "VideoToolbox",
+        Vendor::Cpu => "hardware",
+    }
+}
+
 fn summarize_probe_failure(stderr: &str) -> String {
     let first_line = stderr
         .lines()
@@ -675,7 +691,7 @@ fn summarize_probe_failure(stderr: &str) -> String {
     if lower.contains("timed out") {
         "Probe timed out".to_string()
     } else if lower.contains("unknown encoder") {
-        "Encoder unavailable in current FFmpeg build".to_string()
+        ENCODER_UNAVAILABLE_SUMMARY.to_string()
     } else if lower.contains("permission denied") {
         "Device permission denied".to_string()
     } else if lower.contains("no such file or directory")
@@ -985,6 +1001,31 @@ fn append_failed_vendor_note(notes: &mut Vec<String>, vendor: Vendor, results: &
         .filter(|result| result.candidate.vendor == vendor)
         .collect();
     if vendor_results.is_empty() || vendor_results.iter().any(|result| result.success) {
+        return;
+    }
+
+    // The GPU was discovered (we only generate probes for hardware we found), yet every
+    // probe failed because the FFmpeg build has no matching encoders. That is a build /
+    // packaging problem, not a missing GPU — say so, instead of a bare "no GPU detected".
+    if vendor_results
+        .iter()
+        .all(|result| result.summary == ENCODER_UNAVAILABLE_SUMMARY)
+    {
+        let path = vendor_results
+            .iter()
+            .find_map(|result| result.candidate.device_path.as_deref())
+            .map(|path| format!(" at {}", path))
+            .unwrap_or_default();
+        append_detection_note(
+            notes,
+            format!(
+                "{} GPU detected{} but this FFmpeg build has no {} encoders — use the \
+                 official Alchemist Docker image or an FFmpeg built with hardware support.",
+                vendor.short_name(),
+                path,
+                vendor_backend_hint(vendor),
+            ),
+        );
         return;
     }
 
@@ -1335,6 +1376,11 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     warn!("⚠  NO GPU DETECTED - FALLING BACK TO CPU ENCODING");
     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    // Surface why each discovered GPU was unusable (e.g. an FFmpeg build without VAAPI/QSV
+    // encoders), so the reason is in the logs and not just the Hardware probe UI.
+    for note in &detection_notes {
+        warn!("{}", note);
+    }
     warn!("CPU encoding will be significantly slower than GPU acceleration.");
     warn!("Expected performance: 10-50x slower depending on resolution.");
     warn!("Software encoder: libsvtav1 (AV1) or libx264 (H.264)");
@@ -1709,6 +1755,77 @@ mod tests {
                 .collect(),
             discovery_notes: vec!["test".to_string()],
         }
+    }
+
+    fn failed_probe(
+        vendor: Vendor,
+        encoder: &str,
+        device_path: Option<&str>,
+        summary: &str,
+    ) -> ProbeResult {
+        ProbeResult {
+            candidate: ProbeCandidate {
+                vendor,
+                backend: HardwareBackend::Vaapi,
+                codec: "hevc".to_string(),
+                encoder: encoder.to_string(),
+                device_path: device_path.map(str::to_string),
+                discovery_note: "test".to_string(),
+            },
+            success: false,
+            stderr: String::new(),
+            summary: summary.to_string(),
+        }
+    }
+
+    #[test]
+    fn failed_vendor_note_flags_missing_ffmpeg_encoders() {
+        // Every Intel probe failed because the FFmpeg build lacks the encoders: the note
+        // should blame the FFmpeg build (and name the device), not report a missing GPU.
+        let results = vec![
+            failed_probe(
+                Vendor::Intel,
+                "hevc_vaapi",
+                Some("/dev/dri/renderD128"),
+                ENCODER_UNAVAILABLE_SUMMARY,
+            ),
+            failed_probe(
+                Vendor::Intel,
+                "h264_vaapi",
+                Some("/dev/dri/renderD128"),
+                ENCODER_UNAVAILABLE_SUMMARY,
+            ),
+        ];
+        let mut notes = Vec::new();
+        append_failed_vendor_note(&mut notes, Vendor::Intel, &results);
+
+        assert_eq!(notes.len(), 1);
+        let note = &notes[0];
+        assert!(note.contains("Intel GPU detected"), "note was: {note}");
+        assert!(note.contains("/dev/dri/renderD128"), "note was: {note}");
+        assert!(note.contains("VAAPI/QSV"), "note was: {note}");
+        assert!(!note.contains("probes failed"), "note was: {note}");
+    }
+
+    #[test]
+    fn failed_vendor_note_uses_generic_message_for_other_failures() {
+        // A device/permission failure is not an FFmpeg-build problem: keep the generic note.
+        let results = vec![failed_probe(
+            Vendor::Intel,
+            "hevc_vaapi",
+            Some("/dev/dri/renderD128"),
+            "Device permission denied",
+        )];
+        let mut notes = Vec::new();
+        append_failed_vendor_note(&mut notes, Vendor::Intel, &results);
+
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("probes failed"), "note was: {}", notes[0]);
+        assert!(
+            !notes[0].contains("FFmpeg build has no"),
+            "note was: {}",
+            notes[0]
+        );
     }
 
     #[test]

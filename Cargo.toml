@@ -1,9 +1,9 @@
 [package]
 name = "alchemist"
-version = "0.3.4-rc.2"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.85"
-license = "GPL-3.0"
+license = "AGPL-3.0-or-later"
 build = "build.rs"
 
 [features]

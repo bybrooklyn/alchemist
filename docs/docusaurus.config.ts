@@ -57,11 +57,11 @@ const config: Config = {
         '@type': 'SoftwareApplication',
         name: 'Alchemist',
         description:
-          'Self-hosted video transcoding automation. Scans your media library, analyzes every file, and encodes only what is worth encoding using NVENC, Intel Quick Sync, VAAPI, AMD AMF, or Apple VideoToolbox. GPLv3.',
+          'Self-hosted video transcoding automation. Scans your media library, analyzes every file, and encodes only what is worth encoding using NVENC, Intel Quick Sync, VAAPI, AMD AMF, or Apple VideoToolbox. AGPLv3.',
         applicationCategory: 'MultimediaApplication',
         operatingSystem: 'Linux, macOS, Windows',
         url,
-        license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+        license: 'https://www.gnu.org/licenses/agpl-3.0.html',
         offers: {
           '@type': 'Offer',
           price: '0',
@@ -197,13 +197,13 @@ const config: Config = {
               href: 'https://github.com/bybrooklyn/alchemist/issues',
             },
             {
-              label: 'GPLv3 License',
+              label: 'AGPLv3 License',
               href: 'https://github.com/bybrooklyn/alchemist/blob/master/LICENSE',
             },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Brooklyn Halmstad. Alchemist is GPLv3 open source.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Brooklyn Halmstad. Alchemist is AGPLv3 open source.`,
     },
     prism: {
       theme: prismThemes.dracula,

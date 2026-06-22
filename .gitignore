@@ -39,6 +39,7 @@ Thumbs.db
 # Scratch / exported assistant sessions
 session.md
 update_ui.sh
+reports/
 
 # Project Specifics
 public/pkg/alchemist.css
@@ -52,7 +53,9 @@ integrations/**/obj/
 .claude/skills/duo/
 .agents/settings.local.json
 .pi/
-
 .gemini/
 .antigravitycli/
+
+# Other
 gha-creds-*.json
+image.png

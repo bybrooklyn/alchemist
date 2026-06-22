@@ -24,7 +24,7 @@ and [worker types](https://docs.tdarr.io/docs/nodes/workers/).
 
 | | Alchemist | Tdarr |
 |---|---|---|
-| License | GPLv3 (fully open source) | See Tdarr's own licensing page |
+| License | AGPLv3 (fully open source) | See Tdarr's own licensing page |
 | Deployment | Single binary (also a single Docker container) | Central server + node process(es) + workers |
 | Config model | Declarative — TOML file and UI settings | Plugin stack / flow editor |
 | AV1 target | First-class in the planner, uses AV1-capable GPUs when available | Supported via plugins/flows |
@@ -49,7 +49,7 @@ and [worker types](https://docs.tdarr.io/docs/nodes/workers/).
   service. There's no node to register, no server/worker
   topology to keep healthy, and no plugin stack to debug
   before a file can be processed.
-- **Licensing matters to you.** Alchemist is GPLv3
+- **Licensing matters to you.** Alchemist is AGPLv3
   end-to-end — source, binary, and everything it does. No
   paid tier, no license key, no phone-home.
 - **You prefer declarative config over flow editors.** The
@@ -101,7 +101,7 @@ and records exactly why a backend failed.
 
 ### Open source line
 
-Alchemist's GPLv3 position is intentionally simple: the
+Alchemist's AGPLv3 position is intentionally simple: the
 public repository is the product. There is no private feature
 tree, no paid unlock, and no license key. If that matters to
 you, Alchemist is the cleaner bet. If horizontal worker
@@ -139,7 +139,7 @@ with the host it's on. If you need horizontal scaling across
 multiple physical machines, that remains a Tdarr strength.
 
 **Is Alchemist free?**
-Yes. GPLv3, no paid tier, no license key, no phone-home
+Yes. AGPLv3, no paid tier, no license key, no phone-home
 check. The binary you install is built from the same code in
 the repository. See [Open Source](/open-source).
 

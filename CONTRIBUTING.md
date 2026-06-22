@@ -4,9 +4,9 @@ Thanks for your interest in contributing to **Alchemist**. Contributions are wel
 
 ## License
 
-Alchemist is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+Alchemist is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
 
-By contributing to this project, you agree that your contributions will be licensed under the same GPL-3.0 license.
+By contributing to this project, you agree that your contributions will be licensed under the same AGPL-3.0 license.
 
 ## Copyright & Ownership
 
@@ -14,7 +14,7 @@ By submitting a contribution (code, documentation, assets, or any other material
 
 - You **grant the project owner** a **perpetual, irrevocable, worldwide right** to use, modify, relicense, and redistribute your contribution as part of the project.
 - You retain copyright to your individual contribution, **but you grant the project owner full rights to incorporate it into Alchemist**, including future relicensing or dual-licensing if desired.
-- You confirm that you have the legal right to submit the contribution and that it is your own original work (or properly attributed and compatible with GPL-3.0).
+- You confirm that you have the legal right to submit the contribution and that it is your own original work (or properly attributed and compatible with AGPL-3.0).
 
 In short: you keep authorship credit, but the project owner controls the project.
 
