@@ -575,6 +575,14 @@ paths:
           description: Log history
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/logs/download:
+    get:
+      summary: Download the rotating daemon log file
+      responses:
+        "200":
+          description: Log file (text/plain attachment)
+        default:
+          $ref: "#/components/responses/Problem"
   /api/v1/processor/status:
     get:
       summary: Get processor status

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_DB_PATH: &str = "alchemist.db";
 const DEFAULT_TEMP_DIR: &str = "temp";
+const DEFAULT_LOG_DIR: &str = "logs";
 
 fn parse_bool_env(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -78,6 +79,19 @@ pub fn temp_dir() -> PathBuf {
         return PathBuf::from(temp_dir);
     }
     default_data_dir().join(DEFAULT_TEMP_DIR)
+}
+
+/// Directory for the rotating daemon log file (`alchemist.log`). Lives beside
+/// the database by default so operators have one place for state. Overridable
+/// via `ALCHEMIST_LOG_DIR`, and follows `ALCHEMIST_DATA_DIR` like the DB.
+pub fn log_dir() -> PathBuf {
+    if let Ok(dir) = env::var("ALCHEMIST_LOG_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(data_dir) = env::var("ALCHEMIST_DATA_DIR") {
+        return Path::new(&data_dir).join(DEFAULT_LOG_DIR);
+    }
+    default_data_dir().join(DEFAULT_LOG_DIR)
 }
 
 pub fn config_mutable() -> bool {

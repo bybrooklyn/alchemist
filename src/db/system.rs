@@ -33,10 +33,13 @@ impl Db {
     }
 
     pub async fn add_log(&self, level: &str, job_id: Option<i64>, message: &str) -> Result<()> {
+        // Redact secrets before anything is persisted to the log store, since
+        // these rows are surfaced verbatim in the LogViewer and /api/logs.
+        let message = crate::redact::redact_secrets(message);
         sqlx::query("INSERT INTO logs (level, job_id, message) VALUES (?, ?, ?)")
             .bind(level)
             .bind(job_id)
-            .bind(message)
+            .bind(&message)
             .execute(&self.pool)
             .await?;
         Ok(())

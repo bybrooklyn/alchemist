@@ -15,6 +15,7 @@ import { JobsToolbar } from "./jobs/JobsToolbar";
 import { JobsTable } from "./jobs/JobsTable";
 import { JobDetailModal } from "./jobs/JobDetailModal";
 import { EnqueuePathDialog } from "./jobs/EnqueuePathDialog";
+import { SaveViewDialog } from "./jobs/SaveViewDialog";
 import { getStatusBadge } from "./jobs/jobStatusBadge";
 import { useJobDetailController } from "./jobs/useJobDetailController";
 
@@ -221,11 +222,11 @@ function JobManager() {
         setPage(1);
     };
 
-    const saveCurrentView = async (label: string) => {
+    const saveCurrentView = async (label: string): Promise<boolean> => {
         const trimmedLabel = label.trim();
         if (!trimmedLabel) {
             showToast({ kind: "error", title: "Jobs", message: "View name is required" });
-            return;
+            return false;
         }
 
         const previousViews = savedViews;
@@ -244,10 +245,12 @@ function JobManager() {
 
         try {
             await persistSavedViews(nextViews);
+            return true;
         } catch (e) {
             setSavedViews(previousViews);
             setActiveViewId(previousActiveViewId);
             showToast({ kind: "error", title: "Jobs", message: "Failed to save view" });
+            return false;
         }
     };
 
@@ -271,6 +274,22 @@ function JobManager() {
     const [enqueueDialogOpen, setEnqueueDialogOpen] = useState(false);
     const [enqueuePath, setEnqueuePath] = useState("");
     const [enqueueSubmitting, setEnqueueSubmitting] = useState(false);
+    const [saveViewOpen, setSaveViewOpen] = useState(false);
+    const [saveViewName, setSaveViewName] = useState("");
+    const [saveViewSubmitting, setSaveViewSubmitting] = useState(false);
+
+    const handleSaveViewSubmit = async () => {
+        setSaveViewSubmitting(true);
+        try {
+            const saved = await saveCurrentView(saveViewName);
+            if (saved) {
+                setSaveViewOpen(false);
+                setSaveViewName("");
+            }
+        } finally {
+            setSaveViewSubmitting(false);
+        }
+    };
     const menuRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const compactSearchRef = useRef<HTMLDivElement | null>(null);
@@ -749,8 +768,8 @@ function JobManager() {
                 ))}
                 <button
                     onClick={() => {
-                        const label = window.prompt("View name");
-                        if (label !== null) void saveCurrentView(label);
+                        setSaveViewName("");
+                        setSaveViewOpen(true);
                     }}
                     className="px-3 py-1 rounded-full text-xs font-semibold border border-dashed border-helios-line/40 text-helios-slate hover:border-helios-solar hover:text-helios-solar transition-all flex items-center gap-1"
                 >
@@ -945,6 +964,23 @@ function JobManager() {
                         }
                     }}
                     onSubmit={handleEnqueuePath}
+                />,
+                document.body,
+            )}
+
+            {typeof document !== "undefined" && createPortal(
+                <SaveViewDialog
+                    open={saveViewOpen}
+                    name={saveViewName}
+                    submitting={saveViewSubmitting}
+                    existingLabels={savedViews.map((view) => view.label)}
+                    onNameChange={setSaveViewName}
+                    onClose={() => {
+                        if (!saveViewSubmitting) {
+                            setSaveViewOpen(false);
+                        }
+                    }}
+                    onSubmit={handleSaveViewSubmit}
                 />,
                 document.body,
             )}

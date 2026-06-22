@@ -1,5 +1,15 @@
 import type { ExplanationView, LogEntry } from "./types";
 
+/** Public docs site root where every error/decision code is documented. */
+export const DOCS_BASE_URL = "https://alchemist-project.org";
+
+/** Canonical docs link for a code. Mirrors the backend `docs_url_for_code`
+ *  (`src/explanations.rs`) so client-derived and server-derived explanations
+ *  point at the same anchored reference page. The docs site serves at root. */
+export function docsUrlForCode(code: string): string {
+    return `${DOCS_BASE_URL}/errors#${code.trim().toLowerCase()}`;
+}
+
 function formatReductionPercent(value?: string): string {
     if (!value) return "?";
     const parsed = Number.parseFloat(value);
@@ -33,6 +43,7 @@ export function humanizeSkipReason(reason: string): ExplanationView {
         operator_guidance,
         measured,
         legacy_reason: reason,
+        docs_url: docsUrlForCode(code),
     });
 
     switch (key) {
@@ -181,6 +192,7 @@ export function explainFailureSummary(summary: string): ExplanationView {
         operator_guidance,
         measured: {},
         legacy_reason: summary,
+        docs_url: docsUrlForCode(code),
     });
 
     if (normalized.includes("cancelled")) {
@@ -252,6 +264,7 @@ export function explainFailureLogs(logs: LogEntry[]): ExplanationView | null {
         operator_guidance,
         measured: {},
         legacy_reason: primaryMessage,
+        docs_url: docsUrlForCode(code),
     });
 
     if (normalized.includes("qscale not available for encoder")) {

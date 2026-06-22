@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Reliability: hardware encoder failures now self-heal
+
+- **VideoToolbox (and any hardware encoder) that fails to open its session now falls back
+  to CPU instead of failing the job.** On macOS, a daemon running without a logged-in GUI
+  session (LaunchDaemon, SSH, sandbox) cannot create a VideoToolbox session, so every
+  encode died with `Could not open encoder … -22` and the job was marked failed as an
+  opaque "Transient" error with no recovery. Three fixes: (1) the hardware probe is now
+  hardware-only — it no longer passes `-allow_sw 1`, so detection matches the real encode
+  command and VideoToolbox is not selected when no hardware session can open; (2) on an
+  encoder-open failure the pipeline re-plans onto the CPU encoder (libx265/libx264/SVT-AV1)
+  and runs once more before giving up; (3) encoder-open failures are classified as
+  permanent (`EncoderUnavailable`), not transient, so they stop retrying and surface an
+  actionable, documented reason.
+
+### Error codes and a public error reference
+
+- **Every error now carries a stable code and a docs link.** Job failures, decisions, and
+  the typed `AlchemistError` family resolve to a documented code, surfaced in API
+  `application/problem+json` responses (`code` + `docs_url`), in the job-detail failure
+  panel as a "Learn more" link, and in the logs. A new
+  [Error reference](https://alchemist-project.org/errors) documents the cause and fix for
+  every code.
+- Bounded automatic retry with capped backoff for genuinely transient failures (transient
+  IO, a full disk that may clear); deterministic failures (corrupt media, encoder-open,
+  planner faults) fail fast instead of looping. The opaque "Unknown error: Transient" log
+  line is gone.
+
+### Logging
+
+- **Logs are now written to a daily-rotating file** (`~/.config/alchemist/logs/alchemist.log`,
+  overridable via `ALCHEMIST_LOG_DIR`) alongside stdout, so they survive restarts and are
+  downloadable from the Logs page (and `GET /api/logs/download`).
+- Every job log line carries its `job_id` via a tracing span, so a failure is traceable
+  end-to-end across analyze → plan → encode → finalize.
+- **Secrets are redacted before logs are stored** — API tokens, `Authorization` headers,
+  session cookies, and Discord/Slack webhook tokens are masked.
+
+### Auto-updater robustness
+
+- **The self-updater now takes a complete pre-update backup** — both an online database
+  snapshot and a copy of `config.toml` — and prunes to the five most recent backup sets so
+  the directory does not grow unbounded.
+- **Pre-flight checks fail fast**: the updater verifies there is enough free disk space for
+  the download and extracted binary and that the install directory is writable *before*
+  draining jobs, taking a backup, or downloading anything (`409`/`507` with a clear
+  message).
+- **The binary swap is now an atomic, same-filesystem rename with a co-located rollback.**
+  The new binary is staged beside the current one (the download lives in a temp dir that
+  may be on another filesystem) and swapped with `mv -f`; a rollback copy is kept next to
+  the binary so an on-disk restore is also atomic. If the updated binary exits during
+  startup, the helper restores the previous one and relaunches.
+
+### Convert and UI polish
+
+- **Large Convert uploads no longer abort at 30 seconds.** Uploads stream via a dedicated
+  request with no client timeout and a real progress bar; `apiFetch` gained a per-call
+  `timeoutMs` override. The Convert status poll now stops once a job reaches a terminal
+  state instead of polling forever.
+- "Save view" on the Jobs page uses a themed, focus-trapped dialog with inline validation
+  instead of a native browser prompt.
+
 ## [0.3.4] - 2026-06-22
 
 ### Docker & hardware acceleration

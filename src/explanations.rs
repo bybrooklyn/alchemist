@@ -9,6 +9,24 @@ pub enum ExplanationCategory {
     Failure,
 }
 
+/// Base URL of the public docs site where every error code is documented.
+pub const DOCS_BASE_URL: &str = "https://alchemist-project.org";
+
+/// Canonical documentation link for an error/decision code.
+///
+/// Every code emitted anywhere in Alchemist resolves to a stable anchor on the
+/// error reference page (`{DOCS_BASE_URL}/errors#<code>`) so operators always
+/// have one place to read the cause and the fix. The docs site serves content
+/// at the root (`routeBasePath: '/'`), so there is no `/docs` prefix. Anchors
+/// are lowercased to match Docusaurus heading-id generation. Keep in sync with
+/// `docs/docs/errors.md`.
+pub fn docs_url_for_code(code: &str) -> String {
+    format!(
+        "{DOCS_BASE_URL}/errors#{}",
+        code.trim().to_ascii_lowercase()
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Explanation {
     pub category: ExplanationCategory,
@@ -18,6 +36,10 @@ pub struct Explanation {
     pub operator_guidance: Option<String>,
     pub measured: BTreeMap<String, Value>,
     pub legacy_reason: String,
+    /// Stable docs link derived from `code`. Defaulted on deserialize so rows
+    /// persisted before this field existed still load (and are backfilled).
+    #[serde(default)]
+    pub docs_url: String,
 }
 
 impl Explanation {
@@ -29,14 +51,17 @@ impl Explanation {
         operator_guidance: Option<String>,
         legacy_reason: impl Into<String>,
     ) -> Self {
+        let code = code.into();
+        let docs_url = docs_url_for_code(&code);
         Self {
             category,
-            code: code.into(),
+            code,
             summary: summary.into(),
             detail: detail.into(),
             operator_guidance,
             measured: BTreeMap::new(),
             legacy_reason: legacy_reason.into(),
+            docs_url,
         }
     }
 
@@ -124,7 +149,11 @@ pub fn explanation_to_json(explanation: &Explanation) -> String {
 }
 
 pub fn explanation_from_json(payload: &str) -> Option<Explanation> {
-    serde_json::from_str(payload).ok()
+    let mut explanation: Explanation = serde_json::from_str(payload).ok()?;
+    // Backfill the docs link for rows persisted before `docs_url` existed, and
+    // keep it authoritative (always derived from the code, never trusted blindly).
+    explanation.docs_url = docs_url_for_code(&explanation.code);
+    Some(explanation)
 }
 
 pub fn decision_from_legacy(action: &str, legacy_reason: &str) -> Explanation {
@@ -645,12 +674,34 @@ pub fn classify_ffmpeg_stderr(stderr: &str) -> Option<KnownFailure> {
                 operator_guidance: "Check the FFmpeg log line that names the rejected option, then retry with a different codec, quality profile, or backend.",
             },
         },
+        FailureSignature {
+            all: &[],
+            any: &[
+                "could not open encoder before eof",
+                "could not open encoder",
+                "error while opening encoder",
+                "cannot create compression session",
+            ],
+            failure: KnownFailure {
+                code: "encoder_open_failed",
+                title: "Encoder failed to open",
+                detail: "The selected hardware encoder could not initialize an encoding session (for example, macOS VideoToolbox cannot create a session in a headless/daemon context, or constant-quality mode is unsupported on this build). Alchemist attempts a one-time CPU fallback when this happens.",
+                operator_guidance: "If CPU fallback did not recover the job, enable CPU fallback in Settings -> Hardware, run the daemon inside a logged-in GUI session for VideoToolbox, or switch the encoder to bitrate mode.",
+            },
+        },
     ];
 
     SIGNATURES
         .iter()
         .find(|signature| signature.matches(&normalized))
         .map(|signature| signature.failure)
+}
+
+/// True when FFmpeg stderr indicates the encoder could not initialize its
+/// session (a deterministic, non-transient failure). The pipeline uses this to
+/// trigger a one-time CPU fallback instead of retrying the identical command.
+pub fn is_encoder_open_failure(stderr: &str) -> bool {
+    classify_ffmpeg_stderr(stderr).is_some_and(|failure| failure.code == "encoder_open_failed")
 }
 
 pub fn failure_from_summary(summary: &str) -> Explanation {
@@ -919,5 +970,43 @@ mod tests {
         );
         let payload = explanation_to_json(&explanation);
         assert_eq!(explanation_from_json(&payload), Some(explanation));
+    }
+
+    #[test]
+    fn every_explanation_carries_a_docs_link() {
+        let explanation = failure_from_summary("Transcode failed: Unknown encoder 'missing'");
+        assert_eq!(
+            explanation.docs_url,
+            "https://alchemist-project.org/errors#encoder_unavailable"
+        );
+        assert_eq!(
+            docs_url_for_code("ENCODER_OPEN_FAILED"),
+            "https://alchemist-project.org/errors#encoder_open_failed"
+        );
+    }
+
+    #[test]
+    fn legacy_rows_without_docs_url_are_backfilled() {
+        // Simulate a row persisted before `docs_url` existed.
+        let legacy = r#"{"category":"failure","code":"disk_full","summary":"Output disk is full","detail":"d","operator_guidance":null,"measured":{},"legacy_reason":"r"}"#;
+        let Some(explanation) = explanation_from_json(legacy) else {
+            panic!("legacy payload should deserialize");
+        };
+        assert_eq!(
+            explanation.docs_url,
+            "https://alchemist-project.org/errors#disk_full"
+        );
+    }
+
+    #[test]
+    fn classifies_videotoolbox_encoder_open_failure() {
+        // The exact shape from the reported daemon log.
+        let stderr = "[vost#0:0/hevc_videotoolbox] Could not open encoder before EOF\nTask finished with error code: -22 (Invalid argument)";
+        let Some(failure) = classify_ffmpeg_stderr(stderr) else {
+            panic!("encoder-open stderr should classify");
+        };
+        assert_eq!(failure.code, "encoder_open_failed");
+        assert!(is_encoder_open_failure(stderr));
+        assert!(!is_encoder_open_failure("[out] No space left on device"));
     }
 }

@@ -596,7 +596,12 @@ impl Agent {
                     );
                     let agent = self.clone();
                     let counter = self.in_flight_jobs.clone();
+                    let job_id = job.id;
+                    // Per-job span: every analyze→plan→encode→finalize log line for
+                    // this job carries `job_id`, so a failure is traceable end to end.
+                    let job_span = tracing::info_span!("job", job_id);
                     tokio::spawn(async move {
+                        use tracing::Instrument;
                         struct InFlightGuard(Arc<AtomicUsize>);
                         impl Drop for InFlightGuard {
                             fn drop(&mut self) {
@@ -606,8 +611,8 @@ impl Agent {
 
                         let _guard = InFlightGuard(counter);
                         let _permit = permit;
-                        if let Err(e) = agent.process_job(job).await {
-                            error!("Job processing error: {}", e);
+                        if let Err(e) = agent.process_job(job).instrument(job_span).await {
+                            error!(job_id, "Job processing error: {}", e);
                         }
                         // _guard drops here automatically, even on panic
                     });
@@ -636,11 +641,56 @@ impl Agent {
     }
 
     pub async fn process_job(&self, job: crate::db::Job) -> Result<()> {
+        use crate::media::pipeline::JobFailure;
+
+        let job_id = job.id;
+        // The pipeline increments attempt_count during the run, so the number of
+        // attempts made once it returns is the pre-run count plus one.
+        let attempts_made = job.attempt_count.saturating_add(1);
         let pipeline = self.pipeline();
-        pipeline
-            .process_job(job)
-            .await
-            .map_err(|failure| crate::error::AlchemistError::Unknown(format!("{:?}", failure)))
+
+        match pipeline.process_job(job).await {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let code = job_failure_code(&failure);
+                // Only genuinely transient failures (transient IO, a full disk
+                // that may clear) are worth retrying; deterministic failures
+                // (corrupt media, encoder-open, planner bug) fail fast. The
+                // pipeline already attempts a one-time CPU fallback for hardware
+                // encoder-open failures before surfacing them here.
+                if matches!(failure, JobFailure::Transient)
+                    && attempts_made < MAX_TRANSIENT_ATTEMPTS
+                {
+                    let backoff = transient_backoff(attempts_made);
+                    tracing::warn!(
+                        job_id,
+                        attempt = attempts_made,
+                        max_attempts = MAX_TRANSIENT_ATTEMPTS,
+                        error_code = code,
+                        "Transient job failure; requeueing in {}s",
+                        backoff.as_secs()
+                    );
+                    tokio::time::sleep(backoff).await;
+                    if let Err(e) = self
+                        .db
+                        .update_job_status(job_id, crate::db::JobState::Queued)
+                        .await
+                    {
+                        tracing::error!(job_id, "Failed to requeue transient job: {e}");
+                        return Err(crate::error::AlchemistError::Unknown(format!(
+                            "job {job_id} requeue failed after transient error: {e}"
+                        )));
+                    }
+                    return Ok(());
+                }
+
+                // Surface a coded, legible error instead of an opaque
+                // "Unknown error: Transient" (see errors#{code}).
+                Err(crate::error::AlchemistError::Unknown(format!(
+                    "job {job_id} failed ({code})"
+                )))
+            }
+        }
     }
 
     fn pipeline(&self) -> Pipeline {
@@ -674,5 +724,51 @@ impl Agent {
         }
 
         info!("Rapid shutdown complete.");
+    }
+}
+
+/// Maximum total encode attempts (including the first) for a transient failure
+/// before the job is left in the Failed state.
+const MAX_TRANSIENT_ATTEMPTS: i32 = 3;
+
+/// Capped exponential backoff before requeueing a transient failure. Holding the
+/// concurrency permit during this sleep naturally throttles a systemic problem
+/// (e.g. a full disk) instead of hot-looping.
+fn transient_backoff(attempt: i32) -> tokio::time::Duration {
+    let secs = 2u64.saturating_pow(attempt.clamp(1, 4) as u32).min(30);
+    tokio::time::Duration::from_secs(secs)
+}
+
+/// Stable code for a `JobFailure`, aligned with the docs error reference
+/// (`errors#<code>`) so log lines and the failure surface agree.
+fn job_failure_code(failure: &crate::media::pipeline::JobFailure) -> &'static str {
+    use crate::media::pipeline::JobFailure;
+    match failure {
+        JobFailure::Transient => "transient",
+        JobFailure::MediaCorrupt => "corrupt_or_unreadable_media",
+        JobFailure::EncoderUnavailable => "encoder_unavailable",
+        JobFailure::PlannerBug => "planning_failed",
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn transient_backoff_is_bounded_and_increasing() {
+        assert_eq!(transient_backoff(1).as_secs(), 2);
+        assert_eq!(transient_backoff(2).as_secs(), 4);
+        assert!(transient_backoff(10).as_secs() <= 30);
+    }
+
+    #[test]
+    fn job_failure_codes_match_docs_reference() {
+        use crate::media::pipeline::JobFailure;
+        assert_eq!(job_failure_code(&JobFailure::Transient), "transient");
+        assert_eq!(
+            job_failure_code(&JobFailure::EncoderUnavailable),
+            "encoder_unavailable"
+        );
     }
 }

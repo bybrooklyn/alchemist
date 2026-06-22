@@ -8,6 +8,9 @@ export interface ExplanationView {
     operator_guidance: string | null;
     measured: Record<string, string | number | boolean | null>;
     legacy_reason: string;
+    /** Stable docs link derived from `code`. Populated by the backend; for
+     *  client-derived explanations it is filled from `docsUrlForCode(code)`. */
+    docs_url?: string;
 }
 
 export interface ExplanationPayload {
@@ -18,6 +21,7 @@ export interface ExplanationPayload {
     operator_guidance: string | null;
     measured: Record<string, string | number | boolean | null>;
     legacy_reason: string;
+    docs_url?: string;
 }
 
 export interface Job {

@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::explanations::Explanation;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -1112,6 +1112,62 @@ pub(crate) async fn clear_logs_handler(State(state): State<Arc<AppState>>) -> im
             e.to_string(),
         ),
     }
+}
+
+/// Streams the most recent rotating daemon log file as a download. The daily
+/// appender suffixes the filename with the date, so we pick the newest
+/// `alchemist.log*` file in the log directory.
+pub(crate) async fn download_logs_handler() -> impl IntoResponse {
+    let dir = crate::runtime::log_dir();
+    let Some(path) = newest_log_file(&dir).await else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "LOG_FILE_UNAVAILABLE",
+            "No log file is available yet. File logging may be disabled or the log directory is not writable.",
+        );
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            let mut response = (StatusCode::OK, bytes).into_response();
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            headers.insert(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"alchemist.log\""),
+            );
+            response
+        }
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "LOG_DOWNLOAD_FAILED",
+            e.to_string(),
+        ),
+    }
+}
+
+/// Newest file in `dir` whose name starts with `alchemist.log`, by modified time.
+async fn newest_log_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut entries = tokio::fs::read_dir(dir).await.ok()?;
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("alchemist.log") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|meta| meta.modified().ok());
+        let Some(modified) = modified else { continue };
+        if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+            newest = Some((modified, entry.path()));
+        }
+    }
+    newest.map(|(_, path)| path)
 }
 
 #[derive(Deserialize)]
