@@ -8,14 +8,9 @@ import {
     Scale,
     Film
 } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
+import { cn } from "../lib/cn";
 
 interface TranscodeSettingsPayload {
     concurrent_jobs: number;

@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw, Trash2, Ban, Plus, X } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { showToast } from "../lib/toast";
+import { cn } from "../lib/cn";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { withErrorBoundary } from "./ErrorBoundary";
 import type { Job, TabType, SortField, CountMessageResponse, SavedJobView } from "./jobs/types";
@@ -45,10 +44,6 @@ const BUILT_IN_JOB_VIEWS: SavedJobView[] = [
 
 const TAB_TYPES: TabType[] = ["all", "active", "queued", "completed", "failed", "skipped", "archived"];
 const SORT_FIELDS: SortField[] = ["updated_at", "created_at", "input_path", "size"];
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
 
 function isTabType(value: unknown): value is TabType {
     return typeof value === "string" && TAB_TYPES.includes(value as TabType);
@@ -640,6 +635,9 @@ function JobManager() {
                 message: `${action[0].toUpperCase()}${action.slice(1)} request sent for selected jobs.`,
             });
             await fetchJobs();
+            requestAnimationFrame(() => {
+                searchInputRef.current?.focus();
+            });
         } catch (e) {
             const message = formatJobActionError(e, "Batch action failed");
             setActionError(message);

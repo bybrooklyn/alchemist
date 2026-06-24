@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
 
 interface ConfirmDialogProps {
     open: boolean;
@@ -9,21 +10,6 @@ interface ConfirmDialogProps {
     tone?: "primary" | "danger";
     onConfirm: () => Promise<void> | void;
     onClose: () => void;
-}
-
-function focusableElements(root: HTMLElement): HTMLElement[] {
-    const selector = [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => !element.hasAttribute("disabled")
-    );
 }
 
 export default function ConfirmDialog({
@@ -45,6 +31,7 @@ export default function ConfirmDialog({
             return;
         }
 
+        setAppShellInert(true);
         lastFocusedRef.current = document.activeElement as HTMLElement | null;
 
         const panel = panelRef.current;
@@ -79,15 +66,15 @@ export default function ConfirmDialog({
                 return;
             }
 
-            const focusables = focusableElements(root);
-            if (focusables.length === 0) {
+            const els = focusableElements(root);
+            if (els.length === 0) {
                 event.preventDefault();
                 root.focus();
                 return;
             }
 
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
+            const first = els[0];
+            const last = els[els.length - 1];
             const current = document.activeElement as HTMLElement | null;
 
             if (event.shiftKey && current === first) {
@@ -102,6 +89,7 @@ export default function ConfirmDialog({
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
+            setAppShellInert(false);
             if (lastFocusedRef.current) {
                 lastFocusedRef.current.focus();
             }

@@ -1,10 +1,9 @@
 import { X, Clock, Info, Activity, Database, Zap, Maximize2, AlertCircle, RefreshCw, Ban, Trash2, ExternalLink } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { useEffect, useState, type RefObject } from "react";
 import type React from "react";
 import { apiJson } from "../../lib/api";
+import { cn } from "../../lib/cn";
 import TimeDisplay from "../ui/TimeDisplay";
 import type { JobDetail, EncodeStats, ExplanationView, LogEntry, ConfirmConfig, Job, ProcessorStatus } from "./types";
 import { formatBytes, formatDuration, logLevelClass, isJobActive } from "./types";
@@ -26,10 +25,6 @@ function DocsCodeLink({ explanation }: { explanation: ExplanationView }) {
             <ExternalLink size={11} />
         </a>
     );
-}
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
 }
 
 interface JobDetailModalProps {

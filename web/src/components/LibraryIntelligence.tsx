@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { withErrorBoundary } from "./ErrorBoundary";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Copy, Sparkles, Zap, Search } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
@@ -58,6 +59,8 @@ const TYPE_LABELS: Record<string, string> = {
     wasteful_audio_layout: "Wasteful Audio Layouts",
     commentary_cleanup_candidate: "Commentary Cleanup",
 };
+
+export const LibraryIntelligenceSafe = withErrorBoundary(LibraryIntelligence, "Intelligence");
 
 export default function LibraryIntelligence() {
     const [data, setData] = useState<IntelligenceResponse | null>(null);

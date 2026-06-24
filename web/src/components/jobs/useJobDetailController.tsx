@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiAction, apiJson, isApiError } from "../../lib/api";
 import { showToast } from "../../lib/toast";
 import { normalizeDecisionExplanation, normalizeFailureExplanation } from "./JobExplanations";
+import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
 import type {
     ConfirmConfig,
     EncodeStats,
@@ -11,21 +12,6 @@ import type {
     LogEntry,
 } from "./types";
 import { jobDetailEmptyState } from "./types";
-
-function focusableElements(root: HTMLElement): HTMLElement[] {
-    const selector = [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => !element.hasAttribute("disabled"),
-    );
-}
 
 function formatJobActionError(error: unknown, fallback: string) {
     if (!isApiError(error)) {
@@ -66,6 +52,7 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
             return;
         }
 
+        setAppShellInert(true);
         detailLastFocusedRef.current = document.activeElement as HTMLElement | null;
 
         const root = detailDialogRef.current;
@@ -121,6 +108,7 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
+            setAppShellInert(false);
             if (detailLastFocusedRef.current) {
                 detailLastFocusedRef.current.focus();
             }

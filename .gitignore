@@ -35,11 +35,14 @@ Thumbs.db
 .vscode/
 .idea/
 .obsidian/
+.mcp.json
 
 # Scratch / exported assistant sessions
 session.md
 update_ui.sh
 reports/
+sec.md
+
 
 # Project Specifics
 public/pkg/alchemist.css
@@ -55,7 +58,21 @@ integrations/**/obj/
 .pi/
 .gemini/
 .antigravitycli/
+.mimocode/
 
 # Other
 gha-creds-*.json
 image.png
+
+#### WhyTho? Git Ignore ####
+
+# Rust
+whytho/target/
+
+# Specs
+whytho/av2-spec/v1.0.0/attachments/
+
+#  Other
+whytho/crates/whytho-tables/src/generated/
+whytho/scratch.txt
+whytho/scratch.md

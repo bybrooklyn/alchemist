@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X, Play, Pencil, Eye } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
+import { focusableElements, setAppShellInert } from "../lib/focusUtils";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import ServerDirectoryPicker from "./ui/ServerDirectoryPicker";
 
@@ -113,6 +114,50 @@ export default function WatchFolders() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [previewData, setPreviewData] = useState<LibraryPreviewResponse | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
+    const customizePanelRef = useRef<HTMLDivElement | null>(null);
+    const customizeLastFocusedRef = useRef<HTMLElement | null>(null);
+
+    const closeCustomize = () => {
+        setCustomizeDir(null);
+        setProfileDraft(null);
+    };
+
+    useEffect(() => {
+        if (!customizeDir) return;
+
+        setAppShellInert(true);
+        customizeLastFocusedRef.current = document.activeElement as HTMLElement | null;
+        const panel = customizePanelRef.current;
+        if (panel) {
+            const focusables = focusableElements(panel);
+            (focusables[0] ?? panel).focus();
+        }
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                closeCustomize();
+                return;
+            }
+            if (event.key !== "Tab") return;
+            const root = customizePanelRef.current;
+            if (!root) return;
+            const focusables = focusableElements(root);
+            if (focusables.length === 0) { event.preventDefault(); root.focus(); return; }
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const current = document.activeElement as HTMLElement | null;
+            if (event.shiftKey && current === first) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && current === last) { event.preventDefault(); first.focus(); }
+        };
+
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            setAppShellInert(false);
+            customizeLastFocusedRef.current?.focus();
+        };
+    }, [customizeDir]);
 
     const builtinProfiles = useMemo(
         () => profiles.filter((profile) => profile.builtin),
@@ -623,20 +668,24 @@ export default function WatchFolders() {
 
             {customizeDir && profileDraft ? (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
-                    <div className="w-full max-w-2xl rounded-lg border border-helios-line/20 bg-helios-surface p-6 shadow-2xl">
+                    <div
+                        ref={customizePanelRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="customize-profile-title"
+                        tabIndex={-1}
+                        className="w-full max-w-2xl rounded-lg border border-helios-line/20 bg-helios-surface p-6 shadow-2xl outline-none"
+                    >
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <h3 className="text-lg font-semibold text-helios-ink">Customize Profile</h3>
+                                <h3 id="customize-profile-title" className="text-lg font-semibold text-helios-ink">Customize Profile</h3>
                                 <p className="text-sm text-helios-slate">
                                     Create a custom profile for <span className="font-mono">{customizeDir.path}</span>.
                                 </p>
                             </div>
                             <button
                                 type="button"
-                                onClick={() => {
-                                    setCustomizeDir(null);
-                                    setProfileDraft(null);
-                                }}
+                                onClick={closeCustomize}
                                 className="rounded-lg border border-helios-line/20 px-3 py-2 text-sm text-helios-slate hover:bg-helios-surface-soft"
                             >
                                 Close

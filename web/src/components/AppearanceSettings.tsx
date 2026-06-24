@@ -5,14 +5,9 @@ import {
     CheckCircle2,
     Loader2
 } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson } from "../lib/api";
 import { applyRootTheme, cacheTheme, DEFAULT_THEME_ID, getRootTheme } from "../lib/theme";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
+import { cn } from "../lib/cn";
 
 interface Theme {
     id: string;
@@ -277,7 +272,7 @@ export default function AppearanceSettings() {
                     cacheTheme(themeId);
                 }
             })
-            .catch(() => undefined);
+            .catch((e) => { console.debug("AppearanceSettings: theme preference fetch failed", e); });
     }, []);
 
     useEffect(() => {

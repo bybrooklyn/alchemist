@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { withErrorBoundary } from "./ErrorBoundary";
 import {
     TrendingDown,
     Clock,
@@ -60,6 +61,8 @@ interface TopReasonCodesResponse {
 
 type ReasonWindow = "24h" | "7d" | "30d";
 const MOVIE_EQUIVALENT_BYTES = 4 * 1024 * 1024 * 1024;
+
+export const StatsChartsSafe = withErrorBoundary(StatsCharts, "Statistics Charts");
 
 export default function StatsCharts() {
     const [stats, setStats] = useState<AggregatedStats | null>(null);

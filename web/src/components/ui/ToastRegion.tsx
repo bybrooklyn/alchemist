@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X, type LucideIcon } from "lucide-react";
 import { subscribeToToasts, type ToastKind, type ToastMessage } from "../../lib/toast";
 
@@ -32,6 +32,39 @@ function kindStyles(kind: ToastKind): { icon: LucideIcon; className: string } {
 
 export default function ToastRegion() {
     const [toasts, setToasts] = useState<ToastMessage[]>([]);
+    const [hoveredId, setHoveredId] = useState<string | null>(null);
+    const timerRefs = useRef<Map<string, number>>(new Map());
+    const remainingRefs = useRef<Map<string, number>>(new Map());
+    const startRefs = useRef<Map<string, number>>(new Map());
+
+    const clearAllTimers = useCallback(() => {
+        for (const timer of timerRefs.current.values()) {
+            window.clearTimeout(timer);
+        }
+        timerRefs.current.clear();
+    }, []);
+
+    const dismissToast = useCallback((id: string) => {
+        setToasts((prev) => prev.filter((item) => item.id !== id));
+        const timer = timerRefs.current.get(id);
+        if (timer !== undefined) {
+            window.clearTimeout(timer);
+            timerRefs.current.delete(id);
+        }
+        remainingRefs.current.delete(id);
+        startRefs.current.delete(id);
+    }, []);
+
+    const startTimer = useCallback((id: string, durationMs: number) => {
+        const existing = timerRefs.current.get(id);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+        }
+        startRefs.current.set(id, Date.now());
+        remainingRefs.current.set(id, durationMs);
+        const timer = window.setTimeout(() => dismissToast(id), durationMs);
+        timerRefs.current.set(id, timer);
+    }, [dismissToast]);
 
     useEffect(() => {
         return subscribeToToasts((message) => {
@@ -42,23 +75,43 @@ export default function ToastRegion() {
         });
     }, []);
 
+    // Manage auto-dismiss timers; pause on hover/focus. Running timers are left
+    // untouched across re-renders so countdowns are honest (no reset when a new
+    // toast arrives or another is dismissed).
     useEffect(() => {
-        if (toasts.length === 0) {
-            return;
+        const activeIds = new Set(toasts.map((t) => t.id));
+
+        // Drop timers/state for toasts that no longer exist.
+        for (const [id, timer] of timerRefs.current) {
+            if (!activeIds.has(id)) {
+                window.clearTimeout(timer);
+                timerRefs.current.delete(id);
+                remainingRefs.current.delete(id);
+                startRefs.current.delete(id);
+            }
         }
 
-        const timers = toasts.map((toast) =>
-            window.setTimeout(() => {
-                setToasts((prev) => prev.filter((item) => item.id !== toast.id));
-            }, toast.durationMs ?? DEFAULT_DURATION_MS)
-        );
-
-        return () => {
-            for (const timer of timers) {
-                window.clearTimeout(timer);
+        for (const toast of toasts) {
+            if (toast.id === hoveredId) {
+                // Pause: only when a timer is actually running, record remaining.
+                const timer = timerRefs.current.get(toast.id);
+                if (timer !== undefined) {
+                    const elapsed = Date.now() - (startRefs.current.get(toast.id) ?? Date.now());
+                    const remaining = (remainingRefs.current.get(toast.id) ?? (toast.durationMs ?? DEFAULT_DURATION_MS)) - elapsed;
+                    remainingRefs.current.set(toast.id, Math.max(remaining, 500));
+                    window.clearTimeout(timer);
+                    timerRefs.current.delete(toast.id);
+                }
+            } else if (!timerRefs.current.has(toast.id)) {
+                // Start (new toast) or resume (after unhover) with remaining time.
+                const remaining = remainingRefs.current.get(toast.id);
+                startTimer(toast.id, remaining ?? (toast.durationMs ?? DEFAULT_DURATION_MS));
             }
-        };
-    }, [toasts]);
+        }
+    }, [toasts, hoveredId, startTimer]);
+
+    // Clear every pending timer on unmount.
+    useEffect(() => clearAllTimers, [clearAllTimers]);
 
     const liveMessage = useMemo(() => {
         if (toasts.length === 0) {
@@ -85,6 +138,10 @@ export default function ToastRegion() {
                             key={toast.id}
                             role={toast.kind === "error" ? "alert" : "status"}
                             className={`pointer-events-auto rounded-lg border p-3 shadow-xl shadow-black/30 ${className}`}
+                            onMouseEnter={() => setHoveredId(toast.id)}
+                            onMouseLeave={() => setHoveredId((prev) => (prev === toast.id ? null : prev))}
+                            onFocus={() => setHoveredId(toast.id)}
+                            onBlur={() => setHoveredId((prev) => (prev === toast.id ? null : prev))}
                         >
                             <div className="flex items-start gap-2">
                                 <Icon size={16} />
@@ -98,9 +155,7 @@ export default function ToastRegion() {
                                     type="button"
                                     className="rounded p-1 hover:bg-black/10"
                                     aria-label="Dismiss notification"
-                                    onClick={() =>
-                                        setToasts((prev) => prev.filter((item) => item.id !== toast.id))
-                                    }
+                                    onClick={() => dismissToast(toast.id)}
                                 >
                                     <X size={14} />
                                 </button>

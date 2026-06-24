@@ -2,7 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
 import HeaderActions from "../components/HeaderActions.tsx";
-import {ConversionTool} from "../components/ConversionTool.tsx";
+import { ConversionToolSafe } from "../components/ConversionTool.tsx";
 ---
 
 <Layout title="Alchemist | Convert">
@@ -13,7 +13,7 @@ import {ConversionTool} from "../components/ConversionTool.tsx";
                 <HeaderActions client:load />
             </div>
             <div class="p-6">
-                <ConversionTool client:load />
+                <ConversionToolSafe client:load />
             </div>
         </main>
     </div>

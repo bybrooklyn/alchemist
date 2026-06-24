@@ -21,7 +21,7 @@ export default function ThemeBootstrap() {
                     cacheTheme(themeId);
                 }
             })
-            .catch(() => undefined);
+            .catch((e) => { console.debug("ThemeBootstrap: server preference unavailable", e); });
 
         return () => {
             cancelled = true;
