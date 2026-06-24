@@ -11,6 +11,8 @@ public final class DashboardState {
     public var systemInfo: SystemInfo?
     public var profiles: [LibraryProfile] = []
     public var watchDirectories: [WatchDirectory] = []
+    public var notificationTargets: [NotificationTargetResponse] = []
+    public var apiTokens: [ApiTokenResponse] = []
     public var isRefreshing = false
     public var lastError: AlchemistUIError?
 
@@ -29,6 +31,8 @@ public final class DashboardState {
             async let dailyStats = apiClient.fetchDailyStats()
             async let settingsBundle = apiClient.fetchSettingsBundle()
             async let watchDirs = apiClient.fetchWatchDirectories()
+            async let notifications = apiClient.fetchNotificationTargets()
+            async let tokens = apiClient.fetchApiTokens()
 
             self.stats = try await stats
             self.savings = try await savings
@@ -37,6 +41,8 @@ public final class DashboardState {
             if let loaded = try? await dailyStats { self.dailyStats = loaded }
             if let loaded = try? await settingsBundle { self.settingsBundle = loaded }
             if let loaded = try? await watchDirs { self.watchDirectories = loaded }
+            if let loaded = try? await notifications { self.notificationTargets = loaded.targets }
+            if let loaded = try? await tokens { self.apiTokens = loaded }
             lastError = nil
         } catch {
             lastError = mapError(error)

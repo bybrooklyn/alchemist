@@ -69,8 +69,6 @@ public struct RootView: View {
                             ConvertView()
                         case .system:
                             SystemView()
-                        case .settings:
-                            SettingsView()
                         }
                     }
                 }

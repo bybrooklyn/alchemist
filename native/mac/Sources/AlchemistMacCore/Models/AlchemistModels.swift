@@ -22,7 +22,6 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case intelligence
     case convert
     case system
-    case settings
 
     public var id: String { rawValue }
 
@@ -35,7 +34,6 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         case .intelligence: "Intelligence"
         case .convert: "Convert"
         case .system: "System"
-        case .settings: "Settings"
         }
     }
 
@@ -48,7 +46,6 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         case .intelligence: "sparkles"
         case .convert: "wand.and.sparkles"
         case .system: "waveform.path.ecg"
-        case .settings: "gearshape"
         }
     }
 }
@@ -806,6 +803,68 @@ public struct SetupNotificationTarget: Codable, Equatable, Sendable, Identifiabl
 public struct SetupNotificationSettings: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var targets: [SetupNotificationTarget]
+}
+
+public struct NotificationTargetResponse: Decodable, Equatable, Sendable, Identifiable {
+    public let id: Int64
+    public let name: String
+    public let targetType: String
+    public let configJSON: JSONValue
+    public let events: [String]
+    public let enabled: Bool
+    public let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, events, enabled
+        case targetType = "target_type"
+        case configJSON = "config_json"
+        case createdAt = "created_at"
+    }
+}
+
+public struct NotificationsSettingsResponse: Decodable, Equatable, Sendable {
+    public let dailySummaryTimeLocal: String
+    public let quietHoursEnabled: Bool
+    public let quietHoursStartLocal: String
+    public let quietHoursEndLocal: String
+    public let targets: [NotificationTargetResponse]
+
+    enum CodingKeys: String, CodingKey {
+        case dailySummaryTimeLocal = "daily_summary_time_local"
+        case quietHoursEnabled = "quiet_hours_enabled"
+        case quietHoursStartLocal = "quiet_hours_start_local"
+        case quietHoursEndLocal = "quiet_hours_end_local"
+        case targets
+    }
+}
+
+public struct ApiTokenResponse: Decodable, Equatable, Sendable, Identifiable {
+    public let id: Int64
+    public let name: String
+    public let accessLevel: String
+    public let createdAt: String
+    public let lastUsedAt: String?
+    public let revokedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case accessLevel = "access_level"
+        case createdAt = "created_at"
+        case lastUsedAt = "last_used_at"
+        case revokedAt = "revoked_at"
+    }
+
+    public var isActive: Bool { revokedAt == nil }
+}
+
+public struct CreatedApiTokenResponse: Decodable, Equatable, Sendable {
+    public let token: ApiTokenResponse
+    public let plaintextToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case plaintextToken = "plaintext_token"
+    }
 }
 
 public struct SetupScheduleWindow: Codable, Equatable, Sendable, Identifiable {

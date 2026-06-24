@@ -118,7 +118,7 @@ struct AlchemistMacChecks {
     static func sidebarMatchesWebUISurface() throws {
         let labels = AppSection.allCases.map(\.label)
         try expect(
-            labels == ["Dashboard", "Jobs", "Logs", "Statistics", "Intelligence", "Convert", "System", "Settings"],
+            labels == ["Dashboard", "Jobs", "Logs", "Statistics", "Intelligence", "Convert", "System"],
             "native sidebar drifted from WebUI navigation"
         )
     }
