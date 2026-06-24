@@ -6,7 +6,7 @@ exclude = ["whytho"]
 
 [package]
 name = "alchemist"
-version = "0.3.4"
+version = "0.3.5-rc.1"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-or-later"

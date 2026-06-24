@@ -5,6 +5,8 @@ description: Release history for Alchemist.
 
 ## [Unreleased]
 
+## [0.3.5-rc.1] - 2026-06-24
+
 ### Reliability: hardware encoder failures now self-heal
 
 - **VideoToolbox (and any hardware encoder) that fails to open its session now falls back
@@ -65,6 +67,20 @@ description: Release history for Alchemist.
   state instead of polling forever.
 - "Save view" on the Jobs page uses a themed, focus-trapped dialog with inline validation
   instead of a native browser prompt.
+- **Page sections survive component errors.** Convert, Settings, Logs, Statistics, and
+  Intelligence are wrapped in error boundaries, so a single failing island shows an inline
+  error with a reload action instead of a blank page. An offline banner appears when the
+  browser loses connectivity.
+- **Accessibility and toast polish.** Settings navigation is keyboard-operable (arrow keys
+  with a roving tabindex and a real tablist), dialogs trap focus and mark the rest of the
+  app inert, and toasts pause auto-dismiss while hovered or focused.
+
+### macOS app
+
+- **Manage API tokens and notification targets natively.** The macOS app can create and
+  revoke API tokens and add, test, and remove notification targets (Discord, Gotify, ntfy,
+  webhook, Telegram) without leaving the app, and routes Settings to the standard macOS
+  Settings window.
 
 ## [0.3.4] - 2026-06-22
 
