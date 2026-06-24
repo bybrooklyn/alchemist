@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type React from "react";
 import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2, KeyRound } from "lucide-react";
 import WatchFolders from "./WatchFolders";
 import NotificationSettings from "./NotificationSettings";
@@ -11,6 +12,7 @@ import AppearanceSettings from "./AppearanceSettings";
 import QualitySettings from "./QualitySettings";
 import ConfigEditorSettings from "./ConfigEditorSettings";
 import ApiTokenSettings from "./ApiTokenSettings";
+import { ErrorBoundary, withErrorBoundary } from "./ErrorBoundary";
 
 const TABS = [
     { id: "appearance", label: "Appearance", icon: Palette, component: AppearanceSettings },
@@ -25,6 +27,8 @@ const TABS = [
     { id: "system", label: "Runtime", icon: Server, component: SystemSettings },
     { id: "config", label: "Config", icon: FileCode2, component: ConfigEditorSettings },
 ];
+
+export const SettingsPanelSafe = withErrorBoundary(SettingsPanel, "Settings");
 
 export default function SettingsPanel() {
     // Start with default tab to avoid hydration mismatch, then sync with URL in useEffect
@@ -62,11 +66,35 @@ export default function SettingsPanel() {
         }
     }, [activeTab]);
 
+    const handleTabKeyDown = (event: React.KeyboardEvent) => {
+        const currentIndex = TABS.findIndex((t) => t.id === activeTab);
+        if (currentIndex === -1) return;
+
+        let nextIndex = currentIndex;
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+            event.preventDefault();
+            nextIndex = (currentIndex + 1) % TABS.length;
+        } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+        } else if (event.key === "Home") {
+            event.preventDefault();
+            nextIndex = 0;
+        } else if (event.key === "End") {
+            event.preventDefault();
+            nextIndex = TABS.length - 1;
+        } else {
+            return;
+        }
+        paginate(TABS[nextIndex].id);
+        navItemRefs.current[TABS[nextIndex].id]?.focus();
+    };
+
     return (
         <div className="flex flex-col lg:flex-row gap-8">
             {/* Sidebar Navigation for Settings */}
             <nav className="w-full lg:w-64 flex-shrink-0">
-                <div className="sticky top-8 max-h-[calc(100vh-8rem)] overflow-y-auto pr-1 space-y-1">
+                <div role="tablist" aria-orientation="vertical" onKeyDown={handleTabKeyDown} className="sticky top-8 max-h-[calc(100vh-8rem)] overflow-y-auto pr-1 space-y-1">
                     {TABS.map((tab) => {
                         const isActive = activeTab === tab.id;
                         return (
@@ -75,6 +103,11 @@ export default function SettingsPanel() {
                                 ref={(node) => {
                                     navItemRefs.current[tab.id] = node;
                                 }}
+                                role="tab"
+                                id={`settings-tab-${tab.id}`}
+                                aria-selected={isActive}
+                                aria-controls={`settings-panel-${tab.id}`}
+                                tabIndex={isActive ? 0 : -1}
                                 onClick={() => paginate(tab.id)}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold border transition-all duration-200 group ${isActive
                                     ? "text-helios-ink bg-helios-surface-soft shadow-sm border-helios-line/20"
@@ -94,7 +127,12 @@ export default function SettingsPanel() {
             {/* Content Area */}
             <div className="flex-1 min-w-0">
                 <div key={activeTab} className="p-1">
-                    <div className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm">
+                    <div
+                        role="tabpanel"
+                        id={`settings-panel-${activeTab}`}
+                        aria-labelledby={`settings-tab-${activeTab}`}
+                        className="bg-helios-surface border border-helios-line/20 rounded-xl p-6 sm:p-8 shadow-sm"
+                    >
                         <div className="mb-6">
                             <h2 className="text-xl font-bold text-helios-ink flex items-center gap-2">
                                 {(() => {
@@ -118,7 +156,7 @@ export default function SettingsPanel() {
                                 (t) => t.id === activeTab
                             )?.component;
                             return TabComponent
-                                ? <TabComponent />
+                                ? <ErrorBoundary key={activeTab} moduleName={TABS.find((t) => t.id === activeTab)?.label}><TabComponent /></ErrorBoundary>
                                 : null;
                         })()}
                     </div>

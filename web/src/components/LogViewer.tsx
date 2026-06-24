@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { withErrorBoundary } from "./ErrorBoundary";
 import { Terminal, Pause, Play, Trash2, RefreshCw, Search, Download } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
+import { cn } from "../lib/cn";
 import ConfirmDialog from "./ui/ConfirmDialog";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
 
 interface LogEntry {
     id: number;
@@ -17,6 +13,8 @@ interface LogEntry {
     message: string;
     created_at: string;
 }
+
+export const LogViewerSafe = withErrorBoundary(LogViewer, "Logs");
 
 export default function LogViewer() {
     const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -66,6 +64,7 @@ export default function LogViewer() {
 
         let eventSource: EventSource | null = null;
         let cancelled = false;
+        let reconnectAttempts = 0;
 
         const connect = () => {
             if (cancelled) return;
@@ -73,6 +72,11 @@ export default function LogViewer() {
             setStreamError(null);
             eventSource?.close();
             eventSource = new EventSource("/api/events");
+
+            eventSource.onopen = () => {
+                reconnectAttempts = 0;
+                setStreamError(null);
+            };
 
             const appendLog = (message: string, level: string, jobId?: number) => {
                 if (pausedRef.current) {
@@ -153,12 +157,17 @@ export default function LogViewer() {
             eventSource.onerror = () => {
                 eventSource?.close();
                 eventSource = null;
+                reconnectAttempts += 1;
                 setStreamError("Log stream unavailable. Reconnecting…");
 
                 if (reconnectTimeoutRef.current !== null) {
                     window.clearTimeout(reconnectTimeoutRef.current);
                 }
-                reconnectTimeoutRef.current = window.setTimeout(connect, 3000);
+                const baseDelay = 1000;
+                const maxDelay = 30000;
+                const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts - 1), maxDelay);
+                const jitter = delay * 0.25 * (Math.random() * 2 - 1);
+                reconnectTimeoutRef.current = window.setTimeout(connect, Math.round(delay + jitter));
             };
         };
 

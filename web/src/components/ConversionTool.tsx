@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { withErrorBoundary } from "./ErrorBoundary";
 import {
     ArrowRight,
     CheckCircle2,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
+import ConfirmDialog from "./ui/ConfirmDialog";
 
 interface SubtitleStreamMetadata {
     stream_index: number;
@@ -220,6 +222,8 @@ function parseXhrError(xhr: XMLHttpRequest): string {
     }
 }
 
+export const ConversionToolSafe = withErrorBoundary(ConversionTool, "Conversion");
+
 export function ConversionTool() {
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -234,6 +238,7 @@ export function ConversionTool() {
     const [previewSummary, setPreviewSummary] = useState<PreviewSummary | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
+    const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
     useEffect(() => {
         if (!conversionJobId) return;
@@ -593,23 +598,34 @@ export function ConversionTool() {
                                 onClick={() => setAdvancedOpen((open) => !open)}
                                 className="inline-flex items-center gap-2 rounded-lg border border-helios-line/30 px-4 py-2 text-sm font-semibold text-helios-ink"
                                 aria-expanded={advancedOpen}
+                                aria-controls="conversion-advanced-panel"
                             >
                                 <SlidersHorizontal size={16} />
                                 Advanced
                                 <ChevronDown size={16} className={advancedOpen ? "rotate-180 transition-transform" : "transition-transform"} />
                             </button>
                             <button
-                                onClick={() => void remove()}
+                                onClick={() => setConfirmRemoveOpen(true)}
                                 className="inline-flex items-center gap-2 rounded-lg border border-status-error/30 px-4 py-2 text-sm font-semibold text-status-error"
                             >
                                 <Trash2 size={16} />
                                 Remove
                             </button>
+                            <ConfirmDialog
+                                open={confirmRemoveOpen}
+                                title="Remove conversion job"
+                                description="This will delete the conversion job and any uploaded file. Continue?"
+                                confirmLabel="Remove"
+                                tone="danger"
+                                onClose={() => setConfirmRemoveOpen(false)}
+                                onConfirm={async () => { await remove(); }}
+                            />
                             {previewError && <span className="text-sm text-status-error">{previewError}</span>}
                         </div>
                     </section>
 
                     {advancedOpen && (
+                        <div id="conversion-advanced-panel" className="animate-in fade-in slide-in-from-top-2 duration-200">
                         <AdvancedPanel
                             probe={probe}
                             settings={settings}
@@ -617,6 +633,7 @@ export function ConversionTool() {
                             commandPreview={commandPreview}
                             estimate={estimate}
                         />
+                        </div>
                     )}
 
                     {status && (

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { withErrorBoundary } from "./ErrorBoundary";
 import {
     AreaChart,
     Area,
@@ -51,6 +52,8 @@ function formatChartDate(date: string): string {
     }
     return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+export const SavingsOverviewSafe = withErrorBoundary(SavingsOverview, "Savings Overview");
 
 export default function SavingsOverview() {
     const [summary, setSummary] = useState<SavingsSummary | null>(null);

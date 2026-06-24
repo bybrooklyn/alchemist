@@ -1,14 +1,9 @@
 import { Search, RefreshCw, ArrowDown, ArrowUp, Plus, X } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import type { RefObject } from "react";
 import type React from "react";
 import type { TabType, SortField } from "./types";
 import { SORT_OPTIONS } from "./types";
-
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
+import { cn } from "../../lib/cn";
 
 interface JobsToolbarProps {
     activeTab: TabType;

@@ -90,7 +90,7 @@ export default function LibraryStep({
         onPreviewErrorChange(null);
         onPreviewLoadingChange(true);
         const handle = window.setTimeout(() => {
-            void fetchPreview().catch(() => undefined);
+            void fetchPreview().catch((e) => { console.debug("LibraryStep: preview fetch failed", e); });
         }, 350);
         return () => window.clearTimeout(handle);
     }, [directories, fetchPreview, onPreviewErrorChange, onPreviewLoadingChange]);

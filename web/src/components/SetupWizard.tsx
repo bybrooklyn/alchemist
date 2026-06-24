@@ -213,7 +213,7 @@ export default function SetupWizard() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "setup_complete", value: "true" }),
-            }).catch(() => undefined);
+            }).catch((e) => { console.debug("SetupWizard: submit cleanup failed", e); });
             window.location.href = "/";
         } catch (err) {
             let message = "Failed to save setup configuration.";

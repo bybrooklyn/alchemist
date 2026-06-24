@@ -1,8 +1,8 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
-import SavingsOverview from "../components/SavingsOverview.tsx";
-import StatsCharts from "../components/StatsCharts.tsx";
+import { SavingsOverviewSafe } from "../components/SavingsOverview.tsx";
+import { StatsChartsSafe } from "../components/StatsCharts.tsx";
 import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
@@ -14,8 +14,8 @@ import HeaderActions from "../components/HeaderActions.tsx";
                 <HeaderActions client:load />
             </div>
             <div class="p-6">
-                <div class="mb-8"><SavingsOverview client:load /></div>
-                <StatsCharts client:load />
+                <div class="mb-8"><SavingsOverviewSafe client:load /></div>
+                <StatsChartsSafe client:load />
             </div>
         </main>
     </div>

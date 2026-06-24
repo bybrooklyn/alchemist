@@ -195,7 +195,7 @@ function Dashboard() {
         })();
         void apiJson<{ status: "paused" | "running" | "draining" }>("/api/engine/status")
             .then((data) => setEngineStatus(data.status))
-            .catch(() => undefined);
+            .catch((e) => { console.debug("Dashboard: engine status fetch failed", e); });
 
         const pollVisible = () => {
             if (document.visibilityState === "visible") {
@@ -324,7 +324,7 @@ function Dashboard() {
             </section>
 
             {/* Stat row — compact horizontal strip */}
-            <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-helios-solar" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-helios-solar" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />

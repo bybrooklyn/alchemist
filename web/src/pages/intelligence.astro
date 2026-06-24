@@ -1,7 +1,7 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
-import LibraryIntelligence from "../components/LibraryIntelligence.tsx";
+import { LibraryIntelligenceSafe } from "../components/LibraryIntelligence.tsx";
 import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
@@ -13,7 +13,7 @@ import HeaderActions from "../components/HeaderActions.tsx";
                 <HeaderActions client:load />
             </div>
             <div class="p-6">
-                <LibraryIntelligence client:load />
+                <LibraryIntelligenceSafe client:load />
             </div>
         </main>
     </div>

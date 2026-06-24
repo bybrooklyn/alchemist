@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, Terminal, Server, Cpu, Activity, ShieldCheck, Box, Download, RefreshCw, type LucideIcon } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
+import { focusableElements, setAppShellInert } from "../lib/focusUtils";
 
 interface SystemInfo {
     ffmpeg_version: string;
@@ -40,21 +41,6 @@ interface AboutDialogProps {
     isOpen: boolean;
     onClose: () => void;
     originRect?: DOMRect | null;
-}
-
-function focusableElements(root: HTMLElement): HTMLElement[] {
-    const selector = [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => !element.hasAttribute("disabled")
-    );
 }
 
 export default function AboutDialog({ isOpen, onClose, originRect }: AboutDialogProps) {
@@ -126,6 +112,7 @@ export default function AboutDialog({ isOpen, onClose, originRect }: AboutDialog
             return;
         }
 
+        setAppShellInert(true);
         lastFocusedRef.current = document.activeElement as HTMLElement | null;
 
         const dialog = dialogRef.current;
@@ -181,6 +168,7 @@ export default function AboutDialog({ isOpen, onClose, originRect }: AboutDialog
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
+            setAppShellInert(false);
             if (lastFocusedRef.current) {
                 lastFocusedRef.current.focus();
             }

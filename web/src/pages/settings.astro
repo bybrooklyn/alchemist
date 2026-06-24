@@ -1,7 +1,7 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Sidebar from "../components/Sidebar.astro";
-import SettingsPanel from "../components/SettingsPanel.tsx";
+import { SettingsPanelSafe } from "../components/SettingsPanel.tsx";
 import HeaderActions from "../components/HeaderActions.tsx";
 ---
 
@@ -13,7 +13,7 @@ import HeaderActions from "../components/HeaderActions.tsx";
                 <HeaderActions client:load />
             </div>
             <div class="p-6">
-                <SettingsPanel client:load />
+                <SettingsPanelSafe client:load />
             </div>
         </main>
     </div>
