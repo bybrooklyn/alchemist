@@ -1,3 +1,9 @@
+# Alchemist is a standalone single-package workspace. `whytho/` is an
+# independent Cargo workspace that lives in-tree but is built separately;
+# exclude it so it never gets pulled into the alchemist build graph.
+[workspace]
+exclude = ["whytho"]
+
 [package]
 name = "alchemist"
 version = "0.3.4"
@@ -68,3 +74,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
+codegen-units = 256
