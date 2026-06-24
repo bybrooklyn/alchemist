@@ -61,6 +61,9 @@ public enum AlchemistAPIRoute {
     public static let fsPreview = "/api/v1/fs/preview"
     public static let selftest = "/api/v1/system/selftest"
     public static let backup = "/api/v1/system/backup"
+    public static let notificationTargets = "/api/v1/settings/notifications"
+    public static let notificationTest = "/api/v1/settings/notifications/test"
+    public static let apiTokens = "/api/v1/settings/api-tokens"
 
     public static func job(id: Int64) -> String {
         "/api/v1/jobs/\(id)"
@@ -84,6 +87,14 @@ public enum AlchemistAPIRoute {
 
     public static func watchDir(id: Int64) -> String {
         "/api/v1/settings/watch-dirs/\(id)"
+    }
+
+    public static func notificationTarget(id: Int64) -> String {
+        "/api/v1/settings/notifications/\(id)"
+    }
+
+    public static func apiToken(id: Int64) -> String {
+        "/api/v1/settings/api-tokens/\(id)"
     }
 
     public static func preference(key: String) -> String {
@@ -384,6 +395,71 @@ public actor AlchemistAPIClient {
         let _: EmptyResponse = try await deleteJSON(AlchemistAPIRoute.logs)
     }
 
+    // MARK: - Notification Targets
+
+    public func fetchNotificationTargets() async throws -> NotificationsSettingsResponse {
+        try await getJSON(AlchemistAPIRoute.notificationTargets)
+    }
+
+    public func addNotificationTarget(
+        name: String,
+        targetType: String,
+        configJSON: [String: JSONValue],
+        events: [String],
+        enabled: Bool
+    ) async throws -> NotificationTargetResponse {
+        try await postJSON(
+            AlchemistAPIRoute.notificationTargets,
+            body: AddNotificationTargetPayload(
+                name: name,
+                targetType: targetType,
+                configJSON: configJSON,
+                events: events,
+                enabled: enabled
+            )
+        )
+    }
+
+    public func deleteNotificationTarget(id: Int64) async throws {
+        let _: EmptyResponse = try await deleteJSON(AlchemistAPIRoute.notificationTarget(id: id))
+    }
+
+    public func testNotificationTarget(
+        name: String,
+        targetType: String,
+        configJSON: [String: JSONValue],
+        events: [String],
+        enabled: Bool
+    ) async throws {
+        let _: EmptyResponse = try await postJSON(
+            AlchemistAPIRoute.notificationTest,
+            body: AddNotificationTargetPayload(
+                name: name,
+                targetType: targetType,
+                configJSON: configJSON,
+                events: events,
+                enabled: enabled
+            )
+        )
+    }
+
+    // MARK: - API Tokens
+
+    public func fetchApiTokens() async throws -> [ApiTokenResponse] {
+        try await getJSON(AlchemistAPIRoute.apiTokens)
+    }
+
+    public func createApiToken(name: String, accessLevel: String) async throws -> CreatedApiTokenResponse {
+        try await postJSON(
+            AlchemistAPIRoute.apiTokens,
+            body: CreateApiTokenPayload(name: name, accessLevel: accessLevel)
+        )
+    }
+
+    public func revokeApiToken(id: Int64) async throws {
+        let _: EmptyResponse = try await deleteJSON(AlchemistAPIRoute.apiToken(id: id))
+    }
+
     public func uploadConversion(fileURL: URL) async throws -> ConversionUploadResponse {
         let boundary = "AlchemistBoundary-\(UUID().uuidString)"
         var request = URLRequest(url: try endpoint(AlchemistAPIRoute.conversionUploads))
@@ -559,6 +635,31 @@ private struct AddWatchFolderPayload: Encodable {
     enum CodingKeys: String, CodingKey {
         case path
         case isRecursive = "is_recursive"
+    }
+}
+
+private struct AddNotificationTargetPayload: Encodable {
+    let name: String
+    let targetType: String
+    let configJSON: [String: JSONValue]
+    let events: [String]
+    let enabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case targetType = "target_type"
+        case configJSON = "config_json"
+        case events, enabled
+    }
+}
+
+private struct CreateApiTokenPayload: Encodable {
+    let name: String
+    let accessLevel: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case accessLevel = "access_level"
     }
 }
 

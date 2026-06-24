@@ -37,7 +37,7 @@ struct CommandPaletteView: View {
                 model.navigation.navigate(to: .system)
             },
             CommandPaletteItem(title: "Settings", subtitle: "Open app settings", symbol: "gearshape") {
-                model.navigation.navigate(to: .settings)
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             },
             CommandPaletteItem(title: model.engine.isPaused ? "Start Queue" : "Pause Queue", subtitle: "Control queue execution", symbol: model.engine.isPaused ? "play.fill" : "pause.fill") {
                 Task {

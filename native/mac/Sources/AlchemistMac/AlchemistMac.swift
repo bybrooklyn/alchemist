@@ -64,11 +64,6 @@ struct AlchemistMac: App {
                     appModel.navigation.navigate(to: .system)
                 }
                 .keyboardShortcut("7", modifiers: [.command])
-
-                Button("Settings") {
-                    appModel.navigation.navigate(to: .settings)
-                }
-                .keyboardShortcut("8", modifiers: [.command])
             }
 
             CommandMenu("Jobs") {
