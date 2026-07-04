@@ -127,6 +127,14 @@ jobs:
           set -euo pipefail
           IMAGE="${IMAGE_NAME}:${{ inputs.version }}"
           docker pull "${IMAGE}"
+          docker run --rm --entrypoint sh "${IMAGE}" -c '
+            set -eu
+            command -v vainfo
+            command -v setpriv
+            ffmpeg -hide_banner -encoders | grep -E "h264_vaapi|hevc_vaapi"
+            ffmpeg -hide_banner -encoders | grep -E "h264_qsv|hevc_qsv"
+            ffmpeg -hide_banner -encoders | grep -E "h264_nvenc|hevc_nvenc"
+          '
           docker run --rm "${IMAGE}" --version | grep -F "${{ inputs.version }}"
 
           CONTAINER="$(docker run -d --tmpfs /app/config --tmpfs /app/data -p 127.0.0.1::3000 "${IMAGE}")"

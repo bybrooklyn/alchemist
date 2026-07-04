@@ -7,13 +7,16 @@ on:
     paths:
       - 'VERSION'
       - 'Dockerfile'
+      - 'Dockerfile.runtime'
       - '.dockerignore'
+      - 'entrypoint.sh'
       - 'src/**'
       - 'web/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'migrations/**'
       - 'build.rs'
+      - 'scripts/check_docker_runtime_contract.py'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
@@ -66,12 +69,28 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
+          load: true
+          tags: alchemist:pr-runtime
           cache-from: |
             type=gha,scope=docker-amd64
             type=registry,ref=ghcr.io/bybrooklyn/alchemist:buildcache-amd64
           cache-to: |
             type=gha,scope=docker-amd64,mode=max
           provenance: false
+
+      - name: Runtime GPU contract smoke
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh alchemist:pr-runtime -c '
+            set -eu
+            command -v vainfo
+            command -v setpriv
+            ffmpeg -hide_banner -encoders | grep -E "h264_vaapi|hevc_vaapi"
+            ffmpeg -hide_banner -encoders | grep -E "h264_qsv|hevc_qsv"
+            ffmpeg -hide_banner -encoders | grep -E "h264_nvenc|hevc_nvenc"
+          '
 
       - name: Build and push (manual dispatch)
         if: github.event_name == 'workflow_dispatch'

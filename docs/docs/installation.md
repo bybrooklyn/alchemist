@@ -39,6 +39,14 @@ Open [http://localhost:3000](http://localhost:3000). The
 setup wizard runs on first visit and is only reachable
 from the local network until the first account is created.
 
+In Docker, Alchemist reads `/app/config/config.toml` and
+`/app/data/alchemist.db` inside the container. Volume syntax is
+`host_path:container_path`, so `./config:/app/config` stores that
+same config on the host at `./config/config.toml`. If you prefer
+`/data/alchemist/config:/app/config`, then the container still uses
+`/app/config/config.toml`, backed by `/data/alchemist/config` on
+the host.
+
 For GPU passthrough (NVIDIA, Intel, AMD) see
 [GPU Passthrough](/gpu-passthrough).
 
@@ -85,6 +93,12 @@ winget install Gyan.FFmpeg    # Windows
 ./alchemist        # Linux / macOS
 alchemist.exe      # Windows
 ```
+
+Binary installs are not containerized, so the default config path
+is `~/.config/alchemist/config.toml` on Linux/macOS and
+`%APPDATA%\Alchemist\config.toml` on Windows. Docker overrides
+the config path to `/app/config/config.toml` so it lands in the
+mounted host directory.
 
 Direct binary users can copy the running executable into a
 standard or custom directory:

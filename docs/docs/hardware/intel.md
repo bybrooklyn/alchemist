@@ -45,9 +45,10 @@ For newer systems, `renderD129` may be the Intel node. Check
 
 ## Docker
 
-Pass `/dev/dri` into the container. The image bundles an FFmpeg
-with the Intel VAAPI and QSV encoders, and the default (root)
-container can open the render nodes without any `group_add`.
+Pass `/dev/dri` into the container. The image bundles `vainfo`
+and an FFmpeg with the Intel VAAPI and QSV encoders, and the
+default (root) container can open the render nodes without any
+`group_add`.
 Driver auto-detection handles modern Intel iGPUs; only set
 `LIBVA_DRIVER_NAME=iHD` if it picks the wrong driver. Running
 with `PUID`/`PGID`? Also add the host's numeric render GID — see

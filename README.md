@@ -79,6 +79,15 @@ services:
 Then open [http://localhost:3000](http://localhost:3000) in your browser.
 First-time setup is only reachable from the local network.
 
+In Docker, Alchemist reads its config at `/app/config/config.toml` and
+its database at `/app/data/alchemist.db` inside the container. Docker
+volume paths use `host_path:container_path`; in the example above,
+`./config` and `./data` are directories on your Docker host backing
+the container paths `/app/config` and `/app/data`. A host path like
+`/data/alchemist/config:/app/config` means the container still reads
+`/app/config/config.toml`, but the file is stored on the host under
+`/data/alchemist/config`.
+
 The setup wizard writes `config.toml` into `./config` on first
 run, and the database lives in `./data`. Mount the directories,
 never `config.toml` itself — a single-file bind mount blocks the
@@ -116,6 +125,12 @@ port and print an `INFO` line with the exact
 specific port.
 
 On Windows, run `alchemist.exe` instead.
+
+Binary installs are not inside a container, so their default config file is
+`~/.config/alchemist/config.toml` on Linux/macOS or
+`%APPDATA%\Alchemist\config.toml` on Windows. Docker uses explicit
+`ALCHEMIST_CONFIG_PATH=/app/config/config.toml` so the config lives in the
+mounted host directory instead of disappearing with the container filesystem.
 
 Direct Linux/macOS binary installs can check for signed updates from the
 About dialog. Alchemist verifies the release manifest and asset checksum,

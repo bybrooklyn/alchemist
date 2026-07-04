@@ -27,9 +27,11 @@ on Windows.
 
 ## Docker
 
-Always set path variables explicitly to paths inside your
-mounted volumes. Without this, files are lost when the
-container is removed.
+Docker images set the app paths to container-native locations:
+`ALCHEMIST_CONFIG_PATH=/app/config/config.toml` and
+`ALCHEMIST_DB_PATH=/app/data/alchemist.db`. Keep them explicit in
+Compose files when you want the deployment to show exactly where
+Alchemist reads and writes inside the container.
 
 ```yaml
 environment:
@@ -46,6 +48,14 @@ volumes:
   - ./config:/app/config
   - ./data:/app/data
 ```
+
+In those volume entries, the right side is the container path and
+the left side is the Docker host path backing it. For example,
+`/data/alchemist/config:/app/config` still makes Alchemist read
+`/app/config/config.toml` inside the container, while storing the
+file on the host under `/data/alchemist/config`. Binary installs use
+the default `~/.config/alchemist/config.toml` path because no
+container mount exists.
 
 Docker-only variables, handled by the container entrypoint:
 

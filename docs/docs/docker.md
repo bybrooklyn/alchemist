@@ -39,6 +39,35 @@ host file doesn't exist, Docker creates a directory named
 Do not set `ALCHEMIST_CONFIG_MUTABLE=false` until setup has
 completed at least once; the wizard needs to write the config.
 
+## Config and data paths
+
+Inside the Docker container, Alchemist reads its config from
+`/app/config/config.toml` and its SQLite database from
+`/app/data/alchemist.db`. The image sets these defaults with
+`ALCHEMIST_CONFIG_PATH=/app/config/config.toml` and
+`ALCHEMIST_DB_PATH=/app/data/alchemist.db`.
+
+Your Compose volumes decide where those container directories
+are stored on the Docker host. Docker volume entries are
+`host_path:container_path`:
+
+```yaml
+volumes:
+  - ./config:/app/config
+```
+
+- `./config` is the directory on the Docker host.
+- `/app/config` is the directory inside the Alchemist container.
+- `ALCHEMIST_CONFIG_PATH=/app/config/config.toml` is therefore an
+  in-container path, but the file persists on the host as
+  `./config/config.toml`.
+
+If your Compose file says `/data/alchemist/config:/app/config`,
+then `/data/alchemist/config` is the host directory and
+`/app/config` is only where the container sees it. Native binary
+installs use `~/.config/alchemist/config.toml` by default because
+there is no container mount involved.
+
 ## Volumes
 
 | Mount | Purpose |
@@ -55,7 +84,7 @@ completed at least once; the wizard needs to write the config.
 | `ALCHEMIST_CONFIG_PATH` | Path to `config.toml` inside the container |
 | `ALCHEMIST_DB_PATH` | Path to the SQLite database inside the container |
 | `ALCHEMIST_CONFIG_MUTABLE` | Set `false` to block runtime config writes (only after setup) |
-| `PUID` / `PGID` | Run as this user/group id; mounted dirs are chowned at start. Unset = root |
+| `PUID` / `PGID` | Run as this user/group id; mounted dirs are chowned at start. Unset = root. Supplemental `group_add` ids are preserved for render-node access. |
 | `RUST_LOG` | Log verbosity: `info`, `debug`, `alchemist=trace` |
 
 ## Setup returns SETUP_ACCESS_FORBIDDEN
