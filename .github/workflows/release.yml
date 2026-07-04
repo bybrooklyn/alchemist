@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
 
 concurrency:
@@ -46,8 +47,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected="v${{ steps.version.outputs.version }}"
-          if [[ "${GITHUB_REF_NAME}" != "${expected}" ]]; then
+          expected="${{ steps.version.outputs.version }}"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${tag_version}" != "${expected}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${expected}" >&2
             exit 1
           fi

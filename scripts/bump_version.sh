@@ -27,9 +27,7 @@ while IFS= read -r package_json; do
     }
   ' "$VERSION" "$package_json"
 done < <(
-  find "$ROOT_DIR" \
-    \( -path '*/node_modules/*' -o -path '*/dist/*' -o -path '*/.astro/*' \) -prune \
-    -o -type f -name 'package.json' -print | sort
+  git -C "$ROOT_DIR" ls-files -- 'package.json' '*/package.json'
 )
 
 perl -0pi -e '
