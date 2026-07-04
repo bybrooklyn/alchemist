@@ -112,7 +112,7 @@ Split into focused submodules — no ORM, direct `sqlx` usage:
 | Layer | Technology |
 |------|------------|
 | Language | Rust 2024 |
-| MSRV | Rust 1.85 |
+| MSRV | Rust 1.88 |
 | Async runtime | Tokio |
 | HTTP | Axum 0.7 |
 | Database | `sqlx` 0.8 |

@@ -150,7 +150,7 @@ just build
 ./target/release/alchemist
 ```
 
-Alchemist requires Rust 1.85 or later (MSRV). Use `rustup update stable` to ensure you are on a recent toolchain, and make sure FFmpeg is installed separately.
+Alchemist requires Rust 1.88 or later (MSRV). Use `rustup update stable` to ensure you are on a recent toolchain, and make sure FFmpeg is installed separately.
 
 For Windows local development:
 
