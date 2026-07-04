@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
 
 interface ConfirmDialogProps {
@@ -102,11 +103,14 @@ export default function ConfirmDialog({
         }
     }, [open]);
 
-    if (!open) {
+    if (!open || typeof document === "undefined") {
         return null;
     }
 
-    return (
+    // Render outside the app shell so the focus-trap `inert` attribute (applied
+    // to `.app-shell`) does not propagate into the dialog and suppress its
+    // pointer events. Without this the confirm/cancel buttons are unclickable.
+    return createPortal(
         <div className="fixed inset-0 z-[200]">
             <button
                 type="button"
@@ -162,6 +166,7 @@ export default function ConfirmDialog({
                     </div>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
