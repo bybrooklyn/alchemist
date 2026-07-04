@@ -47,7 +47,8 @@ RUN apt-get update && \
     va-driver-all \
     libsqlite3-0 \
     ca-certificates \
-    gosu \
+    util-linux \
+    vainfo \
     tini \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
     apt-get install -y --no-install-recommends \

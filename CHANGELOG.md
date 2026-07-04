@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Docker GPU diagnostics and permissions
+
+- Docker images now include `vainfo`, matching the Intel/AMD troubleshooting
+  docs and making VAAPI validation possible inside the container.
+- `PUID`/`PGID` startup now preserves Docker `group_add` supplemental groups
+  when dropping privileges, so unprivileged containers keep access to
+  `/dev/dri` render nodes.
+- CI now checks the Docker runtime contract, the Docker workflow watches
+  `Dockerfile.runtime` and `entrypoint.sh`, and built PR/release images smoke
+  test `vainfo`, `setpriv`, and VAAPI/QSV/NVENC encoder presence, preventing
+  release-image drift from bypassing GPU-runtime validation.
+- `just docker-runtime-contract` now runs the same local runtime-image smoke
+  with a temporary build context, including `PUID`/`PGID` supplemental-group
+  preservation.
+- Docker quick-start docs now explicitly explain the container-native
+  `/app/config` and `/app/data` paths, plus `host_path:container_path`
+  volume syntax, so `/data/alchemist/config:/app/config` is clear as
+  host-side storage backing the container's `/app/config` path.
+
 ## [0.3.5-rc.1] - 2026-06-24
 
 ### Reliability: hardware encoder failures now self-heal

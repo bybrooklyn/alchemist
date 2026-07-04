@@ -11,7 +11,8 @@ keywords:
 Use `ghcr.io/bybrooklyn/alchemist:latest`. The image bundles
 an FFmpeg with VAAPI, QSV, and NVENC encoders built in, so once
 the GPU device is visible inside the container, Alchemist detects
-and uses it.
+and uses it. It also includes `vainfo` for in-container VAAPI
+diagnostics.
 
 ## Device permissions (`/dev/dri`)
 
@@ -47,6 +48,10 @@ environment:
 group_add:
   - "105"   # numeric GID of the host 'render' group
 ```
+
+Alchemist preserves numeric supplemental groups when it drops
+from root to `PUID`/`PGID`, so the process keeps access to the
+render node after startup.
 
 ## NVIDIA
 

@@ -59,6 +59,10 @@ group_add:
   - "105"   # getent group render | cut -d: -f3
 ```
 
+Alchemist preserves that supplemental group when it switches to
+`PUID`/`PGID`, so the encoder probes can still open the render
+node.
+
 See [GPU Passthrough](/gpu-passthrough#device-permissions-devdri)
 for full examples.
 

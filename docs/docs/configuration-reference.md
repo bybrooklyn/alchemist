@@ -10,6 +10,11 @@ Default config file location:
 - Windows: `%APPDATA%\Alchemist\config.toml`
 - Override: `ALCHEMIST_CONFIG_PATH`
 
+Docker images set `ALCHEMIST_CONFIG_PATH=/app/config/config.toml`.
+That is the path inside the container. With a volume such as
+`/data/alchemist/config:/app/config`, the same file is stored on
+the Docker host at `/data/alchemist/config/config.toml`.
+
 ## `[appearance]`
 
 | Field | Type | Default | Description |

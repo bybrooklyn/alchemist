@@ -186,6 +186,8 @@ check-u:
     cargo check --all-targets
     @echo "── API contract ──"
     python3 scripts/check_api_contract.py
+    @echo "── Docker runtime contract ──"
+    python3 scripts/check_docker_runtime_contract.py
     @echo "── Frontend typecheck ──"
     cd web && bun install --frozen-lockfile && bun run typecheck && echo "── Frontend build ──" && bun run build
     @if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null; then \
@@ -282,11 +284,47 @@ docker-build:
 docker-build-multi:
     docker buildx build --platform linux/amd64,linux/arm64 -t alchemist:dev .
 
+# Validate runtime-image GPU tooling without doing a full app build.
+# Override with ALCHEMIST_DOCKER_TEST_PLATFORM, ALCHEMIST_DOCKER_TEST_TARGETARCH,
+# or ALCHEMIST_DOCKER_TEST_RENDER_GID when needed.
+docker-runtime-contract:
+    python3 scripts/check_docker_runtime_contract.py
+    @IMAGE="alchemist:runtime-contract-local"; \
+        PLATFORM="${ALCHEMIST_DOCKER_TEST_PLATFORM:-linux/amd64}"; \
+        TARGETARCH="${ALCHEMIST_DOCKER_TEST_TARGETARCH:-amd64}"; \
+        TEST_GID="${ALCHEMIST_DOCKER_TEST_RENDER_GID:-105}"; \
+        TMPDIR="$(mktemp -d)"; \
+        cleanup() { \
+            rm -rf "$TMPDIR"; \
+            docker rmi "$IMAGE" >/dev/null 2>&1 || true; \
+        }; \
+        trap cleanup EXIT; \
+        docker version >/dev/null; \
+        cp Dockerfile.runtime "$TMPDIR/Dockerfile"; \
+        cp entrypoint.sh "$TMPDIR/entrypoint.sh"; \
+        printf '%s\n' '#!/bin/sh' 'echo alchemist-placeholder "$@"' > "$TMPDIR/alchemist"; \
+        chmod +x "$TMPDIR/alchemist"; \
+        docker build --platform "$PLATFORM" --build-arg TARGETARCH="$TARGETARCH" -t "$IMAGE" "$TMPDIR"; \
+        docker run --rm --platform "$PLATFORM" --entrypoint sh "$IMAGE" -c '\
+            set -eu; \
+            command -v vainfo; \
+            command -v setpriv; \
+            ffmpeg -hide_banner -encoders | grep -E "h264_vaapi|hevc_vaapi"; \
+            ffmpeg -hide_banner -encoders | grep -E "h264_qsv|hevc_qsv"; \
+            ffmpeg -hide_banner -encoders | grep -E "h264_nvenc|hevc_nvenc"; \
+        '; \
+        docker run --rm --platform "$PLATFORM" --group-add "$TEST_GID" -e PUID=1000 -e PGID=1000 --entrypoint /app/entrypoint.sh "$IMAGE" id \
+            | grep -E "uid=1000.*gid=1000.*groups=.*${TEST_GID}"; \
+        echo "Docker runtime contract smoke OK."
+
 # Run Alchemist in Docker for local testing
 docker-run:
+    mkdir -p dev-config dev-data
     docker run --rm \
         -p 3000:3000 \
+        -v "$(pwd)/dev-config:/app/config" \
         -v "$(pwd)/dev-data:/app/data" \
+        -e ALCHEMIST_CONFIG_PATH=/app/config/config.toml \
         -e ALCHEMIST_DB_PATH=/app/data/alchemist.db \
         -e ALCHEMIST_CONFIG_MUTABLE=true \
         -e RUST_LOG=info \
@@ -327,6 +365,8 @@ release-verify:
     actionlint .github/workflows/*.yml
     @echo "── API contract ──"
     python3 scripts/check_api_contract.py
+    @echo "── Docker runtime contract ──"
+    python3 scripts/check_docker_runtime_contract.py
     @echo "── Web verify ──"
     cd web && bun install --frozen-lockfile && bun run verify && python3 ../scripts/run_bun_audit.py .
     @echo "── Docs verify ──"

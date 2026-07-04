@@ -66,6 +66,9 @@ jobs:
       - name: API contract
         run: python3 scripts/check_api_contract.py
 
+      - name: Docker runtime contract
+        run: python3 scripts/check_docker_runtime_contract.py
+
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30

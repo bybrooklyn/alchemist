@@ -12,7 +12,9 @@ services:
       #   - "127.0.0.1:3000:3000"
       # or set ALCHEMIST_SETUP_TOKEN below and open /setup?token=<value>.
     volumes:
-      # Config and database persist here (created next to this file).
+      # Alchemist reads /app/config/config.toml inside the container.
+      # Docker volumes are host_path:container_path, so ./config backs
+      # that in-container /app/config directory on the host.
       # Mount the DIRECTORIES, not config.toml itself — the setup wizard
       # writes config.toml on first run.
       - ./config:/app/config

@@ -25,10 +25,21 @@ if [ "$PUID" -ne 0 ] || [ "$PGID" -ne 0 ]; then
         fi
     done
 
-    # Drop privileges and execute. Numeric uid:gid needs no passwd entry,
+    # Docker's numeric group_add entries arrive as supplemental groups on this
+    # root entrypoint process. Preserve those non-root groups while dropping to
+    # PUID/PGID so unprivileged containers can still open /dev/dri render nodes.
+    SUPPLEMENTAL_GROUPS="$(id -G | tr ' ' '\n' | awk -v primary="$PGID" '$1 != "" && $1 != "0" && $1 != primary { out = out ? out "," $1 : $1 } END { print out }')"
+    if [ -n "$SUPPLEMENTAL_GROUPS" ]; then
+        echo "Preserving supplemental groups: $SUPPLEMENTAL_GROUPS"
+        GROUP_ARGS=(--groups "$SUPPLEMENTAL_GROUPS")
+    else
+        GROUP_ARGS=(--clear-groups)
+    fi
+
+    # Drop privileges and execute. Numeric uid/gid needs no passwd entry,
     # so arbitrary PUID/PGID values never collide with existing users.
     export HOME=/app
-    exec gosu "$PUID:$PGID" "$@"
+    exec setpriv --reuid "$PUID" --regid "$PGID" "${GROUP_ARGS[@]}" "$@"
 else
     # Run natively
     exec "$@"

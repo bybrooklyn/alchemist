@@ -5,6 +5,18 @@ description: Release history for Alchemist.
 
 ## [Unreleased]
 
+### Docker GPU diagnostics and permissions
+
+- Docker images now include `vainfo`, matching the Intel/AMD troubleshooting
+  docs and making VAAPI validation possible inside the container.
+- `PUID`/`PGID` startup now preserves Docker `group_add` supplemental groups
+  when dropping privileges, so unprivileged containers keep access to
+  `/dev/dri` render nodes.
+- CI and `just docker-runtime-contract` now verify the Docker runtime contract,
+  including `vainfo`, `setpriv`, and VAAPI/QSV/NVENC encoder presence.
+- Docker docs now explain the container-native `/app/config` and `/app/data`
+  paths, plus `host_path:container_path` volume syntax for host persistence.
+
 ## [0.3.5-rc.1] - 2026-06-24
 
 ### Reliability: hardware encoder failures now self-heal
