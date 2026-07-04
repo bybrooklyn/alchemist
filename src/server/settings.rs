@@ -413,11 +413,14 @@ pub(crate) async fn get_setting_preference_handler(
 ) -> impl IntoResponse {
     match state.db.get_preference(key.as_str()).await {
         Ok(Some(value)) => axum::Json(SettingPreferenceResponse { key, value }).into_response(),
-        Ok(None) => api_error_response(
-            StatusCode::NOT_FOUND,
-            "SETTING_PREFERENCE_NOT_FOUND",
-            "Preference not found",
-        ),
+        // An unset *optional* preference (e.g. saved job views before any are saved) is
+        // a normal state, not an error. Return 200 with an empty value so the client can
+        // treat it as "none" without the browser logging a 404 on every page load.
+        Ok(None) => axum::Json(SettingPreferenceResponse {
+            key,
+            value: String::new(),
+        })
+        .into_response(),
         Err(err) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "SETTING_PREFERENCE_READ_FAILED",
