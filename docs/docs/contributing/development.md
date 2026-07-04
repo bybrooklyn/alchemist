@@ -5,7 +5,7 @@ description: Setting up a local Alchemist development environment.
 
 ## Prerequisites
 
-- Rust 1.85+ (`rustup update stable`)
+- Rust 1.88+ (`rustup update stable`)
 - [Bun](https://bun.sh/) — frontend package manager
 - FFmpeg — required for local testing
 - [just](https://github.com/casey/just) — task runner

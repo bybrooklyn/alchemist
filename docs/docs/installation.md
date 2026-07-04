@@ -132,7 +132,7 @@ just build
 ./target/release/alchemist
 ```
 
-Requires Rust 1.85+. Run `rustup update stable` first.
+Requires Rust 1.88+. Run `rustup update stable` first.
 
 For Windows local development:
 

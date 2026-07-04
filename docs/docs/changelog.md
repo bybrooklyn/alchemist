@@ -3,19 +3,99 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
-## [Unreleased]
+## [0.3.5-rc.2] - 2026-07-04
 
 ### Docker GPU diagnostics and permissions
 
 - Docker images now include `vainfo`, matching the Intel/AMD troubleshooting
-  docs and making VAAPI validation possible inside the container.
+  docs and making VAAPI validation possible inside the container. This fixes
+  the reported `vainfo: command not found` failure when debugging Intel GPU
+  passthrough in the published container. (#6)
 - `PUID`/`PGID` startup now preserves Docker `group_add` supplemental groups
   when dropping privileges, so unprivileged containers keep access to
-  `/dev/dri` render nodes.
-- CI and `just docker-runtime-contract` now verify the Docker runtime contract,
-  including `vainfo`, `setpriv`, and VAAPI/QSV/NVENC encoder presence.
-- Docker docs now explain the container-native `/app/config` and `/app/data`
-  paths, plus `host_path:container_path` volume syntax for host persistence.
+  `/dev/dri` render nodes. This supports the common self-hosted pattern of
+  running as a media user while adding the host's numeric render GID.
+- Docker runtime validation is now enforced in CI and release smoke checks:
+  Docker PR builds watch `Dockerfile.runtime`, `entrypoint.sh`, and the runtime
+  contract script, then smoke test `vainfo`, `setpriv`, and VAAPI/QSV/NVENC
+  encoder presence in the built image.
+- `just docker-runtime-contract` now runs the same local runtime-image smoke
+  with a temporary build context, including `PUID`/`PGID` supplemental-group
+  preservation, so Docker image drift can be caught before release.
+- Docker quick-start docs now explain the container-native `/app/config` and
+  `/app/data` paths first, then show how `host_path:container_path` bind mounts
+  persist those directories on the host. Examples such as
+  `/data/alchemist/config:/app/config` now explicitly mean "host storage at
+  `/data/alchemist/config`, visible inside the container at `/app/config`."
+
+### Startup safety
+
+- Existing but invalid `config.toml` files now fail startup instead of falling
+  back to defaults. This prevents a malformed config from being silently
+  replaced by default settings the next time the UI saves configuration.
+- Missing configs still enter setup mode in server mode, so first-run Docker and
+  binary installs continue to work normally.
+
+### Security and dependencies
+
+- `cargo audit` is now part of `just release-verify`, and the lockfile updates
+  `quinn-proto` to the fixed stream-reassembly release, `time` to the fixed
+  stack-exhaustion release, and `anyhow` past its downcast warning.
+- `sqlx` now disables default features and enables only the SQLite stack
+  Alchemist actually uses, so the MySQL backend is never compiled and
+  `cargo tree -i rsa` reports the crate is absent from the build graph.
+- The one remaining advisory, RUSTSEC-2023-0071 (Marvin timing sidechannel in
+  `rsa`), has no fixed release. `rsa` is only an optional dependency of the
+  unused `sqlx-mysql` backend and stays in `Cargo.lock` purely because Cargo
+  records optional dependencies of graph members even when their feature gate is
+  off. It is never compiled or reached, so it is documented and ignored in
+  `.cargo/audit.toml` with that rationale rather than left as a false alarm.
+- The Rust MSRV is now 1.88 because the fixed `time` release requires it.
+
+### Release process
+
+- Release workflow tag validation now normalizes an optional leading `v` before
+  comparing against `VERSION`, so both `v0.3.5-rc.2` and `0.3.5-rc.2` match the
+  same release version.
+- The release workflow now triggers on numeric version tags as well as `v*`
+  tags.
+- `scripts/bump_version.sh` now updates only git-tracked `package.json` files,
+  so ignored local tool state such as `.mimocode/package.json` cannot interrupt
+  a version bump after only some files have been changed.
+
+### Transcoding and fallback behavior
+
+- Hardware encoder open failures that self-heal by retrying on CPU now record
+  the failed hardware attempt in the job attempt history. Users can see that a
+  GPU path was tried and why the final encode ran on CPU.
+- Encoder selection now prefers preserving the requested codec on CPU before
+  downgrading to a different GPU codec. For example, an HEVC request on a host
+  with only H.264 hardware encode support now uses `libx265` when CPU fallback
+  is available instead of silently producing H.264.
+- If CPU fallback is unavailable, codec-downgrade GPU fallback remains
+  available, preserving the existing escape hatch for hardware-only setups.
+
+### UI and self-hosted reliability
+
+- Optional saved preferences, such as saved job views before any views exist,
+  now return an empty value instead of a 404. This removes noisy browser errors
+  during normal first-use states.
+- The setup wizard now validates manually typed library paths with the server
+  before adding them, surfacing missing or unreadable folders immediately
+  instead of letting the first scan find nothing.
+- The offline banner now checks `/api/health` to determine whether the
+  Alchemist server is reachable, rather than relying on browser WAN connectivity
+  state. This avoids false "offline" banners on LAN/self-hosted deployments.
+- Web fonts are now self-hosted through `@fontsource`, matching the app's
+  self-hosted CSP and keeping the UI functional without Google Fonts access.
+- Completed job details now round average bitrate display values to whole kbps
+  for cleaner presentation.
+
+### Developer workflow
+
+- `just clean` now removes more generated artifacts across docs, web builds,
+  web e2e runtime output, native macOS artifacts, Jellyfin plugin build output,
+  and conditional WhyTho build targets without tracking the WhyTho workspace.
 
 ## [0.3.5-rc.1] - 2026-06-24
 
