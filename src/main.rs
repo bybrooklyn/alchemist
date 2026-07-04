@@ -305,7 +305,10 @@ fn orphaned_temp_output_path(output_path: &str) -> PathBuf {
     PathBuf::from(format!("{output_path}.alchemist.tmp"))
 }
 
-fn load_startup_config(config_path: &Path, is_server_mode: bool) -> (config::Config, bool, bool) {
+fn load_startup_config(
+    config_path: &Path,
+    is_server_mode: bool,
+) -> Result<(config::Config, bool, bool)> {
     if config_path.is_dir() {
         error!(
             "Config path {:?} is a directory, not a file. If you bind-mounted \
@@ -336,25 +339,28 @@ fn load_startup_config(config_path: &Path, is_server_mode: bool) -> (config::Con
         match config::Config::load(config_path) {
             Ok(c) => (c, false),
             Err(e) => {
-                warn!(
-                    "Failed to load config file at {:?}: {}. Using defaults.",
-                    config_path, e
+                // A config file exists but could not be parsed/validated. Falling back
+                // to defaults would silently discard every user setting — and a later
+                // "Save Settings" would then overwrite the real file with defaults,
+                // permanently destroying it. Per DESIGN_PHILOSOPHY (fail safe, not fail
+                // open) we refuse to start instead, surfacing the exact error (the TOML
+                // parse error already carries line/column) so the user can fix the file.
+                // The file is left untouched.
+                error!("Failed to load config file at {:?}: {}", config_path, e);
+                error!(
+                    "Refusing to start so your existing configuration is not overwritten. \
+                     Fix the error above in {:?} (or move the file aside to run the setup \
+                     wizard) and start Alchemist again.",
+                    config_path
                 );
-                if is_server_mode {
-                    warn!(
-                        "Config load failed in server mode. \
-                         Will check for existing users before \
-                         entering Setup Mode."
-                    );
-                    (config::Config::default(), false)
-                } else {
-                    (config::Config::default(), false)
-                }
+                return Err(alchemist::error::AlchemistError::Config(format!(
+                    "invalid configuration at {config_path:?}: {e}"
+                )));
             }
         }
     };
 
-    (config, setup_mode, config_exists)
+    Ok((config, setup_mode, config_exists))
 }
 
 fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bool) -> bool {
@@ -436,7 +442,7 @@ async fn run() -> Result<()> {
     }
 
     let (mut config, mut setup_mode, config_exists) = if is_server_mode {
-        load_startup_config(config_path.as_path(), true)
+        load_startup_config(config_path.as_path(), true)?
     } else {
         if !config_path.exists() {
             error!(
@@ -1631,52 +1637,55 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn invalid_config_with_existing_users_does_not_reenter_setup_mode()
+    #[test]
+    fn invalid_config_aborts_startup_with_existing_users()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let db_path = temp_db_path("alchemist_invalid_config_users");
+        // A config file that exists but cannot be parsed must abort startup rather than
+        // silently fall back to defaults (which a later save would persist over the real
+        // file). Whether users exist is irrelevant — we never get as far as the user
+        // check. The file itself must be left untouched.
         let config_path = temp_config_path("alchemist_invalid_config_users");
-        std::fs::write(&config_path, "not-valid = [")?;
+        let original = "not-valid = [";
+        std::fs::write(&config_path, original)?;
 
-        let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
-        db.create_user("admin", "hash").await?;
+        let result = load_startup_config(config_path.as_path(), true);
 
-        let (_config, setup_mode, config_exists) = load_startup_config(config_path.as_path(), true);
-        let has_users = db.has_users().await?;
-        let final_setup_mode =
-            setup_mode || should_enter_setup_mode_for_missing_users(true, has_users);
-
-        assert!(config_exists);
-        assert!(has_users);
-        assert!(!setup_mode);
-        assert!(!final_setup_mode);
+        assert!(result.is_err(), "invalid config must abort startup");
+        assert_eq!(
+            std::fs::read_to_string(&config_path)?,
+            original,
+            "the invalid config file must not be modified",
+        );
 
         let _ = std::fs::remove_file(config_path);
-        let _ = std::fs::remove_file(db_path);
         Ok(())
     }
 
-    #[tokio::test]
-    async fn invalid_config_without_users_still_enters_setup_mode()
+    #[test]
+    fn invalid_config_aborts_startup_in_non_server_mode()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let db_path = temp_db_path("alchemist_invalid_config_setup");
-        let config_path = temp_config_path("alchemist_invalid_config_setup");
+        // Same fail-safe abort regardless of server mode.
+        let config_path = temp_config_path("alchemist_invalid_config_nonserver");
         std::fs::write(&config_path, "not-valid = [")?;
 
-        let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
-
-        let (_config, setup_mode, config_exists) = load_startup_config(config_path.as_path(), true);
-        let has_users = db.has_users().await?;
-        let final_setup_mode =
-            setup_mode || should_enter_setup_mode_for_missing_users(true, has_users);
-
-        assert!(config_exists);
-        assert!(!has_users);
-        assert!(!setup_mode);
-        assert!(final_setup_mode);
+        assert!(load_startup_config(config_path.as_path(), false).is_err());
 
         let _ = std::fs::remove_file(config_path);
-        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_config_in_server_mode_enters_setup_without_aborting()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        // The missing-file path is unchanged: server mode returns defaults + setup_mode.
+        let config_path = temp_config_path("alchemist_missing_config_setup");
+        let _ = std::fs::remove_file(&config_path);
+
+        let (_config, setup_mode, config_exists) =
+            load_startup_config(config_path.as_path(), true)?;
+
+        assert!(!config_exists);
+        assert!(setup_mode);
         Ok(())
     }
 
