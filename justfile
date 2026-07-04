@@ -532,10 +532,35 @@ release-check:
 fmt:
     cargo fmt --all
 
-# Clean all build artifacts
+# Clean all build and generated artifacts
 clean:
     cargo clean
-    rm -rf web/dist web/node_modules web-e2e/node_modules docs/node_modules docs/build native/mac/.build 
+    @if [ -f whytho/Cargo.toml ]; then \
+        cargo clean --manifest-path whytho/Cargo.toml; \
+    fi
+    rm -rf \
+        dist \
+        docs/.docusaurus \
+        docs/build \
+        docs/node_modules \
+        native/mac/.artifacts \
+        native/mac/.build \
+        web/.astro \
+        web/dist \
+        web/node_modules \
+        web-e2e/.runtime \
+        web-e2e/node_modules \
+        web-e2e/test-results \
+        web.zip
+    rm -rf \
+        integrations/jellyfin/Alchemist.Jellyfin/bin \
+        integrations/jellyfin/Alchemist.Jellyfin/obj \
+        integrations/jellyfin/Alchemist.Jellyfin.Tests/bin \
+        integrations/jellyfin/Alchemist.Jellyfin.Tests/obj \
+        integrations/jellyfin/Alchemist.Jellyfin.Tests/TestResults
+    @if [ -d whytho ]; then \
+        find whytho -type d -name target -prune -exec rm -rf {} +; \
+    fi
 
 # Count lines of source code
 loc:
