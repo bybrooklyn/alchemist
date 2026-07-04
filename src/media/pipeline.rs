@@ -1911,6 +1911,26 @@ impl Pipeline {
                         );
                         tracing::warn!(job_id = job.id, "{message}");
                         self.record_job_log(job.id, "warn", &message).await;
+                        // Persist the failed hardware attempt so the self-heal is visible
+                        // in the job's Attempt History (the CPU attempt below is recorded
+                        // separately on success). Without this, a host whose hardware
+                        // encoder always fails to open would show only fast-looking CPU
+                        // encodes with no hint that acceleration is silently unavailable.
+                        self.record_encode_attempt(
+                            job.id,
+                            crate::db::EncodeAttemptInput {
+                                job_id: job.id,
+                                attempt_number: current_attempt_number,
+                                started_at: Some(encode_started_at.to_rfc3339()),
+                                outcome: "failed".to_string(),
+                                failure_code: Some("encoder_open_failed".to_string()),
+                                failure_summary: Some(message.clone()),
+                                input_size_bytes: Some(metadata.size_bytes as i64),
+                                output_size_bytes: None,
+                                encode_time_seconds: Some(start_time.elapsed().as_secs_f64()),
+                            },
+                        )
+                        .await;
                         // Discard the partial hardware output and any resume state
                         // so the CPU attempt starts clean.
                         if temp_output_path.exists() {

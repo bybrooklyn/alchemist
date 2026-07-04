@@ -472,18 +472,25 @@ fn select_encoder(
 
     if !available_encoders.gpu.is_empty() {
         if allow_fallback {
-            if let Some(encoder) = first_available(
-                &available_encoders.gpu,
-                fallback_gpu_candidates(target_codec),
-            ) {
-                return Some((encoder, Some(codec_fallback(target_codec, encoder))));
-            }
-
+            // Honor the requested codec on the CPU before downgrading the codec on
+            // the GPU: a user who asked for HEVC should get HEVC (via libx265) rather
+            // than a silent H.264 GPU encode, even though CPU is slower. The GPU
+            // codec-downgrade is the next resort, used when no CPU encoder for the
+            // requested codec is available (e.g. CPU encoding disabled). This keeps
+            // the planner consistent with the setup wizard, which tells the user a
+            // codec the hardware cannot encode will fall back to CPU encoding.
             if let Some(encoder) = first_available(
                 &available_encoders.cpu,
                 requested_cpu_candidates(target_codec),
             ) {
                 return Some((encoder, Some(cpu_fallback(target_codec, encoder))));
+            }
+
+            if let Some(encoder) = first_available(
+                &available_encoders.gpu,
+                fallback_gpu_candidates(target_codec),
+            ) {
+                return Some((encoder, Some(codec_fallback(target_codec, encoder))));
             }
 
             if let Some(encoder) = first_available(
@@ -1583,7 +1590,10 @@ mod tests {
     }
 
     #[test]
-    fn gpu_codec_fallback_beats_cpu_requested_codec() {
+    fn cpu_requested_codec_beats_gpu_codec_downgrade() {
+        // The GPU can only downgrade the codec (HevcQsv for an AV1 request) but the
+        // CPU can produce the requested codec (Av1Svt). Honor the requested codec on
+        // CPU rather than silently downgrading on the GPU.
         let inventory = EncoderInventory {
             gpu: vec![Encoder::HevcQsv],
             cpu: vec![Encoder::Av1Svt],
@@ -1591,7 +1601,44 @@ mod tests {
 
         let (encoder, fallback) = select_encoder(OutputCodec::Av1, &inventory, true)
             .unwrap_or_else(|| panic!("expected selected encoder"));
-        assert_eq!(encoder, Encoder::HevcQsv);
+        assert_eq!(encoder, Encoder::Av1Svt);
+        assert_eq!(
+            fallback.unwrap_or_else(|| panic!("expected fallback")).kind,
+            FallbackKind::Cpu
+        );
+    }
+
+    #[test]
+    fn hevc_request_on_h264_only_gpu_uses_cpu_hevc() {
+        // Reproduces the VideoToolbox case: hardware exposes only an H.264 GPU path,
+        // the user asked for HEVC, and CPU encoding is available. The planner must
+        // produce HEVC via libx265, not a silent H.264 GPU downgrade.
+        let inventory = EncoderInventory {
+            gpu: vec![Encoder::H264Videotoolbox],
+            cpu: vec![Encoder::HevcX265, Encoder::H264X264],
+        };
+
+        let (encoder, fallback) = select_encoder(OutputCodec::Hevc, &inventory, true)
+            .unwrap_or_else(|| panic!("expected selected encoder"));
+        assert_eq!(encoder, Encoder::HevcX265);
+        assert_eq!(
+            fallback.unwrap_or_else(|| panic!("expected fallback")).kind,
+            FallbackKind::Cpu
+        );
+    }
+
+    #[test]
+    fn hevc_request_falls_back_to_gpu_h264_when_cpu_unavailable() {
+        // When CPU encoding is disabled (no CPU encoders in the inventory) and the GPU
+        // only offers a codec downgrade, the GPU H.264 path is still reached.
+        let inventory = EncoderInventory {
+            gpu: vec![Encoder::H264Videotoolbox],
+            cpu: Vec::new(),
+        };
+
+        let (encoder, fallback) = select_encoder(OutputCodec::Hevc, &inventory, true)
+            .unwrap_or_else(|| panic!("expected selected encoder"));
+        assert_eq!(encoder, Encoder::H264Videotoolbox);
         assert_eq!(
             fallback.unwrap_or_else(|| panic!("expected fallback")).kind,
             FallbackKind::Codec
