@@ -26,15 +26,15 @@ fn default_data_dir() -> PathBuf {
     // Linux and macOS: follow XDG / ~/.config
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join("alchemist");
-            }
+        if let Ok(xdg) = env::var("XDG_CONFIG_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join("alchemist");
         }
-        if let Some(home) = env::var_os("HOME") {
-            if !home.is_empty() {
-                return PathBuf::from(home).join(".config").join("alchemist");
-            }
+        if let Some(home) = env::var_os("HOME")
+            && !home.is_empty()
+        {
+            return PathBuf::from(home).join(".config").join("alchemist");
         }
         PathBuf::from(".")
     }
@@ -107,10 +107,10 @@ pub fn config_mutable() -> bool {
 /// `[system].log_format` field of the on-disk config is consulted. Failing
 /// that, plain text is the default — matching the historical behaviour.
 pub fn log_format() -> LogFormat {
-    if let Ok(value) = env::var("ALCHEMIST_LOG_FORMAT") {
-        if let Some(parsed) = LogFormat::parse(&value) {
-            return parsed;
-        }
+    if let Ok(value) = env::var("ALCHEMIST_LOG_FORMAT")
+        && let Some(parsed) = LogFormat::parse(&value)
+    {
+        return parsed;
     }
     let path = config_path();
     crate::config::Config::load(&path)

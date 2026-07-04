@@ -622,8 +622,8 @@ impl Db {
                 None => {}
             }
 
-            if let Some(ref statuses) = query.statuses {
-                if !statuses.is_empty() {
+            if let Some(ref statuses) = query.statuses
+                && !statuses.is_empty() {
                     qb.push(" AND j.status IN (");
                     let mut separated = qb.separated(", ");
                     for status in statuses {
@@ -631,7 +631,6 @@ impl Db {
                     }
                     separated.push_unseparated(") ");
                 }
-            }
 
             if let Some(ref search) = query.search {
                 let escaped = search

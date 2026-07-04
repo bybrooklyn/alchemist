@@ -165,10 +165,10 @@ async fn preview_path_is_within_allowed_root(
     }
 
     for root in allowed_roots {
-        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await {
-            if canonical.starts_with(&canonical_root) {
-                return true;
-            }
+        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await
+            && canonical.starts_with(&canonical_root)
+        {
+            return true;
         }
     }
     false

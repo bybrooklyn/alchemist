@@ -95,6 +95,9 @@ All notable changes to this project will be documented in this file.
 - `just clean` now removes more generated artifacts across docs, web builds,
   web e2e runtime output, native macOS artifacts, Jellyfin plugin build output,
   and conditional WhyTho build targets without tracking the WhyTho workspace.
+- Resolved new `clippy` lints (`collapsible_if`, `manual_is_multiple_of`) that
+  the current stable toolchain enforces, keeping the `-D warnings` CI gate green
+  without changing runtime behavior.
 
 ## [0.3.5-rc.1] - 2026-06-24
 

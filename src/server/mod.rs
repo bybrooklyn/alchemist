@@ -1044,16 +1044,14 @@ pub(crate) async fn save_config_or_response(
         return Err(Box::new(config_write_blocked_response(&state.config_path)));
     }
 
-    if let Some(parent) = state.config_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                return Err(config_save_error_to_response(
-                    &state.config_path,
-                    &anyhow::Error::new(err),
-                )
-                .into());
-            }
-        }
+    if let Some(parent) = state.config_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        return Err(
+            config_save_error_to_response(&state.config_path, &anyhow::Error::new(err)).into(),
+        );
     }
 
     if let Err(err) = crate::settings::save_config_and_project(
@@ -1346,16 +1344,16 @@ async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl I
             .into_response();
     }
 
-    if !path.contains('.') {
-        if let Some(content) = load_static_asset("404.html") {
-            let mime = mime_guess::from_path("404.html").first_or_octet_stream();
-            return (
-                StatusCode::NOT_FOUND,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content,
-            )
-                .into_response();
-        }
+    if !path.contains('.')
+        && let Some(content) = load_static_asset("404.html")
+    {
+        let mime = mime_guess::from_path("404.html").first_or_octet_stream();
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, mime.as_ref())],
+            content,
+        )
+            .into_response();
     }
 
     // Default fallback to 404 for missing files.

@@ -610,35 +610,35 @@ pub struct FFmpegProgressState {
 
 impl FFmpegProgressState {
     pub fn ingest_line(&mut self, line: &str) -> Option<FFmpegProgress> {
-        if !line.contains(' ') {
-            if let Some((key, value)) = line.split_once('=') {
-                match key {
-                    "frame" => self.current.frame = value.parse().unwrap_or(0),
-                    "fps" => self.current.fps = value.parse().unwrap_or(0.0),
-                    "bitrate" => self.current.bitrate = value.to_string(),
-                    "total_size" => self.current.total_size = value.parse().unwrap_or(0),
-                    "out_time" => {
-                        self.current.time = value.to_string();
-                        self.current.time_seconds = FFmpegProgress::parse_time(value);
-                    }
-                    "out_time_ms" => {
-                        let micros: f64 = value.parse().unwrap_or(0.0);
-                        if self.current.time_seconds == 0.0 && micros > 0.0 {
-                            self.current.time_seconds = micros / 1_000_000.0;
-                        }
-                    }
-                    "speed" => self.current.speed = value.to_string(),
-                    "progress"
-                        if matches!(value, "continue" | "end")
-                            && (self.current.time_seconds > 0.0 || self.current.frame > 0) =>
-                    {
-                        return Some(self.current.clone());
-                    }
-                    _ => {}
+        if !line.contains(' ')
+            && let Some((key, value)) = line.split_once('=')
+        {
+            match key {
+                "frame" => self.current.frame = value.parse().unwrap_or(0),
+                "fps" => self.current.fps = value.parse().unwrap_or(0.0),
+                "bitrate" => self.current.bitrate = value.to_string(),
+                "total_size" => self.current.total_size = value.parse().unwrap_or(0),
+                "out_time" => {
+                    self.current.time = value.to_string();
+                    self.current.time_seconds = FFmpegProgress::parse_time(value);
                 }
-
-                return None;
+                "out_time_ms" => {
+                    let micros: f64 = value.parse().unwrap_or(0.0);
+                    if self.current.time_seconds == 0.0 && micros > 0.0 {
+                        self.current.time_seconds = micros / 1_000_000.0;
+                    }
+                }
+                "speed" => self.current.speed = value.to_string(),
+                "progress"
+                    if matches!(value, "continue" | "end")
+                        && (self.current.time_seconds > 0.0 || self.current.frame > 0) =>
+                {
+                    return Some(self.current.clone());
+                }
+                _ => {}
             }
+
+            return None;
         }
 
         if let Some(progress) = FFmpegProgress::parse_line(line) {

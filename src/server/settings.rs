@@ -552,12 +552,12 @@ pub(crate) async fn update_settings_config_handler(
         return config_write_blocked_response(state.config_path.as_path());
     }
 
-    if let Some(parent) = state.config_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                return config_save_error_to_response(&state.config_path, &anyhow::Error::new(err));
-            }
-        }
+    if let Some(parent) = state.config_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        return config_save_error_to_response(&state.config_path, &anyhow::Error::new(err));
     }
 
     if let Err(err) = crate::settings::save_config_and_project(

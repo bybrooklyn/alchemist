@@ -231,14 +231,14 @@ impl FileWatcher {
                     };
 
                     for path in event.paths {
-                        if let Some(ext) = path.extension() {
-                            if extensions.contains(&ext.to_string_lossy().to_lowercase()) {
-                                let source_root = resolve_source_root(&path, &watch_roots);
-                                let _ = tx_clone.send(PendingEvent {
-                                    key: PendingKey { path, source_root },
-                                    hint,
-                                });
-                            }
+                        if let Some(ext) = path.extension()
+                            && extensions.contains(&ext.to_string_lossy().to_lowercase())
+                        {
+                            let source_root = resolve_source_root(&path, &watch_roots);
+                            let _ = tx_clone.send(PendingEvent {
+                                key: PendingKey { path, source_root },
+                                hint,
+                            });
                         }
                     }
                 }

@@ -381,10 +381,11 @@ async fn run() -> Result<()> {
 
     if args.wizard {
         let db_path = runtime::db_path();
-        if let Some(parent) = db_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
-            }
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
         }
         let db = db::Db::new(db_path.to_string_lossy().as_ref()).await?;
         ConfigWizard::run(&config_path, Some(&db)).await?;
@@ -476,10 +477,11 @@ async fn run() -> Result<()> {
 
     // 1. Initialize Database
     let db_start = Instant::now();
-    if let Some(parent) = db_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
-        }
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent).map_err(alchemist::error::AlchemistError::Io)?;
     }
     let db = Arc::new(db::Db::new(db_path.to_string_lossy().as_ref()).await?);
     alchemist::settings::project_config_to_db(db.as_ref(), &config).await?;
@@ -564,25 +566,25 @@ async fn run() -> Result<()> {
                 let sidecar_glob = format!("{}*.alchemist-part", job.output_path);
                 // Use glob-style scan: check parent dir
                 // for files matching the pattern
-                if let Some(parent) = std::path::Path::new(&job.output_path).parent() {
-                    if let Ok(entries) = std::fs::read_dir(parent) {
-                        for entry in entries.flatten() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            if name.ends_with(".alchemist-part") {
-                                let path = entry.path();
-                                match std::fs::remove_file(&path) {
-                                    Ok(_) => warn!(
-                                        "Removed orphaned \
+                if let Some(parent) = std::path::Path::new(&job.output_path).parent()
+                    && let Ok(entries) = std::fs::read_dir(parent)
+                {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".alchemist-part") {
+                            let path = entry.path();
+                            match std::fs::remove_file(&path) {
+                                Ok(_) => warn!(
+                                    "Removed orphaned \
                                          subtitle sidecar: {}",
-                                        path.display()
-                                    ),
-                                    Err(err) => error!(
-                                        "Failed to remove \
+                                    path.display()
+                                ),
+                                Err(err) => error!(
+                                    "Failed to remove \
                                          sidecar {}: {}",
-                                        path.display(),
-                                        err
-                                    ),
-                                }
+                                    path.display(),
+                                    err
+                                ),
                             }
                         }
                     }

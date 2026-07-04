@@ -243,10 +243,10 @@ impl LibraryScanner {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             for root in &completed_roots {
-                if let Some(path_str) = root.to_str() {
-                    if let Err(e) = db.update_watch_dir_last_scanned_at(path_str, now_ts).await {
-                        warn!("Failed to update last_scanned_at for {}: {}", path_str, e);
-                    }
+                if let Some(path_str) = root.to_str()
+                    && let Err(e) = db.update_watch_dir_last_scanned_at(path_str, now_ts).await
+                {
+                    warn!("Failed to update last_scanned_at for {}: {}", path_str, e);
                 }
             }
 

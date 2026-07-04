@@ -158,12 +158,12 @@ impl ConfigWizard {
         Self::write_config(config_path, &config)?;
 
         // Create user if requested
-        if let Some((username, password)) = admin_user {
-            if let Some(db) = db {
-                let password_hash = hash_password(&password)?;
-                db.create_user(&username, &password_hash).await?;
-                println!("✅ Admin user '{}' created", username);
-            }
+        if let Some((username, password)) = admin_user
+            && let Some(db) = db
+        {
+            let password_hash = hash_password(&password)?;
+            db.create_user(&username, &password_hash).await?;
+            println!("✅ Admin user '{}' created", username);
         }
 
         println!("\n✅ Configuration saved to {}", config_path.display());

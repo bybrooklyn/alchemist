@@ -128,24 +128,20 @@ impl Scanner {
             });
 
             for entry in walker.filter_map(|e| e.ok()) {
-                if entry.file_type().is_file() {
-                    if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-                        if self.extensions.contains(&ext.to_lowercase()) {
-                            debug!("Found media file: {:?}", entry.path());
-                            let mtime = entry
-                                .metadata()
-                                .map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH))
-                                .unwrap_or(SystemTime::UNIX_EPOCH);
-                            local_files.push(DiscoveredMedia {
-                                path: entry.path().to_path_buf(),
-                                mtime,
-                                source_root: resolve_source_root(
-                                    entry.path(),
-                                    source_roots.as_ref(),
-                                ),
-                            });
-                        }
-                    }
+                if entry.file_type().is_file()
+                    && let Some(ext) = entry.path().extension().and_then(|s| s.to_str())
+                    && self.extensions.contains(&ext.to_lowercase())
+                {
+                    debug!("Found media file: {:?}", entry.path());
+                    let mtime = entry
+                        .metadata()
+                        .map(|m| m.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+                    local_files.push(DiscoveredMedia {
+                        path: entry.path().to_path_buf(),
+                        mtime,
+                        source_root: resolve_source_root(entry.path(), source_roots.as_ref()),
+                    });
                 }
             }
             match files.lock() {
