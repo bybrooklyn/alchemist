@@ -282,7 +282,7 @@ export function JobDetailModal({
                                                     </div>
                                                     <div className="flex justify-between items-center text-xs">
                                                         <span className="text-helios-slate font-medium">Avg bitrate</span>
-                                                        <span className="text-helios-ink font-bold">{`${completedEncodeStats.avg_bitrate_kbps} kbps`}</span>
+                                                        <span className="text-helios-ink font-bold">{`${Math.round(completedEncodeStats.avg_bitrate_kbps)} kbps`}</span>
                                                     </div>
                                                     <div className="flex justify-between items-center text-xs">
                                                         <span className="text-helios-slate font-medium">VMAF</span>

@@ -50,6 +50,8 @@ export default function LibraryStep({
     const [browse, setBrowse] = useState<FsBrowseResponse | null>(null);
     const [browseError, setBrowseError] = useState("");
     const [browseLoading, setBrowseLoading] = useState(false);
+    const [addError, setAddError] = useState<string | null>(null);
+    const [addValidating, setAddValidating] = useState(false);
 
     const previewFailureMessage = (err: unknown) =>
         isApiError(err)
@@ -95,13 +97,48 @@ export default function LibraryStep({
         return () => window.clearTimeout(handle);
     }, [directories, fetchPreview, onPreviewErrorChange, onPreviewLoadingChange]);
 
-    const addDirectory = (path: string) => {
+    const addDirectory = async (path: string) => {
         const normalized = path.trim();
-        if (!normalized || directories.includes(normalized)) {
+        if (!normalized) {
             return;
+        }
+        if (directories.includes(normalized)) {
+            setAddError("That folder is already in the list.");
+            return;
+        }
+        // Validate the typed path against the server before adding it. Without this a
+        // typo'd folder is accepted silently and the first scan just finds nothing, with
+        // no hint why. The Browse picker only walks real folders, so this guards the
+        // manual-entry path. Reuses /api/fs/browse, which errors on a missing/unreadable
+        // directory.
+        setAddValidating(true);
+        setAddError(null);
+        try {
+            // /api/fs/browse answers 200 even for a missing path, reporting readable=false
+            // (with a warning) rather than throwing — so check the flag, not just for an
+            // error.
+            const data = await apiJson<FsBrowseResponse>(
+                `/api/fs/browse?path=${encodeURIComponent(normalized)}`,
+            );
+            if (!data.readable) {
+                setAddError(
+                    data.warnings[0] ?? `Folder not found or not readable: ${normalized}`,
+                );
+                return;
+            }
+        } catch (err) {
+            setAddError(
+                isApiError(err)
+                    ? `${normalized}: ${err.message}`
+                    : `Folder not found or not readable: ${normalized}`,
+            );
+            return;
+        } finally {
+            setAddValidating(false);
         }
         onDirectoriesChange([...directories, normalized]);
         onDirInputChange("");
+        setAddError(null);
     };
 
     const loadBrowse = useCallback(async (path?: string) => {
@@ -173,10 +210,13 @@ export default function LibraryStep({
                 <input
                     type="text"
                     value={dirInput}
-                    onChange={(e) => onDirInputChange(e.target.value)}
+                    onChange={(e) => {
+                        onDirInputChange(e.target.value);
+                        if (addError) setAddError(null);
+                    }}
                     onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                            addDirectory(dirInput);
+                            void addDirectory(dirInput);
                         }
                     }}
                     placeholder="/path/to/media"
@@ -191,13 +231,19 @@ export default function LibraryStep({
                 </button>
                 <button
                     type="button"
-                    onClick={() => addDirectory(dirInput)}
-                    disabled={dirInput.trim().length === 0}
+                    onClick={() => void addDirectory(dirInput)}
+                    disabled={dirInput.trim().length === 0 || addValidating}
                     className="rounded-lg bg-helios-solar px-4 py-2.5 text-sm font-semibold text-helios-main transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Add
+                    {addValidating ? "Checking…" : "Add"}
                 </button>
             </div>
+
+            {addError && (
+                <p role="alert" className="text-xs font-medium text-status-error">
+                    {addError}
+                </p>
+            )}
 
             {directoriesError && (
                 <p role="alert" className="text-xs font-medium text-status-error">
@@ -382,7 +428,7 @@ export default function LibraryStep({
                                 if (!currentBrowsePath) {
                                     return;
                                 }
-                                addDirectory(currentBrowsePath);
+                                void addDirectory(currentBrowsePath);
                                 handleBrowseClose();
                             }}
                             disabled={!currentBrowsePath}
