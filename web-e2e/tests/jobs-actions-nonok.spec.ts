@@ -72,7 +72,7 @@ test("single job delete failure is surfaced to the user", async ({ page }) => {
   await expect(page.getByTitle("/media/sample.mkv")).toBeVisible();
 
   await page.getByTitle("Actions").first().click();
-  await page.getByRole("button", { name: /^Delete$/ }).first().click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -105,10 +105,10 @@ test("active jobs hide delete and disable batch restart/delete", async ({ page }
   await expect(page.getByTitle("Delete")).toBeDisabled();
 
   await page.getByTitle("Actions").first().click();
-  const menu = page.locator("div.absolute.right-0.mt-2.w-44").first();
+  const menu = page.getByRole("menu");
   await expect(menu).toContainText("View details");
   await expect(menu).not.toContainText("Delete");
-  await expect(menu.getByRole("button", { name: "Stop / Cancel" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Stop / Cancel" })).toBeVisible();
 });
 
 test("log clear failure is surfaced to the user", async ({ page }) => {

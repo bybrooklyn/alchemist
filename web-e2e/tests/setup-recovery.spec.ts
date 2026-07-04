@@ -239,6 +239,18 @@ test("setup polls hardware until the review step can complete", async ({ page })
     });
   });
 
+  await page.route("**/api/fs/browse**", async (route) => {
+    // addDirectory validates the manual path via /api/fs/browse before
+    // adding it; without this mock the folder is rejected and no preview runs.
+    await fulfillJson(route, 200, {
+      path: "/srv/media",
+      readable: true,
+      breadcrumbs: [],
+      warnings: [],
+      entries: [],
+    });
+  });
+
   await page.goto("/setup");
   await page.getByRole("button", { name: "Get Started" }).click();
   await page.getByPlaceholder("admin").fill("playwright");
@@ -322,6 +334,18 @@ test("setup surfaces preview failures inline and blocks leaving the library step
   await page.route("**/api/fs/preview", async (route) => {
     await fulfillJson(route, 400, {
       error: { message: "Preview path is not readable by the server." },
+    });
+  });
+
+  await page.route("**/api/fs/browse**", async (route) => {
+    // addDirectory validates the manual path via /api/fs/browse before
+    // adding it; without this mock the folder is rejected and no preview runs.
+    await fulfillJson(route, 200, {
+      path: "/srv/media",
+      readable: true,
+      breadcrumbs: [],
+      warnings: [],
+      entries: [],
     });
   });
 
@@ -449,6 +473,18 @@ test("setup completes directly without an intermediate scan step", async ({ page
     });
   });
 
+  await page.route("**/api/fs/browse**", async (route) => {
+    // addDirectory validates the manual path via /api/fs/browse before
+    // adding it; without this mock the folder is rejected and no preview runs.
+    await fulfillJson(route, 200, {
+      path: "/srv/media",
+      readable: true,
+      breadcrumbs: [],
+      warnings: [],
+      entries: [],
+    });
+  });
+
   await page.goto("/setup");
   await page.getByRole("button", { name: "Get Started" }).click();
   await expect(page.getByPlaceholder("admin")).toBeVisible();
@@ -573,6 +609,18 @@ test("setup submits h264 as a valid output codec", async ({ page }) => {
       files_found: 0,
       files_added: 0,
       current_folder: null,
+    });
+  });
+
+  await page.route("**/api/fs/browse**", async (route) => {
+    // addDirectory validates the manual path via /api/fs/browse before
+    // adding it; without this mock the folder is rejected and no preview runs.
+    await fulfillJson(route, 200, {
+      path: "/srv/media",
+      readable: true,
+      breadcrumbs: [],
+      warnings: [],
+      entries: [],
     });
   });
 
