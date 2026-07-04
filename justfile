@@ -361,6 +361,8 @@ release-verify:
     cargo check --locked --all-targets --all-features
     @echo "── Rust tests ──"
     cargo test --locked --all-targets -- --test-threads=4
+    @echo "── Rust audit ──"
+    cargo audit
     @echo "── Actionlint ──"
     actionlint .github/workflows/*.yml
     @echo "── API contract ──"
