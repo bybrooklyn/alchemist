@@ -1,0 +1,14 @@
+# cargo-audit configuration.
+#
+# RUSTSEC-2023-0071 (Marvin timing sidechannel in `rsa`) has no fixed release.
+# `rsa` is NOT compiled into Alchemist: it is an optional dependency of
+# `sqlx-mysql`, which is itself an optional backend of `sqlx-macros-core`. The
+# app pins `sqlx` with `default-features = false` and enables only the SQLite
+# stack, so `cargo tree -i rsa` reports the crate is absent from the build
+# graph. It remains in `Cargo.lock` solely because Cargo records optional
+# dependencies of graph members even when their feature gate is off. Alchemist
+# never opens a MySQL connection and never exercises `rsa`, so the advisory is
+# not reachable. Re-evaluate if a fixed `rsa` release ships or if the MySQL
+# backend is ever enabled.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]
