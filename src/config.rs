@@ -519,10 +519,10 @@ fn normalize_notification_event(event: &str) -> Option<&'static str> {
 pub fn normalize_notification_events(events: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for event in events {
-        if let Some(value) = normalize_notification_event(event) {
-            if !normalized.iter().any(|candidate| candidate == value) {
-                normalized.push(value.to_string());
-            }
+        if let Some(value) = normalize_notification_event(event)
+            && !normalized.iter().any(|candidate| candidate == value)
+        {
+            normalized.push(value.to_string());
         }
     }
     normalized
@@ -1132,13 +1132,13 @@ impl Config {
             );
         }
 
-        if let Some(vmaf_min_score) = self.transcode.vmaf_min_score {
-            if !(0.0..=100.0).contains(&vmaf_min_score) {
-                anyhow::bail!(
-                    "vmaf_min_score must be between 0.0 and 100.0, got {}",
-                    vmaf_min_score
-                );
-            }
+        if let Some(vmaf_min_score) = self.transcode.vmaf_min_score
+            && !(0.0..=100.0).contains(&vmaf_min_score)
+        {
+            anyhow::bail!(
+                "vmaf_min_score must be between 0.0 and 100.0, got {}",
+                vmaf_min_score
+            );
         }
 
         Ok(())

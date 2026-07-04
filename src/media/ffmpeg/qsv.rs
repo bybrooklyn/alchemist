@@ -8,15 +8,15 @@ pub fn append_args(
     rate_control: Option<RateControl>,
     default_quality: u8,
 ) {
-    if let Some(hw) = hw_info {
-        if let Some(ref device_path) = hw.device_path {
-            args.extend([
-                "-init_hw_device".to_string(),
-                format!("qsv=qsv:{device_path}"),
-                "-filter_hw_device".to_string(),
-                "qsv".to_string(),
-            ]);
-        }
+    if let Some(hw) = hw_info
+        && let Some(ref device_path) = hw.device_path
+    {
+        args.extend([
+            "-init_hw_device".to_string(),
+            format!("qsv=qsv:{device_path}"),
+            "-filter_hw_device".to_string(),
+            "qsv".to_string(),
+        ]);
     }
 
     let quality = match rate_control {

@@ -7,10 +7,10 @@ pub fn append_args(
     hw_info: Option<&HardwareInfo>,
     rate_control: Option<&RateControl>,
 ) {
-    if let Some(hw) = hw_info {
-        if let Some(ref device_path) = hw.device_path {
-            args.extend(["-vaapi_device".to_string(), device_path.to_string()]);
-        }
+    if let Some(hw) = hw_info
+        && let Some(ref device_path) = hw.device_path
+    {
+        args.extend(["-vaapi_device".to_string(), device_path.to_string()]);
     }
 
     match encoder {

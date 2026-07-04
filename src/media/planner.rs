@@ -401,10 +401,10 @@ fn build_available_encoders(
 
     if let Some(hw) = hw_info {
         for backend in &hw.backends {
-            if let Some(encoder) = encoder_for_backend(backend.kind, backend.codec.as_str()) {
-                if seen.insert(encoder) {
-                    available.gpu.push(encoder);
-                }
+            if let Some(encoder) = encoder_for_backend(backend.kind, backend.codec.as_str())
+                && seen.insert(encoder)
+            {
+                available.gpu.push(encoder);
             }
         }
     }
@@ -511,13 +511,13 @@ fn select_encoder(
         return Some((encoder, None));
     }
 
-    if allow_fallback {
-        if let Some(encoder) = first_available(
+    if allow_fallback
+        && let Some(encoder) = first_available(
             &available_encoders.cpu,
             fallback_cpu_candidates(target_codec),
-        ) {
-            return Some((encoder, Some(codec_fallback(target_codec, encoder))));
-        }
+        )
+    {
+        return Some((encoder, Some(codec_fallback(target_codec, encoder))));
     }
 
     None
@@ -789,29 +789,27 @@ fn filter_audio_streams(
     let mut kept: Vec<usize> = streams
         .iter()
         .filter(|stream| {
-            if !rules.strip_audio_by_title.is_empty() {
-                if let Some(title) = &stream.title {
-                    let title_lower = title.to_lowercase();
-                    if rules
-                        .strip_audio_by_title
-                        .iter()
-                        .any(|keyword| title_lower.contains(&keyword.to_lowercase()))
-                    {
-                        return false;
-                    }
+            if !rules.strip_audio_by_title.is_empty()
+                && let Some(title) = &stream.title
+            {
+                let title_lower = title.to_lowercase();
+                if rules
+                    .strip_audio_by_title
+                    .iter()
+                    .any(|keyword| title_lower.contains(&keyword.to_lowercase()))
+                {
+                    return false;
                 }
             }
 
-            if !rules.keep_audio_languages.is_empty() {
-                if let Some(language) = &stream.language {
-                    if !rules
-                        .keep_audio_languages
-                        .iter()
-                        .any(|allowed| allowed.eq_ignore_ascii_case(language))
-                    {
-                        return false;
-                    }
-                }
+            if !rules.keep_audio_languages.is_empty()
+                && let Some(language) = &stream.language
+                && !rules
+                    .keep_audio_languages
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(language))
+            {
+                return false;
             }
 
             if rules.keep_only_default_audio

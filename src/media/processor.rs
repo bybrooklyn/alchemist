@@ -216,10 +216,10 @@ impl Agent {
                 Err(e) => error!("Failed to enqueue job for {:?}: {}", path, e),
             }
         }
-        if !buffer.is_empty() {
-            if let Err(e) = self.db.enqueue_jobs_batch(&buffer).await {
-                error!("Failed to enqueue scanned job batch: {}", e);
-            }
+        if !buffer.is_empty()
+            && let Err(e) = self.db.enqueue_jobs_batch(&buffer).await
+        {
+            error!("Failed to enqueue scanned job batch: {}", e);
         }
 
         // Notify via typed channel

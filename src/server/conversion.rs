@@ -721,17 +721,17 @@ pub(crate) async fn delete_conversion_job_handler(
         );
     };
 
-    if let Some(linked_job_id) = job.linked_job_id {
-        if let Ok(Some(linked_job)) = state.db.get_job_by_id(linked_job_id).await {
-            if linked_job.is_active() {
-                return api_error_response(
-                    StatusCode::CONFLICT,
-                    "CONVERSION_JOB_ACTIVE",
-                    "conversion job is still active",
-                );
-            }
-            let _ = state.db.delete_job(linked_job_id).await;
+    if let Some(linked_job_id) = job.linked_job_id
+        && let Ok(Some(linked_job)) = state.db.get_job_by_id(linked_job_id).await
+    {
+        if linked_job.is_active() {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "CONVERSION_JOB_ACTIVE",
+                "conversion job is still active",
+            );
         }
+        let _ = state.db.delete_job(linked_job_id).await;
     }
 
     if let Err(err) = remove_conversion_artifacts(&job).await {

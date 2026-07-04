@@ -170,16 +170,16 @@ impl Transcoder {
             ));
         }
 
-        if let Some(parent) = request.output.parent() {
-            if !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    error!("Failed to create output directory {:?}: {}", parent, e);
-                    AlchemistError::FFmpeg(format!(
-                        "Failed to create output directory {:?}: {}",
-                        parent, e
-                    ))
-                })?;
-            }
+        if let Some(parent) = request.output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                error!("Failed to create output directory {:?}: {}", parent, e);
+                AlchemistError::FFmpeg(format!(
+                    "Failed to create output directory {:?}: {}",
+                    parent, e
+                ))
+            })?;
         }
 
         let cmd = FFmpegCommandBuilder::new(
@@ -227,15 +227,15 @@ impl Transcoder {
         };
 
         for sidecar_output in request.plan.subtitles.sidecar_outputs() {
-            if let Some(parent) = sidecar_output.temp_path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        AlchemistError::FFmpeg(format!(
-                            "Failed to create subtitle output directory {:?}: {}",
-                            parent, e
-                        ))
-                    })?;
-                }
+            if let Some(parent) = sidecar_output.temp_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    AlchemistError::FFmpeg(format!(
+                        "Failed to create subtitle output directory {:?}: {}",
+                        parent, e
+                    ))
+                })?;
             }
         }
 
@@ -297,12 +297,11 @@ impl Transcoder {
                     e.into_inner()
                 }
             };
-            if pending.remove(&id) {
-                if let Ok(mut channels) = self.cancel_channels.lock() {
-                    if let Some(tx) = channels.remove(&id) {
-                        let _ = tx.send(());
-                    }
-                }
+            if pending.remove(&id)
+                && let Ok(mut channels) = self.cancel_channels.lock()
+                && let Some(tx) = channels.remove(&id)
+            {
+                let _ = tx.send(());
             }
         }
 
@@ -346,8 +345,8 @@ impl Transcoder {
                                 if let Some(observer) = observer.as_ref() {
                                     observer.on_log(line.clone()).await;
 
-                                    if let Some(total_duration) = total_duration {
-                                        if let Some(progress) = progress_state.ingest_line(&line) {
+                                    if let Some(total_duration) = total_duration
+                                        && let Some(progress) = progress_state.ingest_line(&line) {
                                             if !first_frame_logged {
                                                 first_frame_logged = true;
                                                 info!(
@@ -358,7 +357,6 @@ impl Transcoder {
                                             }
                                             observer.on_progress(progress, total_duration).await;
                                         }
-                                    }
                                 }
                             }
                             Ok(None) => break,

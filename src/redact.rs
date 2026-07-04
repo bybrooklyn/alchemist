@@ -81,39 +81,37 @@ fn redact_key_values(input: &str) -> String {
 
     while i < bytes.len() {
         let boundary = i == 0 || !is_key_char(bytes[i - 1]);
-        if boundary {
-            if let Some(key) = SENSITIVE_KEYS
+        if boundary
+            && let Some(key) = SENSITIVE_KEYS
                 .iter()
                 .find(|key| lower_bytes[i..].starts_with(key.as_bytes()))
-            {
-                let after_key = i + key.len();
-                // The match must end at a word boundary so `token` does not match
-                // inside `tokenizer`.
-                let ends_cleanly = after_key >= bytes.len() || !is_key_char(bytes[after_key]);
-                if ends_cleanly {
-                    let mask_through_spaces = matches!(*key, "authorization" | "bearer");
-                    let mut j = after_key;
-                    while j < bytes.len() && bytes[j] == b' ' {
+        {
+            let after_key = i + key.len();
+            // The match must end at a word boundary so `token` does not match
+            // inside `tokenizer`.
+            let ends_cleanly = after_key >= bytes.len() || !is_key_char(bytes[after_key]);
+            if ends_cleanly {
+                let mask_through_spaces = matches!(*key, "authorization" | "bearer");
+                let mut j = after_key;
+                while j < bytes.len() && bytes[j] == b' ' {
+                    j += 1;
+                }
+                if j < bytes.len() && (bytes[j] == b'=' || bytes[j] == b':') {
+                    j += 1;
+                    while j < bytes.len()
+                        && (bytes[j] == b' ' || bytes[j] == b'"' || bytes[j] == b'\'')
+                    {
                         j += 1;
                     }
-                    if j < bytes.len() && (bytes[j] == b'=' || bytes[j] == b':') {
+                    let value_start = j;
+                    while j < bytes.len() && !is_value_delimiter(bytes[j], mask_through_spaces) {
                         j += 1;
-                        while j < bytes.len()
-                            && (bytes[j] == b' ' || bytes[j] == b'"' || bytes[j] == b'\'')
-                        {
-                            j += 1;
-                        }
-                        let value_start = j;
-                        while j < bytes.len() && !is_value_delimiter(bytes[j], mask_through_spaces)
-                        {
-                            j += 1;
-                        }
-                        if j > value_start {
-                            result.push_str(&input[i..value_start]);
-                            result.push_str(MASK);
-                            i = j;
-                            continue;
-                        }
+                    }
+                    if j > value_start {
+                        result.push_str(&input[i..value_start]);
+                        result.push_str(MASK);
+                        i = j;
+                        continue;
                     }
                 }
             }
@@ -136,13 +134,12 @@ fn redact_webhook_urls(input: &str) -> String {
             let trimmed = chunk.trim_end();
             let trailing = &chunk[trimmed.len()..];
             let lower = trimmed.to_ascii_lowercase();
-            if lower.contains("discord.com/api/webhooks/")
+            if (lower.contains("discord.com/api/webhooks/")
                 || lower.contains("discordapp.com/api/webhooks/")
-                || lower.contains("hooks.slack.com/services/")
+                || lower.contains("hooks.slack.com/services/"))
+                && let Some(idx) = trimmed.rfind('/')
             {
-                if let Some(idx) = trimmed.rfind('/') {
-                    return format!("{}/{}{}", &trimmed[..idx], MASK, trailing);
-                }
+                return format!("{}/{}{}", &trimmed[..idx], MASK, trailing);
             }
             chunk.to_string()
         })

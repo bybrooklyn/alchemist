@@ -80,14 +80,14 @@ async fn purge_resume_sessions_for_jobs(state: &AppState, ids: &[i64]) {
         }
 
         let temp_dir = PathBuf::from(&session.temp_dir);
-        if temp_dir.exists() {
-            if let Err(err) = tokio::fs::remove_dir_all(&temp_dir).await {
-                tracing::warn!(
-                    job_id = session.job_id,
-                    path = %temp_dir.display(),
-                    "Failed to remove resume temp dir: {err}"
-                );
-            }
+        if temp_dir.exists()
+            && let Err(err) = tokio::fs::remove_dir_all(&temp_dir).await
+        {
+            tracing::warn!(
+                job_id = session.job_id,
+                path = %temp_dir.display(),
+                "Failed to remove resume temp dir: {err}"
+            );
         }
     }
 }
@@ -160,11 +160,11 @@ pub(crate) async fn enqueue_job_from_submitted_path(
 
     let mut is_allowed = false;
     for root in allowed_roots {
-        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await {
-            if canonical_path.starts_with(&canonical_root) {
-                is_allowed = true;
-                break;
-            }
+        if let Ok(canonical_root) = tokio::fs::canonicalize(&root).await
+            && canonical_path.starts_with(&canonical_root)
+        {
+            is_allowed = true;
+            break;
         }
     }
 
@@ -734,10 +734,11 @@ fn group_encode_attempts_by_run(attempts: &[crate::db::EncodeAttempt]) -> Vec<En
     let mut last_attempt_number: Option<i32> = None;
 
     for attempt in attempts {
-        if let Some(previous_attempt_number) = last_attempt_number {
-            if attempt.attempt_number <= previous_attempt_number && !current_group.is_empty() {
-                grouped_attempts.push(std::mem::take(&mut current_group));
-            }
+        if let Some(previous_attempt_number) = last_attempt_number
+            && attempt.attempt_number <= previous_attempt_number
+            && !current_group.is_empty()
+        {
+            grouped_attempts.push(std::mem::take(&mut current_group));
         }
 
         current_group.push(attempt.clone());

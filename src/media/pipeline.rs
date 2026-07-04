@@ -821,13 +821,12 @@ impl Pipeline {
         let concat_manifest_path = concat_manifest_path_for(&temp_dir);
         let existing_session = self.db.get_resume_session(job.id).await?;
 
-        if let Some(session) = &existing_session {
-            if session.strategy != RESUME_STRATEGY_SEGMENT_V1
+        if let Some(session) = &existing_session
+            && (session.strategy != RESUME_STRATEGY_SEGMENT_V1
                 || session.plan_hash != plan_hash
-                || session.mtime_hash != mtime_hash
-            {
-                self.purge_resume_session_state(job.id).await?;
-            }
+                || session.mtime_hash != mtime_hash)
+        {
+            self.purge_resume_session_state(job.id).await?;
         }
 
         tokio::fs::create_dir_all(&temp_dir).await?;
@@ -1574,15 +1573,15 @@ impl Pipeline {
             return Ok(());
         }
 
-        if temp_output_path.exists() {
-            if let Err(err) = std::fs::remove_file(&temp_output_path) {
-                tracing::warn!(
-                    "Job {}: Failed to remove stale temp output {:?}: {}",
-                    job.id,
-                    temp_output_path,
-                    err
-                );
-            }
+        if temp_output_path.exists()
+            && let Err(err) = std::fs::remove_file(&temp_output_path)
+        {
+            tracing::warn!(
+                "Job {}: Failed to remove stale temp output {:?}: {}",
+                job.id,
+                temp_output_path,
+                err
+            );
         }
 
         let file_name = file_path.file_name().unwrap_or_default();
@@ -1760,15 +1759,15 @@ impl Pipeline {
         }
 
         for sidecar_output in plan.subtitles.sidecar_outputs() {
-            if sidecar_output.temp_path.exists() {
-                if let Err(err) = std::fs::remove_file(&sidecar_output.temp_path) {
-                    tracing::warn!(
-                        "Job {}: Failed to remove stale subtitle temp output {:?}: {}",
-                        job.id,
-                        sidecar_output.temp_path,
-                        err
-                    );
-                }
+            if sidecar_output.temp_path.exists()
+                && let Err(err) = std::fs::remove_file(&sidecar_output.temp_path)
+            {
+                tracing::warn!(
+                    "Job {}: Failed to remove stale subtitle temp output {:?}: {}",
+                    job.id,
+                    sidecar_output.temp_path,
+                    err
+                );
             }
         }
 
@@ -1933,13 +1932,13 @@ impl Pipeline {
                         .await;
                         // Discard the partial hardware output and any resume state
                         // so the CPU attempt starts clean.
-                        if temp_output_path.exists() {
-                            if let Err(err) = tokio::fs::remove_file(&temp_output_path).await {
-                                tracing::warn!(
-                                    job_id = job.id,
-                                    "Failed to remove partial hardware output before CPU fallback: {err}"
-                                );
-                            }
+                        if temp_output_path.exists()
+                            && let Err(err) = tokio::fs::remove_file(&temp_output_path).await
+                        {
+                            tracing::warn!(
+                                job_id = job.id,
+                                "Failed to remove partial hardware output before CPU fallback: {err}"
+                            );
                         }
                         if let Err(err) = self.purge_resume_session_state(job.id).await {
                             tracing::warn!(
@@ -2035,13 +2034,12 @@ impl Pipeline {
                     .ok()
                     .flatten()
                     .is_some()
+                    && let Err(err) = self.purge_resume_session_state(job.id).await
                 {
-                    if let Err(err) = self.purge_resume_session_state(job.id).await {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to purge resume session after successful finalize: {err}"
-                        );
-                    }
+                    tracing::warn!(
+                        job_id = job.id,
+                        "Failed to purge resume session after successful finalize: {err}"
+                    );
                 }
 
                 Ok(())
@@ -2296,17 +2294,15 @@ impl Pipeline {
                     vmaf_score = score.vmaf;
                     if let Some(s) = vmaf_score {
                         tracing::info!("[Job {}] VMAF Score: {:.2}", job_id, s);
-                        if let Some(threshold) = config.transcode.vmaf_min_score {
-                            if s < threshold {
-                                let _ = std::fs::remove_file(context.temp_output_path);
-                                cleanup_temp_subtitle_output(job_id, context.plan).await;
-                                return Err(crate::error::AlchemistError::QualityCheckFailed(
-                                    format!(
-                                        "VMAF score {:.1} fell below the minimum threshold of {:.1}. The original file has been preserved.",
-                                        s, threshold
-                                    ),
-                                ));
-                            }
+                        if let Some(threshold) = config.transcode.vmaf_min_score
+                            && s < threshold
+                        {
+                            let _ = std::fs::remove_file(context.temp_output_path);
+                            cleanup_temp_subtitle_output(job_id, context.plan).await;
+                            return Err(crate::error::AlchemistError::QualityCheckFailed(format!(
+                                "VMAF score {:.1} fell below the minimum threshold of {:.1}. The original file has been preserved.",
+                                s, threshold
+                            )));
                         }
                         if s < config.quality.min_vmaf_score && config.quality.revert_on_low_quality
                         {
@@ -2476,32 +2472,32 @@ impl Pipeline {
         self.verify_chapter_preservation(job_id, context.metadata, context.output_path)
             .await;
 
-        if let Ok(file_settings) = self.db.get_file_settings().await {
-            if file_settings.delete_source {
-                // Safety: verify the promoted output is intact before destroying the source.
-                // This prevents data loss if the filesystem silently corrupted the output
-                // during rename (e.g., stale NFS/SMB mount, full disk).
-                match std::fs::metadata(context.output_path) {
-                    Ok(m) if m.len() > 0 => {
-                        if let Err(e) = std::fs::remove_file(input_path) {
-                            tracing::warn!("Failed to delete source {:?}: {}", input_path, e);
-                        }
+        if let Ok(file_settings) = self.db.get_file_settings().await
+            && file_settings.delete_source
+        {
+            // Safety: verify the promoted output is intact before destroying the source.
+            // This prevents data loss if the filesystem silently corrupted the output
+            // during rename (e.g., stale NFS/SMB mount, full disk).
+            match std::fs::metadata(context.output_path) {
+                Ok(m) if m.len() > 0 => {
+                    if let Err(e) = std::fs::remove_file(input_path) {
+                        tracing::warn!("Failed to delete source {:?}: {}", input_path, e);
                     }
-                    Ok(_) => {
-                        tracing::error!(
-                            "Job {}: Output file {:?} is empty after promotion — source preserved to prevent data loss",
-                            job_id,
-                            context.output_path
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Job {}: Cannot verify output {:?} after promotion ({}). Source preserved to prevent data loss",
-                            job_id,
-                            context.output_path,
-                            e
-                        );
-                    }
+                }
+                Ok(_) => {
+                    tracing::error!(
+                        "Job {}: Output file {:?} is empty after promotion — source preserved to prevent data loss",
+                        job_id,
+                        context.output_path
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Job {}: Cannot verify output {:?} after promotion ({}). Source preserved to prevent data loss",
+                        job_id,
+                        context.output_path,
+                        e
+                    );
                 }
             }
         }
@@ -2526,15 +2522,15 @@ impl Pipeline {
             self.record_job_decision(job_id, "reject", reason).await;
         }
 
-        if context.temp_output_path.exists() {
-            if let Err(cleanup_err) = tokio::fs::remove_file(context.temp_output_path).await {
-                tracing::warn!(
-                    "Job {}: Failed to remove temp output after finalize error {:?}: {}",
-                    job_id,
-                    context.temp_output_path,
-                    cleanup_err
-                );
-            }
+        if context.temp_output_path.exists()
+            && let Err(cleanup_err) = tokio::fs::remove_file(context.temp_output_path).await
+        {
+            tracing::warn!(
+                "Job {}: Failed to remove temp output after finalize error {:?}: {}",
+                job_id,
+                context.temp_output_path,
+                cleanup_err
+            );
         }
         cleanup_temp_subtitle_output(job_id, context.plan).await;
 
@@ -2630,15 +2626,15 @@ struct TelemetryEventParams<'a> {
 
 async fn cleanup_temp_subtitle_output(job_id: i64, plan: &TranscodePlan) {
     for sidecar_output in plan.subtitles.sidecar_outputs() {
-        if sidecar_output.temp_path.exists() {
-            if let Err(err) = tokio::fs::remove_file(&sidecar_output.temp_path).await {
-                tracing::warn!(
-                    "Job {}: Failed to remove subtitle temp output {:?}: {}",
-                    job_id,
-                    sidecar_output.temp_path,
-                    err
-                );
-            }
+        if sidecar_output.temp_path.exists()
+            && let Err(err) = tokio::fs::remove_file(&sidecar_output.temp_path).await
+        {
+            tracing::warn!(
+                "Job {}: Failed to remove subtitle temp output {:?}: {}",
+                job_id,
+                sidecar_output.temp_path,
+                err
+            );
         }
     }
 }

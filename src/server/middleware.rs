@@ -84,10 +84,10 @@ pub(crate) async fn request_context_middleware(request: Request, next: Next) -> 
     };
 
     let mut response = API_REQUEST_CONTEXT.scope(context, next.run(request)).await;
-    if !response.headers().contains_key("x-request-id") {
-        if let Ok(value) = HeaderValue::from_str(&request_id) {
-            response.headers_mut().insert("x-request-id", value);
-        }
+    if !response.headers().contains_key("x-request-id")
+        && let Ok(value) = HeaderValue::from_str(&request_id)
+    {
+        response.headers_mut().insert("x-request-id", value);
     }
     response
 }
@@ -274,17 +274,18 @@ fn request_is_lan(req: &Request, trusted_proxies: &[IpAddr]) -> bool {
 
     // If resolved IP differs from direct peer, forwarded headers were used.
     // Warn operators so misconfigured proxies surface in logs.
-    if let (Some(peer), Some(resolved_ip)) = (direct_peer, resolved) {
-        if peer != resolved_ip && is_lan_ip(resolved_ip) {
-            tracing::warn!(
-                peer_ip = %peer,
-                resolved_ip = %resolved_ip,
-                "Setup gate: access permitted via forwarded headers. \
-                 Verify your reverse proxy is forwarding client IPs correctly \
-                 (X-Forwarded-For / X-Real-IP). Misconfigured proxies may \
-                 expose setup to public traffic."
-            );
-        }
+    if let (Some(peer), Some(resolved_ip)) = (direct_peer, resolved)
+        && peer != resolved_ip
+        && is_lan_ip(resolved_ip)
+    {
+        tracing::warn!(
+            peer_ip = %peer,
+            resolved_ip = %resolved_ip,
+            "Setup gate: access permitted via forwarded headers. \
+             Verify your reverse proxy is forwarding client IPs correctly \
+             (X-Forwarded-For / X-Real-IP). Misconfigured proxies may \
+             expose setup to public traffic."
+        );
     }
 
     resolved.is_some_and(is_lan_ip)
@@ -448,24 +449,21 @@ pub(crate) fn resolved_client_ip(
     // TCP peer is a trusted reverse proxy. When trusted_proxies is non-empty,
     // only those exact IPs (plus loopback) are trusted. Otherwise, fall back
     // to trusting all RFC-1918 private ranges (legacy behaviour).
-    if let Some(peer) = peer_ip {
-        if is_trusted_peer(peer, trusted_proxies) {
-            if let Some(xff) = headers.get("X-Forwarded-For") {
-                if let Ok(xff_str) = xff.to_str() {
-                    if let Some(ip_str) = xff_str.split(',').next() {
-                        if let Ok(ip) = ip_str.trim().parse() {
-                            return Some(normalize_ip(ip));
-                        }
-                    }
-                }
-            }
-            if let Some(xri) = headers.get("X-Real-IP") {
-                if let Ok(xri_str) = xri.to_str() {
-                    if let Ok(ip) = xri_str.trim().parse() {
-                        return Some(normalize_ip(ip));
-                    }
-                }
-            }
+    if let Some(peer) = peer_ip
+        && is_trusted_peer(peer, trusted_proxies)
+    {
+        if let Some(xff) = headers.get("X-Forwarded-For")
+            && let Ok(xff_str) = xff.to_str()
+            && let Some(ip_str) = xff_str.split(',').next()
+            && let Ok(ip) = ip_str.trim().parse()
+        {
+            return Some(normalize_ip(ip));
+        }
+        if let Some(xri) = headers.get("X-Real-IP")
+            && let Ok(xri_str) = xri.to_str()
+            && let Ok(ip) = xri_str.trim().parse()
+        {
+            return Some(normalize_ip(ip));
         }
     }
 

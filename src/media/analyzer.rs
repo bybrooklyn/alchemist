@@ -726,10 +726,10 @@ fn subtitle_codec_is_burnable(codec_name: &str) -> bool {
 }
 
 fn infer_bit_depth(stream: &Stream) -> Option<u8> {
-    if let Some(ref pix_fmt) = stream.pix_fmt {
-        if let Some(depth) = bit_depth_from_pix_fmt(pix_fmt) {
-            return Some(depth);
-        }
+    if let Some(ref pix_fmt) = stream.pix_fmt
+        && let Some(depth) = bit_depth_from_pix_fmt(pix_fmt)
+    {
+        return Some(depth);
     }
 
     stream

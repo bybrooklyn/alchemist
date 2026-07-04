@@ -325,15 +325,15 @@ pub fn preflight_update_environment(asset_size: u64) -> Result<()> {
     const FLOOR_BYTES: u64 = 512 * 1024 * 1024;
     let required = asset_size.saturating_mul(4).max(FLOOR_BYTES);
     let temp = crate::runtime::temp_dir();
-    if let Some(available) = crate::system::disk_space::available_bytes_for_path(&temp) {
-        if available < required {
-            return Err(anyhow!(
-                "not enough free disk space to apply the update: {:.1} GiB available at {}, need ~{:.1} GiB",
-                crate::system::disk_space::as_gib(available),
-                temp.display(),
-                crate::system::disk_space::as_gib(required),
-            ));
-        }
+    if let Some(available) = crate::system::disk_space::available_bytes_for_path(&temp)
+        && available < required
+    {
+        return Err(anyhow!(
+            "not enough free disk space to apply the update: {:.1} GiB available at {}, need ~{:.1} GiB",
+            crate::system::disk_space::as_gib(available),
+            temp.display(),
+            crate::system::disk_space::as_gib(required),
+        ));
     }
 
     // For in-place binary updates, confirm the install directory is writable now

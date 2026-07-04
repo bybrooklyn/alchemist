@@ -1289,20 +1289,20 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
     let mut detection_notes = Vec::new();
     let mut probe_log = HardwareProbeLog::default();
     let parsed_preferred_vendor = preferred_vendor.as_deref().and_then(parse_preferred_vendor);
-    if let Some(preferred_vendor) = preferred_vendor.as_deref() {
-        if parsed_preferred_vendor.is_none() {
-            warn!(
-                "Unknown preferred vendor '{}'. Falling back to auto detection.",
+    if let Some(preferred_vendor) = preferred_vendor.as_deref()
+        && parsed_preferred_vendor.is_none()
+    {
+        warn!(
+            "Unknown preferred vendor '{}'. Falling back to auto detection.",
+            preferred_vendor
+        );
+        append_detection_note(
+            &mut detection_notes,
+            format!(
+                "Unknown preferred vendor '{}' — falling back to auto detection",
                 preferred_vendor
-            );
-            append_detection_note(
-                &mut detection_notes,
-                format!(
-                    "Unknown preferred vendor '{}' — falling back to auto detection",
-                    preferred_vendor
-                ),
-            );
-        }
+            ),
+        );
     }
 
     if matches!(parsed_preferred_vendor, Some(Vendor::Cpu)) && !allow_cpu_fallback {
@@ -1314,19 +1314,17 @@ fn detect_hardware_with_preference_and_runner_inner<R: CommandRunner + ?Sized>(
     let successful_sets = build_successful_candidate_sets(&probe_results);
 
     if let Some(preferred_vendor) = parsed_preferred_vendor.filter(|vendor| *vendor != Vendor::Cpu)
-    {
-        if !successful_sets
+        && !successful_sets
             .iter()
             .any(|set| set.vendor == preferred_vendor)
-        {
-            append_detection_note(
-                &mut detection_notes,
-                format!(
-                    "Preferred vendor '{}' had no successful probes. Falling back to auto detection.",
-                    preferred_vendor.short_name()
-                ),
-            );
-        }
+    {
+        append_detection_note(
+            &mut detection_notes,
+            format!(
+                "Preferred vendor '{}' had no successful probes. Falling back to auto detection.",
+                preferred_vendor.short_name()
+            ),
+        );
     }
 
     for vendor in [Vendor::Apple, Vendor::Nvidia, Vendor::Intel, Vendor::Amd] {

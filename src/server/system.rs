@@ -92,10 +92,10 @@ struct IntelligenceRecommendation {
 
 pub(crate) async fn system_resources_handler(State(state): State<Arc<AppState>>) -> Response {
     let mut cache = state.resources_cache.lock().await;
-    if let Some((value, cached_at)) = cache.as_ref() {
-        if cached_at.elapsed() < Duration::from_millis(500) {
-            return axum::Json(value.clone()).into_response();
-        }
+    if let Some((value, cached_at)) = cache.as_ref()
+        && cached_at.elapsed() < Duration::from_millis(500)
+    {
+        return axum::Json(value.clone()).into_response();
     }
 
     let (cpu_percent, memory_used_mb, memory_total_mb, memory_percent, cpu_count) = {
@@ -229,10 +229,10 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
 
     {
         let guard = state.library_intelligence_cache.lock().await;
-        if let Some((payload, cached_at)) = guard.as_ref() {
-            if cached_at.elapsed() < INTELLIGENCE_CACHE_TTL {
-                return axum::Json(payload.clone()).into_response();
-            }
+        if let Some((payload, cached_at)) = guard.as_ref()
+            && cached_at.elapsed() < INTELLIGENCE_CACHE_TTL
+        {
+            return axum::Json(payload.clone()).into_response();
         }
     }
 
@@ -348,17 +348,16 @@ pub(crate) async fn library_intelligence_handler(State(state): State<Arc<AppStat
                 profile.as_ref(),
             )
             .await
+            && matches!(plan.decision, TranscodeDecision::Remux { .. })
         {
-            if matches!(plan.decision, TranscodeDecision::Remux { .. }) {
-                recommendation_counts.remux_only_candidate += 1;
-                recommendations.push(IntelligenceRecommendation {
+            recommendation_counts.remux_only_candidate += 1;
+            recommendations.push(IntelligenceRecommendation {
                     recommendation_type: "remux_only_candidate".to_string(),
                     title: "Remux-only opportunity".to_string(),
                     summary: "This file already matches the target video codec and looks like a container-normalization candidate instead of a full re-encode.".to_string(),
                     path: job.input_path.clone(),
                     suggested_action: "Queue a remux to normalize the container without re-encoding the video stream.".to_string(),
                 });
-            }
         }
 
         if analysis.metadata.audio_is_heavy {
@@ -459,15 +458,14 @@ struct SnapshotCleanup {
 
 impl Drop for SnapshotCleanup {
     fn drop(&mut self) {
-        if self.path.exists() {
-            if let Err(err) = std::fs::remove_file(&self.path) {
-                if err.kind() != ErrorKind::NotFound {
-                    tracing::warn!(
-                        path = %self.path.display(),
-                        "Failed to remove backup snapshot during drop cleanup: {err}"
-                    );
-                }
-            }
+        if self.path.exists()
+            && let Err(err) = std::fs::remove_file(&self.path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %self.path.display(),
+                "Failed to remove backup snapshot during drop cleanup: {err}"
+            );
         }
     }
 }
@@ -747,21 +745,20 @@ fn query_gpu_utilization() -> (Option<f32>, Option<f32>) {
             "--format=csv,noheader,nounits",
         ],
         Duration::from_secs(2),
-    ) {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Format: "45, 2048, 8192" (utilization %, memory used MB, memory total MB)
-            let parts: Vec<&str> = stdout.trim().split(',').map(|s| s.trim()).collect();
-            if parts.len() >= 3 {
-                let util = parts[0].parse::<f32>().ok();
-                let mem_used = parts[1].parse::<f32>().ok();
-                let mem_total = parts[2].parse::<f32>().ok();
-                let mem_percent = match (mem_used, mem_total) {
-                    (Some(used), Some(total)) if total > 0.0 => Some((used / total) * 100.0),
-                    _ => None,
-                };
-                return (util, mem_percent);
-            }
+    ) && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Format: "45, 2048, 8192" (utilization %, memory used MB, memory total MB)
+        let parts: Vec<&str> = stdout.trim().split(',').map(|s| s.trim()).collect();
+        if parts.len() >= 3 {
+            let util = parts[0].parse::<f32>().ok();
+            let mem_used = parts[1].parse::<f32>().ok();
+            let mem_total = parts[2].parse::<f32>().ok();
+            let mem_percent = match (mem_used, mem_total) {
+                (Some(used), Some(total)) if total > 0.0 => Some((used / total) * 100.0),
+                _ => None,
+            };
+            return (util, mem_percent);
         }
     }
     (None, None)
