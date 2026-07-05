@@ -290,14 +290,20 @@ impl Transcoder {
                     e.into_inner().insert(id, kill_tx);
                 }
             }
-            let mut pending = match self.pending_cancels.lock() {
-                Ok(pending) => pending,
-                Err(e) => {
-                    error!("Pending cancels lock poisoned, recovering: {}", e);
-                    e.into_inner()
-                }
+            // Enforce a single global lock order: never hold pending_cancels and
+            // cancel_channels at the same time. Resolve the pending flag and drop
+            // the pending_cancels guard before touching cancel_channels.
+            let was_pending = {
+                let mut pending = match self.pending_cancels.lock() {
+                    Ok(pending) => pending,
+                    Err(e) => {
+                        error!("Pending cancels lock poisoned, recovering: {}", e);
+                        e.into_inner()
+                    }
+                };
+                pending.remove(&id)
             };
-            if pending.remove(&id)
+            if was_pending
                 && let Ok(mut channels) = self.cancel_channels.lock()
                 && let Some(tx) = channels.remove(&id)
             {
