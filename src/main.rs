@@ -301,8 +301,8 @@ fn should_reload_config_for_event(event: &notify::Event, config_path: &Path) -> 
     )
 }
 
-fn orphaned_temp_output_path(output_path: &str) -> PathBuf {
-    PathBuf::from(format!("{output_path}.alchemist.tmp"))
+fn orphaned_temp_output_path(output_path: &str, job_id: i64) -> PathBuf {
+    PathBuf::from(format!("{output_path}.alchemist.{job_id}.tmp"))
 }
 
 fn load_startup_config(
@@ -522,7 +522,7 @@ async fn run() -> Result<()> {
                 if has_resume_session {
                     continue;
                 }
-                let temp_path = orphaned_temp_output_path(&job.output_path);
+                let temp_path = orphaned_temp_output_path(&job.output_path, job.id);
                 if std::fs::metadata(&temp_path).is_ok() {
                     match std::fs::remove_file(&temp_path) {
                         Ok(_) => warn!("Removed orphaned temp file: {}", temp_path.display()),
@@ -544,7 +544,7 @@ async fn run() -> Result<()> {
     match db.get_jobs_by_status(db::JobState::Cancelled).await {
         Ok(cancelled_jobs) => {
             for job in cancelled_jobs {
-                let temp_path = orphaned_temp_output_path(&job.output_path);
+                let temp_path = orphaned_temp_output_path(&job.output_path, job.id);
                 if std::fs::metadata(&temp_path).is_ok() {
                     match std::fs::remove_file(&temp_path) {
                         Ok(_) => warn!(
