@@ -95,6 +95,7 @@ where
     let state = Arc::new(AppState {
         db: db.clone(),
         config: config.clone(),
+        config_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         agent,
         transcoder,
         scheduler: scheduler.handle(),
