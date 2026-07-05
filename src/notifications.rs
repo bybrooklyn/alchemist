@@ -181,6 +181,40 @@ impl NotificationManager {
         }
     }
 
+    /// Resolve `host:port` and return an IP that is permitted to be contacted
+    /// under the current `allow_local_notifications` setting. Enforces the SSRF
+    /// guard: loopback/private/link-local/metadata destinations are rejected
+    /// (and `localhost` refused before resolution) unless local notifications
+    /// are explicitly allowed. Shared by the HTTP client builder and the SMTP
+    /// email path so every outbound target is validated the same way.
+    async fn resolve_allowed_ip(&self, host: &str, port: u16) -> NotificationResult<IpAddr> {
+        let allow_local = self
+            .config
+            .read()
+            .await
+            .notifications
+            .allow_local_notifications;
+
+        if !allow_local && host.eq_ignore_ascii_case("localhost") {
+            return Err("localhost is not allowed as a notification endpoint".into());
+        }
+
+        let addr = format!("{}:{}", host, port);
+        let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
+
+        if allow_local {
+            ips.into_iter()
+                .map(|a| a.ip())
+                .next()
+                .ok_or_else(|| "no IP address found for notification endpoint".into())
+        } else {
+            ips.into_iter()
+                .map(|a| a.ip())
+                .find(|ip| !is_private_ip(*ip))
+                .ok_or_else(|| "no public IP address found for notification endpoint".into())
+        }
+    }
+
     /// Build an HTTP client with SSRF protections: DNS resolution timeout,
     /// private-IP blocking (unless allow_local_notifications), no redirects,
     /// and a 10-second request timeout.
@@ -192,31 +226,7 @@ impl NotificationManager {
                 .ok_or("notification endpoint host is missing")?;
             let port = url.port_or_known_default().ok_or("invalid port")?;
 
-            let allow_local = self
-                .config
-                .read()
-                .await
-                .notifications
-                .allow_local_notifications;
-
-            if !allow_local && host.eq_ignore_ascii_case("localhost") {
-                return Err("localhost is not allowed as a notification endpoint".into());
-            }
-
-            let addr = format!("{}:{}", host, port);
-            let ips = tokio::time::timeout(Duration::from_secs(3), lookup_host(&addr)).await??;
-
-            let target_ip = if allow_local {
-                ips.into_iter()
-                    .map(|a| a.ip())
-                    .next()
-                    .ok_or("no IP address found for notification endpoint")?
-            } else {
-                ips.into_iter()
-                    .map(|a| a.ip())
-                    .find(|ip| !is_private_ip(*ip))
-                    .ok_or("no public IP address found for notification endpoint")?
-            };
+            let target_ip = self.resolve_allowed_ip(host, port).await?;
 
             Ok(Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -900,6 +910,13 @@ impl NotificationManager {
         failure_explanation: Option<&Explanation>,
     ) -> NotificationResult<()> {
         let config = parse_target_config::<EmailConfig>(target)?;
+
+        // SMTP targets bypass build_safe_client, so apply the same SSRF /
+        // allow_local guard to the user-supplied smtp_host:smtp_port before
+        // connecting.
+        self.resolve_allowed_ip(&config.smtp_host, config.smtp_port)
+            .await?;
+
         let message_text = self.message_for_event(event, decision_explanation, failure_explanation);
 
         let from: Mailbox = config.from_address.parse()?;
@@ -1038,6 +1055,12 @@ impl NotificationManager {
             }
             "email" => {
                 let config = parse_target_config::<EmailConfig>(target)?;
+
+                // SMTP targets bypass build_safe_client, so apply the same SSRF
+                // / allow_local guard to smtp_host:smtp_port before connecting.
+                self.resolve_allowed_ip(&config.smtp_host, config.smtp_port)
+                    .await?;
+
                 let from: Mailbox = config.from_address.parse()?;
                 let mut builder = Message::builder()
                     .from(from)
