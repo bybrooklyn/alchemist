@@ -241,6 +241,7 @@ impl Transcoder {
 
         let mut cmd = tokio::process::Command::new("ffmpeg");
         cmd.args(&args);
+        cmd.kill_on_drop(true);
         self.run_ffmpeg_command(cmd, request.job_id, request.observer, None)
             .await
     }

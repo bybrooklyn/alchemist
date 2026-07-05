@@ -176,6 +176,9 @@ impl<'a> FFmpegCommandBuilder<'a> {
         let args = self.build_args()?;
         let mut cmd = tokio::process::Command::new("ffmpeg");
         cmd.args(&args);
+        // Reap the ffmpeg child if the future driving it is dropped, so a
+        // cancelled/panicked task never leaves an orphaned encoder running.
+        cmd.kill_on_drop(true);
         Ok(cmd)
     }
 
