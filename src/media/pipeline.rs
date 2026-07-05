@@ -2218,10 +2218,50 @@ impl Pipeline {
 
     fn promote_temp_artifact(&self, temp_path: &Path, final_path: &Path) -> Result<()> {
         if cfg!(windows) && final_path.exists() {
-            std::fs::remove_file(final_path)?;
+            // Windows `rename` cannot atomically replace an existing file, so the
+            // previous approach (`remove_file` then `rename`) left a window where
+            // the destination was already gone — a crash there would lose the
+            // user's original file. Instead: move the existing destination aside
+            // to a backup name, move the new file into place, then delete the
+            // backup. If putting the new file in place fails, restore the backup
+            // so the original is never lost.
+            let backup_name = {
+                let mut name = final_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("output")
+                    .to_string();
+                name.push_str(".alchemist.bak");
+                name
+            };
+            let backup_path = final_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(backup_name);
+
+            // Clear any stale backup left by a previously interrupted promotion.
+            if backup_path.exists() {
+                std::fs::remove_file(&backup_path)?;
+            }
+            std::fs::rename(final_path, &backup_path)?;
+            match std::fs::rename(temp_path, final_path) {
+                Ok(()) => {
+                    // New file committed; drop the backup (best effort — a
+                    // leftover backup is harmless and cleaned next time).
+                    let _ = std::fs::remove_file(&backup_path);
+                    Ok(())
+                }
+                Err(e) => {
+                    // Restore the original destination from the backup.
+                    let _ = std::fs::rename(&backup_path, final_path);
+                    Err(e.into())
+                }
+            }
+        } else {
+            // POSIX `rename` atomically replaces the destination — no window.
+            std::fs::rename(temp_path, final_path)?;
+            Ok(())
         }
-        std::fs::rename(temp_path, final_path)?;
-        Ok(())
     }
 
     async fn finalize_job(
