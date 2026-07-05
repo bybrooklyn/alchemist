@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.5-rc.3] - 2026-07-05
+
+### Security and network hardening
+
+- Login rate limiting now ignores spoofable forwarded headers unless the direct
+  peer is a configured trusted proxy, then resolves the real client from the
+  right side of the `X-Forwarded-For` chain. This blocks attacker-injected
+  forwarding hops from sharing or bypassing rate-limit buckets.
+- Setup-token comparison now percent-decodes query tokens and compares them in
+  constant time.
+- Unauthenticated login failures no longer expose raw database errors.
+- Notification delivery now applies the existing SSRF and local-address policy
+  to SMTP targets, not only webhooks.
+- Notification and log redaction now covers more Discord, Slack, GitHub,
+  Telegram, query-string, and path-embedded secret forms before they reach
+  persisted logs or error output.
+
+### Transcoding and data safety
+
+- Output promotion is now safer on Windows by using a backup-rename-restore
+  flow, reducing the chance of losing either the existing destination or the new
+  encode if replacement fails.
+- Per-job temporary output filenames now match orphaned-temp cleanup and remain
+  unique across colliding output paths.
+- Scan buffering now deduplicates colliding output paths before enqueueing.
+- Jobs that are canceled while finalization is racing now keep a consistent job
+  state.
+- Zero-byte encoded outputs are always rejected, including configurations that
+  bypass quality gates.
+- VMAF checks now snapshot configuration before running so they do not hold
+  shared config readers during long analysis work.
+- FFmpeg subprocesses are killed on drop, and orchestrator cancel bookkeeping
+  no longer has the cancel-channel/pending-cancel lock-order deadlock.
+- FFmpeg stderr truncation now respects character boundaries, avoiding a panic
+  on non-ASCII stderr.
+
+### FFmpeg and hardware behavior
+
+- FFmpeg input and output paths are now passed as `OsStr`, preserving non-UTF-8
+  paths on supported platforms.
+- Subtitle filtergraph paths now escape single quotes correctly.
+- NVENC constant-quality encodes now include `-b:v 0`, preventing an unintended
+  bitrate cap.
+- QSV lookahead depth now uses `-look_ahead_depth`, and AV1 QSV configuration is
+  guarded by detected support.
+
+### Database, filesystem, and settings
+
+- Added indexes for `jobs.output_path` and `logs.job_id`, improving
+  scan-collision checks and per-job log retrieval.
+- SQLite `VACUUM INTO` backup paths now escape single quotes correctly.
+- Daily stats now use the correct SQLite modifier order for local-day
+  boundaries.
+- Runtime settings writes now serialize config read-modify-write operations to
+  prevent lost updates.
+- Schedule validation now rejects equal start and end times.
+- Windows device-id and disk-space handling now normalizes verbatim and UNC
+  paths so drive grouping and free-space checks do not fail open.
+- Filesystem browsing now bounds media-hint directory walks and extends the
+  sensitive-path denylist for dotfiles, `.ssh`, and system paths such as `/var`.
+
+### Release verification
+
+- Release tests now align with the hardened trusted-proxy behavior and schema
+  version 18 so the full local gates pass against the current migrations.
+
 ## [0.3.5-rc.2] - 2026-07-04
 
 ### Docker GPU diagnostics and permissions
