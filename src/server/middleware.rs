@@ -445,29 +445,55 @@ pub(crate) fn resolved_client_ip(
 ) -> Option<IpAddr> {
     let peer_ip = peer_ip.map(normalize_ip);
 
-    // Only trust proxy headers (X-Forwarded-For, X-Real-IP) when the direct
-    // TCP peer is a trusted reverse proxy. When trusted_proxies is non-empty,
-    // only those exact IPs (plus loopback) are trusted. Otherwise, fall back
-    // to trusting all RFC-1918 private ranges (legacy behaviour).
-    if let Some(peer) = peer_ip
-        && is_trusted_peer(peer, trusted_proxies)
+    // When no trusted proxies are configured, forwarded headers are entirely
+    // untrustworthy: any client (including hosts on the LAN) can spoof
+    // `X-Forwarded-For` / `X-Real-IP` to impersonate an arbitrary source. In
+    // that mode we ignore forwarded headers completely and use the direct TCP
+    // peer address. This closes both the setup-gate LAN bypass and the
+    // per-IP rate-limit bypass.
+    if trusted_proxies.is_empty() {
+        return peer_ip;
+    }
+
+    // With trusted proxies configured, only honour forwarded headers when the
+    // direct TCP peer is itself a trusted reverse proxy (or loopback).
+    let Some(peer) = peer_ip else {
+        return None;
+    };
+    if !is_trusted_peer(peer, trusted_proxies) {
+        return Some(peer);
+    }
+
+    // Walk the `X-Forwarded-For` chain RIGHT-TO-LEFT, skipping hops that are
+    // themselves trusted proxies. The first (rightmost) address that is NOT a
+    // trusted proxy is the real client; everything further left is
+    // attacker-controlled and must never be trusted. A hop that fails to parse
+    // breaks the chain of trust, so we stop walking there.
+    if let Some(xff) = headers.get("X-Forwarded-For")
+        && let Ok(xff_str) = xff.to_str()
     {
-        if let Some(xff) = headers.get("X-Forwarded-For")
-            && let Ok(xff_str) = xff.to_str()
-            && let Some(ip_str) = xff_str.split(',').next()
-            && let Ok(ip) = ip_str.trim().parse()
-        {
-            return Some(normalize_ip(ip));
-        }
-        if let Some(xri) = headers.get("X-Real-IP")
-            && let Ok(xri_str) = xri.to_str()
-            && let Ok(ip) = xri_str.trim().parse()
-        {
-            return Some(normalize_ip(ip));
+        for candidate in xff_str.rsplit(',') {
+            let Ok(ip) = candidate.trim().parse::<IpAddr>() else {
+                break;
+            };
+            let ip = normalize_ip(ip);
+            if is_trusted_peer(ip, trusted_proxies) {
+                continue;
+            }
+            return Some(ip);
         }
     }
 
-    peer_ip
+    // No usable XFF entry: fall back to a single `X-Real-IP` value set by the
+    // trusted proxy, then to the peer address.
+    if let Some(xri) = headers.get("X-Real-IP")
+        && let Ok(xri_str) = xri.to_str()
+        && let Ok(ip) = xri_str.trim().parse()
+    {
+        return Some(normalize_ip(ip));
+    }
+
+    Some(peer)
 }
 
 /// Returns true if the peer IP may be trusted to set forwarded headers.
@@ -547,6 +573,39 @@ mod tests {
             resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
             Some(IpAddr::from([203, 0, 113, 20]))
         );
+    }
+
+    #[test]
+    fn xff_chain_is_walked_right_to_left_ignoring_attacker_injected_hops() {
+        // An attacker prepends a spoofed hop (6.6.6.6). The real client
+        // (203.0.113.20) is followed by the trusted proxy (10.0.0.2), which is
+        // the direct peer. Walking right-to-left must skip the trusted proxy
+        // and return the real client, never the attacker-controlled leftmost.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Forwarded-For",
+            HeaderValue::from_static("6.6.6.6, 203.0.113.20, 10.0.0.2"),
+        );
+
+        let peer = IpAddr::from([10, 0, 0, 2]);
+        let trusted_proxy = IpAddr::from([10, 0, 0, 2]);
+
+        assert_eq!(
+            resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
+            Some(IpAddr::from([203, 0, 113, 20]))
+        );
+    }
+
+    #[test]
+    fn forwarded_headers_ignored_when_no_trusted_proxies_configured() {
+        // Even a LAN peer must not be able to spoof the resolved client IP when
+        // no trusted proxies are configured.
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-For", HeaderValue::from_static("8.8.8.8"));
+        headers.insert("X-Real-IP", HeaderValue::from_static("8.8.8.8"));
+
+        let peer = IpAddr::from([192, 168, 1, 50]);
+        assert_eq!(resolved_client_ip(Some(peer), &headers, &[]), Some(peer));
     }
 
     #[test]
