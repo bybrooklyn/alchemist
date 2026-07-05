@@ -44,10 +44,12 @@ pub(crate) async fn login_handler(
         Ok(user) => user,
         Err(err) => {
             error!("Login lookup failed for '{}': {}", payload.username, err);
+            // Never surface the raw database error to unauthenticated callers;
+            // it can leak schema/connection details. Keep the detail generic.
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "AUTH_LOOKUP_FAILED",
-                err.to_string(),
+                "Authentication backend error",
             );
         }
     };

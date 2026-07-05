@@ -40,20 +40,33 @@ fn platform_device_id(path: &Path) -> Option<String> {
     // Drive-letter granularity. Two files on the same lettered volume share
     // the same physical spindle for the overwhelming majority of self-hosted
     // setups; mount-point bind volumes can be overridden via config.
-    let s = path.to_str()?;
-    let mut chars = s.chars();
-    let drive = chars.next()?;
-    if drive.is_ascii_alphabetic() && chars.next() == Some(':') {
-        Some(format!("vol:{}", drive.to_ascii_uppercase()))
-    } else if s.starts_with(r"\\") {
-        // UNC path: \\server\share\... — group by server+share.
-        let trimmed = &s[2..];
-        let mut parts = trimmed.splitn(3, '\\');
-        let server = parts.next()?;
-        let share = parts.next()?;
-        Some(format!("unc:{}\\{}", server, share))
-    } else {
-        None
+    //
+    // `std::fs::canonicalize` returns verbatim paths on Windows — `\\?\C:\...`
+    // for lettered volumes and `\\?\UNC\server\share\...` for UNC shares — so
+    // we must match on the parsed `Prefix` component rather than the raw string.
+    // Matching on the prefix transparently handles both the verbatim and the
+    // plain forms (`Disk`/`VerbatimDisk`, `UNC`/`VerbatimUNC`).
+    use std::path::{Component, Prefix};
+
+    let prefix = match path.components().next()? {
+        Component::Prefix(prefix) => prefix.kind(),
+        _ => return None,
+    };
+
+    match prefix {
+        Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+            let drive = char::from(drive).to_ascii_uppercase();
+            Some(format!("vol:{drive}"))
+        }
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+            // Group by server+share.
+            let server = server.to_str()?;
+            let share = share.to_str()?;
+            Some(format!("unc:{server}\\{share}"))
+        }
+        // DeviceNS / Verbatim (non-disk, non-UNC) prefixes have no meaningful
+        // spindle grouping — treat as unknown.
+        Prefix::DeviceNS(_) | Prefix::Verbatim(_) => None,
     }
 }
 

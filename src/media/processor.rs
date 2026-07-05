@@ -193,6 +193,13 @@ impl Agent {
 
         const ENQUEUE_CHUNK: usize = 500;
         let mut buffer: Vec<crate::db::PreparedEnqueue> = Vec::with_capacity(ENQUEUE_CHUNK);
+        // Output paths already staged in the current (not-yet-flushed) buffer.
+        // The DB `has_job_with_output_path` check in `resolve_discovered_for_enqueue`
+        // cannot see rows still buffered in memory, so two discovered files that
+        // resolve to the same output path within one chunk would both enqueue and
+        // then race on the same temp/output file. Dedup them here before staging.
+        let mut staged_output_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for scanned_file in files {
             let path = scanned_file.path.clone();
             match crate::media::pipeline::resolve_discovered_for_enqueue(
@@ -203,12 +210,23 @@ impl Agent {
             .await
             {
                 Ok(Some(prepared)) => {
+                    if !staged_output_paths.insert(prepared.output_path.clone()) {
+                        tracing::warn!(
+                            "Skipping {:?}: output path {:?} already staged in this scan buffer",
+                            path,
+                            prepared.output_path
+                        );
+                        continue;
+                    }
                     buffer.push(prepared);
                     if buffer.len() >= ENQUEUE_CHUNK {
                         if let Err(e) = self.db.enqueue_jobs_batch(&buffer).await {
                             error!("Failed to enqueue scanned job batch: {}", e);
                         }
                         buffer.clear();
+                        // Flushed rows are now visible to the DB output-path check,
+                        // so the in-memory guard only needs to cover the next buffer.
+                        staged_output_paths.clear();
                         tokio::task::yield_now().await;
                     }
                 }

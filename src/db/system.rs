@@ -356,7 +356,9 @@ impl Db {
         Ok(())
     }
     pub async fn create_online_backup(&self, path: &std::path::Path) -> Result<()> {
-        let path_str = path.to_string_lossy();
+        // Escape single quotes by doubling so paths containing ' don't break
+        // (or allow injection into) the SQL string literal.
+        let path_str = path.to_string_lossy().replace('\'', "''");
         sqlx::query(&format!("VACUUM INTO '{}'", path_str))
             .execute(&self.pool)
             .await?;

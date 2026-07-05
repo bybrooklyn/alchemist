@@ -8,6 +8,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use sha2::{Digest, Sha256};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -115,10 +116,15 @@ pub(crate) async fn auth_middleware(
     {
         let allowed = if let Some(expected_token) = &state.setup_token {
             // Token mode: require `?token=<value>` regardless of client IP.
+            // Percent-decode the raw query value first (browsers/clients may
+            // URL-encode it) and compare in constant time so the comparison
+            // cannot leak the token via response timing.
             req.uri()
                 .query()
                 .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-                .map(|t| t == expected_token.as_str())
+                .map(|t| {
+                    constant_time_str_eq(&percent_decode(t), expected_token.as_str())
+                })
                 .unwrap_or(false)
         } else {
             request_is_lan(&req, &state.trusted_proxies)
@@ -416,6 +422,39 @@ async fn allow_global_request(state: &AppState, ip: IpAddr) -> bool {
     }
 }
 
+/// Percent-decode an RFC-3986 query value (`%XX` escapes only). Invalid or
+/// truncated escapes are left verbatim. `+` is intentionally NOT treated as a
+/// space so tokens containing literal `+` (e.g. base64) survive round-tripping.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(hi) = (bytes[i + 1] as char).to_digit(16)
+            && let Some(lo) = (bytes[i + 2] as char).to_digit(16)
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Compare two strings without leaking length or content via timing. Both
+/// sides are reduced to their SHA-256 digest first; comparing fixed-size
+/// digests removes any early-exit dependence on the secret, matching the
+/// hashing approach used for session and API tokens.
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    let digest_a = Sha256::digest(a.as_bytes());
+    let digest_b = Sha256::digest(b.as_bytes());
+    digest_a == digest_b
+}
+
 pub(crate) fn get_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
     for part in cookie_header.split(';') {
@@ -445,29 +484,55 @@ pub(crate) fn resolved_client_ip(
 ) -> Option<IpAddr> {
     let peer_ip = peer_ip.map(normalize_ip);
 
-    // Only trust proxy headers (X-Forwarded-For, X-Real-IP) when the direct
-    // TCP peer is a trusted reverse proxy. When trusted_proxies is non-empty,
-    // only those exact IPs (plus loopback) are trusted. Otherwise, fall back
-    // to trusting all RFC-1918 private ranges (legacy behaviour).
-    if let Some(peer) = peer_ip
-        && is_trusted_peer(peer, trusted_proxies)
+    // When no trusted proxies are configured, forwarded headers are entirely
+    // untrustworthy: any client (including hosts on the LAN) can spoof
+    // `X-Forwarded-For` / `X-Real-IP` to impersonate an arbitrary source. In
+    // that mode we ignore forwarded headers completely and use the direct TCP
+    // peer address. This closes both the setup-gate LAN bypass and the
+    // per-IP rate-limit bypass.
+    if trusted_proxies.is_empty() {
+        return peer_ip;
+    }
+
+    // With trusted proxies configured, only honour forwarded headers when the
+    // direct TCP peer is itself a trusted reverse proxy (or loopback).
+    let Some(peer) = peer_ip else {
+        return None;
+    };
+    if !is_trusted_peer(peer, trusted_proxies) {
+        return Some(peer);
+    }
+
+    // Walk the `X-Forwarded-For` chain RIGHT-TO-LEFT, skipping hops that are
+    // themselves trusted proxies. The first (rightmost) address that is NOT a
+    // trusted proxy is the real client; everything further left is
+    // attacker-controlled and must never be trusted. A hop that fails to parse
+    // breaks the chain of trust, so we stop walking there.
+    if let Some(xff) = headers.get("X-Forwarded-For")
+        && let Ok(xff_str) = xff.to_str()
     {
-        if let Some(xff) = headers.get("X-Forwarded-For")
-            && let Ok(xff_str) = xff.to_str()
-            && let Some(ip_str) = xff_str.split(',').next()
-            && let Ok(ip) = ip_str.trim().parse()
-        {
-            return Some(normalize_ip(ip));
-        }
-        if let Some(xri) = headers.get("X-Real-IP")
-            && let Ok(xri_str) = xri.to_str()
-            && let Ok(ip) = xri_str.trim().parse()
-        {
-            return Some(normalize_ip(ip));
+        for candidate in xff_str.rsplit(',') {
+            let Ok(ip) = candidate.trim().parse::<IpAddr>() else {
+                break;
+            };
+            let ip = normalize_ip(ip);
+            if is_trusted_peer(ip, trusted_proxies) {
+                continue;
+            }
+            return Some(ip);
         }
     }
 
-    peer_ip
+    // No usable XFF entry: fall back to a single `X-Real-IP` value set by the
+    // trusted proxy, then to the peer address.
+    if let Some(xri) = headers.get("X-Real-IP")
+        && let Ok(xri_str) = xri.to_str()
+        && let Ok(ip) = xri_str.trim().parse()
+    {
+        return Some(normalize_ip(ip));
+    }
+
+    Some(peer)
 }
 
 /// Returns true if the peer IP may be trusted to set forwarded headers.
@@ -547,6 +612,56 @@ mod tests {
             resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
             Some(IpAddr::from([203, 0, 113, 20]))
         );
+    }
+
+    #[test]
+    fn percent_decode_handles_encoded_and_literal_values() {
+        assert_eq!(percent_decode("abc123"), "abc123");
+        assert_eq!(percent_decode("a%2Bb%2Fc%3D"), "a+b/c=");
+        // Truncated / invalid escapes are preserved verbatim.
+        assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
+
+    #[test]
+    fn constant_time_str_eq_matches_only_identical_strings() {
+        assert!(constant_time_str_eq("s3cr3t-token", "s3cr3t-token"));
+        assert!(!constant_time_str_eq("s3cr3t-token", "s3cr3t-toke"));
+        assert!(!constant_time_str_eq("s3cr3t-token", "wrong"));
+        assert!(!constant_time_str_eq("", "x"));
+    }
+
+    #[test]
+    fn xff_chain_is_walked_right_to_left_ignoring_attacker_injected_hops() {
+        // An attacker prepends a spoofed hop (6.6.6.6). The real client
+        // (203.0.113.20) is followed by the trusted proxy (10.0.0.2), which is
+        // the direct peer. Walking right-to-left must skip the trusted proxy
+        // and return the real client, never the attacker-controlled leftmost.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Forwarded-For",
+            HeaderValue::from_static("6.6.6.6, 203.0.113.20, 10.0.0.2"),
+        );
+
+        let peer = IpAddr::from([10, 0, 0, 2]);
+        let trusted_proxy = IpAddr::from([10, 0, 0, 2]);
+
+        assert_eq!(
+            resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
+            Some(IpAddr::from([203, 0, 113, 20]))
+        );
+    }
+
+    #[test]
+    fn forwarded_headers_ignored_when_no_trusted_proxies_configured() {
+        // Even a LAN peer must not be able to spoof the resolved client IP when
+        // no trusted proxies are configured.
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-For", HeaderValue::from_static("8.8.8.8"));
+        headers.insert("X-Real-IP", HeaderValue::from_static("8.8.8.8"));
+
+        let peer = IpAddr::from([192, 168, 1, 50]);
+        assert_eq!(resolved_client_ip(Some(peer), &headers, &[]), Some(peer));
     }
 
     #[test]
