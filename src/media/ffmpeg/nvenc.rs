@@ -23,6 +23,8 @@ pub fn append_args(
                 "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
             ]);
         }
         Encoder::HevcNvenc => {
@@ -35,6 +37,8 @@ pub fn append_args(
                 "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
             ]);
         }
         Encoder::H264Nvenc => {
@@ -47,6 +51,8 @@ pub fn append_args(
                 "vbr".to_string(),
                 "-cq".to_string(),
                 cq.to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
             ]);
         }
         _ => {}
