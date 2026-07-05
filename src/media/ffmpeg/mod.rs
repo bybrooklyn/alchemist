@@ -504,10 +504,15 @@ fn render_filtergraph(input: &Path, filters: &[FilterStep]) -> Option<String> {
 }
 
 fn escape_filter_path(path: &Path) -> String {
+    // The path is embedded inside a single-quoted filtergraph token
+    // (subtitles=filename='...'). A literal ' must close the quote, emit an
+    // escaped quote, then reopen: ' -> '\''. Backslashes and colons are
+    // escaped for the filtergraph parser. Order matters: escape backslashes
+    // first so the backslash introduced by the quote rule is not doubled.
     path.to_string_lossy()
         .replace('\\', "\\\\")
         .replace(':', "\\:")
-        .replace('\'', "\\'")
+        .replace('\'', "'\\''")
 }
 
 fn output_format_name(container: &str) -> &str {
