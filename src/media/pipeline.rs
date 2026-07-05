@@ -2447,8 +2447,33 @@ impl Pipeline {
         } else {
             self.promote_temp_artifact(context.temp_output_path, context.output_path)?;
         }
-        self.update_job_state(job_id, crate::db::JobState::Completed)
-            .await?;
+        // Point of no return: the encoded output is now committed on disk. If a
+        // cancel raced in here, update_job_state would silently rewrite this
+        // Completed to Cancelled and return Ok — yet finalize still records a
+        // completed encode attempt, emits success telemetry, and (if configured)
+        // deletes the source. That leaves recorded state != on-disk result.
+        // Force the terminal Completed state directly, bypassing the cancel
+        // intercept, so the recorded state matches the promoted output.
+        self.orchestrator.remove_cancel_request(job_id).await;
+        if let Err(e) = self
+            .db
+            .update_job_status(job_id, crate::db::JobState::Completed)
+            .await
+        {
+            tracing::error!(
+                "Failed to mark job {} completed after promotion: {}",
+                job_id,
+                e
+            );
+            return Err(e);
+        }
+        let _ = self
+            .event_channels
+            .jobs
+            .send(crate::db::JobEvent::StateChanged {
+                job_id,
+                status: crate::db::JobState::Completed,
+            });
         self.update_job_progress(job_id, 100.0).await;
         self.record_encode_attempt(
             job_id,
