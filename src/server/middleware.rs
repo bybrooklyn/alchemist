@@ -122,9 +122,7 @@ pub(crate) async fn auth_middleware(
             req.uri()
                 .query()
                 .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-                .map(|t| {
-                    constant_time_str_eq(&percent_decode(t), expected_token.as_str())
-                })
+                .map(|t| constant_time_str_eq(&percent_decode(t), expected_token.as_str()))
                 .unwrap_or(false)
         } else {
             request_is_lan(&req, &state.trusted_proxies)
@@ -496,9 +494,7 @@ pub(crate) fn resolved_client_ip(
 
     // With trusted proxies configured, only honour forwarded headers when the
     // direct TCP peer is itself a trusted reverse proxy (or loopback).
-    let Some(peer) = peer_ip else {
-        return None;
-    };
+    let peer = peer_ip?;
     if !is_trusted_peer(peer, trusted_proxies) {
         return Some(peer);
     }

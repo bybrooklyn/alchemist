@@ -363,7 +363,10 @@ fn is_sensitive_path(path: &Path) -> bool {
     for component in path.components() {
         if let Component::Normal(name) = component {
             let name = name.to_string_lossy().to_ascii_lowercase();
-            if sensitive_components.iter().any(|candidate| *candidate == name) {
+            if sensitive_components
+                .iter()
+                .any(|candidate| *candidate == name)
+            {
                 return true;
             }
         }
