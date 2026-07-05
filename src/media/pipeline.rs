@@ -2249,7 +2249,11 @@ impl Pipeline {
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
         let encode_duration = context.start_time.elapsed().as_secs_f64();
 
-        let config = self.config.read().await;
+        // Snapshot config to an owned value and release the read lock immediately.
+        // The rest of finalize spans long `.await` points (VMAF spawn_blocking,
+        // reprobe, save_encode_stats); holding the read guard across them would
+        // stall every writer waiting for the config lock for the whole encode.
+        let config = self.config.read().await.clone();
         let telemetry_enabled = config.system.enable_telemetry;
 
         if !context.bypass_quality_gates
