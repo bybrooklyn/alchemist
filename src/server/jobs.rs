@@ -1035,6 +1035,7 @@ pub(crate) async fn set_engine_mode_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<SetEngineModePayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let cpu_count = {
         let sys = state.sys.lock().await;
         sys.cpus().len()

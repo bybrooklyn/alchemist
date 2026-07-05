@@ -152,6 +152,11 @@ fn problem_slug(code: &str) -> String {
 pub struct AppState {
     pub db: Arc<Db>,
     pub config: Arc<RwLock<Config>>,
+    /// Serializes config read-modify-persist-write sequences in settings
+    /// handlers. Without it, concurrent requests each clone the config, mutate
+    /// their copy, persist, then overwrite the shared config — silently losing
+    /// the other request's update. Held for the whole read→mutate→save→write.
+    pub config_update_lock: Arc<tokio::sync::Mutex<()>>,
     pub agent: Arc<Agent>,
     pub transcoder: Arc<Transcoder>,
     pub scheduler: crate::scheduler::SchedulerHandle,
@@ -372,6 +377,7 @@ pub async fn run_server(args: RunServerArgs) -> Result<()> {
     let state = Arc::new(AppState {
         db,
         config,
+        config_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         agent,
         transcoder,
         scheduler,

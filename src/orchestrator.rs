@@ -222,7 +222,7 @@ impl Transcoder {
             request.plan,
         )
         .with_hardware(request.hw_info);
-        let Some(args) = builder.build_subtitle_extract_args()? else {
+        let Some(cmd) = builder.build_subtitle_extract()? else {
             return Ok(());
         };
 
@@ -239,8 +239,6 @@ impl Transcoder {
             }
         }
 
-        let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args(&args);
         self.run_ffmpeg_command(cmd, request.job_id, request.observer, None)
             .await
     }
@@ -290,14 +288,20 @@ impl Transcoder {
                     e.into_inner().insert(id, kill_tx);
                 }
             }
-            let mut pending = match self.pending_cancels.lock() {
-                Ok(pending) => pending,
-                Err(e) => {
-                    error!("Pending cancels lock poisoned, recovering: {}", e);
-                    e.into_inner()
-                }
+            // Enforce a single global lock order: never hold pending_cancels and
+            // cancel_channels at the same time. Resolve the pending flag and drop
+            // the pending_cancels guard before touching cancel_channels.
+            let was_pending = {
+                let mut pending = match self.pending_cancels.lock() {
+                    Ok(pending) => pending,
+                    Err(e) => {
+                        error!("Pending cancels lock poisoned, recovering: {}", e);
+                        e.into_inner()
+                    }
+                };
+                pending.remove(&id)
             };
-            if pending.remove(&id)
+            if was_pending
                 && let Ok(mut channels) = self.cancel_channels.lock()
                 && let Some(tx) = channels.remove(&id)
             {
@@ -324,7 +328,10 @@ impl Transcoder {
                         Ok(line_res) => match line_res {
                             Ok(Some(line)) => {
                                 let line = if line.len() > 4096 {
-                                    format!("{}...[truncated]", &line[..4096])
+                                    // Truncate on a char boundary; &line[..4096] would
+                                    // panic if 4096 lands mid-codepoint.
+                                    let truncated: String = line.chars().take(4096).collect();
+                                    format!("{truncated}...[truncated]")
                                 } else {
                                     line
                                 };

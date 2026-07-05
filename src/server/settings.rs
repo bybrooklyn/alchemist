@@ -75,6 +75,7 @@ pub(crate) async fn update_transcode_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<TranscodeSettingsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     if let Err(msg) = validate_transcode_payload(&payload) {
         return api_error_response(StatusCode::BAD_REQUEST, "TRANSCODE_SETTINGS_INVALID", msg);
     }
@@ -150,6 +151,7 @@ pub(crate) async fn update_hardware_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<HardwareSettingsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let mut next_config = state.config.read().await.clone();
 
     next_config.hardware.allow_cpu_fallback = payload.allow_cpu_fallback;
@@ -250,6 +252,7 @@ pub(crate) async fn update_system_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<SystemSettingsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     if payload.monitoring_poll_interval < 0.5 || payload.monitoring_poll_interval > 10.0 {
         return api_error_response(
             StatusCode::BAD_REQUEST,
@@ -330,6 +333,7 @@ pub(crate) async fn update_settings_bundle_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<Config>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     if let Err(err) = payload.validate() {
         return api_error_response(
             StatusCode::BAD_REQUEST,
@@ -523,6 +527,7 @@ pub(crate) async fn update_settings_config_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<RawConfigPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let config = match crate::settings::parse_raw_config(&payload.raw_toml) {
         Ok(config) => config,
         Err(err) => {
@@ -787,6 +792,7 @@ pub(crate) async fn update_notifications_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<UpdateNotificationsSettingsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let mut next_config = state.config.read().await.clone();
     if let Some(daily_summary_time_local) = payload.daily_summary_time_local.as_ref() {
         let Some(normalized) = normalize_schedule_time(daily_summary_time_local) else {
@@ -842,6 +848,7 @@ pub(crate) async fn add_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let target = normalize_notification_payload(&payload);
     if let Err(msg) = validate_notification_target(&state, &target).await {
         return api_error_response(StatusCode::BAD_REQUEST, "NOTIFICATION_TARGET_INVALID", msg);
@@ -882,6 +889,7 @@ pub(crate) async fn delete_notification_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let target_index = match state.db.get_notification_targets().await {
         Ok(targets) => targets.iter().position(|target| target.id == id),
         Err(e) => {
@@ -1058,6 +1066,7 @@ pub(crate) async fn add_schedule_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddSchedulePayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     if payload.days_of_week.is_empty()
         || payload.days_of_week.iter().any(|day| *day < 0 || *day > 6)
     {
@@ -1129,6 +1138,7 @@ pub(crate) async fn delete_schedule_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let window_index = match state.db.get_schedule_windows().await {
         Ok(windows) => windows.iter().position(|window| window.id == id),
         Err(e) => {
@@ -1198,6 +1208,7 @@ pub(crate) async fn update_file_settings_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<UpdateFileSettingsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     if has_path_separator(&payload.output_extension) || has_path_separator(&payload.output_suffix) {
         return api_error_response(
             StatusCode::BAD_REQUEST,
@@ -1267,6 +1278,7 @@ pub(crate) async fn update_preferences_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<UiPreferences>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let mut next_config = state.config.read().await.clone();
     next_config.appearance.active_theme_id = payload.active_theme_id;
     if let Err(response) = save_config_or_response(&state, &next_config).await {

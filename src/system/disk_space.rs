@@ -7,12 +7,35 @@
 //! space can't be determined for a path, jobs are allowed to proceed so an
 //! unsupported filesystem never blocks the queue forever.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sysinfo::Disks;
 
 /// One GiB in bytes.
 pub const GIB: u64 = 1024 * 1024 * 1024;
+
+/// Normalize a path to a stable prefix representation for mount comparison.
+///
+/// On Windows, `std::fs::canonicalize` (and callers building output paths from
+/// it) yields verbatim paths — `\\?\C:\...` and `\\?\UNC\server\share\...` —
+/// while `sysinfo` reports plain mount points like `C:\`. Without stripping the
+/// `\\?\` / `\\?\UNC\` prefix, `starts_with` never matches, no mount is found,
+/// and the free-space guard silently fails open. Stripping both sides to the
+/// same form lets the correct mount be located. On other platforms this is the
+/// identity function, so Unix behavior is unchanged.
+fn normalize_for_mount_match(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.as_os_str().to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
 
 /// Available bytes on the filesystem that contains `path`, or `None` when it
 /// can't be determined (no matching mount, unsupported filesystem, or query
@@ -20,10 +43,13 @@ pub const GIB: u64 = 1024 * 1024 * 1024;
 /// nested mount resolves to the correct filesystem rather than its parent.
 pub fn available_bytes_for_path(path: &Path) -> Option<u64> {
     let disks = Disks::new_with_refreshed_list();
+    // Normalize away Windows verbatim prefixes so a `\\?\C:\...` output path
+    // still matches sysinfo's `C:\` mount point (see normalize_for_mount_match).
+    let path = normalize_for_mount_match(path);
     let mut best: Option<(usize, u64)> = None;
     for disk in disks.list() {
-        let mount = disk.mount_point();
-        if path.starts_with(mount) {
+        let mount = normalize_for_mount_match(disk.mount_point());
+        if path.starts_with(&mount) {
             let len = mount.as_os_str().len();
             let is_better = match best {
                 Some((best_len, _)) => len > best_len,

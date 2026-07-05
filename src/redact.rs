@@ -126,24 +126,85 @@ fn redact_key_values(input: &str) -> String {
 }
 
 /// Masks the token segment of well-known webhook URLs whose secret is carried in
-/// the path (Discord, Slack), which the key/value pass cannot see.
+/// the path (Discord, Slack, Telegram), which the key/value pass cannot see.
 fn redact_webhook_urls(input: &str) -> String {
     input
         .split_inclusive(char::is_whitespace)
         .map(|chunk| {
             let trimmed = chunk.trim_end();
             let trailing = &chunk[trimmed.len()..];
-            let lower = trimmed.to_ascii_lowercase();
-            if (lower.contains("discord.com/api/webhooks/")
-                || lower.contains("discordapp.com/api/webhooks/")
-                || lower.contains("hooks.slack.com/services/"))
-                && let Some(idx) = trimmed.rfind('/')
-            {
-                return format!("{}/{}{}", &trimmed[..idx], MASK, trailing);
+            match mask_webhook_token(trimmed) {
+                Some(masked) => format!("{masked}{trailing}"),
+                None => chunk.to_string(),
             }
-            chunk.to_string()
         })
         .collect()
+}
+
+/// Returns the URL with its embedded secret masked, or `None` if it is not a
+/// recognised token-bearing URL. ASCII lowercasing is length-preserving so byte
+/// offsets found in the lowercased copy line up with the original.
+fn mask_webhook_token(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+
+    // Discord webhooks carry the token in `/api/webhooks/{id}/{token}`. The
+    // token may be followed by `/slack`, `/github`, or a `?` query string, so
+    // anchor the mask to the prefix and stop at the next `/` or `?` instead of
+    // masking only the final path segment (which would leave the token exposed
+    // for the `/slack` and `/github` variants).
+    for marker in ["discord.com/api/webhooks/", "discordapp.com/api/webhooks/"] {
+        if let Some(pos) = lower.find(marker) {
+            let id_start = pos + marker.len();
+            // Skip past the webhook id segment to the token.
+            if let Some(rel_slash) = url.get(id_start..)?.find('/') {
+                let token_start = id_start + rel_slash + 1;
+                let token_end = token_end_from(url, token_start);
+                if token_end > token_start {
+                    return Some(format!(
+                        "{}{}{}",
+                        &url[..token_start],
+                        MASK,
+                        &url[token_end..]
+                    ));
+                }
+            }
+            return None;
+        }
+    }
+
+    // Telegram Bot API carries the token in `api.telegram.org/bot{token}/...`.
+    const TELEGRAM_MARKER: &str = "api.telegram.org/bot";
+    if let Some(pos) = lower.find(TELEGRAM_MARKER) {
+        let token_start = pos + TELEGRAM_MARKER.len();
+        let token_end = token_end_from(url, token_start);
+        if token_end > token_start {
+            return Some(format!(
+                "{}{}{}",
+                &url[..token_start],
+                MASK,
+                &url[token_end..]
+            ));
+        }
+        return None;
+    }
+
+    // Slack incoming webhooks carry the secret as the final path segment.
+    if lower.contains("hooks.slack.com/services/")
+        && let Some(idx) = url.rfind('/')
+    {
+        return Some(format!("{}/{}", &url[..idx], MASK));
+    }
+
+    None
+}
+
+/// End offset of the token that starts at `start`: the next `/` or `?`, or the
+/// end of the string.
+fn token_end_from(url: &str, start: usize) -> usize {
+    url.get(start..)
+        .and_then(|rest| rest.find(['/', '?']))
+        .map(|i| start + i)
+        .unwrap_or(url.len())
 }
 
 #[cfg(test)]
@@ -186,6 +247,33 @@ mod tests {
         assert_eq!(
             redact_secrets("https://hooks.slack.com/services/T0/B0/XXXXYYYY"),
             "https://hooks.slack.com/services/T0/B0/***"
+        );
+    }
+
+    #[test]
+    fn masks_discord_slack_github_and_query_variants() {
+        // `/slack` and `/github` compatibility routes must not leave the token
+        // in cleartext just because a route segment follows it.
+        assert_eq!(
+            redact_secrets("https://discord.com/api/webhooks/12345/SECRETTOKEN/slack"),
+            "https://discord.com/api/webhooks/12345/***/slack"
+        );
+        assert_eq!(
+            redact_secrets("https://discordapp.com/api/webhooks/12345/SECRETTOKEN/github"),
+            "https://discordapp.com/api/webhooks/12345/***/github"
+        );
+        // A query string terminates the token too.
+        assert_eq!(
+            redact_secrets("https://discord.com/api/webhooks/12345/SECRETTOKEN?wait=true"),
+            "https://discord.com/api/webhooks/12345/***?wait=true"
+        );
+    }
+
+    #[test]
+    fn masks_telegram_bot_token() {
+        assert_eq!(
+            redact_secrets("POST https://api.telegram.org/bot123456:AA-Secret/sendMessage now"),
+            "POST https://api.telegram.org/bot***/sendMessage now"
         );
     }
 

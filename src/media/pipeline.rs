@@ -1291,17 +1291,19 @@ pub async fn skip_reason_for_discovered_path(
 }
 
 /// Creates a temporary output path for encoding.
-/// Uses a predictable `.alchemist.tmp` suffix - this is acceptable because:
+/// Uses a predictable `.alchemist.<job_id>.tmp` suffix - this is acceptable because:
 /// 1. The suffix is unique to Alchemist and unlikely to conflict
 /// 2. Files are created in user-owned media directories
-/// 3. Same-file concurrent transcodes are prevented at the job level
-fn temp_output_path_for(path: &Path) -> PathBuf {
+/// 3. The job id makes the temp path unique per job, so two jobs whose output
+///    paths collide never share (and clobber) the same temp file
+/// The job id keeps the path deterministic per job, preserving resume semantics.
+fn temp_output_path_for(path: &Path, job_id: i64) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let filename = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("output");
-    parent.join(format!("{filename}.alchemist.tmp"))
+    parent.join(format!("{filename}.alchemist.{job_id}.tmp"))
 }
 
 fn resume_temp_dir_for(output_path: &Path, job_id: i64) -> PathBuf {
@@ -1545,7 +1547,7 @@ impl Pipeline {
         };
 
         let output_path = PathBuf::from(&job.output_path);
-        let temp_output_path = temp_output_path_for(&output_path);
+        let temp_output_path = temp_output_path_for(&output_path, job.id);
 
         if file_path == output_path {
             tracing::error!(
@@ -2216,10 +2218,50 @@ impl Pipeline {
 
     fn promote_temp_artifact(&self, temp_path: &Path, final_path: &Path) -> Result<()> {
         if cfg!(windows) && final_path.exists() {
-            std::fs::remove_file(final_path)?;
+            // Windows `rename` cannot atomically replace an existing file, so the
+            // previous approach (`remove_file` then `rename`) left a window where
+            // the destination was already gone — a crash there would lose the
+            // user's original file. Instead: move the existing destination aside
+            // to a backup name, move the new file into place, then delete the
+            // backup. If putting the new file in place fails, restore the backup
+            // so the original is never lost.
+            let backup_name = {
+                let mut name = final_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("output")
+                    .to_string();
+                name.push_str(".alchemist.bak");
+                name
+            };
+            let backup_path = final_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(backup_name);
+
+            // Clear any stale backup left by a previously interrupted promotion.
+            if backup_path.exists() {
+                std::fs::remove_file(&backup_path)?;
+            }
+            std::fs::rename(final_path, &backup_path)?;
+            match std::fs::rename(temp_path, final_path) {
+                Ok(()) => {
+                    // New file committed; drop the backup (best effort — a
+                    // leftover backup is harmless and cleaned next time).
+                    let _ = std::fs::remove_file(&backup_path);
+                    Ok(())
+                }
+                Err(e) => {
+                    // Restore the original destination from the backup.
+                    let _ = std::fs::rename(&backup_path, final_path);
+                    Err(e.into())
+                }
+            }
+        } else {
+            // POSIX `rename` atomically replaces the destination — no window.
+            std::fs::rename(temp_path, final_path)?;
+            Ok(())
         }
-        std::fs::rename(temp_path, final_path)?;
-        Ok(())
     }
 
     async fn finalize_job(
@@ -2247,13 +2289,34 @@ impl Pipeline {
         let reduction = 1.0 - (output_size as f64 / input_size as f64);
         let encode_duration = context.start_time.elapsed().as_secs_f64();
 
-        let config = self.config.read().await;
+        // Snapshot config to an owned value and release the read lock immediately.
+        // The rest of finalize spans long `.await` points (VMAF spawn_blocking,
+        // reprobe, save_encode_stats); holding the read guard across them would
+        // stall every writer waiting for the config lock for the whole encode.
+        let config = self.config.read().await.clone();
         let telemetry_enabled = config.system.enable_telemetry;
 
+        // Integrity gate (ALWAYS enforced, even when quality gates are bypassed):
+        // a zero-byte output is a failed encode, never a valid result. Promoting
+        // it over the source would destroy the user's media. Basic plausibility
+        // checks like this must never sit behind `bypass_quality_gates` — only the
+        // compression-ratio / VMAF thresholds below are opt-out.
+        if output_size == 0 {
+            tracing::error!(
+                "Job {}: Encoded output is empty (0 bytes). Finalizing as failed; source preserved.",
+                job_id
+            );
+            let _ = std::fs::remove_file(context.temp_output_path);
+            cleanup_temp_subtitle_output(job_id, context.plan).await;
+            return Err(crate::error::AlchemistError::FFmpeg(
+                "Encoded output is empty (0 bytes)".to_string(),
+            ));
+        }
+
+        // Quality gate: compression-ratio threshold. Opt-out via bypass_quality_gates.
         if !context.bypass_quality_gates
-            && (output_size == 0
-                || (!context.plan.is_remux
-                    && reduction < config.transcode.size_reduction_threshold))
+            && !context.plan.is_remux
+            && reduction < config.transcode.size_reduction_threshold
         {
             tracing::warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
@@ -2262,17 +2325,10 @@ impl Pipeline {
             );
             let _ = std::fs::remove_file(context.temp_output_path);
             cleanup_temp_subtitle_output(job_id, context.plan).await;
-            let reason = if output_size == 0 {
-                format!(
-                    "size_reduction_insufficient|reduction=0.000,threshold={:.3},output_size=0",
-                    config.transcode.size_reduction_threshold
-                )
-            } else {
-                format!(
-                    "size_reduction_insufficient|reduction={:.3},threshold={:.3},output_size={}",
-                    reduction, config.transcode.size_reduction_threshold, output_size
-                )
-            };
+            let reason = format!(
+                "size_reduction_insufficient|reduction={:.3},threshold={:.3},output_size={}",
+                reduction, config.transcode.size_reduction_threshold, output_size
+            );
             self.record_job_decision(job_id, "skip", &reason).await;
             self.update_job_state(job_id, crate::db::JobState::Skipped)
                 .await?;
@@ -2431,8 +2487,33 @@ impl Pipeline {
         } else {
             self.promote_temp_artifact(context.temp_output_path, context.output_path)?;
         }
-        self.update_job_state(job_id, crate::db::JobState::Completed)
-            .await?;
+        // Point of no return: the encoded output is now committed on disk. If a
+        // cancel raced in here, update_job_state would silently rewrite this
+        // Completed to Cancelled and return Ok — yet finalize still records a
+        // completed encode attempt, emits success telemetry, and (if configured)
+        // deletes the source. That leaves recorded state != on-disk result.
+        // Force the terminal Completed state directly, bypassing the cancel
+        // intercept, so the recorded state matches the promoted output.
+        self.orchestrator.remove_cancel_request(job_id).await;
+        if let Err(e) = self
+            .db
+            .update_job_status(job_id, crate::db::JobState::Completed)
+            .await
+        {
+            tracing::error!(
+                "Failed to mark job {} completed after promotion: {}",
+                job_id,
+                e
+            );
+            return Err(e);
+        }
+        let _ = self
+            .event_channels
+            .jobs
+            .send(crate::db::JobEvent::StateChanged {
+                job_id,
+                status: crate::db::JobState::Completed,
+            });
         self.update_job_progress(job_id, 100.0).await;
         self.record_encode_attempt(
             job_id,
@@ -3003,7 +3084,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         std::fs::write(&temp_output, b"partial")?;
 
         let config = Arc::new(RwLock::new(crate::config::Config::default()));
@@ -3265,7 +3346,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
         assert_eq!(updated.status, crate::db::JobState::Failed);
         assert_eq!(updated.attempt_count, 1);
-        assert!(!temp_output_path_for(&output).exists());
+        assert!(!temp_output_path_for(&output, job.id).exists());
 
         let failure = db
             .get_job_failure_explanation(job.id)
@@ -3412,7 +3493,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let ffmpeg_status = Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -3584,7 +3665,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         std::fs::write(&temp_output, b"partial")?;
         sqlx::query("DROP TABLE logs").execute(&db.pool).await?;
 
@@ -3745,7 +3826,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let ffmpeg_status = std::process::Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -3967,7 +4048,7 @@ mod tests {
             },
             is_remux: false,
             copy_video: false,
-            output_path: Some(temp_output_path_for(&output)),
+            output_path: Some(temp_output_path_for(&output, job.id)),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
             output_codec: Some(crate::config::OutputCodec::H264),
@@ -3993,7 +4074,7 @@ mod tests {
             .await?;
         let first_segment_mtime = std::fs::metadata(&segments[0].temp_path)?.modified()?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let result = pipeline
             .execute_resumable_transcode(&job, &plan, &analysis.metadata, &temp_output)
             .await?;
@@ -4102,7 +4183,7 @@ mod tests {
             },
             is_remux: false,
             copy_video: false,
-            output_path: Some(temp_output_path_for(&output)),
+            output_path: Some(temp_output_path_for(&output, job.id)),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
             output_codec: Some(crate::config::OutputCodec::H264),
