@@ -1418,6 +1418,56 @@ fn print_cli_plan(items: &[CliPlanItem]) {
     }
 }
 
+/// A writer that runs every formatted log record through `redact_secrets`
+/// before forwarding it to the inner writer. This guarantees nothing persisted
+/// to `alchemist.log` (which is downloadable) — or emitted to stdout — contains
+/// webhook/bot tokens or other secrets, regardless of which code path logged
+/// them. `tracing_subscriber`'s fmt layer writes each event as a single buffer,
+/// so redaction is applied per-record and cannot split a token across writes.
+struct RedactingWriter<W: std::io::Write> {
+    inner: W,
+}
+
+impl<W: std::io::Write> std::io::Write for RedactingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        let redacted = alchemist::redact::redact_secrets(&text);
+        self.inner.write_all(redacted.as_bytes())?;
+        // Report the full input as consumed; the redacted output may differ in
+        // length but every input byte was handled.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A `MakeWriter` that wraps another `MakeWriter` so every writer it hands out
+/// redacts secrets. Applied to both the file appender and stdout.
+struct RedactingMakeWriter<M> {
+    inner: M,
+}
+
+impl<M> RedactingMakeWriter<M> {
+    fn new(inner: M) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a, M> tracing_subscriber::fmt::MakeWriter<'a> for RedactingMakeWriter<M>
+where
+    M: tracing_subscriber::fmt::MakeWriter<'a>,
+{
+    type Writer = RedactingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter {
+            inner: self.inner.make_writer(),
+        }
+    }
+}
+
 /// Initialise logging. Returns a `WorkerGuard` that must be kept alive for the
 /// duration of the program — dropping it flushes the non-blocking file writer.
 /// `None` is returned only when the log directory could not be created, in which
@@ -1442,7 +1492,7 @@ fn init_logging(debug_flags: bool) -> Option<tracing_appender::non_blocking::Wor
             let appender = tracing_appender::rolling::daily(runtime::log_dir(), "alchemist.log");
             let (writer, guard) = tracing_appender::non_blocking(appender);
             let layer = tracing_subscriber::fmt::layer()
-                .with_writer(writer)
+                .with_writer(RedactingMakeWriter::new(writer))
                 .with_ansi(false)
                 .with_target(true)
                 .with_timer(time());
@@ -1463,6 +1513,7 @@ fn init_logging(debug_flags: bool) -> Option<tracing_appender::non_blocking::Wor
             registry
                 .with(
                     tracing_subscriber::fmt::layer()
+                        .with_writer(RedactingMakeWriter::new(std::io::stdout))
                         .with_target(true)
                         .with_thread_ids(debug_flags)
                         .with_thread_names(debug_flags)
@@ -1479,6 +1530,7 @@ fn init_logging(debug_flags: bool) -> Option<tracing_appender::non_blocking::Wor
                 registry
                     .with(
                         tracing_subscriber::fmt::layer()
+                            .with_writer(RedactingMakeWriter::new(std::io::stdout))
                             .with_target(true)
                             .with_thread_ids(true)
                             .with_thread_names(true)
@@ -1489,6 +1541,7 @@ fn init_logging(debug_flags: bool) -> Option<tracing_appender::non_blocking::Wor
                 registry
                     .with(
                         tracing_subscriber::fmt::layer()
+                            .with_writer(RedactingMakeWriter::new(std::io::stdout))
                             .without_time()
                             .with_target(false)
                             .compact(),

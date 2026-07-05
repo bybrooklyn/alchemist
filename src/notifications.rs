@@ -244,7 +244,10 @@ impl NotificationManager {
                     Ok(JobEvent::StateChanged { job_id, status }) => {
                         let event = NotifiableEvent::JobStateChanged { job_id, status };
                         if let Err(e) = job_manager.handle_event(event).await {
-                            error!("Notification error: {}", e);
+                            error!(
+                                "Notification error: {}",
+                                crate::redact::redact_secrets(&e.to_string())
+                            );
                         }
                     }
                     Ok(_) => {} // Ignore Progress, Decision, Log
@@ -266,7 +269,10 @@ impl NotificationManager {
                             .handle_event(NotifiableEvent::ScanCompleted)
                             .await
                         {
-                            error!("Notification error: {}", e);
+                            error!(
+                                "Notification error: {}",
+                                crate::redact::redact_secrets(&e.to_string())
+                            );
                         }
                     }
                     Ok(SystemEvent::EngineIdle) => {
@@ -274,7 +280,10 @@ impl NotificationManager {
                             .handle_event(NotifiableEvent::EngineIdle)
                             .await
                         {
-                            error!("Notification error: {}", e);
+                            error!(
+                                "Notification error: {}",
+                                crate::redact::redact_secrets(&e.to_string())
+                            );
                         }
                     }
                     Ok(SystemEvent::DiskSpaceLow { reason }) => {
@@ -282,7 +291,10 @@ impl NotificationManager {
                             .handle_event(NotifiableEvent::DiskSpaceLow { reason })
                             .await
                         {
-                            error!("Notification error: {}", e);
+                            error!(
+                                "Notification error: {}",
+                                crate::redact::redact_secrets(&e.to_string())
+                            );
                         }
                     }
                     Ok(_) => {} // Ignore ScanStarted, EngineStatusChanged, HardwareStateChanged
@@ -304,7 +316,10 @@ impl NotificationManager {
                     .maybe_send_daily_summary_at(chrono::Local::now())
                     .await
                 {
-                    error!("Daily summary notification error: {}", err);
+                    error!(
+                        "Daily summary notification error: {}",
+                        crate::redact::redact_secrets(&err.to_string())
+                    );
                 }
             }
         });
@@ -371,7 +386,8 @@ impl NotificationManager {
                     if let Err(e) = manager.send(&target, &event_clone).await {
                         error!(
                             "Failed to send notification to target '{}': {}",
-                            target.name, e
+                            target.name,
+                            crate::redact::redact_secrets(&e.to_string())
                         );
                     }
                 });
@@ -448,7 +464,8 @@ impl NotificationManager {
             if let Err(err) = self.send_daily_summary_target(&target, &summary).await {
                 error!(
                     "Failed to send daily summary to target '{}': {}",
-                    target.name, err
+                    target.name,
+                    crate::redact::redact_secrets(&err.to_string())
                 );
                 continue;
             }
