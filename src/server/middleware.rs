@@ -8,6 +8,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use sha2::{Digest, Sha256};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -115,10 +116,15 @@ pub(crate) async fn auth_middleware(
     {
         let allowed = if let Some(expected_token) = &state.setup_token {
             // Token mode: require `?token=<value>` regardless of client IP.
+            // Percent-decode the raw query value first (browsers/clients may
+            // URL-encode it) and compare in constant time so the comparison
+            // cannot leak the token via response timing.
             req.uri()
                 .query()
                 .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-                .map(|t| t == expected_token.as_str())
+                .map(|t| {
+                    constant_time_str_eq(&percent_decode(t), expected_token.as_str())
+                })
                 .unwrap_or(false)
         } else {
             request_is_lan(&req, &state.trusted_proxies)
@@ -416,6 +422,39 @@ async fn allow_global_request(state: &AppState, ip: IpAddr) -> bool {
     }
 }
 
+/// Percent-decode an RFC-3986 query value (`%XX` escapes only). Invalid or
+/// truncated escapes are left verbatim. `+` is intentionally NOT treated as a
+/// space so tokens containing literal `+` (e.g. base64) survive round-tripping.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(hi) = (bytes[i + 1] as char).to_digit(16)
+            && let Some(lo) = (bytes[i + 2] as char).to_digit(16)
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Compare two strings without leaking length or content via timing. Both
+/// sides are reduced to their SHA-256 digest first; comparing fixed-size
+/// digests removes any early-exit dependence on the secret, matching the
+/// hashing approach used for session and API tokens.
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    let digest_a = Sha256::digest(a.as_bytes());
+    let digest_b = Sha256::digest(b.as_bytes());
+    digest_a == digest_b
+}
+
 pub(crate) fn get_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
     for part in cookie_header.split(';') {
@@ -573,6 +612,23 @@ mod tests {
             resolved_client_ip(Some(peer), &headers, &[trusted_proxy]),
             Some(IpAddr::from([203, 0, 113, 20]))
         );
+    }
+
+    #[test]
+    fn percent_decode_handles_encoded_and_literal_values() {
+        assert_eq!(percent_decode("abc123"), "abc123");
+        assert_eq!(percent_decode("a%2Bb%2Fc%3D"), "a+b/c=");
+        // Truncated / invalid escapes are preserved verbatim.
+        assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
+
+    #[test]
+    fn constant_time_str_eq_matches_only_identical_strings() {
+        assert!(constant_time_str_eq("s3cr3t-token", "s3cr3t-token"));
+        assert!(!constant_time_str_eq("s3cr3t-token", "s3cr3t-toke"));
+        assert!(!constant_time_str_eq("s3cr3t-token", "wrong"));
+        assert!(!constant_time_str_eq("", "x"));
     }
 
     #[test]
