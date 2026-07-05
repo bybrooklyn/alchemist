@@ -1296,6 +1296,7 @@ pub async fn skip_reason_for_discovered_path(
 /// 2. Files are created in user-owned media directories
 /// 3. The job id makes the temp path unique per job, so two jobs whose output
 ///    paths collide never share (and clobber) the same temp file
+///
 /// The job id keeps the path deterministic per job, preserving resume semantics.
 fn temp_output_path_for(path: &Path, job_id: i64) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
