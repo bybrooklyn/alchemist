@@ -348,8 +348,26 @@ fn resolve_browse_path(path: Option<&str>) -> Result<PathBuf> {
 }
 
 /// Check if a path is a sensitive system directory that shouldn't be browsed.
+///
+/// NOTE: This is a denylist, not a confinement boundary. It reduces the chance
+/// of accidentally exposing well-known secret/system locations, but it does not
+/// sandbox the browser — paths not enumerated here remain reachable. Treat it
+/// as a guardrail, never as a security boundary.
 fn is_sensitive_path(path: &Path) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
+
+    // Cross-platform: block any path that traverses a well-known secrets or
+    // credential directory, matched by exact component name so it applies
+    // wherever the directory appears (e.g. under a user's home).
+    let sensitive_components = [".ssh", ".gnupg", ".aws"];
+    for component in path.components() {
+        if let Component::Normal(name) = component {
+            let name = name.to_string_lossy().to_ascii_lowercase();
+            if sensitive_components.iter().any(|candidate| *candidate == name) {
+                return true;
+            }
+        }
+    }
 
     #[cfg(unix)]
     {
@@ -358,6 +376,7 @@ fn is_sensitive_path(path: &Path) -> bool {
             "/etc",
             "/var/log",
             "/var/run",
+            "/var/lib",
             "/proc",
             "/sys",
             "/dev",
@@ -382,6 +401,10 @@ fn is_sensitive_path(path: &Path) -> bool {
             "\\windows\\syswow64",
             "\\windows\\winsxs",
             "\\programdata\\microsoft",
+            "\\$recycle.bin",
+            "\\system volume information",
+            "\\appdata\\roaming\\microsoft\\credentials",
+            "\\appdata\\roaming\\microsoft\\crypto",
         ];
 
         for pattern in sensitive_patterns {
