@@ -2256,10 +2256,27 @@ impl Pipeline {
         let config = self.config.read().await.clone();
         let telemetry_enabled = config.system.enable_telemetry;
 
+        // Integrity gate (ALWAYS enforced, even when quality gates are bypassed):
+        // a zero-byte output is a failed encode, never a valid result. Promoting
+        // it over the source would destroy the user's media. Basic plausibility
+        // checks like this must never sit behind `bypass_quality_gates` — only the
+        // compression-ratio / VMAF thresholds below are opt-out.
+        if output_size == 0 {
+            tracing::error!(
+                "Job {}: Encoded output is empty (0 bytes). Finalizing as failed; source preserved.",
+                job_id
+            );
+            let _ = std::fs::remove_file(context.temp_output_path);
+            cleanup_temp_subtitle_output(job_id, context.plan).await;
+            return Err(crate::error::AlchemistError::FFmpeg(
+                "Encoded output is empty (0 bytes)".to_string(),
+            ));
+        }
+
+        // Quality gate: compression-ratio threshold. Opt-out via bypass_quality_gates.
         if !context.bypass_quality_gates
-            && (output_size == 0
-                || (!context.plan.is_remux
-                    && reduction < config.transcode.size_reduction_threshold))
+            && !context.plan.is_remux
+            && reduction < config.transcode.size_reduction_threshold
         {
             tracing::warn!(
                 "Job {}: Size reduction gate failed ({:.2}%). Reverting.",
@@ -2268,17 +2285,10 @@ impl Pipeline {
             );
             let _ = std::fs::remove_file(context.temp_output_path);
             cleanup_temp_subtitle_output(job_id, context.plan).await;
-            let reason = if output_size == 0 {
-                format!(
-                    "size_reduction_insufficient|reduction=0.000,threshold={:.3},output_size=0",
-                    config.transcode.size_reduction_threshold
-                )
-            } else {
-                format!(
-                    "size_reduction_insufficient|reduction={:.3},threshold={:.3},output_size={}",
-                    reduction, config.transcode.size_reduction_threshold, output_size
-                )
-            };
+            let reason = format!(
+                "size_reduction_insufficient|reduction={:.3},threshold={:.3},output_size={}",
+                reduction, config.transcode.size_reduction_threshold, output_size
+            );
             self.record_job_decision(job_id, "skip", &reason).await;
             self.update_job_state(job_id, crate::db::JobState::Skipped)
                 .await?;
