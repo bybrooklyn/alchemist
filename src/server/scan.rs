@@ -607,6 +607,7 @@ pub(crate) async fn add_watch_dir_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddWatchDirPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let normalized_path = match super::canonicalize_directory_path(&payload.path, "path") {
         Ok(path) => path,
         Err(msg) => return api_error_response(StatusCode::BAD_REQUEST, "INVALID_PATH", msg),
@@ -665,6 +666,7 @@ pub(crate) async fn sync_watch_dirs_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<SyncWatchDirsPayload>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let mut next_config = state.config.read().await.clone();
     next_config.scanner.extra_watch_dirs = payload.dirs;
 
@@ -693,6 +695,7 @@ pub(crate) async fn remove_watch_dir_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    let _config_guard = state.config_update_lock.lock().await;
     let dir = match state.db.get_watch_dirs().await {
         Ok(dirs) => dirs.into_iter().find(|dir| dir.id == id),
         Err(e) => {
