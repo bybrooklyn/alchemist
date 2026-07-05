@@ -1869,7 +1869,9 @@ async fn proxied_clients_have_independent_login_rate_limits()
         "X-Forwarded-For",
         header::HeaderValue::from_static("203.0.113.20"),
     );
-    let Some(first_client) = middleware::resolved_client_ip(peer, &first_headers, &[]) else {
+    let trusted_proxies = [IpAddr::from([127, 0, 0, 1])];
+    let Some(first_client) = middleware::resolved_client_ip(peer, &first_headers, &trusted_proxies)
+    else {
         panic!("trusted proxy should resolve first client");
     };
 
@@ -1883,7 +1885,9 @@ async fn proxied_clients_have_independent_login_rate_limits()
         "X-Forwarded-For",
         header::HeaderValue::from_static("203.0.113.21"),
     );
-    let Some(second_client) = middleware::resolved_client_ip(peer, &second_headers, &[]) else {
+    let Some(second_client) =
+        middleware::resolved_client_ip(peer, &second_headers, &trusted_proxies)
+    else {
         panic!("trusted proxy should resolve second client");
     };
     assert!(middleware::allow_login_attempt(&state, second_client).await);
@@ -2611,7 +2615,7 @@ async fn restore_validation_accepts_downloaded_backup_snapshot()
     let payload: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
     assert_eq!(payload["valid"], true);
-    assert_eq!(payload["schema_version"], "16");
+    assert_eq!(payload["schema_version"], "18");
     assert_eq!(payload["min_compatible_version"], "0.2.5");
     assert_eq!(payload["job_count"], 1);
     assert!(payload["migration_count"].as_i64().unwrap_or(0) > 0);
