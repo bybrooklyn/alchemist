@@ -122,6 +122,12 @@ fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
     }
 
     let mut entries = if readable {
+        // Browsing a directory classifies every child. The media-hint walk is
+        // O(walk_budget) filesystem ops per child, so an unbounded fan-out on a
+        // huge or network-backed directory would block the worker on thousands
+        // of synchronous syscalls. Cap the number of children that run the deep
+        // walk; the rest fall back to a cheap name-only classification.
+        let mut deep_walks = 0usize;
         std::fs::read_dir(&path)
             .map_err(AlchemistError::Io)?
             .filter_map(|entry| entry.ok())
@@ -140,7 +146,16 @@ fn browse_blocking(path: &Path) -> Result<FsBrowseResponse> {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let hidden = is_hidden(&name, &entry_path);
                 let readable = std::fs::read_dir(&entry_path).is_ok();
-                let media_hint = classify_media_hint(&entry_path);
+                // The cheap name-based `High` hint still runs for every entry
+                // (inside `classify_media_hint_budgeted`); only the recursive
+                // walk is rationed via the budget.
+                let walk_budget = if deep_walks < BROWSE_WALK_ENTRY_CAP {
+                    deep_walks += 1;
+                    BROWSE_WALK_BUDGET
+                } else {
+                    0
+                };
+                let media_hint = classify_media_hint_budgeted(&entry_path, walk_budget);
 
                 let warning = if is_symlink {
                     Some("This is a symbolic link".to_string())
@@ -491,7 +506,24 @@ fn recommendation_reason(path: &Path, media_hint: MediaHint) -> String {
     }
 }
 
-fn classify_media_hint(path: &Path) -> MediaHint {
+/// Per-entry walk budget when classifying a directory listing (see
+/// [`classify_media_hint_budgeted`]). Kept well below the standalone
+/// [`FULL_WALK_BUDGET`] because browsing a directory calls this once per child.
+const BROWSE_WALK_BUDGET: usize = 64;
+
+/// Number of leading directory entries in a single browse listing that are
+/// allowed to run the recursive media-hint walk. Beyond this cap, entries fall
+/// back to a cheap name-only classification so browsing a directory with many
+/// children can't fan out into thousands of synchronous filesystem syscalls.
+const BROWSE_WALK_ENTRY_CAP: usize = 50;
+
+/// Walk budget for standalone classification (recommendations/preview), where
+/// the call count is small and bounded.
+const FULL_WALK_BUDGET: usize = 200;
+
+/// Cheap, name-only media hint: returns `true` when the directory name alone
+/// strongly suggests a media library, without touching the filesystem.
+fn media_name_hint(path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -512,8 +544,32 @@ fn classify_media_hint(path: &Path) -> MediaHint {
         "library",
         "downloads",
     ];
-    if media_names.iter().any(|candidate| name.contains(candidate)) {
+    media_names.iter().any(|candidate| name.contains(candidate))
+}
+
+fn classify_media_hint(path: &Path) -> MediaHint {
+    classify_media_hint_budgeted(path, FULL_WALK_BUDGET)
+}
+
+/// Classify a directory's media likelihood.
+///
+/// The cheap name-based `High` check always runs first. When `walk_budget` is
+/// `0` the recursive filesystem walk is skipped entirely and a cheap
+/// existence-based hint is returned; otherwise the walk visits at most
+/// `walk_budget` entries. Callers that classify many directories in a loop
+/// (e.g. a browse listing) pass a small budget — and `0` past a cap — to keep
+/// the amortized cost bounded.
+fn classify_media_hint_budgeted(path: &Path, walk_budget: usize) -> MediaHint {
+    if media_name_hint(path) {
         return MediaHint::High;
+    }
+
+    if walk_budget == 0 {
+        return if path.exists() {
+            MediaHint::Low
+        } else {
+            MediaHint::Unknown
+        };
     }
 
     let scanner = Scanner::new();
@@ -523,7 +579,7 @@ fn classify_media_hint(path: &Path) -> MediaHint {
         .max_depth(2)
         .into_iter()
         .filter_map(|entry| entry.ok())
-        .take(200)
+        .take(walk_budget)
     {
         if entry.file_type().is_dir() {
             child_dirs += 1;
