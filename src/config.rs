@@ -1107,6 +1107,11 @@ impl Config {
         for window in &self.schedule.windows {
             validate_schedule_time(&window.start_time)?;
             validate_schedule_time(&window.end_time)?;
+            let window_start = schedule_time_minutes(&window.start_time)?;
+            let window_end = schedule_time_minutes(&window.end_time)?;
+            if window_start == window_end {
+                anyhow::bail!("schedule window start and end must differ");
+            }
             if window.days_of_week.is_empty()
                 || window.days_of_week.iter().any(|day| !(0..=6).contains(day))
             {
