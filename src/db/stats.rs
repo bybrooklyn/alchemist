@@ -419,11 +419,15 @@ impl Db {
     pub async fn get_daily_summary_stats(&self) -> Result<DailySummaryStats> {
         let pool = &self.pool;
         timed_query("get_daily_summary_stats", || async {
+            // Timestamp columns are stored in UTC. To bucket by the user's
+            // LOCAL calendar day the modifiers must run in order: shift now to
+            // local wall-clock, snap to local midnight, then convert back to
+            // UTC so the boundary compares correctly against UTC-stored values.
             let row = sqlx::query(
                 "SELECT
-                    COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS completed,
-                    COALESCE(SUM(CASE WHEN status = 'failed' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS failed,
-                    COALESCE(SUM(CASE WHEN status = 'skipped' AND updated_at >= datetime('now', 'start of day', 'localtime') THEN 1 ELSE 0 END), 0) AS skipped
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at >= datetime('now', 'localtime', 'start of day', 'utc') THEN 1 ELSE 0 END), 0) AS completed,
+                    COALESCE(SUM(CASE WHEN status = 'failed' AND updated_at >= datetime('now', 'localtime', 'start of day', 'utc') THEN 1 ELSE 0 END), 0) AS failed,
+                    COALESCE(SUM(CASE WHEN status = 'skipped' AND updated_at >= datetime('now', 'localtime', 'start of day', 'utc') THEN 1 ELSE 0 END), 0) AS skipped
                  FROM jobs
                  WHERE archived = 0",
             )
@@ -437,7 +441,7 @@ impl Db {
             let bytes_row = sqlx::query(
                 "SELECT COALESCE(SUM(input_size_bytes - output_size_bytes), 0) AS bytes_saved
                  FROM encode_stats
-                 WHERE created_at >= datetime('now', 'start of day', 'localtime')",
+                 WHERE created_at >= datetime('now', 'localtime', 'start of day', 'utc')",
             )
             .fetch_one(pool)
             .await?;
@@ -447,7 +451,7 @@ impl Db {
                 "SELECT f.code AS code, COUNT(*) AS count
                  FROM job_failure_explanations f
                  JOIN jobs j ON j.id = f.job_id
-                 WHERE f.updated_at >= datetime('now', 'start of day', 'localtime')
+                 WHERE f.updated_at >= datetime('now', 'localtime', 'start of day', 'utc')
                    AND j.archived = 0
                  GROUP BY f.code
                  ORDER BY count DESC, code ASC
@@ -465,7 +469,7 @@ impl Db {
                  FROM decisions d
                  JOIN jobs j ON j.id = d.job_id
                  WHERE d.action = 'skip'
-                   AND d.created_at >= datetime('now', 'start of day', 'localtime')
+                   AND d.created_at >= datetime('now', 'localtime', 'start of day', 'utc')
                    AND j.archived = 0
                  GROUP BY COALESCE(d.reason_code, d.action)
                  ORDER BY count DESC, code ASC
@@ -493,12 +497,14 @@ impl Db {
     pub async fn get_skip_reason_counts(&self) -> Result<Vec<(String, i64)>> {
         let pool = &self.pool;
         timed_query("get_skip_reason_counts", || async {
+            // Local-day boundary in UTC terms: 'localtime' -> 'start of day'
+            // (local midnight) -> 'utc' to match UTC-stored created_at values.
             let rows = sqlx::query(
                 "SELECT COALESCE(d.reason_code, d.action) AS code, COUNT(*) AS count
                  FROM decisions d
                  JOIN jobs j ON j.id = d.job_id
                  WHERE d.action = 'skip'
-                   AND d.created_at >= datetime('now', 'start of day', 'localtime')
+                   AND d.created_at >= datetime('now', 'localtime', 'start of day', 'utc')
                    AND j.archived = 0
                  GROUP BY COALESCE(d.reason_code, d.action)
                  ORDER BY count DESC, code ASC
