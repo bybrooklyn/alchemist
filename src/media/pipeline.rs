@@ -1291,17 +1291,19 @@ pub async fn skip_reason_for_discovered_path(
 }
 
 /// Creates a temporary output path for encoding.
-/// Uses a predictable `.alchemist.tmp` suffix - this is acceptable because:
+/// Uses a predictable `.alchemist.<job_id>.tmp` suffix - this is acceptable because:
 /// 1. The suffix is unique to Alchemist and unlikely to conflict
 /// 2. Files are created in user-owned media directories
-/// 3. Same-file concurrent transcodes are prevented at the job level
-fn temp_output_path_for(path: &Path) -> PathBuf {
+/// 3. The job id makes the temp path unique per job, so two jobs whose output
+///    paths collide never share (and clobber) the same temp file
+/// The job id keeps the path deterministic per job, preserving resume semantics.
+fn temp_output_path_for(path: &Path, job_id: i64) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let filename = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("output");
-    parent.join(format!("{filename}.alchemist.tmp"))
+    parent.join(format!("{filename}.alchemist.{job_id}.tmp"))
 }
 
 fn resume_temp_dir_for(output_path: &Path, job_id: i64) -> PathBuf {
@@ -1545,7 +1547,7 @@ impl Pipeline {
         };
 
         let output_path = PathBuf::from(&job.output_path);
-        let temp_output_path = temp_output_path_for(&output_path);
+        let temp_output_path = temp_output_path_for(&output_path, job.id);
 
         if file_path == output_path {
             tracing::error!(
@@ -3003,7 +3005,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         std::fs::write(&temp_output, b"partial")?;
 
         let config = Arc::new(RwLock::new(crate::config::Config::default()));
@@ -3265,7 +3267,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
         assert_eq!(updated.status, crate::db::JobState::Failed);
         assert_eq!(updated.attempt_count, 1);
-        assert!(!temp_output_path_for(&output).exists());
+        assert!(!temp_output_path_for(&output, job.id).exists());
 
         let failure = db
             .get_job_failure_explanation(job.id)
@@ -3412,7 +3414,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let ffmpeg_status = Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -3584,7 +3586,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         std::fs::write(&temp_output, b"partial")?;
         sqlx::query("DROP TABLE logs").execute(&db.pool).await?;
 
@@ -3745,7 +3747,7 @@ mod tests {
         db.update_job_status(job.id, crate::db::JobState::Encoding)
             .await?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let ffmpeg_status = std::process::Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -3967,7 +3969,7 @@ mod tests {
             },
             is_remux: false,
             copy_video: false,
-            output_path: Some(temp_output_path_for(&output)),
+            output_path: Some(temp_output_path_for(&output, job.id)),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
             output_codec: Some(crate::config::OutputCodec::H264),
@@ -3993,7 +3995,7 @@ mod tests {
             .await?;
         let first_segment_mtime = std::fs::metadata(&segments[0].temp_path)?.modified()?;
 
-        let temp_output = temp_output_path_for(&output);
+        let temp_output = temp_output_path_for(&output, job.id);
         let result = pipeline
             .execute_resumable_transcode(&job, &plan, &analysis.metadata, &temp_output)
             .await?;
@@ -4102,7 +4104,7 @@ mod tests {
             },
             is_remux: false,
             copy_video: false,
-            output_path: Some(temp_output_path_for(&output)),
+            output_path: Some(temp_output_path_for(&output, job.id)),
             container: "mkv".to_string(),
             requested_codec: crate::config::OutputCodec::H264,
             output_codec: Some(crate::config::OutputCodec::H264),
