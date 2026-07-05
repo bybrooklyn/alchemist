@@ -330,7 +330,10 @@ impl Transcoder {
                         Ok(line_res) => match line_res {
                             Ok(Some(line)) => {
                                 let line = if line.len() > 4096 {
-                                    format!("{}...[truncated]", &line[..4096])
+                                    // Truncate on a char boundary; &line[..4096] would
+                                    // panic if 4096 lands mid-codepoint.
+                                    let truncated: String = line.chars().take(4096).collect();
+                                    format!("{truncated}...[truncated]")
                                 } else {
                                     line
                                 };
