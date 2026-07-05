@@ -173,9 +173,28 @@ impl<'a> FFmpegCommandBuilder<'a> {
     }
 
     pub fn build(self) -> Result<tokio::process::Command> {
+        // build_args() renders every operand as a lossy String (kept for the
+        // flag-ordering unit tests). For the spawned process, substitute the
+        // real OsStr for the two path operands — the token immediately after
+        // "-i" (input) and the final token (output) — so non-UTF-8 filenames
+        // survive on Linux instead of being mangled by lossy conversion.
         let args = self.build_args()?;
         let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args(&args);
+        let last = args.len().saturating_sub(1);
+        let mut expect_input = false;
+        for (i, arg) in args.iter().enumerate() {
+            if i == last {
+                cmd.arg(self.output.as_os_str());
+            } else if expect_input {
+                cmd.arg(self.input.as_os_str());
+                expect_input = false;
+            } else {
+                if arg == "-i" {
+                    expect_input = true;
+                }
+                cmd.arg(arg);
+            }
+        }
         // Reap the ffmpeg child if the future driving it is dropped, so a
         // cancelled/panicked task never leaves an orphaned encoder running.
         cmd.kill_on_drop(true);
@@ -357,6 +376,38 @@ impl<'a> FFmpegCommandBuilder<'a> {
         }
 
         Ok(Some(args))
+    }
+
+    /// Builds the subtitle-extract Command with real OsStr path operands so
+    /// non-UTF-8 input/sidecar filenames survive. Mirrors the operand order of
+    /// [`Self::build_subtitle_extract_args`], which is retained for unit tests.
+    pub fn build_subtitle_extract(&self) -> Result<Option<tokio::process::Command>> {
+        let SubtitleStreamPlan::Extract { outputs } = &self.plan.subtitles else {
+            return Ok(None);
+        };
+        if outputs.is_empty() {
+            return Ok(None);
+        }
+
+        let mut cmd = tokio::process::Command::new("ffmpeg");
+        cmd.arg("-hide_banner")
+            .arg("-y")
+            .arg("-nostats")
+            .arg("-i")
+            .arg(self.input.as_os_str());
+
+        for sidecar_output in outputs {
+            cmd.arg("-map")
+                .arg(format!("0:s:{}", sidecar_output.stream_index))
+                .arg("-c:s")
+                .arg(&sidecar_output.codec)
+                .arg("-f")
+                .arg(&sidecar_output.codec)
+                .arg(sidecar_output.temp_path.as_os_str());
+        }
+
+        cmd.kill_on_drop(true);
+        Ok(Some(cmd))
     }
 }
 

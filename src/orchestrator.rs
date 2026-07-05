@@ -222,7 +222,7 @@ impl Transcoder {
             request.plan,
         )
         .with_hardware(request.hw_info);
-        let Some(args) = builder.build_subtitle_extract_args()? else {
+        let Some(cmd) = builder.build_subtitle_extract()? else {
             return Ok(());
         };
 
@@ -239,9 +239,6 @@ impl Transcoder {
             }
         }
 
-        let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args(&args);
-        cmd.kill_on_drop(true);
         self.run_ffmpeg_command(cmd, request.job_id, request.observer, None)
             .await
     }
