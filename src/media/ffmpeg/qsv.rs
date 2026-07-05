@@ -26,13 +26,13 @@ pub fn append_args(
 
     match encoder {
         Encoder::Av1Qsv => {
+            // av1_qsv does not expose the -look_ahead option; setting it errors
+            // out. Omit lookahead flags entirely for this encoder.
             args.extend([
                 "-c:v".to_string(),
                 "av1_qsv".to_string(),
                 "-global_quality".to_string(),
                 quality.to_string(),
-                "-look_ahead".to_string(),
-                "20".to_string(),
             ]);
         }
         Encoder::HevcQsv => {
@@ -41,7 +41,11 @@ pub fn append_args(
                 "hevc_qsv".to_string(),
                 "-global_quality".to_string(),
                 quality.to_string(),
+                // -look_ahead is a boolean toggle; the window size is set with
+                // -look_ahead_depth.
                 "-look_ahead".to_string(),
+                "1".to_string(),
+                "-look_ahead_depth".to_string(),
                 "20".to_string(),
             ]);
         }
@@ -51,7 +55,11 @@ pub fn append_args(
                 "h264_qsv".to_string(),
                 "-global_quality".to_string(),
                 quality.to_string(),
+                // -look_ahead is a boolean toggle; the window size is set with
+                // -look_ahead_depth.
                 "-look_ahead".to_string(),
+                "1".to_string(),
+                "-look_ahead_depth".to_string(),
                 "20".to_string(),
             ]);
         }
