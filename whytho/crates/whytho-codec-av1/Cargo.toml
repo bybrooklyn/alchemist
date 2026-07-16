@@ -1,0 +1,12 @@
+[package]
+name = "whytho-codec-av1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AV1 decoder and rav1e-backed encoder for whytho."
+
+[dependencies]
+whytho-types.workspace = true
+rav1e.workspace = true
+v_frame.workspace = true

@@ -1,0 +1,56 @@
+[workspace]
+members = [
+    "crates/whytho-backends",
+    "crates/whytho-cli",
+    "crates/whytho-codecs",
+    "crates/whytho-core",
+    "crates/whytho-mux",
+    "crates/whytho-types",
+    "crates/whytho-codec-h264",
+    "crates/whytho-codec-av1",
+    "crates/whytho-codec-opus",
+    "crates/whytho-tables",
+    "crates/whytho-entropy",
+    "crates/whytho-dsp",
+    "crates/whytho-codec-av2",
+    "crates/whytho-rav1e",
+    "crates/whytho-rav1e/ivf",
+    "crates/whytho-h264dec",
+    "vendored/mkv-element",
+    "crates/whytho-opus",
+    "crates/whytho-conformance",
+    "xtask",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+whytho-core = { path = "crates/whytho-core" }
+whytho-codecs = { path = "crates/whytho-codecs" }
+whytho-backends = { path = "crates/whytho-backends" }
+whytho-mux = { path = "crates/whytho-mux" }
+whytho-types = { path = "crates/whytho-types" }
+whytho-codec-h264 = { path = "crates/whytho-codec-h264" }
+whytho-codec-av1 = { path = "crates/whytho-codec-av1" }
+whytho-codec-opus = { path = "crates/whytho-codec-opus" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+matroska = "0.30"
+matroska-demuxer = { path = "vendored/matroska-demuxer" }
+h264-reader = "0.8"
+rav1e     = { package = "whytho-rav1e", path = "crates/whytho-rav1e" }
+v_frame = "0.3"
+rust_h264 = { package = "whytho-h264dec", path = "crates/whytho-h264dec" }
+mkv-element = { path = "vendored/mkv-element" }
+opus-rs   = { package = "whytho-opus", path = "crates/whytho-opus" }
+whytho-tables = { path = "crates/whytho-tables" }
+whytho-entropy = { path = "crates/whytho-entropy" }
+whytho-dsp = { path = "crates/whytho-dsp" }
+whytho-codec-av2 = { path = "crates/whytho-codec-av2" }

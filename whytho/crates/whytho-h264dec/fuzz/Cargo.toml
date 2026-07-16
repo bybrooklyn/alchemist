@@ -1,0 +1,56 @@
+[package]
+name = "rust_h264-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rust_h264]
+path = ".."
+
+# Prevent this crate from interfering with documentation generation.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "parse_annex_b"
+path = "fuzz_targets/parse_annex_b.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_avcc"
+path = "fuzz_targets/parse_avcc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_avcc_config"
+path = "fuzz_targets/parse_avcc_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_annex_b"
+path = "fuzz_targets/decode_annex_b.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_avcc"
+path = "fuzz_targets/decode_avcc.rs"
+test = false
+doc = false
+bench = false

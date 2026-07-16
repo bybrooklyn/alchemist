@@ -1,0 +1,67 @@
+name: "Build/Test the Matroska RFCs"
+# Trigger the workflow on push or pull request
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+jobs:
+  build_ietf:
+    name: "Build RFCS"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get pushed code
+        uses: actions/checkout@v4
+
+      - name: Setup test tools
+        # we need the apt update because old packages won't load
+        run: |
+          sudo apt update
+          sudo apt install xsltproc
+
+      - name: Setup toolchain
+        run: ./bootstrap
+
+      - name: Build Matroska IETF documents
+        run: make matroska
+
+      - name: Build Codecs IETF documents
+        run: make codecs
+
+      - name: Build Tags IETF documents
+        run: make tags
+
+      # "all" target not covered by matroska+codecs+tags+test
+      # in case we add more stuff in there
+      - name: Build remaining
+        run: make
+
+      - name: XML Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matroska-ietf-xmls
+          path: |
+            draft-ietf-cellar-matroska-*.xml
+            draft-ietf-cellar-codec-*.xml
+            draft-ietf-cellar-tags-*.xml
+            draft-ietf-cellar-chapter-codecs-*.xml
+            draft-ietf-cellar-control-*.xml
+            matroska_iana.xml
+
+  schema_test:
+    name: "Test Schema"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get pushed code
+        uses: actions/checkout@v4
+
+      - name: Setup test tools
+        # we need the apt update because old packages won't load
+        run: |
+          sudo apt update
+          sudo apt install xsltproc libxml2-utils
+
+      # First check the Matroska EBML Schema is valid
+      - name: Test Matroska EBML Schema
+        run: make check
+

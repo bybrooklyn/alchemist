@@ -1,0 +1,38 @@
+{{ doc }}
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct {{ name }}(pub u64);
+impl std::ops::Deref for {{ name }} {
+    type Target = u64;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Element for {{ name }} {
+    const ID: VInt64 = VInt64::from_encoded({{ id }});
+    fn decode_body(buf: &mut dyn Buf) -> crate::Result<Self> {
+        if !buf.has_remaining() {
+            return Ok(Self({{ default_value }}));
+        }
+        if buf.remaining() > 8 {
+            return Err(crate::Error::UnderDecode(Self::ID));
+        }
+        let len = buf.remaining().min(8);
+        let mut value = [0u8; 8];
+        buf.take(len).copy_to_slice(&mut value[8 - len..]);
+        Ok(Self(u64::from_be_bytes(value)))
+    }
+    fn encode_body<B: BufMut>(&self, buf: &mut B) -> crate::Result<()> {
+        let bytes = self.0.to_be_bytes();
+        let first_non_zero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len() - 1);
+        buf.put_slice(&bytes[first_non_zero..]);
+        Ok(())
+    }
+{% if has_default %}
+    const HAS_DEFAULT_VALUE: bool = true;
+{% endif %}
+}
+impl Default for {{ name }} {
+    fn default() -> Self {
+        Self({{ default_value }})
+    }
+}

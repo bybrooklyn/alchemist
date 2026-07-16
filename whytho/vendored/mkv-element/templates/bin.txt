@@ -1,0 +1,24 @@
+{{ doc }}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct {{ name }}(pub Bytes);
+impl std::ops::Deref for {{ name }} {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Element for {{ name }} {
+    const ID: VInt64 = VInt64::from_encoded({{ id }});
+    fn decode_body(buf: &mut dyn Buf) -> crate::Result<Self> {
+        Ok(Self(buf.copy_to_bytes(buf.remaining())))
+    }
+    fn encode_body<B: BufMut>(&self, buf: &mut B) -> crate::Result<()> {
+        buf.put_slice(&self.0);
+        Ok(())
+    }
+}
+impl Default for {{ name }} {
+    fn default() -> Self {
+        Self(Bytes::new())
+    }
+}

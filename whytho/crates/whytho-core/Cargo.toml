@@ -1,0 +1,16 @@
+[package]
+name = "whytho-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+whytho-types.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+matroska.workspace = true
+matroska-demuxer.workspace = true
+h264-reader.workspace = true

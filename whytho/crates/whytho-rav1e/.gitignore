@@ -1,0 +1,9 @@
+aom_test
+target/
+*.y4m
+*.ivf
+*.png
+*.bin
+secret_key
+.vscode/
+.idea/

@@ -1,0 +1,19 @@
+[package]
+edition = "2024"
+authors = ["jinti<shenjindi@fourz.cn>"]
+name = "whytho-opus"
+version = "0.1.23"
+description = "pure Rust implementation of Opus codec"
+license = "BSD-3-Clause"
+repository = "https://github.com/restsend/opus-rs"
+
+[lib]
+name = "opus_rs"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+proptest = "1"
+
+[[bench]]
+name = "opus_bench"
+harness = false

@@ -1,0 +1,13 @@
+[package]
+name = "whytho-codec-av2"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license.workspace = true
+description = "The AV2 encode pipeline and bitstream writer"
+
+[dependencies]
+whytho-types.workspace = true
+whytho-tables.workspace = true
+whytho-entropy.workspace = true
+whytho-dsp.workspace = true

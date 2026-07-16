@@ -1,0 +1,21 @@
+WhyTho — Mixed Licensing Notice
+
+First-party code: Apache-2.0 (see workspace LICENSE)
+
+Absorbed vendored components (license preserved, not relicensed):
+- rav1e (AV1 encoder): BSD-2-Clause — Copyright (c) 2017-2023 the rav1e
+  contributors. Also carries an AOM Patent License 1.0 grant (see
+  crates/whytho-rav1e/PATENTS).
+- opus-rs (Opus codec): BSD-3-Clause — Copyright 2026 restsend.com and the
+  original IETF reference-implementation copyright holders (Xiph.Org, Skype
+  Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory
+  Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon — see
+  crates/whytho-opus/COPYING, which also lists Opus's own royalty-free patent
+  grants from Xiph.Org, Microsoft, and Broadcom).
+- rust_h264 (H.264 decoder): MIT OR Apache-2.0 — Copyright (c) 2025 roticv.
+
+AV2 / rav2e components: Apache-2.0 with AOM Patent License 1.0 (see PATENTS)
+  Caveat: The Apache-2.0 relicense of AV2 code applies only to original
+  spec-implementation code owned by the author, not verbatim AVM source
+  (which is BSD-3-Clause-Clear). The AOM patent grant in PATENTS applies
+  regardless.

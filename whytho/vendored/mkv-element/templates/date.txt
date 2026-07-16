@@ -1,0 +1,31 @@
+{{ doc }}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct {{ name }}(pub i64);
+impl std::ops::Deref for {{ name }} {
+    type Target = i64;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Element for {{ name }} {
+    const ID: VInt64 = VInt64::from_encoded({{ id }});
+    fn decode_body(buf: &mut dyn Buf) -> crate::Result<Self> {
+        if buf.remaining() != 8 {
+            return Err(crate::Error::UnderDecode(Self::ID));
+        }
+        Ok(Self(buf.get_i64()))
+    }
+    fn encode_body<B: BufMut>(&self, buf: &mut B) -> crate::Result<()> {
+        buf.put_slice(&self.0.to_be_bytes());
+        Ok(())
+    }
+}
+impl Default for {{ name }} {
+    fn default() -> Self {
+{% if has_default %}
+        Self({{ default_value }})
+{% else %}
+        Self(0)
+{% endif %}
+    }
+}

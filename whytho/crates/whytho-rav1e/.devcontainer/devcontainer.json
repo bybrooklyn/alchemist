@@ -1,0 +1,4 @@
+{
+	"name": "rav1e-devcontainer",
+	"image": "ghcr.io/xiph/rav1e-devcontainer:latest"
+}
