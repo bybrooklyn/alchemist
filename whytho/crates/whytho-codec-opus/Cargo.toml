@@ -1,0 +1,11 @@
+[package]
+name = "whytho-codec-opus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Opus audio encoder for whytho."
+
+[dependencies]
+whytho-types.workspace = true
+opus-rs.workspace = true

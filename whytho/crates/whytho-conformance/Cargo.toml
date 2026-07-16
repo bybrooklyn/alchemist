@@ -1,0 +1,16 @@
+[package]
+name = "whytho-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Conformance / round-trip tests for whytho codecs"
+publish = false
+
+[dev-dependencies]
+whytho-codec-av1 = { path = "../whytho-codec-av1" }
+whytho-codec-h264 = { path = "../whytho-codec-h264" }
+whytho-mux = { path = "../whytho-mux" }
+whytho-types = { path = "../whytho-types" }
+matroska-demuxer = { workspace = true }
+tempfile = "3"

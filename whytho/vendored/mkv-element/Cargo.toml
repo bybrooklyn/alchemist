@@ -1,0 +1,47 @@
+[package]
+name    = "mkv-element"
+version = "0.4.0"
+edition = "2024"
+authors     = ["b01o <b01o@proton.me>"]
+repository  = "https://github.com/b01o/mkv-element"
+license     = "MIT"
+description = "A Matroska/WebM element reader and writer."
+
+keywords = ["matroska", "webm", "parser", "writer"]
+categories = ["asynchronous", "multimedia::encoding"]
+
+[dependencies]
+thiserror = "2"
+hexf = "0.2.1"
+paste = "1"
+log = "0.4"
+bytes = "1"
+tokio = { version = "1.47", default-features = false, features = [], optional = true }
+
+[features]
+tokio = ["dep:tokio"]
+utils = ["tokio/io-util"]
+
+[dev-dependencies]
+roxmltree = "0.21.0"
+tokio-test = "0.4.4"
+tokio     = { version = "1.47", features = ["full"] }
+mkv-element = { path = ".", features = ["tokio", "utils"] }
+remote-file = "0.2"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+
+[build-dependencies]
+roxmltree = "0.21.0"
+hexf      = "0.2.1"
+askama    = "0.15.4"
+
+[package.metadata.cargo-shear]
+ignored = [
+    "tokio-test", # Only used for testing, not a public API.
+    "hexf",       # Used in generated code, cargo shear doesn't know about it.
+]
+
+[package.metadata.docs.rs]
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --no-deps --open
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

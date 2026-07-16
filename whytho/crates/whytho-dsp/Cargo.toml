@@ -1,0 +1,7 @@
+[package]
+name = "whytho-dsp"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license.workspace = true
+description = "AV2 DSP kernels: safe scalar baseline + embedded ARM/x86 asm, runtime dispatched"

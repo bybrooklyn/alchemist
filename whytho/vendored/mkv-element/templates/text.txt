@@ -1,0 +1,40 @@
+{{ doc }}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct {{ name }}(pub String);
+impl std::ops::Deref for {{ name }} {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Element for {{ name }} {
+    const ID: VInt64 = VInt64::from_encoded({{ id }});
+    fn decode_body(buf: &mut dyn Buf) -> crate::Result<Self> {
+{% if has_default %}
+        if !buf.has_remaining() {
+            return Ok(Self("{{ default_value }}".into()));
+        }
+{% endif %}
+        let first_zero = buf.chunk().iter().position(|&b| b == 0).unwrap_or(buf.remaining());
+        let result = Self(String::from_utf8_lossy(&buf.chunk()[..first_zero]).to_string());
+        buf.advance(buf.remaining());
+        Ok(result)
+    }
+    fn encode_body<B: BufMut>(&self, buf: &mut B) -> crate::Result<()> {
+        buf.put_slice(self.0.as_bytes());
+        buf.put_u8(0);
+        Ok(())
+    }
+{% if has_default %}
+    const HAS_DEFAULT_VALUE: bool = true;
+{% endif %}
+}
+impl Default for {{ name }} {
+    fn default() -> Self {
+{% if has_default %}
+        Self("{{ default_value }}".to_string())
+{% else %}
+        Self(String::new())
+{% endif %}
+    }
+}

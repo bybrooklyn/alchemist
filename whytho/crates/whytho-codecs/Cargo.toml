@@ -1,0 +1,21 @@
+[package]
+name = "whytho-codecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Codec facade for whytho.: re-exports + capability registry over feature-gated codec crates"
+
+[dependencies]
+whytho-types.workspace = true
+whytho-codec-h264 = { workspace = true, optional = true }
+whytho-codec-av1 = { workspace = true, optional = true }
+whytho-codec-opus = { workspace = true, optional = true }
+whytho-codec-av2 = { workspace = true, optional = true }
+
+[features]
+default = ["h264", "av1", "av2", "opus"]
+h264 = ["dep:whytho-codec-h264"]
+av1 = ["dep:whytho-codec-av1"]
+opus = ["dep:whytho-codec-opus"]
+av2 = ["dep:whytho-codec-av2"]
