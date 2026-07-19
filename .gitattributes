@@ -5,6 +5,7 @@ Dockerfile linguist-vendored
 
 # Exclude generated/build files
 target/** linguist-generated
+whytho/** linguist-vendored
 *.lock linguist-generated
 Cargo.lock linguist-generated
 
