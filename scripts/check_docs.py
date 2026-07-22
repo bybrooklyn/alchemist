@@ -24,6 +24,7 @@ DEFAULT_MANIFEST_URL = (
     "https://deadsignal.works/alchemist/docs/source-manifest.json"
 )
 LINK_PATTERN = re.compile(r"\]\((/[^)\s]+)\)")
+DOCUSAURUS_DIRECTIVE_PATTERN = re.compile(r"^:::", re.MULTILINE)
 
 
 def frontmatter(source: str, path: Path) -> dict[str, str]:
@@ -128,6 +129,8 @@ def validate() -> dict[str, object]:
 
     allowed_assets = {"/openapi.yaml"}
     for path, source, _fields, _route in parsed:
+        if DOCUSAURUS_DIRECTIVE_PATTERN.search(source):
+            failures.append(f"{path}: contains unsupported Docusaurus directive syntax")
         for match in LINK_PATTERN.finditer(source):
             raw_target = match.group(1)
             path_part = urlsplit(raw_target).path
