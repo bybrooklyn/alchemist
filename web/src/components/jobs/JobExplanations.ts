@@ -1,13 +1,13 @@
 import type { ExplanationView, LogEntry } from "./types";
 
 /** Public docs site root where every error/decision code is documented. */
-export const DOCS_BASE_URL = "https://alchemist-project.org";
+export const DOCS_BASE_URL = "https://deadsignal.works/alchemist/docs";
 
 /** Canonical docs link for a code. Mirrors the backend `docs_url_for_code`
  *  (`src/explanations.rs`) so client-derived and server-derived explanations
- *  point at the same anchored reference page. The docs site serves at root. */
+ *  point at the same anchored reference page. */
 export function docsUrlForCode(code: string): string {
-    return `${DOCS_BASE_URL}/errors#${code.trim().toLowerCase()}`;
+    return `${DOCS_BASE_URL}/errors/#${code.trim().toLowerCase()}`;
 }
 
 function formatReductionPercent(value?: string): string {

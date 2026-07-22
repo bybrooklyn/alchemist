@@ -1,4 +1,4 @@
-name: Docs
+name: Documentation source
 
 on:
   push:
@@ -6,92 +6,40 @@ on:
       - master
     paths:
       - 'docs/**'
+      - 'contracts/openapi.yaml'
+      - 'LICENSE-DOCUMENTATION-CC-BY-SA-4.0'
+      - 'scripts/check_docs.py'
+      - 'scripts/check_api_contract.py'
       - '.github/workflows/docs.yml'
-      - '.github/workflows/build.yml'
   pull_request:
     paths:
       - 'docs/**'
+      - 'contracts/openapi.yaml'
+      - 'LICENSE-DOCUMENTATION-CC-BY-SA-4.0'
+      - 'scripts/check_docs.py'
+      - 'scripts/check_api_contract.py'
       - '.github/workflows/docs.yml'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 concurrency:
-  group: docs-${{ github.workflow }}-${{ github.ref }}
+  group: docs-source-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  BUN_VERSION: "1.3.5"
-  NODE_VERSION: "24"
 
 jobs:
-  build-docs:
+  validate-docs:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate documentation source
+        run: python3 scripts/check_docs.py
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Restore Bun dependency cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            docs/node_modules
-            ~/.bun/install/cache
-          key: bun-docs-${{ runner.os }}-${{ hashFiles('docs/bun.lock') }}
-          restore-keys: |
-            bun-docs-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: cd docs && bun install --frozen-lockfile
-
-      - name: API contract
+      - name: Validate API contract
         run: python3 scripts/check_api_contract.py
-
-      - name: Build docs site
-        env:
-          DOCS_URL: https://bybrooklyn.github.io
-          DOCS_BASE_URL: /
-        run: cd docs && npm run build
-
-      - name: Upload built site artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: docs-site-${{ github.run_id }}
-          path: docs/build
-          retention-days: 7
-
-      - name: Upload GitHub Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: docs/build
-
-  deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-    needs: [build-docs]
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5

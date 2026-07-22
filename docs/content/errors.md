@@ -18,7 +18,7 @@ Every error Alchemist can report carries a stable **code**. The same code appear
 - the **API** as the `code` and `docs_url` fields of an [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `application/problem+json` response,
 - the **logs** (`alchemist.log`), tagged on the failing job's span.
 
-Each code below is an anchor: `https://alchemist-project.org/errors#<code>`. If the app sent you here, jump to your code.
+Each code below is an anchor: `https://deadsignal.works/alchemist/docs/errors/#<code>`. If the app sent you here, jump to your code.
 
 There are three families:
 

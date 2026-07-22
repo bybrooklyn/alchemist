@@ -10,19 +10,17 @@ pub enum ExplanationCategory {
 }
 
 /// Base URL of the public docs site where every error code is documented.
-pub const DOCS_BASE_URL: &str = "https://alchemist-project.org";
+pub const DOCS_BASE_URL: &str = "https://deadsignal.works/alchemist/docs";
 
 /// Canonical documentation link for an error/decision code.
 ///
 /// Every code emitted anywhere in Alchemist resolves to a stable anchor on the
-/// error reference page (`{DOCS_BASE_URL}/errors#<code>`) so operators always
-/// have one place to read the cause and the fix. The docs site serves content
-/// at the root (`routeBasePath: '/'`), so there is no `/docs` prefix. Anchors
-/// are lowercased to match Docusaurus heading-id generation. Keep in sync with
-/// `docs/docs/errors.md`.
+/// error reference page (`{DOCS_BASE_URL}/errors/#<code>`) so operators always
+/// have one place to read the cause and the fix. Anchors are lowercased to
+/// match Astro heading IDs. Keep in sync with `docs/content/errors.md`.
 pub fn docs_url_for_code(code: &str) -> String {
     format!(
-        "{DOCS_BASE_URL}/errors#{}",
+        "{DOCS_BASE_URL}/errors/#{}",
         code.trim().to_ascii_lowercase()
     )
 }
@@ -977,11 +975,11 @@ mod tests {
         let explanation = failure_from_summary("Transcode failed: Unknown encoder 'missing'");
         assert_eq!(
             explanation.docs_url,
-            "https://alchemist-project.org/errors#encoder_unavailable"
+            "https://deadsignal.works/alchemist/docs/errors/#encoder_unavailable"
         );
         assert_eq!(
             docs_url_for_code("ENCODER_OPEN_FAILED"),
-            "https://alchemist-project.org/errors#encoder_open_failed"
+            "https://deadsignal.works/alchemist/docs/errors/#encoder_open_failed"
         );
     }
 
@@ -994,7 +992,7 @@ mod tests {
         };
         assert_eq!(
             explanation.docs_url,
-            "https://alchemist-project.org/errors#disk_full"
+            "https://deadsignal.works/alchemist/docs/errors/#disk_full"
         );
     }
 

@@ -22,7 +22,7 @@ and [worker types](https://docs.tdarr.io/docs/nodes/workers/).
 
 ## At a glance
 
-| | Alchemist | Tdarr |
+| Dimension | Alchemist | Tdarr |
 |---|---|---|
 | License | AGPLv3 (fully open source) | See Tdarr's own licensing page |
 | Deployment | Single binary (also a single Docker container) | Central server + node process(es) + workers |

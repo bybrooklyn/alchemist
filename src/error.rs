@@ -51,7 +51,7 @@ pub enum AlchemistError {
 impl AlchemistError {
     /// Stable, machine-readable code for this error. Every variant maps to a
     /// documented code so logs, API responses, and the UI can link operators to
-    /// `docs_url()`. Keep in sync with `docs/docs/errors.md`.
+    /// `docs_url()`. Keep in sync with `docs/content/errors.md`.
     pub fn code(&self) -> &'static str {
         match self {
             AlchemistError::Database(_) => "ERR_DATABASE",

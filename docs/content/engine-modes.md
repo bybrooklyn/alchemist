@@ -7,7 +7,7 @@ Alchemist uses **Modes** to dictate performance limits and **States** to control
 
 ## Engine Modes (Concurrency)
 
-Modes define the maximum number of concurrent jobs the engine will attempt to run. 
+Modes define the maximum number of concurrent jobs the engine will attempt to run.
 
 | Mode | Concurrent Jobs | Ideal For |
 |------|----------------|-----------|

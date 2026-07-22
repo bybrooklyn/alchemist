@@ -48,8 +48,6 @@ install-u:
     cargo fetch --locked
     @echo "── Web dependencies ──"
     cd web && bun install --frozen-lockfile
-    @echo "── Docs dependencies ──"
-    cd docs && bun install --frozen-lockfile
     @echo "── E2E dependencies ──"
     cd web-e2e && bun install --frozen-lockfile && bunx playwright install chromium
     @if ! command -v ffmpeg >/dev/null; then \
@@ -85,9 +83,10 @@ perform:
 web:
     cd web && bun install --frozen-lockfile && bun run dev
 
-# Start documentation dev server only
+# Validate the authoritative documentation source
 docs:
-    cd docs && bun install --frozen-lockfile && bun run start
+    python3 scripts/check_docs.py
+    @echo "Preview the generated site from the Dead Signal Works website repository."
 
 # ─────────────────────────────────────────
 # BUILD
@@ -372,7 +371,7 @@ release-verify:
     @echo "── Web verify ──"
     cd web && bun install --frozen-lockfile && bun run verify && python3 ../scripts/run_bun_audit.py .
     @echo "── Docs verify ──"
-    cd docs && bun install --frozen-lockfile && bun run build && python3 ../scripts/run_bun_audit.py .
+    python3 scripts/check_docs.py
     @echo "── E2E backend build ──"
     rm -rf target/debug/incremental
     CARGO_INCREMENTAL=0 cargo build --locked --no-default-features
@@ -478,14 +477,14 @@ update NEW_VERSION:
     fi; \
     for file in "${CHANGED_TRACKED[@]}"; do \
         case "${file}" in \
-            VERSION|Cargo.toml|Cargo.lock|CHANGELOG.md|docs/docs/changelog.md|package.json|*/package.json) ;; \
+            VERSION|Cargo.toml|Cargo.lock|CHANGELOG.md|docs/content/changelog.md|package.json|*/package.json) ;; \
             *) \
                 echo "error: unexpected tracked change after validation: ${file}" >&2; \
                 exit 1; \
                 ;; \
         esac; \
     done; \
-    git add -- VERSION Cargo.toml Cargo.lock CHANGELOG.md docs/docs/changelog.md; \
+    git add -- VERSION Cargo.toml Cargo.lock CHANGELOG.md docs/content/changelog.md; \
     if [ "${#PACKAGE_FILES[@]}" -gt 0 ]; then \
         git add -- "${PACKAGE_FILES[@]}"; \
     fi; \
@@ -521,7 +520,7 @@ release-check:
     @just release-verify
     @echo ""
     @echo "✓ All checks passed. Next steps:"
-    @echo "  1. Update CHANGELOG.md and docs/docs/changelog.md"
+    @echo "  1. Update CHANGELOG.md and docs/content/changelog.md"
     @echo "  2. Complete the manual checklist in RELEASING.md"
     @echo "  3. Commit and merge the release-prep changes"
     @echo "  4. Tag v{{VERSION}} on the exact merged commit when ready"
@@ -542,9 +541,6 @@ clean:
     fi
     rm -rf \
         dist \
-        docs/.docusaurus \
-        docs/build \
-        docs/node_modules \
         native/mac/.artifacts \
         native/mac/.build \
         web/.astro \

@@ -2,11 +2,15 @@
 
 Thanks for your interest in contributing to **Alchemist**. Contributions are welcome, but please read this document carefully before submitting anything.
 
-## License
+## Licenses
 
-Alchemist is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+Alchemist software is licensed under the **GNU Affero General Public License
+v3.0 or later (AGPL-3.0-or-later)**. Human-authored documentation under
+`docs/content/` is licensed under **Creative Commons Attribution-ShareAlike 4.0
+International (CC BY-SA 4.0)**.
 
-By contributing to this project, you agree that your contributions will be licensed under the same AGPL-3.0 license.
+By contributing, you agree that software contributions use AGPL-3.0-or-later
+and documentation contributions use CC BY-SA 4.0. See [LICENSES.md](LICENSES.md).
 
 ## Copyright & Ownership
 
@@ -14,7 +18,7 @@ By submitting a contribution (code, documentation, assets, or any other material
 
 - You **grant the project owner** a **perpetual, irrevocable, worldwide right** to use, modify, relicense, and redistribute your contribution as part of the project.
 - You retain copyright to your individual contribution, **but you grant the project owner full rights to incorporate it into Alchemist**, including future relicensing or dual-licensing if desired.
-- You confirm that you have the legal right to submit the contribution and that it is your own original work (or properly attributed and compatible with AGPL-3.0).
+- You confirm that you have the legal right to submit the contribution and that it is your own original work or properly attributed and compatible with the applicable project license.
 
 In short: you keep authorship credit, but the project owner controls the project.
 
@@ -47,7 +51,7 @@ path. Broader utility and release recipes remain Unix-first for now.
 
 Additional setup and workflow docs live in:
 
-- `docs/docs/contributing/development.md`
+- `docs/content/contributing/development.md`
 - `RELEASING.md`
 
 Low-effort PRs will be closed.
