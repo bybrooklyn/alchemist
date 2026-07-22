@@ -45,6 +45,15 @@ That is the line Alchemist draws: no "community edition"
 that exists to upsell the real one, and no operational
 feature held behind a subscription.
 
+## Documentation license
+
+The human-authored manual is copyright Brooklyn Halmstad and licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). It is
+published at [Dead Signal Works](https://deadsignal.works/alchemist/docs/) from
+the authoritative Markdown in this repository. The documentation license does
+not change the AGPL license on Alchemist software or grant rights to Dead
+Signal Works branding and website implementation.
+
 ## Telemetry
 
 Opt-in, off by default. The config field is

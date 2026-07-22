@@ -105,10 +105,10 @@ def check_docker_path_docs(failures: list[str]) -> None:
         read(path)
         for path in (
             "README.md",
-            "docs/docs/docker.md",
-            "docs/docs/installation.md",
-            "docs/docs/environment-variables.md",
-            "docs/docs/configuration-reference.md",
+            "docs/content/docker.md",
+            "docs/content/installation.md",
+            "docs/content/environment-variables.md",
+            "docs/content/configuration-reference.md",
         )
     )
     require(

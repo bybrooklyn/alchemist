@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "src/server/mod.rs"
-OPENAPI = ROOT / "docs/static/openapi.yaml"
+OPENAPI = ROOT / "contracts/openapi.yaml"
 
 
 def extract_function_body(source: str, function_name: str) -> str:
@@ -108,7 +108,7 @@ def main() -> int:
             print(f"  - {path}")
     if missing_openapi:
         failed = True
-        print("v1 API routes missing from docs/static/openapi.yaml:")
+        print("v1 API routes missing from contracts/openapi.yaml:")
         for path in missing_openapi:
             print(f"  - {path}")
     if stale_openapi:

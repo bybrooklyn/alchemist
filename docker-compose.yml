@@ -32,7 +32,7 @@ services:
       # - PGID=1000
 
     # ── Hardware acceleration (opt-in) ─────────────────────────────────
-    # See https://alchemist.bybrooklyn.dev/gpu-passthrough for details.
+    # See https://deadsignal.works/alchemist/docs/gpu-passthrough/ for details.
     # The bundled FFmpeg already includes VAAPI/QSV/NVENC encoders.
     #
     # Intel QuickSync / AMD VAAPI — pass the render device (root needs no

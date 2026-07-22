@@ -10,7 +10,7 @@ just bump <next-rc-version>
 
 Then complete the release-candidate preflight:
 
-1. Update `CHANGELOG.md` and `docs/docs/changelog.md`.
+1. Update `CHANGELOG.md` and `docs/content/changelog.md`.
 2. Run `just release-check`.
 3. Confirm release signing is configured:
    - `ALCHEMIST_RELEASE_SIGNING_KEY_PEM` GitHub secret contains the Ed25519 private key used to sign `alchemist-update-manifest.json`.
@@ -44,7 +44,7 @@ Promote to stable only after a seven-day RC soak completes without a new P1/P2
 issue and the same automated preflight is still green.
 
 1. Run `just bump <stable-version>`.
-2. Update `CHANGELOG.md` and `docs/docs/changelog.md` for the stable cut.
+2. Update `CHANGELOG.md` and `docs/content/changelog.md` for the stable cut.
 3. Run `just release-check`.
 4. Confirm release signing secret/variable configuration still matches the active update key.
 5. Re-run the manual smoke checklist against the final release artifacts:
@@ -55,9 +55,12 @@ issue and the same automated preflight is still green.
    - Install the Jellyfin plugin from the stable repository feed and repeat the
      integration behavior checks against `jellyfin/jellyfin:10.11.10`
 6. Re-run the Windows contributor verification checklist if Windows parity changed after the last RC.
-7. Confirm release notes, docs, and hardware-support wording match the tested release state.
-8. Commit the stable release changes on `master`.
-9. Create the annotated tag `v<stable-version>` on the exact merged commit.
+7. Refresh and deploy the Dead Signal Works documentation mirror, then run
+   `python3 scripts/check_docs.py --published-manifest` to prove the live source
+   digest matches this checkout.
+8. Confirm release notes, docs, and hardware-support wording match the tested release state.
+9. Commit the stable release changes on `master`.
+10. Create the annotated tag `v<stable-version>` on the exact merged commit.
 
 Stable releases publish the Jellyfin plugin zip, MD5, SHA-256, and update:
 

@@ -23,7 +23,7 @@ publicly.
 
 ## At a glance
 
-| | Alchemist | FileFlows |
+| Dimension | Alchemist | FileFlows |
 |---|---|---|
 | License | AGPLv3, no paid tier, no license key | Free / Personal / Commercial license tiers |
 | Config model | Declarative — TOML file and UI settings | Flow editor (node-based) |

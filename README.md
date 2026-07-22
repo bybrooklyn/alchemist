@@ -2,6 +2,9 @@
 
 Point it at your media library. Walk away. Come back to a smaller, better-encoded collection.
 
+Alchemist is a Dead Signal Works project, created and maintained by Brooklyn
+Halmstad.
+
 Alchemist saves space automatically without asking you to babysit shell commands or risk your originals. It is AGPLv3 open source, self-hosted, and ships as one application with a web UI for setup, monitoring, and day-to-day control. No paid tier, no private "pro" feature tree, no license key.
 
 ## Why Alchemist?
@@ -200,7 +203,7 @@ alchemist plan /path/to/media --json
 Alchemist is AGPLv3. The public repository is the product:
 there is no commercial unlock, no separate enterprise build,
 no license-key gate, and telemetry is opt-in/off by default.
-See [Open Source](docs/docs/open-source.md) for the details.
+See [Open Source](docs/content/open-source.md) for the details.
 
 ## Backups
 
@@ -237,10 +240,12 @@ while encodes are in flight.
 
 ## License
 
-Licensed under AGPLv3. See [LICENSE](LICENSE) for details.
+The software is licensed under AGPLv3. The human-authored documentation is
+licensed under CC BY-SA 4.0. See [LICENSES.md](LICENSES.md) for the complete
+boundary.
 
 ## Contributing
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms,
-[docs/docs/contributing/development.md](docs/docs/contributing/development.md)
+[docs/content/contributing/development.md](docs/content/contributing/development.md)
 for local setup, and [RELEASING.md](RELEASING.md) for the release process.

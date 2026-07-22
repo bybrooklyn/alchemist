@@ -2064,7 +2064,7 @@ overhaul (not previously tracked as audit entries):**
 - **Central error-code catalog + docs links.** Every `Explanation` and `AlchemistError`
   now carries a stable code and a `docs_url` (`{base}/errors#<code>`), surfaced in API
   problem+json (`code`/`docs_url`), `ApiError`, and a "Learn more" link in the job-detail
-  failure panel. New docs page `docs/docs/errors.md` documents every code.
+  failure panel. The docs page `docs/content/errors.md` documents every code.
 - **Logging:** daily-rotating file via `tracing-appender` (`runtime::log_dir()`), per-job
   `info_span!("job", job_id)` so logs are traceable end-to-end, a secret-redaction pass on
   the log store (`src/redact.rs`, applied in `db.add_log`), and a "Download logs" button +

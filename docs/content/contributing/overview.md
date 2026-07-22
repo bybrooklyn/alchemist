@@ -3,7 +3,8 @@ title: Contributing Overview
 description: How to report bugs, suggest features, and contribute to Alchemist.
 ---
 
-Alchemist is AGPLv3 open source. Contributions are welcome.
+Alchemist software is AGPLv3 open source. Its human-authored documentation is
+CC BY-SA 4.0. Contributions are welcome.
 
 ## Start here
 
@@ -29,11 +30,11 @@ Explain why the feature is useful, not just what you want.
 
 ## License and CLA
 
-By submitting a pull request or patch, you agree that your
-contribution will be licensed under AGPLv3 and you grant
-Brooklyn Halmstad (the project owner) a perpetual,
-irrevocable right to use, modify, and redistribute your
-contribution as part of Alchemist.
+By submitting a pull request or patch, you agree that software contributions
+will be licensed under AGPL-3.0-or-later and documentation contributions under
+CC BY-SA 4.0. You also grant Brooklyn Halmstad (the project owner) a perpetual,
+irrevocable right to use, modify, and redistribute your contribution as part
+of Alchemist.
 
 You keep copyright to your individual contribution.
 

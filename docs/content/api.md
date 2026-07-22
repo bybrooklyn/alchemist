@@ -404,7 +404,7 @@ List current health issues.
 ## Events (SSE)
 
 ### `GET /api/v1/events`
-Real-time event stream. 
+Real-time event stream.
 
 **Emitted Events:**
 - `status`: Job state changes.

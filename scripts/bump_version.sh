@@ -40,7 +40,7 @@ echo "Updated version to $VERSION"
 
 cat <<EOF
 Next steps:
-  1. Update CHANGELOG.md and docs/docs/changelog.md for ${VERSION}
+  1. Update CHANGELOG.md and docs/content/changelog.md for ${VERSION}
   2. Run just release-check
   3. Complete the manual RC/stable smoke checklist in RELEASING.md
   4. Commit the release prep on master so Docker publishes ${VERSION}

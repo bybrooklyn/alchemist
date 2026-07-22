@@ -188,7 +188,7 @@ description: Release history for Alchemist.
   the typed `AlchemistError` family resolve to a documented code, surfaced in API
   `application/problem+json` responses (`code` + `docs_url`), in the job-detail failure
   panel as a "Learn more" link, and in the logs. A new
-  [Error reference](https://alchemist-project.org/errors) documents the cause and fix for
+  [Error reference](https://deadsignal.works/alchemist/docs/errors/) documents the cause and fix for
   every code.
 - Bounded automatic retry with capped backoff for genuinely transient failures (transient
   IO, a full disk that may clear); deterministic failures (corrupt media, encoder-open,
