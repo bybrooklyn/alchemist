@@ -3,7 +3,7 @@
   "version": "0.3.5-rc.3",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "packageManager": "bun@1.3.5",
+  "packageManager": "bun@1.3.14",
   "type": "module",
   "scripts": {
     "test": "playwright test",
@@ -12,6 +12,6 @@
     "test:reliability": "playwright test tests/settings-nonok.spec.ts tests/setup-recovery.spec.ts tests/setup-happy-path.spec.ts tests/new-user-redirect.spec.ts tests/stats-poller.spec.ts tests/jobs-actions-nonok.spec.ts tests/jobs-stability.spec.ts tests/library-intake-stability.spec.ts tests/intelligence-actions.spec.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0"
+    "@playwright/test": "^1.62.0"
   }
 }

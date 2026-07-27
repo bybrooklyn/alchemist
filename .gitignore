@@ -66,6 +66,10 @@ image.png
 
 #### WhyTho? Git Ignore ####
 
+# The WhyTho tree is maintained outside this repository and should remain
+# invisible to Git from the Alchemist checkout.
+/whytho/
+
 # Rust
 whytho/target/
 

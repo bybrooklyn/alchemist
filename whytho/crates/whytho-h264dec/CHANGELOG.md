@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Maintenance
+
+- Refreshed the standalone and fuzz lockfiles for current compatible Rust
+  dependencies.
+- Made the fuzz target's local dependency alias explicit for the renamed
+  `whytho-h264dec` package so current Cargo resolves it correctly.
+
 ## [0.4.0] - 2026-04-19
 
 ### Added

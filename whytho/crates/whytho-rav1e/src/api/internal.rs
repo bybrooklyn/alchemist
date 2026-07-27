@@ -295,7 +295,6 @@ impl<T: Pixel> ContextInner<T> {
       },
       enc.min_key_frame_interval as usize,
       enc.max_key_frame_interval as usize,
-      av_scenechange::CpuFeatureLevel::default(),
     );
     keyframe_detector.enable_cache();
 

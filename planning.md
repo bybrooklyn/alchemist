@@ -66,6 +66,25 @@ Latest validation:
 - `bunx playwright install chromium` refreshed the browser cache for `@playwright/test` 1.60.0.
 - `just release-check` - passed on 2026-05-19 after the docs `ws` override, covering Rust fmt/clippy/check/tests, actionlint, API contract, web verify/audit, docs build/audit, E2E reliability, and Jellyfin build/tests.
 
+### Dependency Refresh Follow-up (2026-07-26)
+
+- Root Rust dependencies and lockfile were refreshed, including `sysinfo` 0.38,
+  `ed25519-dalek` 3, and `base64` 0.23; root check, strict clippy, and the
+  complete Rust test suite passed before the final disk-pressure rerun.
+- Web and E2E packages were refreshed to Astro 7 / React integration 6 and
+  Playwright 1.62. TypeScript remains pinned to 6.0.3 because TypeScript 7
+  currently breaks Astro's checker; web typecheck, Astro check/build, and Bun
+  audit pass.
+- WhyTho dependencies and standalone lockfiles were refreshed. Workspace
+  default-feature checks and all non-benchmark workspace tests pass; the
+  optional `libdav1d-sys` all-features check still requires host `meson` and
+  `ninja`, and the existing Opus benchmark has an invariant panic.
+- `just release-check` reached the Rust/web/docs/API gates, but its final rerun
+  was stopped by local `ENOSPC` failures in temp-file tests after rebuilding
+  the root target alongside Playwright browser assets. Generated targets were
+  cleaned afterward; no source test assertion failure was observed in that
+  rerun.
+
 ## Roadmap Execution Pass
 
 Status: in progress from the broad referenced-docs plan. Work should land as small vertical slices with docs and targeted tests before moving to the next item.

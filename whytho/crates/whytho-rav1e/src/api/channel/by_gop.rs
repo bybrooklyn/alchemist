@@ -70,7 +70,6 @@ impl<T: Pixel> SceneChange<T> {
       },
       enc.min_key_frame_interval as usize,
       enc.max_key_frame_interval as usize,
-      av_scenechange::CpuFeatureLevel::default(),
     );
 
     Self { frames: 0, pyramid_size, processed: 0, last_keyframe: 0, detector }

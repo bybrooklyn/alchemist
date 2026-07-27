@@ -3,7 +3,6 @@
     "compilerOptions": {
         "jsx": "react-jsx",
         "jsxImportSource": "react",
-        "baseUrl": ".",
         "moduleResolution": "bundler",
         "allowImportingTsExtensions": true,
         "noEmit": true,

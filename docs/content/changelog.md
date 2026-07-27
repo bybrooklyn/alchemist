@@ -3,6 +3,30 @@ title: Changelog
 description: Release history for Alchemist.
 ---
 
+## [Unreleased]
+
+### Dependency maintenance
+
+- Upgraded the Alchemist Rust dependency set, including `sysinfo` 0.38,
+  `ed25519-dalek` 3, `base64` 0.23, and the current compatible transitive
+  security and runtime dependencies.
+- Upgraded the Astro frontend to Astro 7 with the React integration 6, current
+  React, Tailwind, PostCSS, Playwright, chart, font, and icon packages, and
+  pinned TypeScript 6.0.3 as the newest version supported by Astro's checker.
+- Added audited frontend overrides for patched `fast-uri`, `js-yaml`, `sharp`,
+  and `svgo` releases; the Bun audit is clean after the upgrade.
+- Refreshed the WhyTho workspace and standalone codec/fuzz lockfiles and
+  upgraded its codec, scene-change, parser, and developer-tool dependencies.
+
+### Compatibility fixes
+
+- Updated WhyTho's `av-scenechange` integration for its 0.15 API, which removed
+  the obsolete runtime CPU-feature argument.
+- Corrected standalone WhyTho fuzz manifests to identify their renamed local
+  packages explicitly, keeping fuzz targets resolvable under current Cargo.
+- Updated CI and package metadata to use Bun 1.3.14 consistently with the
+  regenerated lockfiles.
+
 ## [0.3.5-rc.3] - 2026-07-05
 
 ### Security and network hardening

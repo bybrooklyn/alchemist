@@ -41,7 +41,7 @@ whytho-codec-opus = { path = "crates/whytho-codec-opus" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "0.9"
 matroska = "0.30"
 matroska-demuxer = { path = "vendored/matroska-demuxer" }
 h264-reader = "0.8"
