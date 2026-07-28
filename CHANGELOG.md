@@ -26,6 +26,11 @@ All notable changes to this project will be documented in this file.
 - Updated CI and package metadata to use Bun 1.3.14 consistently with the
   regenerated lockfiles.
 
+### UI reliability
+
+- Engine header controls now keep a successful Start or Stop action visible when
+  a transient network failure interrupts the follow-up status request.
+
 ## [0.3.5-rc.3] - 2026-07-05
 
 ### Security and network hardening

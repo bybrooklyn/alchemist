@@ -18,6 +18,20 @@ interface EngineStatus {
     is_manual_override: boolean;
 }
 
+type EngineActionStatus = Pick<EngineStatus, "status">;
+
+const DEFAULT_ENGINE_STATUS: EngineStatus = {
+    status: "paused",
+    manual_paused: true,
+    scheduler_paused: false,
+    draining: false,
+    disk_blocked: false,
+    disk_block_reason: null,
+    mode: "background",
+    concurrent_limit: 1,
+    is_manual_override: false,
+};
+
 export default function HeaderActions() {
     const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
     const [engineLoading, setEngineLoading] = useState(false);
@@ -69,6 +83,19 @@ export default function HeaderActions() {
         const data = await apiJson<EngineStatus>("/api/engine/status");
         setEngineStatus(data);
         return data;
+    };
+
+    const applyActionStatus = (actionStatus: EngineActionStatus) => {
+        setEngineStatus((current) => ({
+            ...(current ?? DEFAULT_ENGINE_STATUS),
+            status: actionStatus.status,
+            manual_paused: actionStatus.status === "running"
+                ? false
+                : actionStatus.status === "paused"
+                  ? true
+                  : current?.manual_paused ?? false,
+            draining: actionStatus.status === "draining",
+        }));
     };
 
     useEffect(() => {
@@ -124,8 +151,17 @@ export default function HeaderActions() {
     const handleStart = async () => {
         setEngineLoading(true);
         try {
-            await apiAction("/api/engine/resume", { method: "POST" });
-            await refreshEngineStatus();
+            const result = await apiJson<EngineActionStatus>("/api/engine/resume", {
+                method: "POST",
+            });
+            // The action response confirms the state change. Keep the control
+            // accurate if a transient network failure breaks the follow-up GET.
+            applyActionStatus(result);
+            try {
+                await refreshEngineStatus();
+            } catch {
+                // Keep the acknowledged action state until the next poll.
+            }
         } catch {
             showToast({
                 kind: "error",
@@ -140,8 +176,15 @@ export default function HeaderActions() {
     const handleStop = async () => {
         setEngineLoading(true);
         try {
-            await apiAction("/api/engine/drain", { method: "POST" });
-            await refreshEngineStatus();
+            const result = await apiJson<EngineActionStatus>("/api/engine/drain", {
+                method: "POST",
+            });
+            applyActionStatus(result);
+            try {
+                await refreshEngineStatus();
+            } catch {
+                // Keep the acknowledged action state until the next poll.
+            }
         } catch {
             showToast({
                 kind: "error",

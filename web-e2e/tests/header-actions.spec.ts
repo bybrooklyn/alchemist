@@ -107,3 +107,32 @@ test("failed engine transitions surface an error toast", async ({ page }) => {
   await expect(page.getByText("Failed to update engine state.").first()).toBeVisible();
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
 });
+
+test("successful Start stays visible when the follow-up status request fails", async ({
+  page,
+}) => {
+  let resumeCalls = 0;
+
+  await mockDashboardData(page);
+  await page.route("**/api/engine/status", async (route) => {
+    if (resumeCalls > 0) {
+      await route.abort();
+      return;
+    }
+    await fulfillJson(route, 200, createEngineStatus());
+  });
+  await page.route("**/api/engine/mode", async (route) => {
+    await fulfillJson(route, 200, createEngineMode());
+  });
+  await page.route("**/api/engine/resume", async (route) => {
+    resumeCalls += 1;
+    await fulfillJson(route, 200, { status: "running" });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start" }).click();
+
+  await expect.poll(() => resumeCalls).toBe(1);
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByText("Failed to update engine state.")).not.toBeVisible();
+});
