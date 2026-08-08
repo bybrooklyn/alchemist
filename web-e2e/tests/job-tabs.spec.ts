@@ -204,10 +204,10 @@ test("saved job views apply filters and persist custom views", async ({ page }) 
     )
   ).toBe(true);
 
-  page.once("dialog", async (dialog) => {
-    await dialog.accept(" Review Queue ");
-  });
   await page.getByRole("button", { name: /Save View/i }).click();
+  const saveViewDialog = page.getByRole("dialog", { name: "Save view" });
+  await saveViewDialog.locator("#save-view-name").fill(" Review Queue ");
+  await saveViewDialog.getByRole("button", { name: "Save view", exact: true }).click();
 
   await expect(page.getByRole("button", { name: "Review Queue", exact: true })).toBeVisible();
   await expect.poll(() => {

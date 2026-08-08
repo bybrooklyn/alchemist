@@ -268,7 +268,9 @@ export default function SetupWizard() {
         : previewError
             ? "Preview failed"
             : preview
-                ? `${preview.total_media_files}`
+                ? preview.truncated
+                    ? `${preview.total_media_files}+`
+                    : `${preview.total_media_files}`
                 : settings.scanner.directories.length > 0
                     ? "Preview required"
                     : "--";

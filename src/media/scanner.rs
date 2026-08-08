@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error};
 use walkdir::WalkDir;
 
@@ -10,6 +10,14 @@ use crate::media::pipeline::DiscoveredMedia;
 
 pub struct Scanner {
     pub extensions: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct BoundedScanResult {
+    pub files: Vec<DiscoveredMedia>,
+    pub scanned_entries: usize,
+    pub truncated: bool,
+    pub timed_out: bool,
 }
 
 /// PERF-3 aggressive directory pruning. When enabled and `last_scanned_at`
@@ -53,6 +61,79 @@ impl Scanner {
 
     pub fn scan_with_recursion(&self, directories: Vec<(PathBuf, bool)>) -> Vec<DiscoveredMedia> {
         self.scan_with_options(directories, &PruneOptions::default())
+    }
+
+    /// Walk one directory with hard entry/file budgets and a best-effort
+    /// deadline. Preview endpoints use this instead of the parallel full scan
+    /// so a large or network-backed root cannot enqueue unbounded work.
+    pub fn scan_directory_bounded(
+        &self,
+        directory: PathBuf,
+        recursive: bool,
+        max_entries: usize,
+        max_files: usize,
+        deadline: Instant,
+    ) -> BoundedScanResult {
+        let mut files = Vec::new();
+        let mut scanned_entries = 0usize;
+        let mut truncated = false;
+        let mut timed_out = false;
+        let walker = if recursive {
+            WalkDir::new(&directory)
+        } else {
+            WalkDir::new(&directory).max_depth(1)
+        };
+
+        for entry_result in walker {
+            if Instant::now() >= deadline {
+                truncated = true;
+                timed_out = true;
+                break;
+            }
+            if scanned_entries >= max_entries {
+                truncated = true;
+                break;
+            }
+            scanned_entries += 1;
+
+            let Ok(entry) = entry_result else {
+                continue;
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Some(ext) = entry.path().extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !self.extensions.contains(&ext.to_lowercase()) {
+                continue;
+            }
+
+            let mtime = entry
+                .metadata()
+                .map(|metadata| metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            files.push(DiscoveredMedia {
+                path: entry.path().to_path_buf(),
+                mtime,
+                source_root: Some(directory.clone()),
+            });
+            if files.len() >= max_files {
+                truncated = true;
+                break;
+            }
+        }
+
+        // Keep preview output stable without asking WalkDir to pre-enumerate
+        // and sort every child of a potentially huge directory.
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+
+        BoundedScanResult {
+            files,
+            scanned_entries,
+            truncated,
+            timed_out,
+        }
     }
 
     pub fn scan_with_options(
@@ -189,6 +270,59 @@ mod tests {
         p.push(format!("alchemist_scan_{label}_{}", rand::random::<u64>()));
         let _ = fs::create_dir_all(&p);
         p
+    }
+
+    #[test]
+    fn bounded_scan_stops_at_file_and_entry_limits() {
+        let root = unique_temp_dir("bounded");
+        for name in ["c.mkv", "a.mkv", "b.mkv", "d.mkv"] {
+            assert!(fs::write(root.join(name), b"video").is_ok());
+        }
+
+        let scanner = Scanner::new();
+        let file_limited = scanner.scan_directory_bounded(
+            root.clone(),
+            true,
+            100,
+            2,
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        assert!(file_limited.truncated);
+        assert!(!file_limited.timed_out);
+        assert_eq!(file_limited.files.len(), 2);
+        assert!(
+            file_limited
+                .files
+                .windows(2)
+                .all(|pair| pair[0].path <= pair[1].path)
+        );
+
+        let entry_limited = scanner.scan_directory_bounded(
+            root.clone(),
+            true,
+            1,
+            10,
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        assert!(entry_limited.truncated);
+        assert_eq!(entry_limited.scanned_entries, 1);
+        assert!(entry_limited.files.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bounded_scan_reports_expired_deadline() {
+        let root = unique_temp_dir("deadline");
+        assert!(fs::write(root.join("movie.mkv"), b"video").is_ok());
+
+        let result =
+            Scanner::new().scan_directory_bounded(root.clone(), true, 100, 10, Instant::now());
+        assert!(result.truncated);
+        assert!(result.timed_out);
+        assert!(result.files.is_empty());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Default mode (no pruning) walks the whole tree and finds the file

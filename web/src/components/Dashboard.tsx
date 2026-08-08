@@ -328,7 +328,9 @@ function Dashboard() {
                 <StatCard label="Active Jobs" value={stats.active} icon={Zap} colorClass="text-helios-solar" />
                 <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} colorClass="text-helios-solar" />
                 <StatCard label="Failed" value={stats.failed} icon={AlertCircle} colorClass="text-status-error" />
-                <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
+                <div className="hidden md:block">
+                    <StatCard label="Total Processed" value={stats.total} icon={Database} colorClass="text-helios-solar" />
+                </div>
             </div>
 
             {/* Main content row */}

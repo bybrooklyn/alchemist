@@ -283,7 +283,7 @@ test("right-click row menu copies the input path", async ({ page }) => {
   const queuedRow = page.locator("tbody tr").filter({ has: page.getByTitle("/media/queued.mkv") });
   await queuedRow.click({ button: "right" });
 
-  await page.getByRole("button", { name: "Copy input path" }).click();
+  await page.getByRole("menuitem", { name: "Copy input path" }).click();
 
   await expect.poll(() =>
     page.evaluate(() => window.localStorage.getItem("copied-input-path"))
@@ -303,7 +303,7 @@ test("row menu conflicts surface blocked job details from the API", async ({ pag
 
   await page.goto("/jobs");
   await page.getByTitle("Actions").click();
-  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("menuitem", { name: "Retry" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Retry" }).click();
 
   await expect(

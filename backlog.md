@@ -89,13 +89,15 @@ documentation, or iteration.
 
 ## Active Priorities
 
-### `0.3.4` Trust and Adoption Cycle
-- Hold major transcoding features until `0.3.4-rc.2` completes a seven-day soak
-  without a new P1/P2 issue
-- Prove users can discover, install, configure, and trust the existing product
-- Validate stable Jellyfin catalog installation and behavior against `10.11.10`
-- Keep release docs, changelog entries, and support wording aligned with the
-  published artifacts
+### `0.3.5` RC Hardening
+- Keep major feature work out of the release candidate while bounded filesystem
+  previews, browser coverage, and dependency audits are qualified together
+- Require the complete local release gate and release-binary smoke before an RC
+  tag, then require exact-commit CI and published-artifact smoke
+- Validate Windows, Docker, fresh-install, `0.2.x` upgrade, notification,
+  encode/skip/failure, and Jellyfin feed behavior in their real environments
+- Require a seven-day RC soak without a new P1/P2 issue before stable promotion
+- Keep the stable Jellyfin catalog feed pointed at stable releases only
 
 ### Setup and Settings Research
 - Keep the unresolved setup and Settings feedback in `feedback.md` active

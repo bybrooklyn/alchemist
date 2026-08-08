@@ -5,7 +5,14 @@ use crate::media::scanner::Scanner;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
+
+pub(crate) const FS_PREVIEW_MAX_DIRECTORIES: usize = 16;
+const FS_PREVIEW_MAX_ENTRIES: usize = 10_000;
+const FS_PREVIEW_MAX_MEDIA_FILES: usize = 200;
+const FS_PREVIEW_SAMPLE_LIMIT: usize = 5;
+const FS_PREVIEW_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsBreadcrumb {
@@ -74,6 +81,7 @@ pub struct FsPreviewDirectory {
 pub struct FsPreviewResponse {
     pub directories: Vec<FsPreviewDirectory>,
     pub total_media_files: usize,
+    pub truncated: bool,
     pub warnings: Vec<String>,
 }
 
@@ -260,64 +268,107 @@ fn recommendations_blocking(
 fn preview_blocking(request: FsPreviewRequest) -> Result<FsPreviewResponse> {
     let scanner = Scanner::new();
     let mut total_media_files = 0usize;
+    let mut remaining_entries = FS_PREVIEW_MAX_ENTRIES;
+    let mut remaining_media_files = FS_PREVIEW_MAX_MEDIA_FILES;
+    let deadline = Instant::now() + FS_PREVIEW_TIMEOUT;
+    let mut truncated = false;
     let mut warnings = Vec::new();
 
-    let directories = request
+    let requested_directories = request
         .directories
         .into_iter()
         .filter(|dir| !dir.trim().is_empty())
-        .map(|raw| {
-            let path = PathBuf::from(raw.trim());
-            let canonical = canonical_or_original(&path)?;
+        .collect::<Vec<_>>();
+    if requested_directories.len() > FS_PREVIEW_MAX_DIRECTORIES {
+        return Err(AlchemistError::Watch(format!(
+            "A setup preview accepts at most {FS_PREVIEW_MAX_DIRECTORIES} directories"
+        )));
+    }
 
-            // Block sensitive system directories
-            if is_sensitive_path(&canonical) {
-                return Err(AlchemistError::Watch(format!(
-                    "Access to sensitive path {:?} is restricted",
-                    path
-                )));
-            }
+    let mut directories = Vec::with_capacity(requested_directories.len());
+    for raw in requested_directories {
+        let path = PathBuf::from(raw.trim());
+        let canonical = canonical_or_original(&path)?;
 
-            let exists = canonical.exists();
-            let readable = exists && canonical.is_dir() && std::fs::read_dir(&canonical).is_ok();
+        // Setup explicitly approves these candidate roots, but sensitive host
+        // paths remain unavailable even before authentication is configured.
+        if is_sensitive_path(&canonical) {
+            return Err(AlchemistError::Watch(format!(
+                "Access to sensitive path {:?} is restricted",
+                path
+            )));
+        }
 
-            // Scan once and reuse results for both count and samples
-            let scan_results = if readable {
-                scanner.scan_with_recursion(vec![(canonical.clone(), true)])
-            } else {
-                Vec::new()
-            };
-            let media_files = scan_results.len();
-            total_media_files += media_files;
-
-            let sample_files = scan_results
+        let exists = canonical.exists();
+        let readable = exists && canonical.is_dir() && std::fs::read_dir(&canonical).is_ok();
+        let mut directory_truncated = false;
+        let mut timed_out = false;
+        let scan_results = if readable
+            && remaining_entries > 0
+            && remaining_media_files > 0
+            && Instant::now() < deadline
+        {
+            let result = scanner.scan_directory_bounded(
+                canonical.clone(),
+                true,
+                remaining_entries,
+                remaining_media_files.saturating_add(1),
+                deadline,
+            );
+            remaining_entries = remaining_entries.saturating_sub(result.scanned_entries);
+            directory_truncated = result.truncated || result.files.len() > remaining_media_files;
+            timed_out = result.timed_out;
+            result
+                .files
                 .into_iter()
-                .take(5)
-                .map(|media| media.path.to_string_lossy().to_string())
-                .collect::<Vec<_>>();
-
-            let mut dir_warnings = directory_warnings(&canonical, readable);
-            if readable && media_files == 0 {
-                dir_warnings
-                    .push("No supported media files were found in this directory.".to_string());
+                .take(remaining_media_files)
+                .collect::<Vec<_>>()
+        } else {
+            if readable {
+                directory_truncated = true;
+                timed_out = Instant::now() >= deadline;
             }
-            warnings.extend(dir_warnings.clone());
+            Vec::new()
+        };
+        let media_files = scan_results.len();
+        remaining_media_files = remaining_media_files.saturating_sub(media_files);
+        total_media_files += media_files;
+        truncated |= directory_truncated;
 
-            Ok(FsPreviewDirectory {
-                path: canonical.to_string_lossy().to_string(),
-                exists,
-                readable,
-                media_files,
-                sample_files,
-                media_hint: classify_media_hint(&canonical),
-                warnings: dir_warnings,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+        let sample_files = scan_results
+            .into_iter()
+            .take(FS_PREVIEW_SAMPLE_LIMIT)
+            .map(|media| media.path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        let mut dir_warnings = directory_warnings(&canonical, readable);
+        if directory_truncated {
+            let warning = if timed_out {
+                "Preview stopped after 10 seconds; the displayed media count is partial."
+            } else {
+                "Preview reached its safe scan limit; the displayed media count is partial."
+            };
+            dir_warnings.push(warning.to_string());
+        } else if readable && media_files == 0 {
+            dir_warnings.push("No supported media files were found in this directory.".to_string());
+        }
+        warnings.extend(dir_warnings.clone());
+
+        directories.push(FsPreviewDirectory {
+            path: canonical.to_string_lossy().to_string(),
+            exists,
+            readable,
+            media_files,
+            sample_files,
+            media_hint: classify_media_hint(&canonical),
+            warnings: dir_warnings,
+        });
+    }
 
     Ok(FsPreviewResponse {
         directories,
         total_media_files,
+        truncated,
         warnings,
     })
 }
@@ -758,6 +809,7 @@ mod tests {
         let response = response.unwrap_or_else(|err| panic!("preview failed: {err}"));
 
         assert_eq!(response.total_media_files, 1);
+        assert!(!response.truncated);
         assert_eq!(response.directories.len(), 1);
         assert!(
             response.directories[0]
@@ -769,5 +821,45 @@ mod tests {
         let _ = std::fs::remove_file(media_file);
         let _ = std::fs::remove_dir_all(root);
         let _ = SystemTime::UNIX_EPOCH;
+    }
+
+    #[test]
+    fn preview_caps_large_roots_and_reports_partial_counts() {
+        let root = std::env::temp_dir().join(format!(
+            "alchemist_fs_preview_cap_{}",
+            rand::random::<u64>()
+        ));
+        assert!(std::fs::create_dir_all(&root).is_ok());
+        for index in 0..=FS_PREVIEW_MAX_MEDIA_FILES {
+            assert!(std::fs::write(root.join(format!("movie-{index:03}.mkv")), b"video").is_ok());
+        }
+
+        let response = preview_blocking(FsPreviewRequest {
+            directories: vec![root.to_string_lossy().to_string()],
+        });
+        assert!(response.is_ok());
+        let response = response.unwrap_or_else(|err| panic!("preview failed: {err}"));
+        assert!(response.truncated);
+        assert_eq!(response.total_media_files, FS_PREVIEW_MAX_MEDIA_FILES);
+        assert_eq!(
+            response.directories[0].sample_files.len(),
+            FS_PREVIEW_SAMPLE_LIMIT
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("partial"))
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_rejects_too_many_directories() {
+        let response = preview_blocking(FsPreviewRequest {
+            directories: vec!["/tmp".to_string(); FS_PREVIEW_MAX_DIRECTORIES + 1],
+        });
+        assert!(response.is_err());
     }
 }

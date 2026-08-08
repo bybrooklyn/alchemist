@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tower::util::ServiceExt;
@@ -1650,7 +1650,7 @@ async fn fs_endpoints_are_available_during_setup()
     std::fs::create_dir_all(&media_dir)?;
     std::fs::write(media_dir.join("movie.mkv"), b"video")?;
 
-    let (_state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+    let (state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
 
     let browse_response = app
         .clone()
@@ -1687,8 +1687,76 @@ async fn fs_endpoints_are_available_during_setup()
     assert_eq!(preview_response.status(), StatusCode::OK);
     let preview_body = body_text(preview_response).await;
     assert!(preview_body.contains("\"total_media_files\":1"));
+    assert!(preview_body.contains("\"truncated\":false"));
+    assert!(!state.library_preview_in_progress.load(Ordering::SeqCst));
 
     cleanup_paths(&[browse_root, config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fs_preview_rejects_excessive_and_overlapping_requests()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let preview_root = temp_path("alchemist_fs_preview_guard", "dir");
+    std::fs::create_dir_all(&preview_root)?;
+    let (state, app, config_path, db_path) = build_test_app(true, 8, |_| {}).await?;
+
+    let excessive_directories = vec![
+        preview_root.to_string_lossy().to_string();
+        crate::system::fs_browser::FS_PREVIEW_MAX_DIRECTORIES + 1
+    ];
+    let excessive_response = app
+        .clone()
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/fs/preview",
+                Body::from(json!({ "directories": excessive_directories }).to_string()),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            request
+        })
+        .await?;
+    assert_eq!(excessive_response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(excessive_response)
+            .await
+            .contains("FS_PREVIEW_TOO_MANY_DIRECTORIES")
+    );
+
+    state
+        .library_preview_in_progress
+        .store(true, Ordering::SeqCst);
+    let busy_response = app
+        .clone()
+        .oneshot({
+            let mut request = localhost_request(
+                Method::POST,
+                "/api/fs/preview",
+                Body::from(
+                    json!({
+                        "directories": [preview_root.to_string_lossy().to_string()]
+                    })
+                    .to_string(),
+                ),
+            );
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            request
+        })
+        .await?;
+    assert_eq!(busy_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(body_text(busy_response).await.contains("PREVIEW_BUSY"));
+    state
+        .library_preview_in_progress
+        .store(false, Ordering::SeqCst);
+
+    cleanup_paths(&[preview_root, config_path, db_path]);
     Ok(())
 }
 

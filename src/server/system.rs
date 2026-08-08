@@ -15,6 +15,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info};
@@ -1236,8 +1237,46 @@ pub(crate) async fn fs_recommendations_handler(
 }
 
 pub(crate) async fn fs_preview_handler(
+    State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<crate::system::fs_browser::FsPreviewRequest>,
 ) -> impl IntoResponse {
+    let directory_count = payload
+        .directories
+        .iter()
+        .filter(|directory| !directory.trim().is_empty())
+        .count();
+    if directory_count > crate::system::fs_browser::FS_PREVIEW_MAX_DIRECTORIES {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "FS_PREVIEW_TOO_MANY_DIRECTORIES",
+            format!(
+                "A setup preview accepts at most {} directories.",
+                crate::system::fs_browser::FS_PREVIEW_MAX_DIRECTORIES
+            ),
+        );
+    }
+
+    // Share the library preview guard so setup and authenticated previews
+    // cannot multiply bounded filesystem and ffprobe work against one host.
+    struct PreviewGuard(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for PreviewGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    if state
+        .library_preview_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "PREVIEW_BUSY",
+            "A library preview is already running. Try again in a moment.",
+        );
+    }
+    let _preview_guard = PreviewGuard(state.library_preview_in_progress.clone());
+
     match crate::system::fs_browser::preview(payload).await {
         Ok(response) => axum::Json(response).into_response(),
         Err(err) => config_read_error_response("preview selected server folders", &err),

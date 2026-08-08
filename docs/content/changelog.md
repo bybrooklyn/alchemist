@@ -5,6 +5,8 @@ description: Release history for Alchemist.
 
 ## [Unreleased]
 
+## [0.3.5-rc.4] - 2026-08-08
+
 ### Dependency maintenance
 
 - Upgraded the Alchemist Rust dependency set, including `sysinfo` 0.38,
@@ -13,8 +15,10 @@ description: Release history for Alchemist.
 - Upgraded the Astro frontend to Astro 7 with the React integration 6, current
   React, Tailwind, PostCSS, Playwright, chart, font, and icon packages, and
   pinned TypeScript 6.0.3 as the newest version supported by Astro's checker.
-- Added audited frontend overrides for patched `fast-uri`, `js-yaml`, `sharp`,
-  and `svgo` releases; the Bun audit is clean after the upgrade.
+- Added audited frontend overrides for patched `fast-uri`, `js-yaml`, `nanoid`,
+  `sharp`, and `svgo` releases; the Bun audit is clean after the upgrade.
+- Updated the transitive `event-listener` dependency to 5.4.2, which fixes
+  RUSTSEC-2026-0221 while remaining compatible with the current SQLx release.
 - Refreshed the WhyTho workspace and standalone codec/fuzz lockfiles and
   upgraded its codec, scene-change, parser, and developer-tool dependencies.
 
@@ -26,6 +30,27 @@ description: Release history for Alchemist.
   packages explicitly, keeping fuzz targets resolvable under current Cargo.
 - Updated CI and package metadata to use Bun 1.3.14 consistently with the
   regenerated lockfiles.
+
+### UI reliability
+
+- Engine header controls now keep a successful Start or Stop action visible when
+  a transient network failure interrupts the follow-up status request.
+- Mobile dashboards now omit the secondary Total Processed card so active work
+  remains the priority on narrow screens.
+
+### Setup safety
+
+- Setup filesystem previews now share a single-flight guard with authenticated
+  library previews and enforce fixed directory, entry, media-file, and time
+  budgets. Large roots return explicit partial counts instead of walking the
+  host filesystem without bounds.
+
+### Test and developer workflow
+
+- Full browser coverage now follows the current saved-view dialog and ARIA menu
+  contracts instead of waiting for removed native-dialog and button semantics.
+- Repository agent guidance is consolidated in `AGENTS.md`; `CLAUDE.md` and
+  `GEMINI.md` are compatibility symlinks to the canonical file.
 
 ## [0.3.5-rc.3] - 2026-07-05
 

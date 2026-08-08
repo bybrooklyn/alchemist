@@ -103,6 +103,7 @@ export interface FsPreviewDirectory {
 export interface FsPreviewResponse {
     directories: FsPreviewDirectory[];
     total_media_files: number;
+    truncated: boolean;
     warnings: string[];
 }
 

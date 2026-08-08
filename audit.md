@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-06-22
+Last updated: 2026-08-08
 
 ---
 
@@ -1182,6 +1182,38 @@ The abort kills the entire request, including the in-flight upload body. A 30 s 
 
 ---
 
+### [P2-43] Setup filesystem preview recursively scans arbitrary selected roots without bounds
+
+**Status: RESOLVED (2026-08-08)**
+
+**Files:**
+- `src/server/middleware.rs:167–173` — setup-mode `/api/fs/*` routes are allowed after the LAN check without normal authentication.
+- `src/server/system.rs:1238–1245` — the preview handler accepts the client-supplied directory list and delegates directly to the scanner.
+- `src/system/fs_browser.rs:58–60, 101–104, 260–323` — preview canonicalizes and denylist-checks paths, then recursively scans each readable directory with no file, directory, time, or concurrency bound.
+- `src/media/scanner.rs:54–116` — recursive `WalkDir` traversal collects every matching media file before returning.
+
+**Severity:** P2
+
+**Validation:** Bounded scanner and setup-preview tests now cover file/entry limits,
+expired deadlines, partial-count warnings, excessive directory lists, overlapping
+requests, and guard release. The complete browser gate passes 98/98.
+
+**Problem:**
+
+The setup wizard needs a server-side folder preview, but the endpoint accepts arbitrary non-empty paths and runs a full recursive scan for each one. There is no maximum number of directories, maximum files or entries, traversal timeout, or single-flight guard. `/` and other non-denylisted roots remain reachable because the path policy is explicitly a denylist rather than a confinement boundary. A LAN client during first-run setup, or a user selecting a large mounted/NAS root, can therefore tie up blocking workers and Rayon threads with repeated scans before authentication is configured.
+
+**Resolution:**
+
+1. Both preview paths now use a bounded walker with directory,
+   entry, media-file, and best-effort time limits; ordinary library scans remain
+   unchanged.
+2. Setup and authenticated library previews share one RAII single-flight guard,
+   returning `429 PREVIEW_BUSY` for overlap and releasing the guard on every exit.
+3. Setup-selected roots retain the sensitive-path denylist and return explicit,
+   non-blocking partial-count warnings when a safety limit is reached.
+
+---
+
 ## Technical Debt
 
 ---
@@ -1397,6 +1429,31 @@ The same pattern was the basis for TD-9 (`std::fs::canonicalize` in enqueue path
 **Fix:**
 
 1. Extract a single `private func bootstrap() async` containing the readiness poll (P2-37 step 2) + setup check + session restore + refresh; call it from all three entry points.
+
+---
+
+### [TD-14] Web E2E selectors still assert the pre-dialog and pre-menu semantics
+
+**Status: RESOLVED (2026-08-08)**
+
+**Files:**
+- `web-e2e/tests/job-tabs.spec.ts:207–212` — saved-view coverage still listens for a native `window.dialog`.
+- `web-e2e/tests/jobs-success.spec.ts:286, 306` — row-menu coverage still queries `role="button"` for actions that now expose `role="menuitem"`.
+- `web/src/components/jobs/SaveViewDialog.tsx:66–79` and `web/src/components/jobs/JobsTable.tsx:213–227` — current implementations use the themed dialog and ARIA menu semantics.
+
+**Severity:** TD
+
+**Validation:** `just check-web` on 2026-08-08: 98 passed. Saved-view
+coverage submits the in-app dialog and row-menu coverage queries the shipped
+`menuitem` roles.
+
+**Problem:**
+
+The broader web gate remains red after the UX-9 dialog replacement and the jobs-menu accessibility change. The saved-view test waits for a browser prompt that no longer exists, while two row-menu tests look for buttons even though the actions intentionally have `menuitem` roles. This makes the release gate report failures for working flows and reduces confidence in any future frontend result.
+
+**Resolution:** The stale native-dialog and button selectors were replaced with
+the current themed-dialog and ARIA-menu contracts, retaining the existing
+confirmation-dialog assertions.
 
 ---
 
@@ -1928,6 +1985,29 @@ Every other interactive flow in the app uses the in-app primitives — `ConfirmD
 
 ---
 
+### [UX-10] Mobile dashboard still shows the secondary Total Processed stat card
+
+**Status: RESOLVED (2026-08-08)**
+
+**Files:**
+- `web/src/components/Dashboard.tsx:327–332` — all four stat cards render in the mobile two-column grid; `Total Processed` has no mobile visibility rule.
+- `web-e2e/tests/dashboard-ui.spec.ts:88–113` — the mobile-priority test requires `Total Processed` to be hidden at 390px wide.
+
+**Severity:** UX
+
+**Validation:** The focused dashboard test and full `just check-web` gate pass;
+the latter is 98/98 on 2026-08-08.
+
+**Problem:**
+
+The dashboard’s mobile contract prioritizes active work, but the fourth summary card remains visible. On a 390px viewport this consumes space needed by the active-job surface and directly contradicts the existing regression test. This is a real product behavior failure, not merely a stale selector.
+
+**Resolution:** `Total Processed` is wrapped in `hidden md:block`, preserving
+the desktop summary while the existing 390px regression test proves it is
+absent on mobile.
+
+---
+
 ## Feature Gaps
 
 ---
@@ -2072,3 +2152,15 @@ overhaul (not previously tracked as audit entries):**
 - **Errors:** bounded transient retry with capped backoff in the processor (deterministic
   failures fail fast via `AlchemistError::is_retryable`), and the opaque
   "Unknown error: Transient" log replaced with a coded message.
+
+**The three items found by the 2026-07-28 stability audit are resolved in the
+0.3.5-rc.4 preparation:**
+
+1. **[UX-10]** The secondary `Total Processed` card is hidden on mobile.
+2. **[P2-43]** Setup filesystem previews are bounded, partial-result aware, and single-flight.
+3. **[TD-14]** Browser contracts follow the current dialog and menu semantics.
+
+The full web gate now passes 98/98. The complete local release gate and isolated
+release-binary smoke also pass for `0.3.5-rc.4`. Stable promotion still requires
+external platform and hardware qualification, published-artifact smoke checks,
+and the required RC soak.

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -135,7 +136,9 @@ pub(crate) struct LibraryPreviewResponse {
 
 const PREVIEW_DEFAULT_MAX_FILES: usize = 60;
 const PREVIEW_MAX_FILES_CAP: usize = 200;
+const PREVIEW_MAX_ENTRIES: usize = 10_000;
 const PREVIEW_SAMPLE_LIMIT: usize = 20;
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolve `candidate` and confirm it canonicalizes inside one of the
 /// configured library directories or watch folders. Mirrors the bound
@@ -228,13 +231,20 @@ pub(crate) async fn preview_library_path_handler(
     }
 
     let scan_target = preview_root.clone();
-    let files = match tokio::task::spawn_blocking(move || {
+    let bounded_file_limit = max_files.saturating_add(1);
+    let scan_result = match tokio::task::spawn_blocking(move || {
         let scanner = crate::media::scanner::Scanner::new();
-        scanner.scan_with_recursion(vec![(scan_target, true)])
+        scanner.scan_directory_bounded(
+            scan_target,
+            true,
+            PREVIEW_MAX_ENTRIES,
+            bounded_file_limit,
+            Instant::now() + PREVIEW_TIMEOUT,
+        )
     })
     .await
     {
-        Ok(files) => files,
+        Ok(result) => result,
         Err(err) => {
             error!("Preview scan worker failed: {err}");
             return api_error_response(
@@ -245,8 +255,8 @@ pub(crate) async fn preview_library_path_handler(
         }
     };
 
-    let truncated = files.len() > max_files;
-    let to_process: Vec<_> = files.into_iter().take(max_files).collect();
+    let truncated = scan_result.truncated || scan_result.files.len() > max_files;
+    let to_process: Vec<_> = scan_result.files.into_iter().take(max_files).collect();
 
     let file_settings = state
         .db

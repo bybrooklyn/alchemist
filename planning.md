@@ -1,48 +1,64 @@
 # Planning
 
-Last updated: 2026-06-04
+Last updated: 2026-08-08
 
 This file tracks current coordination notes only. Detailed historical execution logs belong in git history, `CHANGELOG.md`, and release notes.
 
 ## Current Baseline
 
-- Stable version: `0.3.3`
-- Active version: `0.3.4-rc.2`
-- Release line: 0.3.4 trust, distribution, and onboarding
-- Required orientation files: `CHANGELOG.md`, `VERSION`, `CLAUDE.md`
+- Stable version: `0.3.4`
+- Active version: `0.3.5-rc.4`
+- Release line: 0.3.5 release hardening and dependency compatibility
+- Required orientation files: `AGENTS.md`, `CHANGELOG.md`, `VERSION`
 - Living planning sources:
   - `backlog.md` for active and future product work
   - `audit.md` for verified bugs/security/correctness findings
   - `ideas.md` for optional future ideas
   - `native/mac/Docs/swift.md` for the native macOS client specification
 
-## 0.3.4 Trust and Adoption Cycle
+## 0.3.5 Release Candidate Cycle
 
-Status: implementation complete for RC cut; the seven-day soak starts only
-after `v0.3.4-rc.2` is published and its post-publication smoke is green.
+Status: local `0.3.5-rc.4` candidate preparation is complete. The complete
+release gate and an isolated release-binary smoke pass locally. Stable promotion
+remains blocked on published-artifact qualification, external platform and
+hardware validation, and the required seven-day RC soak.
 
 Release focus:
 
-- Resolve P2-33 and RG-10 with one normalized, trusted-proxy-aware client-IP
-  resolver used by login/global rate limiting and LAN/trusted-proxy checks.
-- Prove published native and Docker artifacts with automated version,
-  `selftest`, isolated-start, and readiness checks.
-- Publish changelog-backed GitHub release notes and correct the stable Docker
-  quick start.
-- Package the Jellyfin `10.11.10` plugin as `0.3.4.0`, attach RC/stable assets,
-  and update the stable repository feed only for stable releases.
-- Keep setup and Settings redesign as research work until user interviews
-  produce a concrete design brief.
+- Bound setup and authenticated library previews so very large or slow roots
+  return explicit partial results instead of monopolizing blocking workers.
+- Restore the complete browser contract after the saved-view dialog, row-menu
+  semantics, and mobile dashboard behavior changed.
+- Clear current Rust and frontend dependency advisories without weakening the
+  audit policy or raising the supported toolchain floor unnecessarily.
+- Keep release metadata, changelogs, canonical agent guidance, and package
+  versions synchronized for `0.3.5-rc.4`.
+- Qualify the built artifacts and integrations before any stable claim.
 
 Release gates:
 
-- `just release-check` must pass before the RC tag.
-- GitHub CI, Nightly, Release, and Release Smoke must be green.
-- Stable promotion requires a seven-day RC soak without a new P1/P2 issue and
-  a successful install-from-feed Jellyfin validation.
-- AMD AV1 remains evidence-gated on real AMD hardware.
-- Native macOS expansion, crop detection, VMAF pre-flight, rules engines, and
-  undo remain deferred.
+- `just release-check`, the complete 98-test browser suite, and local release
+  binary smoke must pass before the RC tag.
+- GitHub CI, Nightly, Release, and Release Smoke must be green for the exact RC
+  commit and published artifacts.
+- Stable promotion requires a seven-day RC soak without a new P1/P2 issue,
+  successful fresh-install and upgrade smoke, and install-from-feed Jellyfin
+  validation against the supported server release.
+- Windows, Docker, notification, encode/skip/failure, and real-hardware claims
+  remain evidence-gated until those environments have been exercised.
+- The stable Jellyfin feed must continue to reference stable releases only.
+
+Latest local validation (2026-08-08):
+
+- `just check-web` - passed all 98 Playwright tests after web typecheck and build.
+- `just release-check` - passed Rust fmt/clippy/check and 349 tests, Rust and Bun
+  audits, actionlint, API and Docker runtime contracts, web/docs verification,
+  43 E2E reliability tests, and the Jellyfin build plus 10 tests.
+- `just build` - built the production frontend, optimized Rust binary, and
+  native macOS package.
+- `python3 scripts/release_smoke.py --binary ./target/release/alchemist
+  --expected-version 0.3.5-rc.4` - passed isolated version, startup, migration,
+  self-test transcode, and output verification.
 
 ## Package Refresh / Release Check Pass
 

@@ -33,7 +33,7 @@ export default function ReviewStep({
             ? "Library preview is still running. Wait for Alchemist to inspect the selected server folders before completing setup."
             : preview === null && settings.scanner.directories.length > 0
                 ? "Library preview has not completed yet. Return to the Library step and confirm server path access."
-                : null;
+                : preview?.warnings[0] ?? null;
 
     return (
         <motion.div key="review" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-8">
@@ -63,7 +63,13 @@ export default function ReviewStep({
                     title="Library"
                     lines={[
                         `${settings.scanner.directories.length} server folders selected`,
-                        ...(preview ? [`${preview.total_media_files} supported media files previewed`] : []),
+                        ...(preview
+                            ? [
+                                preview.truncated
+                                    ? `At least ${preview.total_media_files} supported media files previewed`
+                                    : `${preview.total_media_files} supported media files previewed`,
+                            ]
+                            : []),
                         ...(previewWarning ? [previewWarning] : []),
                         settings.scanner.directories.length > 0
                             ? settings.scanner.directories.map((d) => d.split("/").pop() ?? d).join(", ")
