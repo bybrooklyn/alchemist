@@ -4,6 +4,76 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Frontend reliability and accessibility
+
+- Fixed four frontend defects surfaced by the deep frontend audit (see
+  `audit.md` P2-44 through P2-47): Save View no longer crashes on plain-HTTP
+  deployments (`crypto.randomUUID` required a secure context); modal focus and
+  inert management no longer churn on every parent render, which stole focus
+  mid-typing and broke focus restore around live SSE updates; jobs list fetches
+  are sequence-guarded so slow older responses can no longer overwrite newer
+  filter/tab/page state; and job row selection is keyboard-operable and clears
+  when the query changes so batch actions can never target invisible rows.
+- Byte/duration/relative-time formatting, previously reimplemented seven
+  different ways across the frontend with drifting behavior (mismatched
+  decimal precision, negative values silently collapsing to `"0 B"` instead
+  of displaying, `Math.log` producing `"NaN undefined"` on bad input), is now
+  centralized in `web/src/lib/format.ts`.
+- The Dashboard's engine-paused banner and the header's engine controls now
+  share a single polling store (`web/src/lib/engineStatusStore.ts`) instead
+  of independently fetching `/api/engine/status` — they could previously
+  disagree about the same engine, and the dashboard's queue-ETA/banner never
+  refreshed after the initial load. A Start/Stop action now updates both
+  instantly instead of waiting for the next poll tick.
+- The Convert tool's status poll now stops after 5 consecutive failures and
+  shows a "Lost contact with this conversion" banner with a Retry button,
+  instead of polling a dead job indefinitely with only a one-time toast.
+- Settings' 11 tabs are now lazy-loaded (`React.lazy`/`Suspense`) instead of
+  all being eagerly bundled into one island — previously the largest chunk
+  in the app. Every framer-motion animation in the frontend now honors the
+  OS `prefers-reduced-motion` setting (WCAG 2.3.3), and CSS transitions/
+  animations/smooth-scroll are disabled under it too.
+- The 8 light-background theme profiles (ivory, cloud, mint, linen, sunlit,
+  sage, sprout, glow) no longer inherit status colors tuned for a dark
+  background — contrast against those palettes measured as low as ~1.8:1
+  (WCAG AA needs 4.5:1); they now get their own verified-contrast overrides.
+- The mobile sidebar drawer no longer leaves the page unscrollable after a
+  nav-triggered view transition, closes on Escape, and moves focus to the
+  first nav link when opened.
+- A session expiring mid-request no longer hangs the calling code forever
+  (`apiFetch`'s 401 handler returned a promise that never resolved); it now
+  rejects immediately and round-trips the page you were on via `?next=` so
+  re-login returns you there instead of the dashboard.
+- `ConfirmDialog` no longer produces a silent unhandled rejection and a
+  stuck-open dialog when its confirm handler throws; the error is toasted
+  and the dialog stays open. The jobs-table right-click context menu no
+  longer renders partially offscreen near a viewport edge. Toasts announce
+  once to screen readers instead of twice (a dedicated live region and each
+  toast's own `role="alert"`/`"status"` were both firing).
+- Removed the unused direct `devalue` dependency from `web/package.json`
+  (an unrelated transitive-version `overrides` pin for the same package,
+  used by Astro itself, is unaffected).
+
+### Reliability
+
+- FFmpeg's raw `-progress` field lines (`frame=`, `fps=`, `out_time_ms=`, ...)
+  are no longer persisted to the `logs` table or broadcast over SSE. They were
+  previously logged unfiltered on every ~0.5s tick (~11 lines per tick), which
+  could silently grow the database by hundreds of thousands of rows over a
+  single long encode. The progress-bar path was already correctly throttled;
+  this brings the raw-log path in line with it.
+
+### Documentation
+
+- `audit.md`'s 2026-08-22 deep frontend sweep (four P2, three RG, three UX,
+  five TD) is now fully resolved, including the RG/UX/TD backlog that
+  originally shipped as "batch opportunistically." A 2026-08-25
+  re-evaluation reverted the `lucide-react` removal (kept as `lucide-react`;
+  the measured production bundle savings from vendoring were real but
+  marginal — about 7KB gzip — and not worth owning a hand-maintained,
+  unlicensed-for-attribution copy of the icon SVG data with no update path),
+  and added a new P1 for the log-flood fix above.
+
 ## [0.3.5-rc.4] - 2026-08-08
 
 ### Dependency maintenance

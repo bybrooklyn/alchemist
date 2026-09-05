@@ -1,5 +1,7 @@
 use crate::error::{AlchemistError, Result};
-use crate::media::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress, FFmpegProgressState};
+use crate::media::ffmpeg::{
+    FFmpegCommandBuilder, FFmpegProgress, FFmpegProgressState, is_progress_fragment,
+};
 use crate::media::pipeline::TranscodePlan;
 use crate::system::hardware::HardwareInfo;
 use std::collections::{HashMap, HashSet};
@@ -350,7 +352,9 @@ impl Transcoder {
                                 }
 
                                 if let Some(observer) = observer.as_ref() {
-                                    observer.on_log(line.clone()).await;
+                                    if !is_progress_fragment(&line) {
+                                        observer.on_log(line.clone()).await;
+                                    }
 
                                     if let Some(total_duration) = total_duration
                                         && let Some(progress) = progress_state.ingest_line(&line) {

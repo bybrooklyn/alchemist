@@ -9,6 +9,7 @@ import {
     Scissors,
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import { formatRelativeTime } from "../lib/format";
 import { showToast } from "../lib/toast";
 
 interface HealthSummary {
@@ -40,30 +41,11 @@ interface LibraryHealthIssue {
     report: HealthIssueReport;
 }
 
-function formatRelativeTime(value: string | null): string {
-    if (!value) {
+function formatLastScanTime(value: string | null): string {
+    if (!value || Number.isNaN(new Date(value).getTime())) {
         return "Never scanned";
     }
-
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-        return "Never scanned";
-    }
-
-    const diffMs = Date.now() - parsed.getTime();
-    const minutes = Math.floor(diffMs / 60_000);
-    if (minutes < 1) {
-        return "just now";
-    }
-    if (minutes < 60) {
-        return `${minutes}m ago`;
-    }
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) {
-        return `${hours}h ago`;
-    }
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
+    return formatRelativeTime(value);
 }
 
 export default function LibraryDoctor() {
@@ -240,7 +222,7 @@ export default function LibraryDoctor() {
                     </p>
                     <p className="text-xs text-helios-slate mt-1">
                         {summary?.last_run
-                            ? `Last scan: ${formatRelativeTime(summary.last_run)}`
+                            ? `Last scan: ${formatLastScanTime(summary.last_run)}`
                             : "Never scanned"}
                     </p>
                 </div>

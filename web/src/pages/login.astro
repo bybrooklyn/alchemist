@@ -80,14 +80,24 @@ import { ArrowRight } from "lucide-react";
     const form = document.getElementById('login-form') as HTMLFormElement;
     const errorMsg = document.getElementById('error-msg');
 
+    // Only accept a same-origin relative path, and never send the user back
+    // into a login/setup loop: `next` is attacker-influenceable query input,
+    // so a leading "//" (protocol-relative) or absolute URL is rejected.
+    function safeNextPath(): string {
+        const raw = new URLSearchParams(window.location.search).get("next");
+        if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
+        if (raw.startsWith("/login") || raw.startsWith("/setup")) return "/";
+        return raw;
+    }
+
     form?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(form);
         const data = Object.fromEntries(formData);
-        
+
         // Reset error
         errorMsg?.classList.add('hidden');
-        
+
         try {
             await apiAction('/api/auth/login', {
                 method: 'POST',
@@ -95,7 +105,7 @@ import { ArrowRight } from "lucide-react";
                 credentials: 'same-origin',
                 body: JSON.stringify(data)
             });
-            window.location.href = "/";
+            window.location.href = safeNextPath();
         } catch (err) {
             console.error("Login failed", err);
             errorMsg?.classList.remove('hidden');

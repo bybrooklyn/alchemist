@@ -44,6 +44,10 @@ const BUILT_IN_JOB_VIEWS: SavedJobView[] = [
 
 const TAB_TYPES: TabType[] = ["all", "active", "queued", "completed", "failed", "skipped", "archived"];
 const SORT_FIELDS: SortField[] = ["updated_at", "created_at", "input_path", "size"];
+// /api/jobs/table has no total-count field, so pagination relies on this
+// heuristic: a full page might mean there's more, or might mean the next
+// page happens to be exactly empty. Accepted tradeoff — see the Next button.
+const JOBS_PAGE_LIMIT = 50;
 
 function isTabType(value: unknown): value is TabType {
     return typeof value === "string" && TAB_TYPES.includes(value as TabType);
@@ -227,7 +231,7 @@ function JobManager() {
         const previousViews = savedViews;
         const previousActiveViewId = activeViewId;
         const newView: SavedJobView = {
-            id: `custom-${crypto.randomUUID()}`,
+            id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
             label: trimmedLabel,
             activeTab,
             sortBy,
@@ -281,6 +285,8 @@ function JobManager() {
                 setSaveViewOpen(false);
                 setSaveViewName("");
             }
+        } catch {
+            showToast({ kind: "error", title: "Jobs", message: "Failed to save view" });
         } finally {
             setSaveViewSubmitting(false);
         }
@@ -365,13 +371,17 @@ function JobManager() {
         }
     };
 
+    const fetchSeqRef = useRef(0);
+    const refreshSeqRef = useRef(0);
     const fetchJobs = useCallback(async (silent = false) => {
+        const seq = ++fetchSeqRef.current;
         if (!silent) {
+            refreshSeqRef.current = seq;
             setRefreshing(true);
         }
         try {
             const params = new URLSearchParams({
-                limit: "50",
+                limit: String(JOBS_PAGE_LIMIT),
                 page: page.toString(),
                 sort: sortBy,
                 sort_desc: String(sortDesc),
@@ -394,9 +404,15 @@ function JobManager() {
             }
 
             const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
+            if (seq !== fetchSeqRef.current) {
+                return;
+            }
             setJobs(data);
             setActionError(null);
         } catch (e) {
+            if (seq !== fetchSeqRef.current) {
+                return;
+            }
             const message = isApiError(e) ? e.message : "Failed to fetch jobs";
             setActionError(message);
             if (!silent) {
@@ -404,7 +420,7 @@ function JobManager() {
             }
         } finally {
             setLoading(false);
-            if (!silent) {
+            if (!silent && refreshSeqRef.current === seq) {
                 setRefreshing(false);
             }
         }
@@ -421,6 +437,14 @@ function JobManager() {
     useEffect(() => {
         void fetchJobs(false);
     }, [fetchJobs]);
+
+    // Selection only ever refers to the loaded page. Clear it whenever the
+    // query shape changes so batch actions can never target rows that are no
+    // longer visible.
+    useEffect(() => {
+        setSelected(new Set());
+        setSelectionAnchor(null);
+    }, [activeTab, sortBy, sortDesc, page, debouncedSearch, reasonCode, failureCode]);
 
     useEffect(() => {
         const pollVisible = () => {
@@ -705,18 +729,21 @@ function JobManager() {
 
     return (
         <div className="space-y-6 relative">
-            <div className="flex items-center gap-4 px-1 text-xs text-helios-slate">
+            <div
+                className="flex items-center gap-4 px-1 text-xs text-helios-slate"
+                title="Counts reflect only the jobs currently loaded on this page, not the whole queue."
+            >
                 <span>
                     <span className="font-medium text-helios-ink">{activeCount}</span>
-                    {" "}active
+                    {" "}active on this page
                 </span>
                 <span>
                     <span className="font-medium text-status-error">{failedCount}</span>
-                    {" "}failed
+                    {" "}failed on this page
                 </span>
                 <span>
                     <span className="font-medium text-emerald-500">{completedCount}</span>
-                    {" "}completed
+                    {" "}completed on this page
                 </span>
             </div>
 
@@ -894,7 +921,7 @@ function JobManager() {
             {/* Footer Actions */}
             <div className="flex justify-between items-center pt-2">
                 <div className="flex items-center gap-3">
-                    <p className="text-xs text-helios-slate font-medium">Showing {jobs.length} jobs (Limit 50)</p>
+                    <p className="text-xs text-helios-slate font-medium">Showing {jobs.length} jobs (Limit {JOBS_PAGE_LIMIT})</p>
                     <div className="flex items-center gap-1">
                         <button
                             onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -906,7 +933,7 @@ function JobManager() {
                         <span className="px-2 text-xs font-mono text-helios-slate">Page {page}</span>
                         <button
                             onClick={() => setPage((p) => p + 1)}
-                            disabled={jobs.length < 50}
+                            disabled={jobs.length < JOBS_PAGE_LIMIT}
                             className="px-2 py-1 rounded-md border border-helios-line/20 text-xs font-semibold text-helios-slate hover:border-helios-solar hover:text-helios-solar disabled:opacity-40 disabled:hover:border-helios-line/20 disabled:hover:text-helios-slate transition-all"
                         >
                             Next

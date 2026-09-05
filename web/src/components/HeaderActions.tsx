@@ -1,39 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Info, LogOut, Play, Square } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, MotionConfig } from "framer-motion";
 import AboutDialog from "./AboutDialog";
 import { apiAction, apiJson } from "../lib/api";
+import {
+    type EngineActionStatus,
+    applyEngineActionStatus,
+    refreshEngineStatusNow,
+    useEngineStatus,
+} from "../lib/engineStatusStore";
 import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 
-interface EngineStatus {
-    status: "running" | "paused" | "draining";
-    manual_paused: boolean;
-    scheduler_paused: boolean;
-    draining: boolean;
-    disk_blocked?: boolean;
-    disk_block_reason?: string | null;
-    mode: "background" | "balanced" | "throughput";
-    concurrent_limit: number;
-    is_manual_override: boolean;
-}
-
-type EngineActionStatus = Pick<EngineStatus, "status">;
-
-const DEFAULT_ENGINE_STATUS: EngineStatus = {
-    status: "paused",
-    manual_paused: true,
-    scheduler_paused: false,
-    draining: false,
-    disk_blocked: false,
-    disk_block_reason: null,
-    mode: "background",
-    concurrent_limit: 1,
-    is_manual_override: false,
-};
-
 export default function HeaderActions() {
-    const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+    const { status: engineStatus } = useEngineStatus();
     const [engineLoading, setEngineLoading] = useState(false);
     const [showAbout, setShowAbout] = useState(false);
     const [aboutOrigin, setAboutOrigin] = useState<DOMRect | null>(null);
@@ -79,89 +59,20 @@ export default function HeaderActions() {
                 ? "idle"
                 : status;
 
-    const refreshEngineStatus = async () => {
-        const data = await apiJson<EngineStatus>("/api/engine/status");
-        setEngineStatus(data);
-        return data;
-    };
-
-    const applyActionStatus = (actionStatus: EngineActionStatus) => {
-        setEngineStatus((current) => ({
-            ...(current ?? DEFAULT_ENGINE_STATUS),
-            status: actionStatus.status,
-            manual_paused: actionStatus.status === "running"
-                ? false
-                : actionStatus.status === "paused"
-                  ? true
-                  : current?.manual_paused ?? false,
-            draining: actionStatus.status === "draining",
-        }));
-    };
-
-    useEffect(() => {
-        let cancelled = false;
-
-        const load = async () => {
-            try {
-                const status = await apiJson<EngineStatus>("/api/engine/status");
-
-                if (cancelled) {
-                    return;
-                }
-
-                setEngineStatus(status);
-            } catch {
-                // Ignore transient header control failures.
-            }
-        };
-
-        const pollStatus = async () => {
-            try {
-                const status = await apiJson<EngineStatus>("/api/engine/status");
-                if (!cancelled) {
-                    setEngineStatus(status);
-                }
-            } catch {
-                // Ignore transient polling failures.
-            }
-        };
-
-        void load();
-        const intervalId = window.setInterval(() => {
-            void pollStatus();
-        }, 5000);
-
-        return () => {
-            cancelled = true;
-            window.clearInterval(intervalId);
-        };
-    }, []);
-
-    // Fast poll during draining state for responsive UI
-    useEffect(() => {
-        if (status !== "draining") return;
-
-        const id = window.setInterval(() => {
-            void refreshEngineStatus();
-        }, 1000);
-
-        return () => window.clearInterval(id);
-    }, [status]);
-
-    const handleStart = async () => {
+    const runEngineAction = async (
+        endpoint: "/api/engine/resume" | "/api/engine/drain",
+    ) => {
         setEngineLoading(true);
         try {
-            const result = await apiJson<EngineActionStatus>("/api/engine/resume", {
+            const result = await apiJson<EngineActionStatus>(endpoint, {
                 method: "POST",
             });
-            // The action response confirms the state change. Keep the control
-            // accurate if a transient network failure breaks the follow-up GET.
-            applyActionStatus(result);
-            try {
-                await refreshEngineStatus();
-            } catch {
-                // Keep the acknowledged action state until the next poll.
-            }
+            // The action response confirms the state change; apply it to every
+            // subscriber immediately, then confirm against the server. Unlike
+            // the old local refresh, this never throws — a failed follow-up
+            // GET just keeps the acknowledged action state until the next poll.
+            applyEngineActionStatus(result);
+            void refreshEngineStatusNow();
         } catch {
             showToast({
                 kind: "error",
@@ -173,28 +84,8 @@ export default function HeaderActions() {
         }
     };
 
-    const handleStop = async () => {
-        setEngineLoading(true);
-        try {
-            const result = await apiJson<EngineActionStatus>("/api/engine/drain", {
-                method: "POST",
-            });
-            applyActionStatus(result);
-            try {
-                await refreshEngineStatus();
-            } catch {
-                // Keep the acknowledged action state until the next poll.
-            }
-        } catch {
-            showToast({
-                kind: "error",
-                title: "Engine",
-                message: "Failed to update engine state.",
-            });
-        } finally {
-            setEngineLoading(false);
-        }
-    };
+    const handleStart = () => runEngineAction("/api/engine/resume");
+    const handleStop = () => runEngineAction("/api/engine/drain");
 
     const handleLogout = async () => {
         try {
@@ -210,7 +101,7 @@ export default function HeaderActions() {
     };
 
     return (
-        <>
+        <MotionConfig reducedMotion="user">
             <div className="flex items-center gap-2">
 
                 {/* Status pill */}
@@ -305,6 +196,6 @@ export default function HeaderActions() {
                 onClose={() => setShowAbout(false)}
                 originRect={aboutOrigin}
             />
-        </>
+        </MotionConfig>
     );
 }

@@ -1,18 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { FolderOpen, Bell, Calendar, FileCog, Cog, Server, LayoutGrid, Palette, Activity, FileCode2, KeyRound } from "lucide-react";
-import WatchFolders from "./WatchFolders";
-import NotificationSettings from "./NotificationSettings";
-import ScheduleSettings from "./ScheduleSettings";
-import FileSettings from "./FileSettings";
-import TranscodeSettings from "./TranscodeSettings";
-import SystemSettings from "./SystemSettings";
-import HardwareSettings from "./HardwareSettings";
-import AppearanceSettings from "./AppearanceSettings";
-import QualitySettings from "./QualitySettings";
-import ConfigEditorSettings from "./ConfigEditorSettings";
-import ApiTokenSettings from "./ApiTokenSettings";
 import { ErrorBoundary, withErrorBoundary } from "./ErrorBoundary";
+import SkeletonList from "./ui/Skeleton";
+
+// Lazy-loaded so switching tabs only fetches the ~11 settings panels the
+// user actually opens, instead of SettingsPanel's single client:load island
+// eagerly parsing all of them (previously the largest chunk in the app).
+const AppearanceSettings = lazy(() => import("./AppearanceSettings"));
+const WatchFolders = lazy(() => import("./WatchFolders"));
+const TranscodeSettings = lazy(() => import("./TranscodeSettings"));
+const QualitySettings = lazy(() => import("./QualitySettings"));
+const FileSettings = lazy(() => import("./FileSettings"));
+const ScheduleSettings = lazy(() => import("./ScheduleSettings"));
+const NotificationSettings = lazy(() => import("./NotificationSettings"));
+const ApiTokenSettings = lazy(() => import("./ApiTokenSettings"));
+const HardwareSettings = lazy(() => import("./HardwareSettings"));
+const SystemSettings = lazy(() => import("./SystemSettings"));
+const ConfigEditorSettings = lazy(() => import("./ConfigEditorSettings"));
 
 const TABS = [
     { id: "appearance", label: "Appearance", icon: Palette, component: AppearanceSettings },
@@ -156,7 +161,13 @@ export default function SettingsPanel() {
                                 (t) => t.id === activeTab
                             )?.component;
                             return TabComponent
-                                ? <ErrorBoundary key={activeTab} moduleName={TABS.find((t) => t.id === activeTab)?.label}><TabComponent /></ErrorBoundary>
+                                ? (
+                                    <ErrorBoundary key={activeTab} moduleName={TABS.find((t) => t.id === activeTab)?.label}>
+                                        <Suspense fallback={<SkeletonList count={4} itemClassName="h-10 w-full" />}>
+                                            <TabComponent />
+                                        </Suspense>
+                                    </ErrorBoundary>
+                                )
                                 : null;
                         })()}
                     </div>

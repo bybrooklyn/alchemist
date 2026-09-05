@@ -175,8 +175,12 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
             const path = window.location.pathname;
             const isAuthPage = path.startsWith("/login") || path.startsWith("/setup");
             if (!isAuthPage) {
-                window.location.href = "/login";
-                return new Promise(() => {});
+                const next = encodeURIComponent(path + window.location.search);
+                const error = await toApiError(resolvedUrl, response);
+                window.location.href = `/login?next=${next}`;
+                // Navigation is async; reject so awaiting callers' catch paths
+                // run deterministically instead of hanging until unload.
+                throw error;
             }
         }
 

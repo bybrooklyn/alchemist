@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import { Activity, X, Zap, CheckCircle2, AlertTriangle, Database } from "lucide-react";
 import { useSharedStats } from "../lib/statsStore";
 
@@ -87,7 +87,7 @@ export default function SystemStatus() {
     const percentage = Math.min((stats.active / stats.concurrent_limit) * 100, 100);
 
     return (
-        <>
+        <MotionConfig reducedMotion="user">
             <motion.div
                 onClick={() => setIsExpanded(true)}
                 className="flex flex-col gap-3 cursor-pointer group p-4 rounded-xl bg-helios-surface-soft border border-helios-line/40 shadow-sm"
@@ -238,6 +238,6 @@ export default function SystemStatus() {
                     </>
                 )}
             </AnimatePresence>
-        </>
+        </MotionConfig>
     );
 }

@@ -14,6 +14,7 @@ import {
     Upload,
 } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import { formatBytes, formatDurationPrecise } from "../lib/format";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 
@@ -239,13 +240,19 @@ export function ConversionTool() {
     const [error, setError] = useState<string | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
     const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
+    const [pollingLost, setPollingLost] = useState(false);
 
     useEffect(() => {
-        if (!conversionJobId) return;
+        if (!conversionJobId || pollingLost) return;
         // Stop polling once the job reaches a terminal state — there is nothing
         // left to learn, and an idle Convert tab otherwise hits the API forever.
         if (status && TERMINAL_CONVERSION_STATES.has(status.status)) return;
         let consecutiveErrors = 0;
+        // A permanently-invalid job id (e.g. the row expired server-side)
+        // would otherwise poll a guaranteed-404 every 2s for as long as the
+        // tab stays open. Give up after MAX_CONSECUTIVE_ERRORS and let the
+        // user explicitly retry instead.
+        const MAX_CONSECUTIVE_ERRORS = 5;
         const id = window.setInterval(() => {
             void apiJson<JobStatusResponse>(`/api/conversion/jobs/${conversionJobId}`)
                 .then((next) => {
@@ -259,10 +266,14 @@ export function ConversionTool() {
                         const message = isApiError(err) ? err.message : "Lost contact with the conversion job.";
                         showToast({ kind: "warning", title: "Conversion", message });
                     }
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        window.clearInterval(id);
+                        setPollingLost(true);
+                    }
                 });
         }, 2000);
         return () => window.clearInterval(id);
-    }, [conversionJobId, status?.status]);
+    }, [conversionJobId, status?.status, pollingLost]);
 
     const runPreview = useCallback(
         async (
@@ -331,6 +342,7 @@ export function ConversionTool() {
         setPreviewError(null);
         try {
             const payload = await uploadConversionFile(file, setUploadProgress);
+            setPollingLost(false);
             setConversionJobId(payload.conversion_job_id);
             setProbe(payload.probe);
             setSettings(payload.normalized_settings);
@@ -481,7 +493,7 @@ export function ConversionTool() {
                                 ["Video", sourceSummary.videoCodec],
                                 ["Resolution", sourceSummary.resolution],
                                 ["Dynamic range", sourceSummary.dynamicRange],
-                                ["Duration", formatDuration(sourceSummary.durationSecs)],
+                                ["Duration", formatDurationPrecise(sourceSummary.durationSecs)],
                                 ["Size", formatBytes(sourceSummary.sizeBytes)],
                                 ["Audio", sourceSummary.audio],
                                 ["Subtitles", `${sourceSummary.subtitleCount}`],
@@ -634,6 +646,22 @@ export function ConversionTool() {
                             estimate={estimate}
                         />
                         </div>
+                    )}
+
+                    {pollingLost && (
+                        <section className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-5 flex items-center justify-between gap-4">
+                            <span className="text-sm text-status-warning">
+                                Lost contact with this conversion. It may have expired or the server restarted.
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setPollingLost(false)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-status-warning/40 px-3 py-1.5 text-sm font-semibold text-status-warning shrink-0"
+                            >
+                                <RefreshCw size={14} />
+                                Retry
+                            </button>
+                        </section>
                     )}
 
                     {status && (
@@ -1157,30 +1185,6 @@ function sourceAudio(metadata: MediaAnalysis["metadata"]) {
         return `${formatCodec(metadata.audio_codec)}${channels}`;
     }
     return "None";
-}
-
-function formatBytes(bytes: number) {
-    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = bytes;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-    const precision = value >= 10 || unit === 0 ? 0 : 1;
-    return `${value.toFixed(precision)} ${units[unit]}`;
-}
-
-function formatDuration(seconds: number) {
-    if (!Number.isFinite(seconds) || seconds <= 0) return "--";
-    const rounded = Math.round(seconds);
-    const hours = Math.floor(rounded / 3600);
-    const minutes = Math.floor((rounded % 3600) / 60);
-    const secs = rounded % 60;
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    if (minutes > 0) return `${minutes}m ${secs}s`;
-    return `${secs}s`;
 }
 
 function formatCodec(value: string) {

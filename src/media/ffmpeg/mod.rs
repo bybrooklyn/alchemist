@@ -662,6 +662,15 @@ impl FFmpegProgress {
     }
 }
 
+/// True for a raw `-progress pipe:2` field line: a single `key=value` token
+/// with no spaces (`frame=`, `fps=`, `out_time_ms=`, `progress=`, ...).
+/// `FFmpegProgressState` already turns a full tick of these into one
+/// `FFmpegProgress` event, so callers that log raw ffmpeg stderr should skip
+/// them rather than persisting/broadcasting one log entry per field.
+pub fn is_progress_fragment(line: &str) -> bool {
+    !line.contains(' ') && line.contains('=')
+}
+
 #[derive(Debug, Default)]
 pub struct FFmpegProgressState {
     current: FFmpegProgress,
@@ -669,7 +678,7 @@ pub struct FFmpegProgressState {
 
 impl FFmpegProgressState {
     pub fn ingest_line(&mut self, line: &str) -> Option<FFmpegProgress> {
-        if !line.contains(' ')
+        if is_progress_fragment(line)
             && let Some((key, value)) = line.split_once('=')
         {
             match key {
@@ -1043,6 +1052,43 @@ mod tests {
             .unwrap_or_else(|| panic!("expected structured progress"));
         assert_eq!(progress.frame, 42);
         assert!((progress.time_seconds - 1.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn progress_fragment_lines_are_filtered_from_raw_logging() {
+        for line in [
+            "frame=42",
+            "fps=25.0",
+            "bitrate=1500kbps",
+            "total_size=1000000",
+            "out_time=00:00:04.00",
+            "out_time_ms=4000000",
+            "dup_frames=0",
+            "drop_frames=0",
+            "speed=1.5x",
+            "progress=continue",
+            "progress=end",
+        ] {
+            assert!(
+                is_progress_fragment(line),
+                "expected {line:?} to be recognized as a progress fragment"
+            );
+        }
+    }
+
+    #[test]
+    fn non_progress_lines_are_not_filtered() {
+        for line in [
+            "frame=  100 fps=25.0 bitrate=1500kbps total_size=1000000 time=00:00:04.00 speed=1.5x",
+            "Stream mapping:",
+            "[libx264 @ 0x7f8a] using cpu capabilities: ARM NEON",
+            "Conversion failed!",
+        ] {
+            assert!(
+                !is_progress_fragment(line),
+                "expected {line:?} to NOT be treated as a progress fragment"
+            );
+        }
     }
 
     #[test]

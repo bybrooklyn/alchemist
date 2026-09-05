@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import Modal from "./Modal";
+import { isApiError } from "../../lib/api";
+import { showToast } from "../../lib/toast";
 
 interface ConfirmDialogProps {
     open: boolean;
@@ -64,6 +66,12 @@ export default function ConfirmDialog({
                         try {
                             await onConfirm();
                             onClose();
+                        } catch (err) {
+                            showToast({
+                                kind: "error",
+                                title: title,
+                                message: isApiError(err) ? err.message : "Action failed",
+                            });
                         } finally {
                             setSubmitting(false);
                         }

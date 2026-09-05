@@ -62,6 +62,20 @@ export default function Modal({
     const [mounted, setMounted] = useState(false);
     const manageFocus = trapFocus && !externalPanelRef;
 
+    // Callers routinely pass inline arrows (and toggle `disableClose` while
+    // submits are in flight). Keeping them in refs lets the focus lifecycle
+    // below run strictly on open/close instead of churning — teardown steals
+    // focus back to the trigger and re-focusses the panel's first element on
+    // every parent render otherwise.
+    const onCloseRef = useRef(onClose);
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    });
+    const disableCloseRef = useRef(disableClose);
+    useEffect(() => {
+        disableCloseRef.current = disableClose;
+    });
+
     useEffect(() => setMounted(true), []);
 
     useEffect(() => {
@@ -83,8 +97,8 @@ export default function Modal({
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
-                if (!disableClose) {
-                    onClose();
+                if (!disableCloseRef.current) {
+                    onCloseRef.current();
                 }
                 return;
             }
@@ -124,8 +138,7 @@ export default function Modal({
             setAppShellInert(false);
             lastFocusedRef.current?.focus();
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, manageFocus, disableClose, onClose]);
+    }, [open, manageFocus]);
 
     if (!mounted) {
         return null;

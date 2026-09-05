@@ -47,8 +47,19 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
         confirmOpenRef.current = confirmState !== null;
     }, [confirmState]);
 
+    // The dialog lifecycle (inert, initial focus, focus restore) must run once
+    // per open/close — not on every SSE-driven `focusedJob` identity change,
+    // which would re-capture `detailLastFocusedRef` from inside the modal and
+    // bounce focus to the panel's first element mid-interaction.
+    const detailOpen = focusedJob !== null;
+    const detailOpenRef = useRef(detailOpen);
+
     useEffect(() => {
-        if (!focusedJob) {
+        detailOpenRef.current = focusedJob !== null;
+    }, [focusedJob]);
+
+    useEffect(() => {
+        if (!detailOpen) {
             return;
         }
 
@@ -66,7 +77,7 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
         }
 
         const onKeyDown = (event: KeyboardEvent) => {
-            if (!focusedJob || confirmOpenRef.current) {
+            if (!detailOpenRef.current || confirmOpenRef.current) {
                 return;
             }
 
@@ -113,7 +124,7 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
                 detailLastFocusedRef.current.focus();
             }
         };
-    }, [focusedJob]);
+    }, [detailOpen]);
 
     const openJobDetails = useCallback(async (id: number) => {
         setDetailLoading(true);

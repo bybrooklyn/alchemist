@@ -1,5 +1,6 @@
 import { Inbox, MoreHorizontal } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useRef } from "react";
 import type { RefObject, MutableRefObject } from "react";
 import type React from "react";
 import type { Job, ConfirmConfig } from "./types";
@@ -51,6 +52,11 @@ export function JobsTable({
     fetchJobDetails, setMenuJobId, setMenuPosition, copyInputPath, openConfirm, handleAction, handlePriority,
     getStatusBadge,
 }: JobsTableProps) {
+    // Click handlers fire before change events; capture the shift modifier so
+    // range-selection works for mouse users while keyboard activation (Space)
+    // still toggles through onChange.
+    const shiftClickRef = useRef(false);
+
     const closeMenu = () => {
         setMenuJobId(null);
         setMenuPosition(null);
@@ -65,6 +71,7 @@ export function JobsTable({
                             <input type="checkbox"
                                 checked={jobs.length > 0 && jobs.every(j => selected.has(j.id))}
                                 onChange={toggleSelectAll}
+                                aria-label="Select all loaded jobs"
                                 className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
                             />
                         </th>
@@ -102,7 +109,16 @@ export function JobsTable({
                                 onClick={() => void fetchJobDetails(job.id)}
                                 onContextMenu={(event) => {
                                     event.preventDefault();
-                                    setMenuPosition({ x: event.clientX, y: event.clientY });
+                                    // Clamp to the viewport so a right-click near an edge
+                                    // doesn't render the menu partially offscreen. Estimated
+                                    // against the menu's actual w-44 width and its worst-case
+                                    // (all-actions-visible) height.
+                                    const MENU_WIDTH = 176;
+                                    const MENU_HEIGHT_ESTIMATE = 280;
+                                    setMenuPosition({
+                                        x: Math.max(8, Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8)),
+                                        y: Math.max(8, Math.min(event.clientY, window.innerHeight - MENU_HEIGHT_ESTIMATE - 8)),
+                                    });
                                     setMenuJobId(job.id);
                                 }}
                                 className={cn(
@@ -116,9 +132,13 @@ export function JobsTable({
                                         checked={selected.has(job.id)}
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            toggleSelect(job.id, e.shiftKey);
+                                            shiftClickRef.current = e.shiftKey;
                                         }}
-                                        onChange={() => {}}
+                                        onChange={(e) => {
+                                            e.stopPropagation();
+                                            toggleSelect(job.id, shiftClickRef.current);
+                                        }}
+                                        aria-label={`Select ${job.input_path.split(/[/\\]/).pop()}`}
                                         className="rounded border-helios-line/30 bg-helios-surface-soft accent-helios-solar"
                                     />
                                 </td>
