@@ -14,7 +14,13 @@ export function formatBytes(bytes: number): string {
     const k = 1024;
     const sign = bytes < 0 ? "-" : "";
     const abs = Math.abs(bytes);
-    const i = Math.min(Math.floor(Math.log(abs) / Math.log(k)), BYTE_UNITS.length - 1);
+    // Clamped at both ends: a sub-byte value (0 < |bytes| < 1) makes the log
+    // negative, and a negative index reads past the start of BYTE_UNITS —
+    // rendering "0.5 undefined".
+    const i = Math.min(
+        Math.max(Math.floor(Math.log(abs) / Math.log(k)), 0),
+        BYTE_UNITS.length - 1,
+    );
     return `${sign}${parseFloat((abs / Math.pow(k, i)).toFixed(2))} ${BYTE_UNITS[i]}`;
 }
 

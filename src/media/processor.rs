@@ -149,8 +149,23 @@ impl Agent {
 
         let output_dir = std::path::Path::new(&next.output_path)
             .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let available = crate::system::disk_space::available_bytes_for_path(output_dir);
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+        // Enumerating and refreshing every mount is blocking syscall work, and a
+        // stale network mount can make it hang for seconds. This runs on every
+        // engine-loop iteration, so keep it off the async worker.
+        let probe_dir = output_dir.clone();
+        let available = match tokio::task::spawn_blocking(move || {
+            crate::system::disk_space::available_bytes_for_path(&probe_dir)
+        })
+        .await
+        {
+            Ok(available) => available,
+            Err(e) => {
+                debug!("Disk guardrail: free-space probe failed: {e}");
+                return false;
+            }
+        };
 
         if crate::system::disk_space::is_below_min_free(available, min_gb) {
             let free_gib = available.map_or(0.0, crate::system::disk_space::as_gib);
@@ -405,6 +420,15 @@ impl Agent {
 
         let batch_size: i64 = 100;
         let mut total_analyzed: usize = 0;
+        // Every iteration re-queries at offset 0 and relies on analyzed jobs
+        // dropping out of the selection. A job that cannot be moved out of it
+        // (e.g. a transient DB error on the profile lookup, which leaves the job
+        // `failed` with no decision row) would otherwise be re-selected forever:
+        // the boot pass never returns, `analyzing_boot` stays set, and the engine
+        // claim loop never starts a single job. Tracking what this pass has
+        // already attempted guarantees termination regardless of why a job stays
+        // selected — it is simply retried on the next pass instead.
+        let mut attempted: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
         loop {
             let batch = match self.db.get_jobs_for_analysis_batch(0, batch_size).await {
@@ -419,10 +443,24 @@ impl Agent {
                 break;
             }
 
-            let batch_len = batch.len();
+            let still_selected = batch.len();
+            let fresh: Vec<_> = batch
+                .into_iter()
+                .filter(|job| attempted.insert(job.id))
+                .collect();
+            if fresh.is_empty() {
+                warn!(
+                    "Auto-analysis: {still_selected} job(s) remain selected after \
+                     already being analyzed this pass; stopping to avoid a spin. \
+                     They will be retried on the next pass."
+                );
+                break;
+            }
+
+            let batch_len = fresh.len();
             debug!("Auto-analysis: analyzing {} job(s)...", batch_len);
 
-            for job in batch {
+            for job in fresh {
                 let pipeline = self.pipeline();
                 match pipeline.analyze_job_only(job).await {
                     Ok(_) => {}

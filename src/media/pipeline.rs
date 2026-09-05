@@ -746,6 +746,28 @@ impl Pipeline {
         }
     }
 
+    /// Record a terminal failure for a job: the error log line, the job log row,
+    /// the failure explanation, and the `Failed` state transition. Every failure
+    /// exit in `process_job` needs all four, and doing them by hand at each exit
+    /// is how they drift apart.
+    ///
+    /// The caller still decides the `JobFailure` classification and returns it,
+    /// because that choice (transient vs. corrupt vs. planner bug) is the part
+    /// that genuinely differs per call site.
+    async fn mark_job_failed(&self, job_id: i64, message: &str) {
+        tracing::error!("Job {}: {}", job_id, message);
+        self.record_job_log(job_id, "error", message).await;
+        let explanation = crate::explanations::failure_from_summary(message);
+        self.record_job_failure_explanation(job_id, &explanation)
+            .await;
+        if let Err(e) = self
+            .update_job_state(job_id, crate::db::JobState::Failed)
+            .await
+        {
+            tracing::warn!(job_id, "Failed to update job state to failed: {e}");
+        }
+    }
+
     async fn record_encode_attempt(&self, job_id: i64, input: crate::db::EncodeAttemptInput) {
         if let Err(err) = self.db.insert_encode_attempt(input).await {
             tracing::warn!(job_id, "Failed to record encode attempt: {err}");
@@ -1460,6 +1482,12 @@ impl Pipeline {
                 self.record_job_log(job_id, "error", &reason).await;
                 self.record_job_failure_explanation(job_id, &failure_explanation)
                     .await;
+                // Record the terminal decision too, not just the failure. The
+                // auto-analysis batch selects jobs by `status IN ('queued',
+                // 'failed') AND NOT EXISTS (decisions)`, and `failed` is inside
+                // that set — without a decision row this job is re-selected on
+                // every pass, re-probing an unreadable file forever.
+                self.record_job_decision(job_id, "skip", &reason).await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
@@ -1478,6 +1506,10 @@ impl Pipeline {
                 self.record_job_log(job_id, "error", &reason).await;
                 self.record_job_failure_explanation(job_id, &failure_explanation)
                     .await;
+                // Deliberately no decision row here: this is a transient database
+                // error, not a property of the file, so the job stays eligible for
+                // the next analysis pass. `_run_analysis_pass`'s per-pass seen-set
+                // is what stops it from spinning inside a single pass.
                 self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
@@ -1499,6 +1531,10 @@ impl Pipeline {
                 self.record_job_log(job_id, "error", &reason).await;
                 self.record_job_failure_explanation(job_id, &failure_explanation)
                     .await;
+                // Terminal for this file's current state — record the decision so
+                // the auto-analysis batch stops re-selecting it (see the
+                // analysis_failed branch above).
+                self.record_job_decision(job_id, "skip", &reason).await;
                 self.update_job_state(job_id, crate::db::JobState::Failed)
                     .await?;
                 return Ok(());
@@ -1613,18 +1649,8 @@ impl Pipeline {
         let analysis = match analyzer.analyze_with_cache(&self.db, &file_path).await {
             Ok(m) => m,
             Err(e) => {
-                let msg = format!("Probing failed: {e}");
-                tracing::error!("Job {}: {}", job.id, msg);
-                self.record_job_log(job.id, "error", &msg).await;
-                let explanation = crate::explanations::failure_from_summary(&msg);
-                self.record_job_failure_explanation(job.id, &explanation)
+                self.mark_job_failed(job.id, &format!("Probing failed: {e}"))
                     .await;
-                if let Err(e) = self
-                    .update_job_state(job.id, crate::db::JobState::Failed)
-                    .await
-                {
-                    tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                }
                 return Err(JobFailure::MediaCorrupt);
             }
         };
@@ -1659,18 +1685,11 @@ impl Pipeline {
         let conversion_job = match self.db.get_conversion_job_by_linked_job_id(job.id).await {
             Ok(conversion_job) => conversion_job,
             Err(err) => {
-                let msg = format!("Failed to load linked conversion job: {err}");
-                tracing::error!("Job {}: {}", job.id, msg);
-                self.record_job_log(job.id, "error", &msg).await;
-                let explanation = crate::explanations::failure_from_summary(&msg);
-                self.record_job_failure_explanation(job.id, &explanation)
-                    .await;
-                if let Err(e) = self
-                    .update_job_state(job.id, crate::db::JobState::Failed)
-                    .await
-                {
-                    tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                }
+                self.mark_job_failed(
+                    job.id,
+                    &format!("Failed to load linked conversion job: {err}"),
+                )
+                .await;
                 return Err(JobFailure::Transient);
             }
         };
@@ -1680,18 +1699,11 @@ impl Pipeline {
                 match serde_json::from_str(&conversion_job.settings_json) {
                     Ok(settings) => settings,
                     Err(err) => {
-                        let msg = format!("Invalid conversion job settings: {err}");
-                        tracing::error!("Job {}: {}", job.id, msg);
-                        self.record_job_log(job.id, "error", &msg).await;
-                        let explanation = crate::explanations::failure_from_summary(&msg);
-                        self.record_job_failure_explanation(job.id, &explanation)
-                            .await;
-                        if let Err(e) = self
-                            .update_job_state(job.id, crate::db::JobState::Failed)
-                            .await
-                        {
-                            tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                        }
+                        self.mark_job_failed(
+                            job.id,
+                            &format!("Invalid conversion job settings: {err}"),
+                        )
+                        .await;
                         return Err(JobFailure::PlannerBug);
                     }
                 };
@@ -1699,18 +1711,8 @@ impl Pipeline {
             {
                 Ok(plan) => plan,
                 Err(err) => {
-                    let msg = format!("Conversion planning failed: {err}");
-                    tracing::error!("Job {}: {}", job.id, msg);
-                    self.record_job_log(job.id, "error", &msg).await;
-                    let explanation = crate::explanations::failure_from_summary(&msg);
-                    self.record_job_failure_explanation(job.id, &explanation)
+                    self.mark_job_failed(job.id, &format!("Conversion planning failed: {err}"))
                         .await;
-                    if let Err(e) = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                    }
                     return Err(JobFailure::PlannerBug);
                 }
             }
@@ -1719,18 +1721,11 @@ impl Pipeline {
             let profile = match self.db.get_profile_for_path(&job.input_path).await {
                 Ok(profile) => profile,
                 Err(err) => {
-                    let msg = format!("Failed to resolve library profile: {err}");
-                    tracing::error!("Job {}: {}", job.id, msg);
-                    self.record_job_log(job.id, "error", &msg).await;
-                    let explanation = crate::explanations::failure_from_summary(&msg);
-                    self.record_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    if let Err(e) = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                    }
+                    self.mark_job_failed(
+                        job.id,
+                        &format!("Failed to resolve library profile: {err}"),
+                    )
+                    .await;
                     return Err(JobFailure::Transient);
                 }
             };
@@ -1740,18 +1735,8 @@ impl Pipeline {
             {
                 Ok(plan) => plan,
                 Err(e) => {
-                    let msg = format!("Planner failed: {e}");
-                    tracing::error!("Job {}: {}", job.id, msg);
-                    self.record_job_log(job.id, "error", &msg).await;
-                    let explanation = crate::explanations::failure_from_summary(&msg);
-                    self.record_job_failure_explanation(job.id, &explanation)
+                    self.mark_job_failed(job.id, &format!("Planner failed: {e}"))
                         .await;
-                    if let Err(e) = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                    }
                     return Err(JobFailure::PlannerBug);
                 }
             }
@@ -1964,18 +1949,8 @@ impl Pipeline {
         match execution_result {
             Ok(result) => {
                 if result.fallback_occurred && !plan.allow_fallback {
-                    tracing::error!("Job {}: Encoder fallback detected and not allowed.", job.id);
                     let summary = "Encoder fallback detected and not allowed.";
-                    let explanation = crate::explanations::failure_from_summary(summary);
-                    self.record_job_log(job.id, "error", summary).await;
-                    self.record_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    if let Err(e) = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await
-                    {
-                        tracing::warn!(job_id = job.id, "Failed to update job state: {e}");
-                    }
+                    self.mark_job_failed(job.id, summary).await;
                     self.record_encode_attempt(
                         job.id,
                         crate::db::EncodeAttemptInput {
@@ -2113,20 +2088,12 @@ impl Pipeline {
                     .await;
                 } else {
                     let msg = format!("Transcode failed: {e}");
-                    tracing::error!("Job {}: {}", job.id, msg);
-                    self.record_job_log(job.id, "error", &msg).await;
-                    let explanation = crate::explanations::failure_from_summary(&msg);
-                    self.record_job_failure_explanation(job.id, &explanation)
-                        .await;
-                    if let Err(e) = self
-                        .update_job_state(job.id, crate::db::JobState::Failed)
-                        .await
-                    {
-                        tracing::warn!(
-                            job_id = job.id,
-                            "Failed to update job state to failed: {e}"
-                        );
-                    }
+                    // Recomputed rather than reused from `mark_job_failed`: the
+                    // enclosing scope already binds `explanation` to this job's
+                    // *decision* explanation, so the attempt row would silently
+                    // record a decision code as its failure code.
+                    let failure_explanation = crate::explanations::failure_from_summary(&msg);
+                    self.mark_job_failed(job.id, &msg).await;
                     self.record_encode_attempt(
                         job.id,
                         crate::db::EncodeAttemptInput {
@@ -2134,7 +2101,7 @@ impl Pipeline {
                             attempt_number: current_attempt_number,
                             started_at: Some(encode_started_at.to_rfc3339()),
                             outcome: "failed".to_string(),
-                            failure_code: Some(explanation.code.clone()),
+                            failure_code: Some(failure_explanation.code.clone()),
                             failure_summary: Some(msg),
                             input_size_bytes: Some(metadata.size_bytes as i64),
                             output_size_bytes: None,
@@ -2687,7 +2654,12 @@ impl Pipeline {
             speed_factor: params.speed_factor,
         };
 
-        let _ = crate::telemetry::send_event(event).await;
+        // Detached: telemetry is best-effort and must never gate the encode
+        // pipeline. Awaiting it held the job's concurrency permit through up to
+        // three 4s HTTP attempts plus backoff — about 13s per event, on both
+        // `job_started` and `job_finished` — whenever the ingest endpoint was
+        // slow or unreachable.
+        tokio::spawn(crate::telemetry::send_event(event));
     }
 }
 
@@ -3460,6 +3432,74 @@ mod tests {
         assert!(db.get_job_decision(job.id).await?.is_none());
         assert!(db.get_job_failure_explanation(job.id).await?.is_some());
 
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    /// A job whose analysis fails must leave the auto-analysis selection set.
+    ///
+    /// `get_jobs_for_analysis_batch` selects `status IN ('queued', 'failed') AND
+    /// NOT EXISTS (decisions)`, and `_run_analysis_pass` re-queries it at offset 0
+    /// until it comes back empty. Marking the job `failed` without writing a
+    /// decision row left it permanently selected: the pass never terminated, the
+    /// boot pass never cleared `analyzing_boot`, and the engine claim loop never
+    /// started a single job — one unreadable file froze the whole queue.
+    #[tokio::test]
+    async fn analysis_failure_leaves_the_auto_analysis_selection_set() -> anyhow::Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_analysis_failure_exit_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_analysis_failure_exit_{}",
+            rand::random::<u64>()
+        ));
+
+        // Deliberately never created on disk: probing must fail.
+        let input = temp_root.join("missing.mkv");
+        let output = temp_root.join("missing-alchemist.mkv");
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let _ = db
+            .enqueue_job(&input, &output, SystemTime::UNIX_EPOCH)
+            .await?;
+        let job = db
+            .get_job_by_input_path(input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing queued job"))?;
+
+        let selected_before = db.get_jobs_for_analysis_batch(0, 100).await?;
+        assert!(
+            selected_before
+                .iter()
+                .any(|candidate| candidate.id == job.id)
+        );
+
+        let pipeline = test_pipeline(db.clone(), false);
+        pipeline.analyze_job_only(job.clone()).await?;
+
+        let updated = db
+            .get_job_by_id(job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing failed job"))?;
+        assert_eq!(updated.status, crate::db::JobState::Failed);
+        assert!(db.get_job_failure_explanation(job.id).await?.is_some());
+        assert!(
+            db.get_job_decision(job.id).await?.is_some(),
+            "a failed analysis must record a decision so the job stops being re-selected"
+        );
+
+        let selected_after = db.get_jobs_for_analysis_batch(0, 100).await?;
+        assert!(
+            !selected_after
+                .iter()
+                .any(|candidate| candidate.id == job.id),
+            "job is still selected for analysis after failing — the pass would spin forever"
+        );
+
+        drop(pipeline);
+        drop(db);
         let _ = std::fs::remove_dir_all(temp_root);
         let _ = std::fs::remove_file(db_path);
         Ok(())

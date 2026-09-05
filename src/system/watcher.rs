@@ -137,24 +137,42 @@ impl FileWatcher {
                             continue;
                         }
 
-                        let mut ready = Vec::new();
-                        pending.retain(|key, state| {
-                            match state.poll(&key.path) {
-                                PendingPoll::Pending => true,
-                                PendingPoll::Gone => false,
-                                PendingPoll::Ready => {
-                                    ready.push(key.clone());
-                                    false
+                        // The sweep stats every pending path, and the pending set is
+                        // unbounded — a bulk import puts thousands of files in it. Doing
+                        // that synchronously here blocked a runtime worker for the whole
+                        // sweep, every second. Run it on the blocking pool instead: one
+                        // handoff per tick regardless of how many files are pending.
+                        let mut owned = std::mem::take(&mut pending);
+                        let sweep = tokio::task::spawn_blocking(move || {
+                            let mut ready = Vec::new();
+                            owned.retain(|key, state| {
+                                match state.poll(&key.path) {
+                                    PendingPoll::Pending => true,
+                                    PendingPoll::Gone => false,
+                                    PendingPoll::Ready => {
+                                        ready.push(key.clone());
+                                        false
+                                    }
                                 }
+                            });
+                            (owned, ready)
+                        }).await;
+
+                        let ready = match sweep {
+                            Ok((remaining, ready)) => {
+                                pending = remaining;
+                                ready
                             }
-                        });
+                            Err(err) => {
+                                error!("Watcher stability sweep failed: {err}");
+                                continue;
+                            }
+                        };
 
                         for key in ready {
-                            if key.path.exists() {
+                            if let Ok(metadata) = tokio::fs::metadata(&key.path).await {
                                 debug!("Auto-enqueuing stable file: {:?}", key.path);
-                                let mtime = std::fs::metadata(&key.path)
-                                    .and_then(|m| m.modified())
-                                    .unwrap_or(SystemTime::now());
+                                let mtime = metadata.modified().unwrap_or_else(|_| SystemTime::now());
                                 let discovered = crate::media::pipeline::DiscoveredMedia {
                                     path: key.path.clone(),
                                     mtime,

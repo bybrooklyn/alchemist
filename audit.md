@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-08-22
+Last updated: 2026-09-04
 
 ---
 
@@ -246,6 +246,141 @@ Net user-visible effect: on an affected host the entire library "encodes" but pr
 3. In `src/media/pipeline.rs`, detect encoder-open failures from FFmpeg stderr ("Could not open encoder", "Error while opening encoder", "Invalid argument" at session create) and route them to a non-Transient outcome: trigger the planned CPU fallback if `allow_fallback`, else classify `JobFailure::EncoderUnavailable` so the job stops retrying and the UI surfaces an actionable reason.
 4. Add a probe-time CQ validation: when constant-quality is requested for VideoToolbox, run a one-frame `-q:v` probe and cache whether it opened; only emit `-q:v` when it did.
 5. Tests: a unit test asserting probe args and real-encode args use the same `-allow_sw` policy; a `map_failure`/stderr-classifier test that an encoder-open failure is not `Transient`.
+
+---
+
+### [P1-15] One unreadable file freezes the entire encode queue — the auto-analysis pass never terminates
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/processor.rs` — `_run_analysis_pass` re-queries at offset 0 until the batch is empty.
+- `src/media/pipeline.rs` — `analyze_job_only`'s failure paths set `Failed` without recording a decision.
+- `src/db/jobs.rs` — `get_jobs_for_analysis_batch` selection predicate.
+
+**Severity:** P1
+
+**Problem:**
+
+`get_jobs_for_analysis_batch` selects `status IN ('queued', 'failed') AND NOT EXISTS
+(SELECT 1 FROM decisions WHERE job_id = j.id)`. `_run_analysis_pass` loops on that query
+at offset 0 and relies on analyzed jobs dropping out of the set:
+
+```rust
+loop {
+    let batch = self.db.get_jobs_for_analysis_batch(0, batch_size).await?;
+    if batch.is_empty() { break; }
+    for job in batch { pipeline.analyze_job_only(job).await; }
+}
+```
+
+`analyze_job_only`'s three failure paths — `analysis_failed`, `profile_lookup_failed`,
+`planning_failed` — write a `logs` row and a `job_failure_explanations` row and set the
+job to `Failed`. None writes a `decisions` row, and `failed` is **inside** the selection
+set. The job is therefore re-selected on the next iteration, forever.
+
+Consequences, from a single unreadable, missing, permission-denied, or unsupported file:
+
+1. `analyze_pending_jobs_boot` never returns, so `set_boot_analyzing(false)` never runs.
+   `run_loop` blocks on `if self.is_paused() || self.is_boot_analyzing()`, so the engine
+   claim loop **never starts a single job** — the whole queue is dead for the life of the
+   process.
+2. The stuck pass holds the `analysis_semaphore` permit forever, so every later
+   watcher-triggered pass `try_acquire`s and silently skips.
+3. ffprobe is respawned on the bad file continuously, and each iteration inserts another
+   `logs` row — the same unbounded-DB-growth class as the P1 log flood.
+
+`analyze_with_cache` does not cache negative results, and `probe_cache_key_for_path`
+fails before ffprobe even runs when the file is missing, so nothing short-circuits it.
+
+**Fix (applied):**
+
+1. `analyze_job_only` now records a decision (`record_job_decision(job_id, "skip", &reason)`)
+   on the `analysis_failed` and `planning_failed` paths, so the job leaves the selection
+   set. `explanations::decision_from_legacy` already had dedicated `analysis_failed` and
+   `planning_failed` **Decision** arms, confirming this was the intended shape.
+2. `profile_lookup_failed` deliberately still records **no** decision: it is a transient
+   database error, not a property of the file, so the job stays eligible for the next pass.
+3. `_run_analysis_pass` tracks the job ids it has already attempted in this pass and stops
+   when a batch contains none that are new, logging a warning. This guarantees termination
+   for the transient case above and for any future predicate drift.
+4. Regression test: `media::pipeline::tests::analysis_failure_leaves_the_auto_analysis_selection_set`
+   asserts the failed job is gone from `get_jobs_for_analysis_batch` afterwards. Its sibling
+   `analyze_job_only_marks_job_failed_without_decision_on_profile_lookup_failure` still
+   asserts the opposite for the transient path, pinning both halves.
+
+---
+
+### [P1-16] Disabling the last schedule window strands the engine paused, and the UI cannot recover it
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/scheduler.rs` — `check_schedule`'s `enabled_windows.is_empty()` early return.
+- `src/media/processor.rs` — `Agent::resume` / `Agent::is_paused`.
+
+**Severity:** P1
+
+**Problem:**
+
+`check_schedule` returned early when no enabled windows exist, with the comment "No
+schedule active -> Do nothing, leave current state alone". `set_scheduler_paused(false)`
+was reachable *only* from the `in_window` branch below it, so the early return could never
+clear an already-set pause.
+
+Reproduction: configure an off-peak window (say 01:00–06:00). At midday the scheduler sets
+`scheduler_paused = true`. Now disable or delete that window — `settings.rs` calls
+`state.scheduler.trigger()`, `check_schedule` runs, finds no enabled windows, and returns
+without clearing the flag.
+
+The engine is now permanently paused. `Agent::resume()` only clears the *manual* `paused`
+flag and `is_paused()` is `paused || scheduler_paused`, so the UI's Resume button reports
+success and changes nothing. Only restarting the process recovers it, because
+`scheduler_paused` is constructed `false`.
+
+**Fix (applied):**
+
+`check_schedule` now clears the scheduler pause before returning when no enabled window
+remains — "no schedule" means "no restriction", matching the semantics used everywhere
+else. Regression test:
+`scheduler::tests::no_enabled_windows_clears_an_existing_scheduler_pause` (verified to
+fail against the pre-fix code).
+
+---
+
+### [P1-17] A stalled FFmpeg process is reported as a user cancellation
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/orchestrator.rs` — `run_ffmpeg_command`'s 120 s stall watchdog and its `killed` flag.
+- `src/media/pipeline.rs` — the `AlchemistError::Cancelled` arm of `process_job`.
+
+**Severity:** P1
+
+**Problem:**
+
+`run_ffmpeg_command` sets one `killed` flag for two very different events — the user's
+cancel channel firing, and the watchdog killing a process that produced no stderr for 120
+seconds — then returns `Err(AlchemistError::Cancelled)` for both.
+
+A hung encoder therefore looked exactly like someone pressing Cancel:
+
+- the job was written as `Cancelled`, not `Failed`;
+- no failure explanation was recorded, so the UI showed no reason;
+- `map_failure` was never consulted, so the transient retry never ran;
+- telemetry logged `failure_reason: "cancelled"`.
+
+A hardware encoder that wedges — the most common cause — produced a queue full of jobs
+the user never cancelled, with no diagnostic anywhere.
+
+**Fix (applied):**
+
+A separate `stalled` flag distinguishes the watchdog kill. It now returns
+`AlchemistError::FFmpeg("FFmpeg produced no output for 120s and was killed as stalled.
+Last output:\n…")`, which `map_failure` classifies as `JobFailure::Transient` — so the job
+is marked `Failed`, gets a real explanation, and is retried with backoff. The user's
+cancel channel still returns `Cancelled`.
 
 ---
 
@@ -1325,6 +1460,193 @@ Three compounding defects:
 
 ---
 
+### [P2-48] Unbounded `IN (...)` bind lists — a library-wide reanalyze is impossible past ~32k jobs
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/db/jobs.rs` — `batch_cancel_jobs`, `batch_delete_jobs`, `batch_restart_jobs`, `batch_reanalyze_jobs`, `get_jobs_by_ids`, `get_resume_sessions_by_job_ids`, `get_job_decision_explanations`, `get_job_failure_explanations`.
+- `src/server/scan.rs` — `reanalyze_library_root_handler` collects every non-active job under a watch folder.
+
+**Severity:** P2
+
+**Problem:**
+
+Every one of these built a single `IN (...)` clause with one bound variable per id.
+SQLite's `SQLITE_MAX_VARIABLE_NUMBER` defaults to 32766, and exceeding it fails the whole
+statement with "too many SQL variables".
+
+This is reachable in ordinary use, not only under abuse. `reanalyze_library_root_handler`
+does:
+
+```rust
+let jobs = state.db.get_jobs_under_root_path(&watch_dir.path).await?;
+let ids: Vec<i64> = jobs.into_iter().filter(|j| !j.is_active()).map(|j| j.id).collect();
+state.db.batch_reanalyze_jobs(&ids).await
+```
+
+— i.e. every job under the folder, and `batch_reanalyze_jobs` then binds that list four
+separate times. Any library past roughly 32k files could never be re-analyzed; the
+endpoint returned a 500 with an opaque SQL error. `POST /api/jobs/batch` has the same
+shape from the client side (axum's 2 MB default body limit still allows ~250k ids).
+
+**Fix (applied):**
+
+A shared `ID_CHUNK = 500` in `src/db/jobs.rs`; every id-list query now iterates
+`ids.chunks(ID_CHUNK)`, accumulating `rows_affected` / extending the result collection.
+`batch_reanalyze_jobs` and `batch_restart_jobs` do all their chunks inside one
+transaction, so the batch stays all-or-nothing. `get_jobs_by_ids` re-sorts once across
+chunks to preserve its newest-first contract. Regression test:
+`db::jobs::tests::batch_updates_apply_across_id_chunks`.
+
+---
+
+### [P2-49] Restart and reanalyze leave the previous run's failure explanation attached
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/db/jobs.rs` — `batch_restart_jobs`, `batch_reanalyze_jobs`, `reanalyze_jobs_under_path`.
+
+**Severity:** P2
+
+**Problem:**
+
+`batch_reanalyze_jobs` deleted the job's `decisions`, `job_resume_sessions` and
+`encode_stats` rows, and `batch_restart_jobs` reset status/progress/attempt_count — but
+neither touched `job_failure_explanations`, and neither did `reanalyze_jobs_under_path`.
+
+`jobs_table_handler` attaches `get_job_failure_explanations(&job_ids)` to every row, so a
+job that had been restarted or re-analyzed kept rendering its old failure banner in the
+jobs table and the detail modal while sitting healthy in the queue — and kept it even
+after the retry completed successfully.
+
+**Fix (applied):**
+
+All three paths now delete the job's `job_failure_explanations` row. `batch_restart_jobs`
+scopes its delete with a subquery matching the same eligibility predicate as its `UPDATE`
+(`archived = 0 AND status NOT IN ('analyzing','encoding','remuxing','resuming')`), so an
+ineligible id never loses its explanation without also being restarted. Regression test:
+`db::jobs::tests::restart_and_reanalyze_clear_stale_failure_explanations`.
+
+---
+
+### [P2-50] FFmpeg failure diagnostics are 20 lines of `-progress` fields instead of the error
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/orchestrator.rs` — the `last_lines` ring buffer in `run_ffmpeg_command`.
+
+**Severity:** P2
+
+**Problem:**
+
+`last_lines` keeps the final 20 stderr lines and they become the `"FFmpeg failed (…). Last
+output:\n…"` message stored as the job's failure summary. With `-progress pipe:2`, ffmpeg
+emits ~11 `key=value` field lines per ~0.5 s tick, so by the time a failure surfaces the
+buffer holds about two ticks of `frame=`/`fps=`/`out_time_ms=` and nothing else. The
+actual error had already been pushed out.
+
+This is the same root cause as the `-progress` log flood fixed earlier; that fix filtered
+the *logging* path but the diagnostics buffer was still unfiltered.
+
+**Fix (applied):**
+
+`last_lines` now skips lines matching `is_progress_fragment`, so it retains 20 lines of
+real diagnostic output. The stall-watchdog message added in P1-17 reuses the same buffer.
+
+---
+
+### [P2-51] Telemetry is awaited inline in the encode pipeline, holding the worker permit
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/pipeline.rs` — `emit_telemetry_event`.
+- `src/telemetry.rs` — `send_event`'s retry/backoff schedule.
+
+**Severity:** P2
+
+**Problem:**
+
+`emit_telemetry_event` ended in `let _ = crate::telemetry::send_event(event).await;`, and
+`send_event` makes up to three HTTP attempts with a 4 s client timeout each plus 200 ms
+and 800 ms backoff — about 13 seconds when the ingest endpoint is unreachable or slow.
+
+It is called on `job_started` and `job_finished`, both inside `process_job`, which runs
+holding the agent's concurrency permit. With telemetry enabled and the endpoint down,
+every job paid roughly 26 seconds of dead time during which its worker slot was
+unavailable to any other job. On a `concurrent_jobs = 1` host that is pure throughput
+loss.
+
+**Fix (applied):**
+
+`tokio::spawn(crate::telemetry::send_event(event))`. Telemetry is best-effort by
+definition and must never gate the pipeline. All four call sites route through the single
+`emit_telemetry_event` choke point, so this is one change.
+
+---
+
+### [P2-52] MCP `recent_jobs` materializes the entire jobs table to return ten rows
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/mcp.rs` — `tool_recent_jobs`.
+- `src/db/jobs.rs` — `get_all_jobs` (removed).
+
+**Severity:** P2
+
+**Problem:**
+
+```rust
+let limit = parse_limit(arguments, 10, 50)?;
+let jobs = self.db.get_all_jobs().await?;
+let jobs: Vec<Value> = jobs.into_iter().take(limit)...
+```
+
+`get_all_jobs` has no `LIMIT` and runs two correlated subqueries per row (latest decision
+reason, VMAF score). Asking for ten recent jobs loaded and decorated every non-archived
+row in the database first.
+
+**Fix (applied):**
+
+`tool_recent_jobs` now uses the existing paginated `get_jobs_filtered` with
+`limit`/`offset: 0`/`sort_by: "updated_at"`/`sort_desc: true`, which bounds the work in
+SQL and preserves the ordering. `get_all_jobs` had no other caller and was deleted.
+
+---
+
+### [P2-53] Watcher stability sweep blocks a runtime worker, unbounded, once per second
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/system/watcher.rs` — the `interval.tick()` arm of the pending-file loop.
+
+**Severity:** P2
+
+**Problem:**
+
+Every second the loop ran `pending.retain(|key, state| state.poll(&key.path))`, and
+`PendingState::poll` calls `std::fs::metadata` — blocking I/O executed directly on the
+tokio worker driving the task. The ready branch then did another `path.exists()` plus
+`std::fs::metadata` per file.
+
+`pending` is unbounded: a bulk import puts every arriving media file in it, so the sweep
+could stat thousands of paths synchronously, every tick, and each stat can be slow on a
+network mount.
+
+**Fix (applied):**
+
+The whole sweep moved into a single `tokio::task::spawn_blocking` per tick (the map is
+moved in with `std::mem::take` and handed back), so the cost is one handoff regardless of
+how many files are pending. The per-ready-file stat now uses `tokio::fs::metadata`, which
+also removes the redundant `exists()` + `metadata` double-stat.
+
+---
+
 ## Technical Debt
 
 ---
@@ -1741,6 +2063,156 @@ Four small, unrelated defects that don't warrant individual entries but are wort
 
 ---
 
+### [TD-20] `process_job`'s failure exits repeated the same four-step block eight times
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/pipeline.rs` — `process_job`, `mark_job_failed`.
+
+**Severity:** TD
+
+**Problem:**
+
+Eight separate failure exits in `process_job` each hand-wrote the same sequence: a
+`tracing::error!`, a `record_job_log`, a `failure_from_summary` + `record_job_failure_explanation`,
+and an `update_job_state(Failed)` with its own `if let Err` warning. About 90 lines of
+copy-paste, already drifting (two variants of the warning message, one site ordering the
+log before the explanation).
+
+**Fix (applied):**
+
+Extracted `Pipeline::mark_job_failed(job_id, message)`, which does all four steps. Each
+call site keeps its own explicit `return Err(JobFailure::…)`, because the classification
+is the part that genuinely differs. Net ~55 lines removed and the four steps can no longer
+diverge between exits.
+
+One trap worth recording: `process_job` binds `explanation` in an enclosing scope to the
+job's *decision* explanation. Removing the local `let explanation = failure_from_summary(…)`
+from the "Transcode failed" block made a later `explanation.code` silently resolve to that
+outer decision code — it compiled clean. The block now computes an explicitly named
+`failure_explanation` for the attempt row.
+
+---
+
+### [TD-21] Enqueue fetched watch dirs twice and swallowed the first fetch's error
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/jobs.rs` — `enqueue_job_from_submitted_path`.
+
+**Severity:** TD
+
+**Problem:**
+
+`get_watch_dirs()` was called once to build the path allow-list — with the result
+discarded on error via `if let Ok(...)` — and again later for source-root resolution,
+where the same failure correctly returned a 500. So a database blip silently narrowed the
+allow-list and rejected a legitimate path as `ENQUEUE_PATH_FORBIDDEN`, which is both wrong
+and misleading to debug.
+
+**Fix (applied):**
+
+Loaded once, up front, returning `ENQUEUE_WATCH_DIRS_LOAD_FAILED` on error, and reused for
+both purposes.
+
+---
+
+### [TD-22] `?page=` can overflow the jobs-table offset computation
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/jobs.rs` — `jobs_table_handler`.
+
+**Severity:** TD
+
+**Problem:**
+
+`let offset = (page - 1) * limit;` with `page` clamped only at the bottom (`.max(1)`).
+`?page=9223372036854775807` overflows `i64`: a panic in a debug build, a wrapped negative
+`OFFSET` in a release one.
+
+**Fix (applied):** `page.saturating_sub(1).saturating_mul(limit)`.
+
+---
+
+### [TD-23] `formatBytes` reads past the start of the unit table for sub-byte values
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `web/src/lib/format.ts` — `formatBytes`.
+
+**Severity:** TD
+
+**Problem:**
+
+`Math.min(Math.floor(Math.log(abs) / Math.log(k)), BYTE_UNITS.length - 1)` is only clamped
+at the top. For `0 < |bytes| < 1` the log is negative, so the index is negative and
+`BYTE_UNITS[-1]` is `undefined` — rendering e.g. `"0.5 undefined"`. Same class as the
+`"NaN undefined"` bug the consolidation into `format.ts` was written to fix.
+
+**Fix (applied):** clamped at both ends with `Math.max(…, 0)`.
+
+---
+
+### [TD-24] Blocking `std::fs::metadata` in the conversion start handler
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/conversion.rs` — `start_conversion_handler`.
+
+**Severity:** TD
+
+**Problem:**
+
+A `std::fs::metadata` call sat two lines below an awaited `tokio::fs::create_dir_all` in
+the same async handler — blocking I/O on the runtime for no reason, and inconsistent with
+its immediate neighbour.
+
+**Fix (applied):** switched to `tokio::fs::metadata`.
+
+---
+
+### [TD-25] `set_concurrent_jobs` can over-reduce when the limit is lowered twice in a row
+
+**Status: OPEN.**
+
+**Files:**
+- `src/media/processor.rs` — `set_concurrent_jobs`, the reduction branch.
+
+**Severity:** TD
+
+**Problem:**
+
+Lowering the limit spawns a task that acquires `reduce_by` permits and parks them in
+`held_permits`. It guards against a concurrent *raise* with
+`if limit.load() > target_limit { … }`, but not against a second *lower*. Going 4 → 3 → 2
+in quick succession spawns two tasks, targeting 3 and 2; the flag is already 2, so
+neither task's guard trips, and both park their permits — 3 held against a semaphore of 4,
+leaving 1 usable slot where 2 was requested.
+
+Self-corrects on the next `set_concurrent_jobs` that raises the limit (it drains
+`held_permits` first), and the window requires two mode changes inside the time it takes
+to acquire a permit — i.e. while a long encode holds one. Low impact, but the
+lock-free-atomics-plus-spawned-task design is the reason it is hard to reason about.
+
+**Fix:**
+
+1. Serialize the whole adjustment under the existing `held_permits` mutex instead of an
+   atomic plus a detached task: take the lock, compute the delta against `held.len()`, and
+   acquire/release inside it.
+2. Or give each reduction a monotonically increasing generation number and have the task
+   bail when `generation != current`.
+   Option 1 is preferred — it removes the concurrency rather than sequencing it.
+3. Test: drive 4 → 3 → 2 with a permit held, then assert `semaphore.available_permits() +
+   in_flight == 2`.
+
+---
+
 ## Reliability Gaps
 
 ---
@@ -2153,6 +2625,107 @@ own polling to 1s while draining, so there's no longer a second poll loop in
 During a drain (which by definition happens when shutting down for updates), each failed status request produces an unhandled promise rejection in the console; the interval also outlives the component's intent because the fast-poll effect lacks the `cancelled` guard its sibling effects use. Cosmetic today, but it pollutes logs during exactly the shutdown windows where diagnostics matter.
 
 **Fix:** Mirror the `load`/`pollStatus` pattern already in the same file: wrap the fast poll body in try/catch and check a `cancelled` boolean from the effect cleanup before `setEngineStatus`.
+
+---
+
+### [RG-19] Free-space guardrail enumerates every mount synchronously on the async runtime
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/system/disk_space.rs` — `available_bytes_for_path`.
+- `src/media/processor.rs` — `disk_guardrail_should_hold`, called from `run_loop`.
+
+**Severity:** RG
+
+**Problem:**
+
+`available_bytes_for_path` calls `Disks::new_with_refreshed_list()`, which enumerates and
+`statvfs`-refreshes every mounted filesystem. It is a plain synchronous function called
+directly from the async `disk_guardrail_should_hold`, which `run_loop` invokes on every
+iteration — at least every 5 s while idle, and before each job claim.
+
+Fine on a laptop; on a host with a stale NFS/SMB mount, `statvfs` can block for seconds,
+and it blocks the tokio worker thread driving the engine loop for that whole time.
+
+**Fix (applied):**
+
+The probe now runs inside `tokio::task::spawn_blocking`; a `JoinError` fails open (returns
+"do not hold"), matching the guardrail's documented fail-open contract.
+
+---
+
+### [RG-20] Library-health issues store unbounded ffmpeg stderr
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/health.rs` — `categorize_health_output`.
+
+**Severity:** RG
+
+**Problem:**
+
+`HealthIssueReport.raw_output` was the full trimmed stderr, persisted per health issue.
+`summary` is capped at 200 characters but `raw_output` had no bound, and a badly damaged
+file makes ffmpeg emit thousands of decode-error lines even under `-v error`. One corrupt
+file could write megabytes into the health-issues table.
+
+**Fix (applied):**
+
+Capped at `MAX_RAW_OUTPUT_CHARS = 4096` with a `\n[output clipped]` marker. The marker
+deliberately avoids the word "truncated", because the categorizer matches that string to
+detect a truncated *media file* — using it would have misclassified every oversized error
+dump as `TruncatedFile`. Regression test:
+`media::health::tests::oversized_output_is_clipped_without_forcing_truncated_category`
+asserts both the cap and the category.
+
+---
+
+### [RG-21] Config → database projection is not atomic
+
+**Status: OPEN.**
+
+**Files:**
+- `src/settings.rs` — `project_config_to_db`.
+- `src/db/config.rs` — `replace_watch_dirs`, `replace_notification_targets`, `replace_schedule_windows`, `replace_file_settings_projection`.
+
+**Severity:** RG
+
+**Problem:**
+
+```rust
+db.replace_watch_dirs(...).await?;
+db.replace_notification_targets(...).await?;
+db.replace_schedule_windows(...).await?;
+db.replace_file_settings_projection(...).await?;
+```
+
+Four independent `replace_*` calls, each its own transaction, with `?` between them. A
+failure on the second leaves watch dirs replaced from the new config while notification
+targets, schedule windows and file settings still reflect the old one — and the caller
+reports an error, so the operator has no reason to expect a partial write.
+
+Impact is bounded: the TOML file remains the declared source of truth (`source_of_truth:
+"toml"`), and the next successful save or the next `load_and_project` on startup repairs
+the projection. But between those points, the scheduler and watcher read a DB state that
+matches neither the old nor the new config.
+
+**Not fixed here deliberately.** The fix needs all four `replace_*` functions to take a
+`&mut Transaction` instead of borrowing the pool, which changes signatures across
+`src/db/config.rs` and every other caller. That is the config write path — the highest
+data-safety-risk surface in the app — and it deserves its own change with its own
+verification rather than being folded into an audit sweep.
+
+**Fix:**
+
+1. Add `replace_*_tx(&mut Transaction<'_, Sqlite>, …)` variants holding the current
+   bodies; keep the existing pool-based functions as thin wrappers that open a transaction
+   and delegate, so no other caller changes.
+2. Rewrite `project_config_to_db` to open one transaction, call the four `_tx` variants
+   and the `active_theme_id` preference write inside it, and commit once.
+3. Test: inject a failure in the third call (e.g. drop `schedule_windows`) and assert the
+   watch-dir table is unchanged afterwards.
 
 ---
 
@@ -2700,3 +3273,63 @@ motion, the context-menu clamp, the light-theme status colors) but the sandboxed
 Playwright-MCP browser required a `sudo`-gated Chrome install this session couldn't
 complete non-interactively — code-level verification (contrast math, chunk-split output,
 line-level diffs) stands in for it here.
+
+---
+
+**The 2026-09-04 sweep (three P1, six P2, one RG, four TD resolved; two documented open).**
+
+This round deliberately targeted the subsystems earlier sweeps had never covered —
+`processor.rs`, `scheduler.rs`, `watcher.rs`, `mcp.rs`, `health.rs`, `disk_space.rs`,
+`telemetry.rs`, `metrics.rs`, `webhooks.rs`, `settings.rs`, `db/events.rs` had zero
+mentions in this file — plus a re-read of the orchestrator and the batch DB layer. That is
+where all of the new findings came from; the frontend and auth/middleware paths were
+re-swept and produced only [TD-23].
+
+**Fix these first, in this order:**
+
+1. **[P1-15] Auto-analysis pass never terminates.** Highest impact by a distance: one
+   unreadable file in the library leaves the engine claim loop permanently blocked, so
+   *nothing* encodes until the process is restarted — and it recurs on the next restart
+   because the file is still there.
+2. **[P1-16] Scheduler pause is unrecoverable.** Reachable by a normal settings action
+   (disabling the last off-peak window), and the UI's own Resume button cannot undo it.
+3. **[P1-17] Stalled FFmpeg reported as cancelled.** Silently mislabels the failure mode
+   operators most need to see, and suppresses the retry.
+4. **[P2-48] Unbounded `IN (...)` binds**, then **[P2-51] inline telemetry**, then the
+   rest of the P2s.
+
+Still open and deliberately deferred, each with a fix recipe in its own entry:
+**[RG-21]** config→DB projection atomicity (needs a transaction-threading change through
+`src/db/config.rs`; the config write path deserves its own change and verification) and
+**[TD-25]** `set_concurrent_jobs` double-reduction race (low impact, self-correcting).
+
+Verification: `just check-rust` (fmt, clippy with `-D clippy::unwrap_used -D
+clippy::expect_used`, `cargo check --all-targets`), `just test` (356 tests across the lib
+and all integration suites), and `just check-web` (typecheck, production build, and the
+full Playwright suite at 98/98) all exit 0.
+
+`just check` as a whole does **not** pass on this machine, for an environment reason
+unrelated to these changes: its `mac-check` leg fails with `external macro implementation
+type 'SwiftUIMacros.StateMacro' could not be found; plugin for module 'SwiftUIMacros' not
+found` on every `@State` in the SwiftUI sources. `xcode-select -p` points at
+`/Library/Developer/CommandLineTools`, there is no full Xcode installed, and
+`/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` contains only
+`libObservationMacros.dylib` and `libSwiftMacros.dylib` — the SwiftUI macro plugin ships
+with Xcode, not the Command Line Tools. This sweep touched no Swift file (`git status
+native/` is clean) and the same failure reproduces on the unmodified tree. The mac target
+still needs to be checked on a machine with full Xcode before release.
+`web-e2e` also needed `bunx playwright install chromium` first — without the browser
+binary all 98 tests fail in 0 ms, which is a missing dependency, not a regression (the
+same trap is recorded in the 2026-08-22 entry).
+
+Five regression
+tests were added — `analysis_failure_leaves_the_auto_analysis_selection_set`,
+`no_enabled_windows_clears_an_existing_scheduler_pause`,
+`batch_updates_apply_across_id_chunks`,
+`restart_and_reanalyze_clear_stale_failure_explanations`, and
+`oversized_output_is_clipped_without_forcing_truncated_category`. The scheduler test was
+confirmed to fail against the pre-fix code before the fix was restored; the P1-15 test is
+pinned against its sibling `analyze_job_only_marks_job_failed_without_decision_on_profile_lookup_failure`,
+which still asserts the opposite for the transient path. P1-17 has no automated test — the
+watchdog's 120 s timeout is not configurable, and making it so to test a three-line flag
+change was not worth the surface.

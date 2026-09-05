@@ -4,6 +4,68 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Queue and engine correctness
+
+- A single unreadable file in the library no longer freezes the entire encode
+  queue. The auto-analysis pass selects jobs by "queued or failed, and has no
+  decision recorded" and loops until that set is empty — but a job whose
+  analysis failed was marked `failed` without a decision row, so it stayed
+  selected forever. The boot pass never returned, which left the engine's claim
+  loop permanently blocked: nothing encoded until the process was restarted, and
+  the same file re-triggered it on the next start. Failed analyses now record
+  their decision, and the pass additionally stops if a batch contains only jobs
+  it has already attempted (`audit.md` P1-15).
+- Disabling or deleting the last off-peak schedule window no longer strands the
+  engine paused. The scheduler skipped its "clear the pause" branch when no
+  windows were enabled, and because `Resume` only clears the *manual* pause, the
+  UI could not recover the engine — only restarting the process could (P1-16).
+- An FFmpeg process killed by the 120-second stall watchdog is now reported as a
+  failure instead of a cancellation. It previously returned the same error as a
+  user cancel, so a hung encoder produced a job marked `cancelled` with no
+  failure explanation, no retry, and telemetry recording the reason as
+  "cancelled" (P1-17).
+- Restarting or re-analyzing a job now clears the previous run's failure
+  explanation, so a requeued job stops rendering a stale failure banner while it
+  sits healthy in the queue (P2-49).
+
+### Performance and scale
+
+- Job id lists are chunked before being bound into SQL. Every batch query built
+  one `IN (...)` clause with a variable per id, and SQLite's limit is 32766 — so
+  re-analyzing a watch folder, which passes *every* job under it, failed
+  outright on libraries past roughly 32k files (P2-48).
+- Telemetry is no longer awaited inside the encode pipeline. With telemetry
+  enabled and the ingest endpoint unreachable, each job's start and finish events
+  blocked for about 13 seconds apiece while holding the worker's concurrency
+  permit (P2-51).
+- The filesystem watcher's per-second stability sweep now runs on the blocking
+  pool. It stat-ed every pending file synchronously on a tokio worker, and the
+  pending set is unbounded during a bulk import (P2-53). The disk-space guardrail
+  probe, which enumerates and refreshes every mount on each engine-loop
+  iteration, moved off the runtime for the same reason (RG-19).
+- The MCP `recent_jobs` tool no longer loads the whole jobs table — with two
+  correlated subqueries per row — to return at most 50 rows (P2-52).
+
+### Diagnostics
+
+- An FFmpeg failure's "Last output" is real diagnostic output again. The
+  20-line context buffer was unfiltered, so with `-progress` emitting ~11 field
+  lines per tick it contained nothing but two ticks of `frame=`/`fps=` by the
+  time a failure surfaced, with the actual error already pushed out (P2-50).
+- Library-health issues cap the stored ffmpeg stderr at 4KB. A badly damaged
+  file could emit thousands of decode-error lines and write all of them to the
+  database (RG-20).
+
+### Internal
+
+- `process_job`'s eight failure exits shared one `mark_job_failed` helper
+  instead of each hand-writing the same log/explanation/state-transition
+  sequence (TD-20). Enqueue loads watch folders once instead of twice, and no
+  longer silently narrows the path allow-list when that load fails (TD-21).
+  Also fixed: an `i64` overflow on an absurd `?page=` value (TD-22), a negative
+  array index in `formatBytes` for sub-byte values (TD-23), and a blocking
+  `std::fs::metadata` in the conversion start handler (TD-24).
+
 ### Frontend reliability and accessibility
 
 - Fixed four frontend defects surfaced by the deep frontend audit (see

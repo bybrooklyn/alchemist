@@ -27,6 +27,16 @@ const ENQUEUE_JOB_UPSERT_SQL: &str =
      updated_at = CURRENT_TIMESTAMP
      WHERE mtime_hash != excluded.mtime_hash OR output_path != excluded.output_path";
 
+/// Maximum job ids bound into a single `IN (...)` clause.
+///
+/// SQLite's `SQLITE_MAX_VARIABLE_NUMBER` defaults to 32766, and exceeding it
+/// fails the entire statement with "too many SQL variables". That is reachable
+/// in ordinary use, not just under abuse: `reanalyze_library_root_handler`
+/// collects *every* non-active job under a watch folder and hands the whole list
+/// to `batch_reanalyze_jobs`, so any library past ~32k files could never be
+/// re-analyzed. Every id-list query chunks through this instead.
+const ID_CHUNK: usize = 500;
+
 impl Db {
     pub async fn reset_interrupted_jobs(&self) -> Result<u64> {
         let result = sqlx::query(
@@ -282,29 +292,6 @@ impl Db {
             .await
     }
 
-    pub async fn get_all_jobs(&self) -> Result<Vec<Job>> {
-        let pool = &self.pool;
-        timed_query("get_all_jobs", || async {
-            let jobs = sqlx::query_as::<_, Job>(
-                "SELECT j.id, j.input_path, j.output_path, j.status,
-                        (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
-                        COALESCE(j.priority, 0) as priority,
-                        COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
-                        COALESCE(j.attempt_count, 0) as attempt_count,
-                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
-                 FROM jobs j
-                 WHERE j.archived = 0
-                 ORDER BY j.updated_at DESC",
-            )
-            .fetch_all(pool)
-            .await?;
-
-            Ok(jobs)
-        })
-        .await
-    }
-
     pub async fn get_duplicate_candidates(&self) -> Result<Vec<DuplicateCandidate>> {
         timed_query("get_duplicate_candidates", || async {
             let all_rows: Vec<DuplicateCandidate> = sqlx::query_as(
@@ -383,37 +370,34 @@ impl Db {
         &self,
         job_ids: &[i64],
     ) -> Result<HashMap<i64, Explanation>> {
-        if job_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
+        let mut out = HashMap::new();
+        for chunk in job_ids.chunks(ID_CHUNK) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "SELECT d.job_id, d.action, d.reason, d.reason_payload_json
+                 FROM decisions d
+                 INNER JOIN (SELECT job_id, MAX(id) AS max_id FROM decisions WHERE job_id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for job_id in chunk {
+                separated.push_bind(job_id);
+            }
+            separated.push_unseparated(") GROUP BY job_id) latest ON latest.max_id = d.id");
 
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "SELECT d.job_id, d.action, d.reason, d.reason_payload_json
-             FROM decisions d
-             INNER JOIN (SELECT job_id, MAX(id) AS max_id FROM decisions WHERE job_id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for job_id in job_ids {
-            separated.push_bind(job_id);
-        }
-        separated.push_unseparated(") GROUP BY job_id) latest ON latest.max_id = d.id");
+            let rows = qb
+                .build_query_as::<DecisionRecord>()
+                .fetch_all(&self.pool)
+                .await?;
 
-        let rows = qb
-            .build_query_as::<DecisionRecord>()
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| {
+            out.extend(rows.into_iter().map(|row| {
                 let explanation = row
                     .reason_payload_json
                     .as_deref()
                     .and_then(explanation_from_json)
                     .unwrap_or_else(|| decision_from_legacy(&row.action, &row.reason));
                 (row.job_id, explanation)
-            })
-            .collect())
+            }));
+        }
+        Ok(out)
     }
 
     pub async fn upsert_job_failure_explanation(
@@ -461,35 +445,32 @@ impl Db {
         &self,
         job_ids: &[i64],
     ) -> Result<HashMap<i64, Explanation>> {
-        if job_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
+        let mut out = HashMap::new();
+        for chunk in job_ids.chunks(ID_CHUNK) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "SELECT job_id, legacy_summary, code, payload_json
+                 FROM job_failure_explanations
+                 WHERE job_id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for job_id in chunk {
+                separated.push_bind(job_id);
+            }
+            separated.push_unseparated(")");
 
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "SELECT job_id, legacy_summary, code, payload_json
-             FROM job_failure_explanations
-             WHERE job_id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for job_id in job_ids {
-            separated.push_bind(job_id);
-        }
-        separated.push_unseparated(")");
+            let rows = qb
+                .build_query_as::<JobFailureExplanationRecord>()
+                .fetch_all(&self.pool)
+                .await?;
 
-        let rows = qb
-            .build_query_as::<JobFailureExplanationRecord>()
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| {
+            out.extend(rows.into_iter().map(|row| {
                 let explanation = explanation_from_json(&row.payload_json).unwrap_or_else(|| {
                     failure_from_summary(row.legacy_summary.as_deref().unwrap_or(row.code.as_str()))
                 });
                 (row.job_id, explanation)
-            })
-            .collect())
+            }));
+        }
+        Ok(out)
     }
 
     /// Update job progress (for resume support)
@@ -719,54 +700,79 @@ impl Db {
     }
 
     pub async fn batch_cancel_jobs(&self, ids: &[i64]) -> Result<u64> {
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for id in ids {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(")");
+        let mut affected = 0_u64;
+        for chunk in ids.chunks(ID_CHUNK) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for id in chunk {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
 
-        let result = qb.build().execute(&self.pool).await?;
-        Ok(result.rows_affected())
+            affected += qb.build().execute(&self.pool).await?.rows_affected();
+        }
+        Ok(affected)
     }
 
     pub async fn batch_delete_jobs(&self, ids: &[i64]) -> Result<u64> {
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for id in ids {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(")");
+        let mut affected = 0_u64;
+        for chunk in ids.chunks(ID_CHUNK) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "UPDATE jobs SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for id in chunk {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
 
-        let result = qb.build().execute(&self.pool).await?;
-        Ok(result.rows_affected())
+            affected += qb.build().execute(&self.pool).await?.rows_affected();
+        }
+        Ok(affected)
     }
 
     pub async fn batch_restart_jobs(&self, ids: &[i64]) -> Result<u64> {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs SET status = 'queued', progress = 0.0, attempt_count = 0, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for id in ids {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(")");
 
-        let result = qb.build().execute(&self.pool).await?;
-        Ok(result.rows_affected())
+        let mut tx = self.pool.begin().await?;
+        let mut affected = 0_u64;
+        for chunk in ids.chunks(ID_CHUNK) {
+            // Clear the stale failure explanation as part of the restart. Without
+            // this, a job requeued after a failure kept rendering its previous
+            // failure banner in the jobs table and detail modal even while it sat
+            // healthy in the queue. Scoped to the same rows the UPDATE below will
+            // actually touch, so an ineligible id never loses its explanation.
+            let mut clear_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "DELETE FROM job_failure_explanations WHERE job_id IN (
+                     SELECT id FROM jobs
+                     WHERE archived = 0
+                       AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming')
+                       AND id IN (",
+            );
+            let mut clear_ids = clear_qb.separated(", ");
+            for id in chunk {
+                clear_ids.push_bind(id);
+            }
+            clear_ids.push_unseparated("))");
+            clear_qb.build().execute(&mut *tx).await?;
+
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "UPDATE jobs SET status = 'queued', progress = 0.0, attempt_count = 0, updated_at = CURRENT_TIMESTAMP WHERE archived = 0 AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming') AND id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for id in chunk {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
+
+            affected += qb.build().execute(&mut *tx).await?.rows_affected();
+        }
+        tx.commit().await?;
+        Ok(affected)
     }
 
     pub async fn batch_reanalyze_jobs(&self, ids: &[i64]) -> Result<u64> {
@@ -775,53 +781,49 @@ impl Db {
         }
 
         let mut tx = self.pool.begin().await?;
+        let mut affected = 0_u64;
 
-        let mut delete_qb =
-            sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM decisions WHERE job_id IN (");
-        let mut delete_ids = delete_qb.separated(", ");
-        for id in ids {
-            delete_ids.push_bind(id);
+        for chunk in ids.chunks(ID_CHUNK) {
+            // A reanalyze wipes every derived record for the job. The failure
+            // explanation is one of them: leaving it behind meant a job that was
+            // re-analyzed clean still showed its old failure in the UI.
+            for table in [
+                "decisions",
+                "job_resume_sessions",
+                "encode_stats",
+                "job_failure_explanations",
+            ] {
+                let mut delete_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(format!(
+                    "DELETE FROM {table} WHERE job_id IN ("
+                ));
+                let mut delete_ids = delete_qb.separated(", ");
+                for id in chunk {
+                    delete_ids.push_bind(id);
+                }
+                delete_ids.push_unseparated(")");
+                delete_qb.build().execute(&mut *tx).await?;
+            }
+
+            let mut update_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "UPDATE jobs
+                 SET status = 'queued',
+                     progress = 0.0,
+                     attempt_count = 0,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE archived = 0
+                   AND id IN (",
+            );
+            let mut update_ids = update_qb.separated(", ");
+            for id in chunk {
+                update_ids.push_bind(id);
+            }
+            update_ids.push_unseparated(")");
+
+            affected += update_qb.build().execute(&mut *tx).await?.rows_affected();
         }
-        delete_ids.push_unseparated(")");
-        delete_qb.build().execute(&mut *tx).await?;
 
-        let mut delete_resume_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "DELETE FROM job_resume_sessions WHERE job_id IN (",
-        );
-        let mut delete_resume_ids = delete_resume_qb.separated(", ");
-        for id in ids {
-            delete_resume_ids.push_bind(id);
-        }
-        delete_resume_ids.push_unseparated(")");
-        delete_resume_qb.build().execute(&mut *tx).await?;
-
-        let mut delete_stats_qb =
-            sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM encode_stats WHERE job_id IN (");
-        let mut delete_stats_ids = delete_stats_qb.separated(", ");
-        for id in ids {
-            delete_stats_ids.push_bind(id);
-        }
-        delete_stats_ids.push_unseparated(")");
-        delete_stats_qb.build().execute(&mut *tx).await?;
-
-        let mut update_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "UPDATE jobs
-             SET status = 'queued',
-                 progress = 0.0,
-                 attempt_count = 0,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE archived = 0
-               AND id IN (",
-        );
-        let mut update_ids = update_qb.separated(", ");
-        for id in ids {
-            update_ids.push_bind(id);
-        }
-        update_ids.push_unseparated(")");
-
-        let result = update_qb.build().execute(&mut *tx).await?;
         tx.commit().await?;
-        Ok(result.rows_affected())
+        Ok(affected)
     }
 
     pub async fn reanalyze_jobs_under_path(&self, root_path: &str) -> Result<u64> {
@@ -869,6 +871,15 @@ impl Db {
         sqlx::query("DELETE FROM encode_stats WHERE job_id IN (SELECT id FROM jobs_to_reanalyze)")
             .execute(&mut *tx)
             .await?;
+
+        // Matches `batch_reanalyze_jobs`: a reanalyze clears every derived record,
+        // including the failure explanation, so a job that re-analyzes clean stops
+        // showing its previous failure.
+        sqlx::query(
+            "DELETE FROM job_failure_explanations WHERE job_id IN (SELECT id FROM jobs_to_reanalyze)",
+        )
+        .execute(&mut *tx)
+        .await?;
 
         let result = sqlx::query(
             "UPDATE jobs
@@ -1033,26 +1044,26 @@ impl Db {
         &self,
         ids: &[i64],
     ) -> Result<Vec<JobResumeSession>> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
+        let mut sessions = Vec::new();
+        for chunk in ids.chunks(ID_CHUNK) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "SELECT id, job_id, strategy, plan_hash, mtime_hash, temp_dir,
+                        concat_manifest_path, segment_length_secs, status, created_at, updated_at
+                 FROM job_resume_sessions
+                 WHERE job_id IN (",
+            );
+            let mut separated = qb.separated(", ");
+            for id in chunk {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
 
-        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "SELECT id, job_id, strategy, plan_hash, mtime_hash, temp_dir,
-                    concat_manifest_path, segment_length_secs, status, created_at, updated_at
-             FROM job_resume_sessions
-             WHERE job_id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for id in ids {
-            separated.push_bind(id);
+            sessions.extend(
+                qb.build_query_as::<JobResumeSession>()
+                    .fetch_all(&self.pool)
+                    .await?,
+            );
         }
-        separated.push_unseparated(")");
-
-        let sessions = qb
-            .build_query_as::<JobResumeSession>()
-            .fetch_all(&self.pool)
-            .await?;
         Ok(sessions)
     }
 
@@ -1236,6 +1247,17 @@ impl Db {
     }
 
     pub async fn get_jobs_by_ids(&self, ids: &[i64]) -> Result<Vec<Job>> {
+        let mut jobs = Vec::new();
+        for chunk in ids.chunks(ID_CHUNK) {
+            jobs.extend(self.get_jobs_by_ids_chunk(chunk).await?);
+        }
+        // Each chunk is ordered on its own, so re-sort once across chunks to keep
+        // the documented newest-first ordering for callers.
+        jobs.sort_by_key(|job| std::cmp::Reverse(job.updated_at));
+        Ok(jobs)
+    }
+
+    async fn get_jobs_by_ids_chunk(&self, ids: &[i64]) -> Result<Vec<Job>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -2039,6 +2061,109 @@ mod tests {
                 .await?;
         assert_eq!(archived_job_check_after.get::<i64, _>(0), 1);
         assert_ne!(archived_job_check_after.get::<String, _>(1), "queued");
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    /// Id lists longer than one `IN (...)` chunk must still apply in full.
+    /// Before chunking, a list past SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+    /// (32766) failed the whole statement with "too many SQL variables" — which
+    /// a library-wide reanalyze reaches in ordinary use. This uses a list a few
+    /// chunks long, which is enough to prove every chunk is executed.
+    #[tokio::test]
+    async fn batch_updates_apply_across_id_chunks()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_id_chunk_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let total = ID_CHUNK * 2 + 7;
+        let mut ids = Vec::with_capacity(total);
+        for i in 0..total {
+            db.enqueue_job(
+                Path::new(&format!("/media/chunk-{i}.mkv")),
+                Path::new(&format!("/media/chunk-{i}.out.mkv")),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+            let job = db
+                .get_job_by_input_path(&format!("/media/chunk-{i}.mkv"))
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing enqueued chunk job"))?;
+            ids.push(job.id);
+        }
+
+        // Reads chunk too: every id must come back, not just the first chunk.
+        let fetched = db.get_jobs_by_ids(&ids).await?;
+        assert_eq!(fetched.len(), total);
+
+        let cancelled = db.batch_cancel_jobs(&ids).await?;
+        assert_eq!(cancelled, total as u64);
+
+        let archived = db.batch_delete_jobs(&ids).await?;
+        assert_eq!(archived, total as u64);
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    /// A restart clears the job's stale failure explanation. Without this, a
+    /// requeued job kept rendering the previous run's failure banner while it
+    /// sat healthy in the queue.
+    #[tokio::test]
+    async fn restart_and_reanalyze_clear_stale_failure_explanations()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_stale_failure_test_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let restarted_path = "/media/restart-me.mkv";
+        let reanalyzed_path = "/media/reanalyze-me.mkv";
+        for path in [restarted_path, reanalyzed_path] {
+            db.enqueue_job(
+                Path::new(path),
+                Path::new(&format!("{path}.out")),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        }
+
+        let restarted = db
+            .get_job_by_input_path(restarted_path)
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing restart job"))?;
+        let reanalyzed = db
+            .get_job_by_input_path(reanalyzed_path)
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing reanalyze job"))?;
+
+        for id in [restarted.id, reanalyzed.id] {
+            db.update_job_status(id, JobState::Failed).await?;
+            db.upsert_job_failure_explanation(id, &failure_from_summary("Transcode failed: boom"))
+                .await?;
+        }
+        let before = db
+            .get_job_failure_explanations(&[restarted.id, reanalyzed.id])
+            .await?;
+        assert_eq!(before.len(), 2);
+
+        db.batch_restart_jobs(&[restarted.id]).await?;
+        db.batch_reanalyze_jobs(&[reanalyzed.id]).await?;
+
+        let after = db
+            .get_job_failure_explanations(&[restarted.id, reanalyzed.id])
+            .await?;
+        assert!(
+            after.is_empty(),
+            "restart/reanalyze left stale failure explanations: {after:?}"
+        );
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
