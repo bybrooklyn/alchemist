@@ -1,13 +1,13 @@
 # Planning
 
-Last updated: 2026-08-08
+Last updated: 2026-09-27
 
 This file tracks current coordination notes only. Detailed historical execution logs belong in git history, `CHANGELOG.md`, and release notes.
 
 ## Current Baseline
 
-- Stable version: `0.3.4`
-- Active version: `0.3.5-rc.4`
+- Stable version: `0.3.5`
+- Active version: `0.3.5`
 - Release line: 0.3.5 release hardening and dependency compatibility
 - Required orientation files: `AGENTS.md`, `CHANGELOG.md`, `VERSION`
 - Living planning sources:
@@ -16,12 +16,12 @@ This file tracks current coordination notes only. Detailed historical execution 
   - `ideas.md` for optional future ideas
   - `native/mac/Docs/swift.md` for the native macOS client specification
 
-## 0.3.5 Release Candidate Cycle
+## 0.3.5 Stable Cut
 
-Status: local `0.3.5-rc.4` candidate preparation is complete. The complete
-release gate and an isolated release-binary smoke pass locally. Stable promotion
-remains blocked on published-artifact qualification, external platform and
-hardware validation, and the required seven-day RC soak.
+Status: cutting `0.3.5` stable directly (2026-09-27) with an explicit soak
+waiver — no RC soaked. Contributor issues #9–#12 were merged directly
+(2026-09-27, issues closed as fixed); #11 was reconciled with the P1-15
+attempted-set guard (keyset cursor + attempted set retained as backstops).
 
 Release focus:
 
@@ -32,23 +32,56 @@ Release focus:
 - Clear current Rust and frontend dependency advisories without weakening the
   audit policy or raising the supported toolchain floor unnecessarily.
 - Keep release metadata, changelogs, canonical agent guidance, and package
-  versions synchronized for `0.3.5-rc.4`.
-- Qualify the built artifacts and integrations before any stable claim.
+  versions synchronized for `0.3.5`.
+ - Qualify the built artifacts and integrations before any stable claim.
 
 Release gates:
 
-- `just release-check`, the complete 98-test browser suite, and local release
-  binary smoke must pass before the RC tag.
-- GitHub CI, Nightly, Release, and Release Smoke must be green for the exact RC
+- `just release-check` must pass before the stable tag.
+- Await the contributor PR for #9–#12, review it (notably the #11 keyset
+  paging vs the P1-15 attempted-set guard in `analyze_pending_jobs_boot`),
+  and merge it to `master` before tagging.
+- GitHub CI, Nightly, Release, and Release Smoke must be green for the exact
   commit and published artifacts.
-- Stable promotion requires a seven-day RC soak without a new P1/P2 issue,
-  successful fresh-install and upgrade smoke, and install-from-feed Jellyfin
-  validation against the supported server release.
+- Fresh-install and upgrade smoke plus install-from-feed Jellyfin validation
+  remain required against the final artifacts.
 - Windows, Docker, notification, encode/skip/failure, and real-hardware claims
   remain evidence-gated until those environments have been exercised.
 - The stable Jellyfin feed must continue to reference stable releases only.
 
-Latest local validation (2026-08-08):
+Latest local validation (2026-09-27):
+
+- New fixes since the 0.3.5 stable-prep: SEC-3 (CSP drops `script-src
+  'unsafe-inline'`, theme bootstrap externalized, `check_csp_baseline.py`
+  added to `just check` / `just release-verify`), SEC-4 (notification
+  secrets write-only with sentinel restore on test/bundle paths, SSE
+  payload redacted), TD-25 (serialized concurrency adjustment), RG-21
+  (atomic config projection). Each ships a regression test.
+- `cargo fmt --check`, strict Clippy, `cargo check`, 361 Rust/integration
+  tests, `cargo audit` (only the two standing allowed yanked-transitive
+  warnings), API + CSP + Docker runtime contracts, web typecheck and
+  production build: all green. `just mac-check` remains environment-blocked
+  (CommandLineTools lacks the SwiftUI macro plugin; no Swift files touched).
+- E2E: the release `test:reliability` set passes 43/43 on the final tree.
+  A first attempt failed 40/43 because the strict CSP blocked Astro's
+  build-injected island scripts (blank React islands on every page); fixed
+  with per-response nonces injected at serve time, covered by new unit and
+  handler tests plus the extended `check_csp_baseline.py`.
+
+Previous local validation (2026-09-18):
+
+- `just release-check` - passed Rust fmt, strict Clippy, locked all-target
+  check, and 356 Rust/integration tests; Rust and Bun vulnerability audits;
+  actionlint; API, Docker runtime, and documentation contracts; frontend
+  typecheck and production build; 43 Playwright reliability tests; and the
+  Jellyfin build plus 10 tests.
+- The release gate initially exposed RUSTSEC-2026-0285 and current frontend
+  advisories. The final lockfiles use `rustls` 0.23.45, Astro 7.3.3, and
+  patched frontend overrides; the final Rust and Bun audits report no
+  vulnerabilities. Rust audit retains two allowed yanked-transitive warnings
+  for `chacha20` 0.10.1 and `spin` 0.9.8.
+
+Previous local validation (2026-08-08):
 
 - `just check-web` - passed all 98 Playwright tests after web typecheck and build.
 - `just release-check` - passed Rust fmt/clippy/check and 349 tests, Rust and Bun

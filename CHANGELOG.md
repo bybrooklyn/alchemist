@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-27
+
+### Security hardening
+
+- The Content-Security-Policy no longer allows `script-src 'unsafe-inline'`.
+  The first-paint theme bootstrap moved from an inline script to the
+  externally served `web/public/theme-init.js`, and `base-uri 'self'` /
+  `form-action 'self'` were added. Astro's build-injected island scripts
+  are covered by a fresh per-response nonce injected at serve time, so the
+  policy stays strict without a hash registry. `scripts/check_csp_baseline.py`,
+  now part of `just check` and `just release-verify`, guards the static
+  policy, the nonce injector, and the absence of DOM-XSS sinks (SEC-3).
+- Outbound notification secrets are now write-only. Reads (notification
+  targets GET, settings bundle, and the `config_updated` SSE event, which
+  read-only tokens may subscribe to) echo a `********` sentinel instead of
+  webhook URLs, tokens, and passwords; the test endpoint and bundle PUT
+  resolve the sentinel against storage so round-trips preserve secrets
+  (SEC-4).
+- Closed the remaining open audit items: `set_concurrent_jobs` reductions
+  are serialized under the `held_permits` mutex so rapid limit changes
+  cannot over-park permits (TD-25), and the config-to-database projection
+  commits watch dirs, notification targets, schedule windows, file
+  settings, and the theme preference in a single transaction (RG-21).
+
+### Engine and analysis fixes
+
+- FFprobe streams without a `codec_name` (typically font attachments in
+  Matroska files) no longer reject the entire probe document. The field is
+  optional and falls back to the inert value `"unknown"`, which matches no
+  lossless, burnable, or heavy codec (#9).
+- The server engine can now start unpaused by configuration. The new
+  `system.start_paused` option defaults to `true`, preserving existing
+  behavior; set it to `false` to process queued work immediately after a
+  restart or unattended upgrade. Setup mode always starts paused (#10).
+- The auto-analysis pass now pages by keyset instead of re-fetching offset
+  zero, so a full batch of jobs that fail without recording a decision can
+  no longer starve the rest of the library or spin the pass forever (#11).
+- Balanced-mode device exclusion ignores archived rows, interrupted jobs
+  are reset even when archived (without unarchiving them), and
+  `update_job_status` refuses to move an archived row into an active state
+  — so a stale archived active row can no longer block its whole device
+  (#12).
+
 ### Queue and engine correctness
 
 - A single unreadable file in the library no longer freezes the entire encode
@@ -58,6 +101,15 @@ All notable changes to this project will be documented in this file.
 
 ### Internal
 
+- Upgraded Astro to 7.3.3 and refreshed the audited frontend overrides for
+  `baseline-browser-mapping`, `browserslist`, `devalue`, `fast-uri`,
+  `js-yaml`, `sharp`, `smol-toml`, and `svgo` to patched releases.
+- Updated transitive `rustls` to 0.23.45 to fix RUSTSEC-2026-0285, including
+  its compatible `aws-lc` and `rustls-webpki` lockfile dependencies.
+- Removed the unused direct `tokio-stream` Rust dependency and the unused
+  `playwright` frontend dependency. SQLx continues to supply `tokio-stream`
+  transitively, while browser tests remain owned by `web-e2e` through
+  `@playwright/test`.
 - `process_job`'s eight failure exits shared one `mark_job_failed` helper
   instead of each hand-writing the same log/explanation/state-transition
   sequence (TD-20). Enqueue loads watch folders once instead of twice, and no
