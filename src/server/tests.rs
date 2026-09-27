@@ -4065,3 +4065,260 @@ async fn system_selftest_returns_429_when_busy()
     cleanup_paths(&[config_path, db_path]);
     Ok(())
 }
+
+#[tokio::test]
+async fn notification_target_reads_mask_outbound_secrets()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // SEC-4: outbound secrets are write-only. The add response and every
+    // subsequent GET must echo the masked sentinel, never the stored value.
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let add_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::POST,
+            "/api/settings/notifications",
+            &token,
+            json!({
+                "name": "Discord",
+                "target_type": "discord_webhook",
+                "config_json": { "webhook_url": "https://discord.com/api/webhooks/123/SECRET123" },
+                "events": ["encode.completed"],
+                "enabled": true
+            }),
+        ))
+        .await?;
+    assert_eq!(add_response.status(), StatusCode::OK);
+    let add_body = body_text(add_response).await;
+    assert!(
+        !add_body.contains("SECRET123"),
+        "add response must not echo the webhook secret"
+    );
+    assert!(add_body.contains(crate::settings::MASKED_SECRET));
+
+    let get_response = app
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/settings/notifications",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let get_body = body_text(get_response).await;
+    assert!(
+        !get_body.contains("SECRET123"),
+        "targets GET must not echo the webhook secret"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&get_body)?;
+    assert_eq!(
+        payload["targets"][0]["config_json"]["webhook_url"],
+        crate::settings::MASKED_SECRET
+    );
+
+    // The stored value itself is untouched — only the read projection masks.
+    let stored = state.db.get_notification_targets().await?;
+    assert_eq!(stored.len(), 1);
+    assert!(stored[0].config_json.contains("SECRET123"));
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn settings_bundle_round_trip_preserves_masked_secrets()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // SEC-4: the bundle GET masks secrets, so a GET → PUT round-trip must
+    // restore them from storage instead of persisting the sentinel.
+    let (state, app, config_path, db_path) = build_test_app(false, 8, |config| {
+        config.notifications.targets =
+            vec![crate::config::NotificationTargetConfig {
+                name: "Discord".to_string(),
+                target_type: "discord_webhook".to_string(),
+                config_json: serde_json::json!({ "webhook_url": "https://discord.com/api/webhooks/123/SECRET123" }),
+                endpoint_url: None,
+                auth_token: None,
+                events: vec!["encode.completed".to_string()],
+                enabled: true,
+            }];
+    })
+    .await?;
+    let token = create_session(state.db.as_ref()).await?;
+
+    let get_response = app
+        .clone()
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/settings/bundle",
+            &token,
+            Body::empty(),
+        ))
+        .await?;
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let bundle: serde_json::Value = serde_json::from_str(&body_text(get_response).await)?;
+    assert!(!bundle.to_string().contains("SECRET123"));
+    assert_eq!(
+        bundle["settings"]["notifications"]["targets"][0]["config_json"]["webhook_url"],
+        crate::settings::MASKED_SECRET
+    );
+
+    let put_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            Method::PUT,
+            "/api/settings/bundle",
+            &token,
+            bundle["settings"].clone(),
+        ))
+        .await?;
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let stored = state.config.read().await;
+    let restored = stored.notifications.targets.iter().find_map(|target| {
+        (target.name == "Discord").then(|| {
+            target
+                .config_json
+                .get("webhook_url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        })
+    });
+    assert_eq!(
+        restored.as_deref(),
+        Some("https://discord.com/api/webhooks/123/SECRET123"),
+        "bundle PUT must restore the masked secret, not persist the sentinel"
+    );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sse_config_updated_event_redacts_secrets()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // SEC-4: /api/events is subscribable with read-only tokens, so the
+    // config_updated payload must never carry outbound secrets.
+    let mut config = crate::config::Config::default();
+    config.notifications.targets = vec![crate::config::NotificationTargetConfig {
+        name: "Gotify".to_string(),
+        target_type: "gotify".to_string(),
+        config_json: serde_json::json!({
+            "server_url": "https://gotify.example.com",
+            "app_token": "GOTIFYSECRET"
+        }),
+        endpoint_url: None,
+        auth_token: None,
+        events: vec![],
+        enabled: true,
+    }];
+
+    let message = super::sse::sse_message_for_config_event(&crate::db::ConfigEvent::Updated(
+        Box::new(config),
+    ));
+    assert_eq!(message.event_name, "config_updated");
+    assert!(
+        !message.data.contains("GOTIFYSECRET"),
+        "SSE config payload must not contain the app token"
+    );
+    assert!(message.data.contains(crate::settings::MASKED_SECRET));
+    // Non-secret fields keep their shape so consumers are unaffected.
+    assert!(message.data.contains("https://gotify.example.com"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn csp_nonce_injection_tags_only_inline_scripts()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // SEC-3: Astro's build-injected inline scripts need a nonce; external
+    // files must be left untouched so `script-src 'self'` keeps covering
+    // them without any per-file registry.
+    let html = r#"<html><head><script src="/theme-init.js"></script><script>astro:load()</script><SCRIPT type="module">import {x} from "/_astro/y.js"</SCRIPT></head></html>"#;
+    let (first, script_src) = super::inject_csp_nonce(html.as_bytes())
+        .ok_or_else(|| std::io::Error::other("valid HTML must rewrite"))?;
+    let first = String::from_utf8(first)?;
+
+    assert!(
+        first.contains(r#"<script src="/theme-init.js"></script>"#),
+        "external scripts must not gain a nonce: {first}"
+    );
+    assert!(
+        !first.contains("<script>astro"),
+        "bare inline scripts must gain a nonce: {first}"
+    );
+    assert!(
+        !first.contains(r#"<SCRIPT type="module">"#),
+        "inline modules must gain a nonce: {first}"
+    );
+
+    let nonce = script_src
+        .strip_prefix("'self' 'nonce-")
+        .and_then(|rest| rest.strip_suffix('\''))
+        .ok_or_else(|| std::io::Error::other("unexpected script-src shape"))?;
+    assert!(
+        first.contains(&format!(r#"nonce="{nonce}""#)),
+        "body nonces must match the header value"
+    );
+
+    // Fresh nonce per response: the same page served twice must differ.
+    let (_, second_src) = super::inject_csp_nonce(html.as_bytes())
+        .ok_or_else(|| std::io::Error::other("valid HTML must rewrite"))?;
+    assert_ne!(script_src, second_src, "nonces must not repeat");
+
+    // Non-UTF-8 bytes are served unmodified rather than erroring.
+    assert!(super::inject_csp_nonce(&[0xff, 0xfe]).is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn served_html_carries_matching_csp_nonce()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // End-to-end through static_handler: every src-less script in the
+    // served page carries the nonce named by the response CSP header.
+    if !std::path::Path::new("web/dist/index.html").exists() {
+        return Ok(());
+    }
+    let (_state, app, config_path, db_path) = build_test_app(false, 8, |_| {}).await?;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .map_err(|err| std::io::Error::other(err.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let csp = response
+        .headers()
+        .get("content-security-policy")
+        .ok_or_else(|| std::io::Error::other("missing CSP header"))?
+        .to_str()
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .to_string();
+    assert!(
+        !csp.contains("unsafe-inline") || csp.contains("style-src"),
+        "script-src must stay strict: {csp}"
+    );
+    let nonce = csp
+        .split('\'')
+        .find_map(|part| part.strip_prefix("nonce-"))
+        .ok_or_else(|| std::io::Error::other(format!("no nonce in CSP: {csp}")))?
+        .to_string();
+
+    let body = body_text(response).await;
+    assert!(
+        body.contains(&format!(r#"nonce="{nonce}""#)),
+        "served HTML must carry the header nonce"
+    );
+    assert!(
+        body.contains(r#"<script src="/theme-init.js"></script>"#),
+        "external theme script must stay nonce-free"
+    );
+
+    cleanup_paths(&[config_path, db_path]);
+    Ok(())
+}

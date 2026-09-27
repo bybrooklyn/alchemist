@@ -367,6 +367,19 @@ fn should_enter_setup_mode_for_missing_users(is_server_mode: bool, has_users: bo
     is_server_mode && !has_users
 }
 
+/// Whether the background processor should start paused, waiting for an
+/// explicit user action before it will pick up any jobs. Setup mode always
+/// starts paused regardless of configuration, since there is no verified
+/// user configuration yet; otherwise this defers to the configured
+/// `start_paused` setting.
+fn should_start_paused(
+    is_server_mode: bool,
+    setup_mode: bool,
+    configured_start_paused: bool,
+) -> bool {
+    setup_mode || (is_server_mode && configured_start_paused)
+}
+
 async fn run() -> Result<()> {
     let args = Args::parse();
     // Held for the lifetime of `run()` so the non-blocking file writer keeps
@@ -831,8 +844,13 @@ async fn run() -> Result<()> {
     }
 
     // 3. Start Background Processor Loop
-    // In server mode the engine starts paused and waits for an explicit user action.
-    if is_server_mode || setup_mode {
+    // In server mode the engine starts paused and waits for an explicit user action,
+    // unless the config opts out via `system.start_paused = false`.
+    if should_start_paused(
+        is_server_mode,
+        setup_mode,
+        config.read().await.system.start_paused,
+    ) {
         agent.pause();
     }
     let proc = agent.clone();
@@ -1598,6 +1616,28 @@ mod tests {
         let mut config_path = std::env::temp_dir();
         config_path.push(format!("{prefix}_{}.toml", rand::random::<u64>()));
         config_path
+    }
+
+    #[test]
+    fn should_start_paused_server_mode_honors_config() {
+        // Default config behaviour: server mode starts paused.
+        assert!(should_start_paused(true, false, true));
+        // Opting out via config: server mode starts running.
+        assert!(!should_start_paused(true, false, false));
+    }
+
+    #[test]
+    fn should_start_paused_setup_mode_always_pauses() {
+        // Setup mode always pauses, regardless of the configured value.
+        assert!(should_start_paused(true, true, true));
+        assert!(should_start_paused(true, true, false));
+    }
+
+    #[test]
+    fn should_start_paused_non_server_mode_ignores_config() {
+        // CLI (non-server) runs never pause the background processor here.
+        assert!(!should_start_paused(false, false, true));
+        assert!(!should_start_paused(false, false, false));
     }
 
     #[test]

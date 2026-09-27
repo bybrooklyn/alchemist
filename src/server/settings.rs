@@ -334,6 +334,15 @@ pub(crate) async fn update_settings_bundle_handler(
     axum::Json(payload): axum::Json<Config>,
 ) -> impl IntoResponse {
     let _config_guard = state.config_update_lock.lock().await;
+    // The bundle GET masks outbound secrets, so a GET → PUT round-trip
+    // arrives with sentinels where secrets were. Restore them from the
+    // stored config before validating, or the mask would be persisted over
+    // the real secret (SEC-4).
+    let mut payload = payload;
+    {
+        let stored = state.config.read().await;
+        crate::settings::restore_masked_config_notification_targets(&mut payload, &stored);
+    }
     if let Err(err) = payload.validate() {
         return api_error_response(
             StatusCode::BAD_REQUEST,
@@ -707,12 +716,17 @@ fn normalize_notification_payload(
 fn notification_target_response(
     target: crate::db::NotificationTarget,
 ) -> NotificationTargetResponse {
+    // Outbound secrets are write-only: echo back a masked sentinel so a
+    // live admin session cannot harvest integration secrets in one GET
+    // (SEC-4). Write/test paths resolve the sentinel against storage.
+    let mut config_json: JsonValue = serde_json::from_str(&target.config_json)
+        .unwrap_or_else(|_| JsonValue::Object(JsonMap::new()));
+    crate::settings::mask_notification_config_json(&mut config_json);
     NotificationTargetResponse {
         id: target.id,
         name: target.name,
         target_type: target.target_type,
-        config_json: serde_json::from_str(&target.config_json)
-            .unwrap_or_else(|_| JsonValue::Object(JsonMap::new())),
+        config_json,
         events: serde_json::from_str(&target.events).unwrap_or_default(),
         enabled: target.enabled,
         created_at: target.created_at,
@@ -931,7 +945,22 @@ pub(crate) async fn test_notification_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<AddNotificationTargetPayload>,
 ) -> impl IntoResponse {
-    let target_config = normalize_notification_payload(&payload);
+    let mut target_config = normalize_notification_payload(&payload);
+    // The targets GET masks secrets, and clients test the echoed target
+    // verbatim — so a masked value here means "use the stored secret".
+    // Resolve sentinels against the in-memory config target with the same
+    // name and type before validating, or testing a saved target would
+    // always fail (SEC-4). Fresh targets (no stored counterpart) pass
+    // through and validate as before.
+    {
+        let stored = state.config.read().await;
+        if let Some(prior) = stored.notifications.targets.iter().find(|candidate| {
+            candidate.name == target_config.name
+                && candidate.target_type == target_config.target_type
+        }) {
+            crate::settings::restore_masked_notification_target(&mut target_config, prior);
+        }
+    }
     if let Err(msg) = validate_notification_target(&state, &target_config).await {
         return api_error_response(StatusCode::BAD_REQUEST, "NOTIFICATION_TARGET_INVALID", msg);
     }

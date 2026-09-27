@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::Db;
 use super::types::*;
+use super::{NotificationTargetSchemaFlags, WatchDirSchemaFlags};
 
 fn notification_config_string(config_json: &str, key: &str) -> Option<String> {
     serde_json::from_str::<JsonValue>(config_json)
@@ -145,12 +146,27 @@ impl Db {
         &self,
         watch_dirs: &[crate::config::WatchDirConfig],
     ) -> Result<()> {
-        let has_is_recursive = self.watch_dir_flags.has_is_recursive;
-        let has_recursive = self.watch_dir_flags.has_recursive;
-        let has_profile_id = self.watch_dir_flags.has_profile_id;
+        let mut tx = self.pool.begin().await?;
+        Self::replace_watch_dirs_in_tx(&mut tx, &self.watch_dir_flags, watch_dirs).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Transaction-body behind [`Db::replace_watch_dirs`]. Runs the
+    /// profile-preserving read plus the delete/insert cycle inside the
+    /// caller's transaction so [`Db::replace_config_projection`] can commit
+    /// every projection table atomically (RG-21).
+    async fn replace_watch_dirs_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        flags: &WatchDirSchemaFlags,
+        watch_dirs: &[crate::config::WatchDirConfig],
+    ) -> Result<()> {
+        let has_is_recursive = flags.has_is_recursive;
+        let has_recursive = flags.has_recursive;
+        let has_profile_id = flags.has_profile_id;
         let preserved_profiles = if has_profile_id {
             let rows = sqlx::query("SELECT path, profile_id FROM watch_dirs")
-                .fetch_all(&self.pool)
+                .fetch_all(&mut **tx)
                 .await?;
             rows.into_iter()
                 .map(|row| {
@@ -162,9 +178,8 @@ impl Db {
         } else {
             HashMap::new()
         };
-        let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM watch_dirs")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         for watch_dir in watch_dirs {
             let preserved_profile_id = preserved_profiles.get(&watch_dir.path).copied().flatten();
@@ -175,7 +190,7 @@ impl Db {
                 .bind(&watch_dir.path)
                 .bind(watch_dir.is_recursive)
                 .bind(preserved_profile_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             } else if has_recursive && has_profile_id {
                 sqlx::query(
@@ -184,22 +199,21 @@ impl Db {
                 .bind(&watch_dir.path)
                 .bind(watch_dir.is_recursive)
                 .bind(preserved_profile_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             } else if has_recursive {
                 sqlx::query("INSERT INTO watch_dirs (path, recursive) VALUES (?, ?)")
                     .bind(&watch_dir.path)
                     .bind(watch_dir.is_recursive)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             } else {
                 sqlx::query("INSERT INTO watch_dirs (path) VALUES (?)")
                     .bind(&watch_dir.path)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -546,10 +560,23 @@ impl Db {
         &self,
         targets: &[crate::config::NotificationTargetConfig],
     ) -> Result<()> {
-        let flags = &self.notification_target_flags;
         let mut tx = self.pool.begin().await?;
+        Self::replace_notification_targets_in_tx(&mut tx, &self.notification_target_flags, targets)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Transaction-body behind [`Db::replace_notification_targets`].
+    /// See [`Db::replace_watch_dirs_in_tx`] for why this takes the caller's
+    /// transaction (RG-21).
+    async fn replace_notification_targets_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        flags: &NotificationTargetSchemaFlags,
+        targets: &[crate::config::NotificationTargetConfig],
+    ) -> Result<()> {
         sqlx::query("DELETE FROM notification_targets")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         for target in targets {
             let config_json = target.config_json.to_string();
@@ -570,7 +597,7 @@ impl Db {
                 .bind(&config_json)
                 .bind(&events)
                 .bind(target.enabled)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             } else {
                 sqlx::query(
@@ -581,11 +608,10 @@ impl Db {
                 .bind(&config_json)
                 .bind(&events)
                 .bind(target.enabled)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             }
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -680,8 +706,18 @@ impl Db {
         windows: &[crate::config::ScheduleWindowConfig],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        Self::replace_schedule_windows_in_tx(&mut tx, windows).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Transaction-body behind [`Db::replace_schedule_windows`] (RG-21).
+    async fn replace_schedule_windows_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        windows: &[crate::config::ScheduleWindowConfig],
+    ) -> Result<()> {
         sqlx::query("DELETE FROM schedule_windows")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         for window in windows {
             sqlx::query(
@@ -691,10 +727,9 @@ impl Db {
             .bind(&window.end_time)
             .bind(serde_json::to_string(&window.days_of_week).unwrap_or_else(|_| "[]".to_string()))
             .bind(window.enabled)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -748,14 +783,75 @@ impl Db {
         &self,
         settings: &crate::config::FileSettingsConfig,
     ) -> Result<FileSettings> {
-        self.update_file_settings(
-            settings.delete_source,
-            &settings.output_extension,
-            &settings.output_suffix,
-            &settings.replace_strategy,
-            settings.output_root.as_deref(),
+        let mut tx = self.pool.begin().await?;
+        let row = Self::replace_file_settings_projection_in_tx(&mut tx, settings).await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+
+    /// Transaction-body behind [`Db::replace_file_settings_projection`]
+    /// (RG-21).
+    async fn replace_file_settings_projection_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        settings: &crate::config::FileSettingsConfig,
+    ) -> Result<FileSettings> {
+        let row = sqlx::query_as::<_, FileSettings>(
+            "UPDATE file_settings
+            SET delete_source = ?, output_extension = ?, output_suffix = ?, replace_strategy = ?, output_root = ?
+            WHERE id = 1
+            RETURNING *",
         )
-        .await
+        .bind(settings.delete_source)
+        .bind(&settings.output_extension)
+        .bind(&settings.output_suffix)
+        .bind(&settings.replace_strategy)
+        .bind(settings.output_root.as_deref())
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
+    /// Project every config surface to the database inside a single
+    /// transaction: watch dirs, notification targets, schedule windows,
+    /// file settings, and the active-theme preference commit together or
+    /// not at all. Previously each `replace_*` call was its own
+    /// transaction, so a mid-projection failure left the scheduler and
+    /// watcher reading a mix of old and new config (RG-21).
+    pub async fn replace_config_projection(&self, config: &crate::config::Config) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        Self::replace_watch_dirs_in_tx(
+            &mut tx,
+            &self.watch_dir_flags,
+            &config.scanner.extra_watch_dirs,
+        )
+        .await?;
+        Self::replace_notification_targets_in_tx(
+            &mut tx,
+            &self.notification_target_flags,
+            &config.notifications.targets,
+        )
+        .await?;
+        Self::replace_schedule_windows_in_tx(&mut tx, &config.schedule.windows).await?;
+        Self::replace_file_settings_projection_in_tx(&mut tx, &config.files).await?;
+
+        if let Some(theme_id) = config.appearance.active_theme_id.as_deref() {
+            sqlx::query(
+                "INSERT INTO ui_preferences (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind("active_theme_id")
+            .bind(theme_id)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM ui_preferences WHERE key = ?")
+                .bind("active_theme_id")
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Set UI preference
@@ -880,6 +976,64 @@ mod tests {
                 .await?
                 .map(|profile| profile.name),
             Some("nested".to_string())
+        );
+
+        db.pool.close().await;
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    /// RG-21: a mid-projection failure must leave every projection table
+    /// untouched. Dropping `schedule_windows` makes the third write fail;
+    /// the watch-dir write (first in the transaction) must roll back with
+    /// it instead of persisting a half-new config.
+    #[tokio::test]
+    async fn config_projection_is_atomic_across_tables() -> anyhow::Result<()> {
+        let db_path = temp_db_path("alchemist_config_projection_atomic");
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let mut before = crate::config::Config::default();
+        before.scanner.extra_watch_dirs = vec![crate::config::WatchDirConfig {
+            path: "/media/a".to_string(),
+            is_recursive: true,
+        }];
+        before.schedule.windows = vec![crate::config::ScheduleWindowConfig {
+            start_time: "22:00".to_string(),
+            end_time: "06:00".to_string(),
+            days_of_week: vec![1, 2, 3],
+            enabled: true,
+        }];
+        db.replace_config_projection(&before).await?;
+
+        let watched_before: Vec<String> =
+            sqlx::query_scalar("SELECT path FROM watch_dirs ORDER BY path")
+                .fetch_all(&db.pool)
+                .await?;
+        assert_eq!(watched_before, vec!["/media/a".to_string()]);
+
+        // Inject a failure in the third projection write.
+        sqlx::query("DROP TABLE schedule_windows")
+            .execute(&db.pool)
+            .await?;
+
+        let mut after = crate::config::Config::default();
+        after.scanner.extra_watch_dirs = vec![crate::config::WatchDirConfig {
+            path: "/media/b".to_string(),
+            is_recursive: true,
+        }];
+        let result = db.replace_config_projection(&after).await;
+        assert!(
+            result.is_err(),
+            "projection against a missing schedule_windows table must fail"
+        );
+
+        let watched_after: Vec<String> =
+            sqlx::query_scalar("SELECT path FROM watch_dirs ORDER BY path")
+                .fetch_all(&db.pool)
+                .await?;
+        assert_eq!(
+            watched_after, watched_before,
+            "a failed projection must not persist the watch-dir write"
         );
 
         db.pool.close().await;

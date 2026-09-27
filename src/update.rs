@@ -4,7 +4,6 @@ use base64::{Engine as _, engine::general_purpose};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -835,11 +834,6 @@ fn first_number_in(value: &str) -> Option<u64> {
                 part.parse::<u64>().ok()
             }
         })
-}
-
-#[allow(dead_code)]
-fn command_args_without_binary() -> Vec<OsString> {
-    std::env::args_os().skip(1).collect()
 }
 
 #[cfg(test)]

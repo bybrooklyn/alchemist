@@ -46,14 +46,25 @@ pub(crate) async fn security_headers_middleware(request: Request, next: Next) ->
         HeaderValue::from_static("1; mode=block"),
     );
 
-    // Content Security Policy - allows inline scripts/styles for the SPA
-    // This is permissive enough for the app while still providing protection
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
-        ),
-    );
+    // Content Security Policy. script-src deliberately omits 'unsafe-inline':
+    // the only first-paint script (theme bootstrap) is served as a classic
+    // script from 'self' (web/public/theme-init.js), and every other script
+    // Astro emits is a bundled file. Astro also injects src-less inline
+    // scripts (island hydration runtime) into dist HTML; those are covered
+    // per-response by a fresh nonce in `static_handler`
+    // (`inject_csp_nonce`), which sets its own CSP header. This static
+    // header therefore only applies where no handler set one — leave any
+    // existing CSP value (e.g. the nonce-bearing page value) untouched.
+    // style-src keeps 'unsafe-inline' for React inline styles.
+    // scripts/check_csp_baseline.py enforces this (SEC-3).
+    if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+            ),
+        );
+    }
 
     // Referrer policy
     headers.insert(

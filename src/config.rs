@@ -766,6 +766,13 @@ pub struct SystemConfig {
     pub metrics_enabled: bool,
     #[serde(default)]
     pub engine_mode: EngineMode,
+    /// Whether the background processing engine starts paused when the
+    /// server boots, waiting for an explicit user action before it will
+    /// pick up any jobs. Defaults to `true` so existing configs keep
+    /// today's behaviour unchanged; set to `false` to have the engine
+    /// start running immediately, with no separate API call needed.
+    #[serde(default = "default_true")]
+    pub start_paused: bool,
     /// Enable HSTS header (only enable if running behind HTTPS)
     #[serde(default)]
     pub https_only: bool,
@@ -861,6 +868,7 @@ impl Default for SystemConfig {
             log_retention_days: default_log_retention_days(),
             metrics_enabled: false,
             engine_mode: EngineMode::default(),
+            start_paused: default_true(),
             https_only: false,
             trusted_proxies: Vec::new(),
             arr_path_translations: Vec::new(),
@@ -986,6 +994,7 @@ impl Default for Config {
                 log_retention_days: default_log_retention_days(),
                 metrics_enabled: false,
                 engine_mode: EngineMode::default(),
+                start_paused: default_true(),
                 https_only: false,
                 trusted_proxies: Vec::new(),
                 arr_path_translations: Vec::new(),
@@ -1442,5 +1451,58 @@ mod tests {
     fn engine_mode_defaults_to_balanced() {
         assert_eq!(EngineMode::default(), EngineMode::Balanced);
         assert_eq!(EngineMode::Balanced.concurrent_jobs_for_cpu_count(8), 4);
+    }
+
+    #[test]
+    fn system_config_without_start_paused_defaults_to_true() {
+        let raw = r#"
+            [transcode]
+            size_reduction_threshold = 0.3
+            min_bpp_threshold = 0.1
+            min_file_size_mb = 50
+            concurrent_jobs = 1
+
+            [hardware]
+            preferred_vendor = "cpu"
+            allow_cpu_fallback = true
+
+            [scanner]
+            directories = []
+        "#;
+
+        let config: Config = match toml::from_str(raw) {
+            Ok(config) => config,
+            Err(err) => panic!("failed to parse config fixture: {err}"),
+        };
+
+        assert!(config.system.start_paused);
+    }
+
+    #[test]
+    fn system_config_honors_explicit_start_paused_false() {
+        let raw = r#"
+            [transcode]
+            size_reduction_threshold = 0.3
+            min_bpp_threshold = 0.1
+            min_file_size_mb = 50
+            concurrent_jobs = 1
+
+            [hardware]
+            preferred_vendor = "cpu"
+            allow_cpu_fallback = true
+
+            [scanner]
+            directories = []
+
+            [system]
+            start_paused = false
+        "#;
+
+        let config: Config = match toml::from_str(raw) {
+            Ok(config) => config,
+            Err(err) => panic!("failed to parse config fixture: {err}"),
+        };
+
+        assert!(!config.system.start_paused);
     }
 }

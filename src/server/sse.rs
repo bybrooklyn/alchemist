@@ -86,10 +86,18 @@ pub(crate) fn sse_message_for_job_event(event: &JobEvent) -> SseMessage {
 
 pub(crate) fn sse_message_for_config_event(event: &ConfigEvent) -> SseMessage {
     match event {
-        ConfigEvent::Updated(config) => SseMessage {
-            event_name: "config_updated",
-            data: serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
-        },
+        ConfigEvent::Updated(config) => {
+            // The event stream is subscribable with read-only tokens, so it
+            // must never carry outbound secrets even though the settings
+            // GETs (full-access only) echo a masked sentinel. Serialize a
+            // redacted clone: same shape, secrets stripped (SEC-4).
+            let mut redacted = config.clone();
+            crate::settings::mask_config_notification_targets(&mut redacted);
+            SseMessage {
+                event_name: "config_updated",
+                data: serde_json::to_string(&redacted).unwrap_or_else(|_| "{}".to_string()),
+            }
+        }
         ConfigEvent::WatchFolderAdded(path) => SseMessage {
             event_name: "watch_folder_added",
             data: serde_json::json!({ "path": path }).to_string(),

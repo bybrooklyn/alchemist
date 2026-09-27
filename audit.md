@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-09-04
+Last updated: 2026-09-27
 
 ---
 
@@ -1976,6 +1976,13 @@ mid-session just to run the existing e2e suite; a manual visual pass hit a
 sandboxed `sudo` prompt for Chrome). Recommend a dedicated follow-up with
 real timing numbers before attempting the island extraction.
 
+2026-09-27 decision: still deferred. `ResourceMonitor` is self-contained
+(no props, own fetching) so extraction is feasible, but it sits inside
+`Dashboard`'s grid — a standalone `client:idle` island would move it out
+of the grid and change the dashboard layout, and the `AppearanceSettings`
+preview already ships inside the lazy-loaded tab. No TTI timing access
+exists to validate the win, so this stays a follow-up with numbers.
+
 **Files:**
 - `web/src/pages/*.astro` — all 18 islands hydrate via `client:load`/`client:only`; none use `client:idle`/`client:visible`.
 - `web/src/components/SettingsPanel.tsx:4–14` — imports every settings tab eagerly into one island.
@@ -2179,7 +2186,13 @@ its immediate neighbour.
 
 ### [TD-25] `set_concurrent_jobs` can over-reduce when the limit is lowered twice in a row
 
-**Status: OPEN.**
+**Status: RESOLVED (2026-09-27).** The reduction branch no longer spawns a
+detached task per call. The whole adjustment (delta computation plus
+permit acquire/release) now runs under the `held_permits` mutex, so
+consecutive reductions compose instead of racing; raises drain parked
+permits first as before. Test
+`consecutive_reductions_park_exactly_the_composed_delta` drives 4 → 3 → 2
+with a permit held and asserts 2 usable slots plus release on raise.
 
 **Files:**
 - `src/media/processor.rs` — `set_concurrent_jobs`, the reduction branch.
@@ -2684,7 +2697,14 @@ asserts both the cap and the category.
 
 ### [RG-21] Config → database projection is not atomic
 
-**Status: OPEN.**
+**Status: RESOLVED (2026-09-27).** The four `replace_*` bodies moved into
+`_tx` variants taking the caller's transaction (existing pool-based
+functions are thin wrappers), and `project_config_to_db` now goes through
+`Db::replace_config_projection`, which commits watch dirs, notification
+targets, schedule windows, file settings, and the theme preference in one
+transaction. Test `config_projection_is_atomic_across_tables` drops
+`schedule_windows` mid-projection and asserts the watch-dir write rolls
+back.
 
 **Files:**
 - `src/settings.rs` — `project_config_to_db`.
