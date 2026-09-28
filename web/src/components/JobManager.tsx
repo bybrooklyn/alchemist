@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { RefreshCw, Trash2, Ban, Plus, X } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
+import { uniqueId } from "../lib/uniqueId";
 import { showToast } from "../lib/toast";
 import { cn } from "../lib/cn";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -231,7 +232,7 @@ function JobManager() {
         const previousViews = savedViews;
         const previousActiveViewId = activeViewId;
         const newView: SavedJobView = {
-            id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            id: uniqueId("custom"),
             label: trimmedLabel,
             activeTab,
             sortBy,
