@@ -172,6 +172,15 @@ impl Scanner {
             // direct children are never pruned so new top-level entries are
             // still picked up.
             let walker = walker_base.into_iter().filter_entry(move |entry| {
+                // Hidden components (scratch/resume dirs, other tools'
+                // staging dirs, dotfiles) are pruned unconditionally,
+                // regardless of aggressive-pruning config. Returning false
+                // for a directory here stops the walk from descending into
+                // it at all, rather than filtering its contents out later.
+                if has_hidden_component(entry.path(), &root_for_filter) {
+                    return false;
+                }
+
                 if !prune_enabled || last_scanned.is_none() {
                     return true;
                 }
@@ -253,6 +262,29 @@ fn resolve_source_root(path: &Path, source_roots: &[PathBuf]) -> Option<PathBuf>
         .cloned()
 }
 
+/// True if any path component strictly *below* `root` starts with `.` — a
+/// hidden directory or file. Only components after `root` are checked, so
+/// the root itself may live under a dot directory (e.g.
+/// `/home/u/.media/library`) without being treated as hidden.
+///
+/// Shared by the scanner (pruning the walk) and the file watcher (filtering
+/// raw filesystem events) so both agree on what counts as hidden. This
+/// keeps scratch/staging directories out of the library: Alchemist writes
+/// its own resume segments under a dot-prefixed sibling directory next to
+/// the source (see `resume_temp_dir_for` in `media::pipeline`, e.g.
+/// `.movie.mkv.alchemist.resume-42/segment-00001.mkv`), and other tools'
+/// hidden staging directories follow the same convention. If `path` is not
+/// under `root`, this conservatively returns `false` (nothing to prune).
+pub(crate) fn has_hidden_component(path: &Path, root: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    relative.components().any(|component| {
+        matches!(component, std::path::Component::Normal(name)
+            if name.to_str().is_some_and(|s| s.starts_with('.')))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +295,108 @@ mod tests {
         let roots = vec![PathBuf::from("/media"), PathBuf::from("/media/movies")];
         let resolved = resolve_source_root(Path::new("/media/movies/action/example.mkv"), &roots);
         assert_eq!(resolved, Some(PathBuf::from("/media/movies")));
+    }
+
+    #[test]
+    fn has_hidden_component_checks_only_components_below_root() {
+        let root = Path::new("/media/library");
+        assert!(!has_hidden_component(
+            Path::new("/media/library/movie.mkv"),
+            root
+        ));
+        assert!(has_hidden_component(
+            Path::new("/media/library/.hidden-dir/movie.mkv"),
+            root
+        ));
+        assert!(has_hidden_component(
+            Path::new("/media/library/.foo.mkv"),
+            root
+        ));
+        assert!(has_hidden_component(
+            Path::new("/media/library/.movie.mkv.alchemist.resume-7/segment-00001.mkv"),
+            root
+        ));
+
+        // The root itself living under a dot directory must not count —
+        // only components strictly below it do.
+        let dotted_root = Path::new("/home/u/.media/library");
+        assert!(!has_hidden_component(
+            Path::new("/home/u/.media/library/movie.mkv"),
+            dotted_root
+        ));
+        assert!(has_hidden_component(
+            Path::new("/home/u/.media/library/.hidden-dir/movie.mkv"),
+            dotted_root
+        ));
+    }
+
+    /// Regression test for the scanner half of the hidden-scratch-directory
+    /// bug: real library media at the watch root must be found, while a
+    /// file inside a plain dot-directory, a dot-prefixed resume-segment
+    /// directory (Alchemist's own scratch naming), and a bare dotfile are
+    /// all skipped.
+    #[test]
+    fn scan_skips_hidden_directories_and_dotfiles() -> anyhow::Result<()> {
+        let root = unique_temp_dir("hidden");
+
+        let visible = root.join("movie.mkv");
+        fs::write(&visible, b"data")?;
+
+        let hidden_dir = root.join(".hidden-dir");
+        fs::create_dir_all(&hidden_dir)?;
+        fs::write(hidden_dir.join("inside.mkv"), b"data")?;
+
+        let resume_dir = root.join(".movie.mkv.alchemist.resume-7");
+        fs::create_dir_all(&resume_dir)?;
+        fs::write(resume_dir.join("segment-00001.mkv"), b"data")?;
+
+        fs::write(root.join(".foo.mkv"), b"data")?;
+
+        let scanner = Scanner::new();
+        let found = scanner.scan_with_recursion(vec![(root.clone(), true)]);
+
+        assert_eq!(
+            found.len(),
+            1,
+            "expected only the visible file, found: {:?}",
+            found
+        );
+        assert_eq!(found[0].path, visible);
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    /// The watch root itself may legitimately live under a dot directory
+    /// (e.g. `~/.media/library`); only components *below* the root count
+    /// as hidden, so a visible file directly under such a root must still
+    /// be found.
+    #[test]
+    fn scan_finds_visible_file_when_root_itself_is_under_a_dot_directory() -> anyhow::Result<()> {
+        let base = unique_temp_dir("dotroot_base");
+        let root = base.join(".media").join("library");
+        fs::create_dir_all(&root)?;
+
+        let visible = root.join("movie.mkv");
+        fs::write(&visible, b"data")?;
+
+        let hidden_dir = root.join(".hidden-dir");
+        fs::create_dir_all(&hidden_dir)?;
+        fs::write(hidden_dir.join("inside.mkv"), b"data")?;
+
+        let scanner = Scanner::new();
+        let found = scanner.scan_with_recursion(vec![(root.clone(), true)]);
+
+        assert_eq!(
+            found.len(),
+            1,
+            "expected the visible file under a dotted root, found: {:?}",
+            found
+        );
+        assert_eq!(found[0].path, visible);
+
+        let _ = fs::remove_dir_all(base);
+        Ok(())
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
