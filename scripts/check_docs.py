@@ -157,7 +157,13 @@ def validate() -> dict[str, object]:
 
 def load_manifest(location: str) -> dict[str, object]:
     if location.startswith(("https://", "http://")):
-        with urllib.request.urlopen(location, timeout=15) as response:
+        # The docs mirror filters bot-like clients; identify as the repo's
+        # own contract checker so the fetch is served like a browser fetch.
+        request = urllib.request.Request(
+            location,
+            headers={"User-Agent": "alchemist-check-docs/1.0 (+https://github.com/bybrooklyn/alchemist)"},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
             return json.load(response)
     return json.loads(Path(location).read_text(encoding="utf-8"))
 
