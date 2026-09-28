@@ -1,6 +1,13 @@
 # Audit Findings
 
-Last updated: 2026-09-27
+Last updated: 2026-09-28
+
+> 2026-09-28 round: focused sweep of file detection (`media/scanner.rs`,
+> `system/watcher.rs`), probing (`media/analyzer.rs`, `db/probe_cache.rs`,
+> probe failure paths), and the jobs screen (frontend `jobs/` + `server/jobs.rs`).
+> 17 new findings (ten P2, two RG, four UX, one TD); dropped four candidates
+> whose mechanisms did not verify (fps fallback, transient-skip starvation,
+> output-probe success-gating, watcher mtime churn).
 
 ---
 
@@ -1647,6 +1654,280 @@ also removes the redundant `exists()` + `metadata` double-stat.
 
 ---
 
+### [P2-54] Every standard 8-bit file is misreported as unknown bit depth
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: marker loop plus exact-match 8-bit families (48/64-bit markers added for rgb48-style formats). Tests cover base/10/12-bit, rgb48le, and garbage.
+
+**Files:**
+- `src/media/analyzer.rs:755-772` — `bit_depth_from_pix_fmt` matches depth markers only.
+- `src/media/analyzer.rs:312-321` — `MissingBitDepth` + `UnrecognizedPixelFormat` warnings.
+- `src/media/planner.rs:343-349` — confidence-scaled BPP threshold (1.3× / 1.8×).
+
+**Severity:** P2
+
+**Problem:**
+
+`bit_depth_from_pix_fmt` only recognizes explicit depth markers (`p10`, `10le`, …).
+`yuv420p`, `yuvj420p`, `nv12`, and the other base 8-bit families carry no marker, so
+`infer_bit_depth` returns `None` for the most common pixel formats in existence and
+every normal 8-bit file collects both warnings. Two warnings drop confidence to
+Medium (three to Low), which multiplies the BPP skip threshold by 1.3 (1.8 on Low) —
+so borderline files are wrongly skipped as `bpp_below_threshold` for no real reason.
+(Secondary: `rgb48le` *does* match `8le` and is misread as 8-bit.)
+
+**Fix:**
+
+1. In `bit_depth_from_pix_fmt`, keep the marker loop, then fall back to an exact-match
+   list of known 8-bit-only families (`yuv420p`, `yuvj420p`, `yuv422p`, `yuvj422p`,
+   `yuv444p`, `yuvj444p`, `yuv410p`, `yuv411p`, `nv12`, `nv21`, `gray`, `rgb24`,
+   `bgr24`). Exact match, not `contains`, so `rgb48le`-style false hits stay `None`.
+2. Add unit tests: `yuv420p`/`nv12` → 8, `yuv420p10le` → 10, `rgb48le` → not 8,
+   garbage → `None`.
+
+---
+
+### [P2-55] Unparseable probe size becomes 0 bytes and skips as "too small"
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: probe size falls back to the filesystem size (`probe_size_or_fs_size`); 0 only when both are unavailable. No enum ripple.
+
+**Files:**
+- `src/media/analyzer.rs:346` — `size_bytes: metadata.format.size.parse().unwrap_or(0)`.
+- `src/media/planner.rs:366-374` — `below_min_file_size` gate against `min_file_size_mb`.
+
+**Severity:** P2
+
+**Problem:**
+
+ffprobe reports `"size": "N/A"` for inputs it cannot size. `parse().unwrap_or(0)` maps
+that probe gap to a 0-byte file, and the planner then skips it as
+`below_min_file_size` with a confident-sounding "size_mb=0" reason — a verdict about
+the file drawn from the absence of data. Same failure class as the `codec_name` gap
+fixed for #9.
+
+**Fix:**
+
+1. Parse the size to `Option<i64>`; on failure record a `MissingContainerSize`-style
+   warning and leave the size unknown instead of 0.
+2. In the planner, skip the size gate (fail open) when the size is unknown, mirroring
+   the disk-guardrail philosophy; the confidence penalty from the warning already
+   biases borderline calls toward skipping.
+3. Test: `"N/A"` size analyzes without a `below_min_file_size` decision.
+
+---
+
+### [P2-56] Required ffprobe `format` fields turn shape gaps into terminal skips
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: `Format` string fields are `#[serde(default)]`; sparse probe documents parse with `Missing*` warnings instead of terminal skips.
+
+**Files:**
+- `src/media/analyzer.rs:124-130` — `Format { format_name/duration/size/bit_rate: String }` with no `#[serde(default)]`.
+- `src/media/pipeline.rs:1468-1494` — any `analyze_with_cache` error records a terminal `skip` + `Failed`.
+
+**Severity:** P2
+
+**Problem:**
+
+Unlike `Stream.codec_name` (fixed for #9), every `Format` string field is required, so
+a probe document missing any one of them fails whole-document deserialization and the
+file is terminally skipped as failed — unrecoverable without manual intervention.
+Narrow `-show_entries` output and unusual inputs omit these fields in practice.
+
+**Fix:**
+
+1. Give `Format`'s string fields `#[serde(default)]` (and audit `Stream`'s remaining
+   required fields the same way), degrading gaps to warnings via the existing
+   `Missing*` machinery instead of hard errors.
+2. Test: a probe document with `size`/`bit_rate` omitted parses and warns instead of
+   erroring.
+
+---
+
+### [P2-57] Cover art passes the video gate; analysis and encode can pick different streams
+
+**Status: PARTIALLY RESOLVED (2026-09-28).** Partially fixed 2026-09-28: attached_pic streams excluded from selection (with test). Open: carry the analyzed video index into the encode map instead of hard-coded `0:v:0`.
+
+**Files:**
+- `src/media/analyzer.rs:181-217` — `select_video_stream` filters on `codec_type` only.
+- `src/media/ffmpeg/mod.rs:242-243` — encode hard-codes `-map 0:v:0` (file order).
+
+**Severity:** P2
+
+**Problem:**
+
+Two related gaps. First, nothing excludes `attached_pic` streams, so an `mjpeg` cover
+in an audiobook passes the "No video stream found" gate and the file is planned as
+video. Second, analysis selects default-flag-first then largest-area while the encode
+maps file-order-first, so for multi-video files the BPP/resolution/codec verdict is
+computed on a different stream than the one transcoded.
+
+**Fix:**
+
+1. Exclude `attached_pic` streams in `select_video_stream` (check `stream.disposition`
+   for an attached-pic marker the same way `default` is read; fall back to excluding
+   `mjpeg`/`png` single-frame video streams only if the disposition is absent).
+2. Record the analyzed video stream's file-order index in `MediaMetadata` and map
+   `0:v:<index>` at encode time instead of `0:v:0`.
+3. Tests: audiobook-with-cover selects no video stream; dual-video fixture analyzes
+   and maps the same index.
+
+---
+
+### [P2-58] Symlinked media is invisible to library scans
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: symlink-to-file entries enqueue by link path with canonical-identity dedupe; symlinked dirs still never descended. Unix-gated test.
+
+**Files:**
+- `src/media/scanner.rs:211-227` — `entry.file_type().is_file()` with default `WalkDir` settings.
+- `src/media/scanner.rs:87-125` — same pattern in `scan_directory_bounded`.
+
+**Severity:** P2
+
+**Problem:**
+
+`WalkDir` does not follow symlinks unless asked, and `file_type().is_file()` is false
+for a symlink itself — so symlinked files are skipped and symlinked directories are
+never descended, in both the full and the bounded scan. Symlink layouts are common in
+self-hosted setups (seedbox imports, split volumes), and the files are silently absent:
+no job, no warning, no error.
+
+**Fix:**
+
+1. Track visited `(device, inode)` pairs and enable symlink following, *or* (smaller,
+   no cycle risk) enqueue symlink-to-file entries by their link path while never
+   descending symlinked directories; document the dir limitation.
+2. Dedupe: if both a link and its target are in the tree, canonicalize and keep one.
+3. Test: symlinked file discovered once; symlink loop cannot hang the scan.
+
+---
+
+### [P2-59] Selection is never pruned on refresh, so batches fail with 409
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: `fetchJobs` intersects `selected` with visible IDs on every successful fetch.
+
+**Files:**
+- `web/src/components/JobManager.tsx:127,415-445` — `selected` set; `fetchJobs` never intersects it.
+- `web/src/components/JobManager.tsx:626-653` — `handleBatch` sends `Array.from(selected)` verbatim.
+- `src/server/jobs.rs:507-513` — `jobs.len() != ids.len()` rejects the whole batch.
+
+**Severity:** P2
+
+**Problem:**
+
+`selected` is cleared on query-shape change but not when the rows themselves go away.
+After a single delete, clear-completed, or an external archive, the next batch sends
+dead IDs and the backend's all-or-nothing guard rejects the *entire* batch with
+`409 BATCH_ACTION_CONFLICT` — a confusing failure for an action the UI presented as
+valid (the visible rows are all eligible).
+
+**Fix:**
+
+1. In `fetchJobs`'s success path, intersect `selected` with the returned page's IDs
+   (`setSelected(prev => new Set([...prev].filter(id => visibleIds.has(id))))`).
+2. E2E: select two rows, delete one via row menu, batch-delete the rest — no 409.
+
+---
+
+### [P2-60] Searching never resets the page, stranding users on empty results
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: both toolbar search inputs reset to page 1 on change.
+
+**Files:**
+- `web/src/components/jobs/JobsToolbar.tsx:99-106,171-178` — both search inputs call only `setSearchInput`.
+- `web/src/components/JobManager.tsx:368-381` — `fetchJobs` keeps the current `page`.
+
+**Severity:** P2
+
+**Problem:**
+
+Tabs, sort, and sort direction all call `setPage(1)`, but neither search input does.
+Searching from page 3 with fewer than a page of hits renders the empty state until
+the user manually pages back — the results exist, the UI just doesn't go to them.
+
+**Fix:**
+
+1. Reset to page 1 wherever `setSearchInput` is called with a changed query (both
+   toolbar inputs; the saved-view apply path at `JobManager.tsx:220` already does).
+2. E2E: go to page 3, search a one-hit term, assert the row is visible without paging.
+
+---
+
+### [P2-61] Priority actions are ungated and the backend allows them anywhere
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: `set_job_priority` returns applied/ineligible (archived/active guarded, missing still errors) with 409; buttons gated.
+
+**Files:**
+- `web/src/components/jobs/JobsTable.tsx:254-256,275-283`, `JobDetailModal.tsx:477-493` — Boost/Lower/Reset render unconditionally.
+- `src/db/jobs.rs:544-551` — bare `UPDATE jobs SET priority … WHERE id = ?`.
+- `src/server/jobs.rs:701-707` — success JSON regardless of eligibility.
+
+**Severity:** P2
+
+**Problem:**
+
+Delete/Retry/Cancel are status-gated, but Boost/Lower/Reset are not, and unlike
+restart/delete the priority write has no `archived = 0` / not-active guard. Priority
+can be mutated mid-encode or on an archived row: success toast, zero visible effect —
+a silent no-op presented as success (and a potential ordering surprise if the row is
+ever requeued).
+
+**Fix:**
+
+1. Add `AND archived = 0 AND status NOT IN ('analyzing','encoding','remuxing','resuming')`
+   to `set_job_priority` (missing id must still error, as today).
+2. Gate the three buttons on the same eligibility the backend enforces.
+3. Tests: priority write on an active/archived row is rejected; buttons hidden there.
+
+---
+
+### [P2-62] Job-detail modal has no open-sequence guard, so rapid clicks show the wrong job
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: `detailSeqRef` guards `openJobDetails`, mirroring `fetchSeqRef`.
+
+**Files:**
+- `web/src/components/jobs/useJobDetailController.tsx:129-140` — `openJobDetails` fires bare fetches.
+- `web/src/components/JobManager.tsx:362` — `fetchJobs` already sequence-guards via `fetchSeqRef`.
+
+**Severity:** P2
+
+**Problem:**
+
+Clicking row A then row B quickly lets the slower A response overwrite `focusedJob`
+with A's detail, attempts, and logs while B stays selected — the modal confidently
+shows one job's data under another job's identity, including failure explanations.
+
+**Fix:**
+
+1. Add a `detailSeqRef` (or AbortController) mirroring `fetchSeqRef`: stamp each
+   `openJobDetails` call, ignore responses whose stamp is stale.
+2. E2E: open A, immediately open B, assert B's path is shown and A's never flashes.
+
+---
+
+### [P2-63] Non-UTF-8 paths can never become jobs
+
+**Files:**
+- `src/media/pipeline.rs:1237-1245` — `discovered.path.to_str()` → `Err("Invalid input path")`.
+- `src/db/types.rs:22-26` — `mtime_hash_string` falls back to `"0.0"`.
+
+**Severity:** P2
+
+**Problem:**
+
+`resolve_discovered_for_enqueue` rejects any path that is not valid UTF-8, so such
+files are silently absent from the library — even though the encoder builder already
+handles real `OsStr` paths. Legal on Linux/macOS filenames, invisible in the UI, no
+warning anywhere. (Related: the probe-cache key uses `to_string_lossy`, so two
+distinct non-UTF-8 paths could theoretically share a cache entry.)
+
+**Fix:**
+
+1. Carry `OsString`/lossless representation through enqueue (store the path as
+   lossless bytes or escaped form; keep `mtime_hash` on real mtime).
+2. Make the probe-cache key collision-free for non-UTF-8 paths.
+3. Test: non-UTF-8 fixture enqueues and analyzes.
+
+---
+
 ## Technical Debt
 
 ---
@@ -2226,6 +2507,34 @@ lock-free-atomics-plus-spawned-task design is the reason it is hard to reason ab
 
 ---
 
+### [TD-26] Jobs list over-fetches unrendered columns and duplicates the VMAF lookup
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: list select uses NULL metadata + the `es` join alone for VMAF (job_id is UNIQUE).
+
+**Files:**
+- `src/db/jobs.rs:631-642,728-742` — `get_jobs_filtered` selects `input_metadata_json` and joins `encode_stats` *and* a correlated VMAF subquery.
+- `web/src/components/JobManager.tsx:433-445` — 5s visible poll plus SSE-triggered refetches.
+
+**Severity:** TD
+
+**Problem:**
+
+Every table fetch selects the full `input_metadata_json` blob per row, which the table
+never renders (only the detail modal uses it, via a separate endpoint), and resolves
+the VMAF score twice per row (`LEFT JOIN es` plus a correlated `SELECT vmaf_score`).
+The search path adds leading-`%` `LIKE`s with two `EXISTS … LIKE` subqueries — all
+unindexable. Bounded (`limit.clamp(1,200)`) but executed on the 5s poll and every
+SSE-triggered refetch, so large libraries pay it constantly during scans.
+
+**Fix:**
+
+1. Drop `input_metadata_json` from the list select (detail endpoint already serves it).
+2. Keep one VMAF source (the join) and delete the correlated subquery.
+3. Longer term: FTS5 or a trigram index for the search path; at minimum keep the
+   200-row clamp and the fetch-sequence guard, which already bound the damage.
+
+---
+
 ## Reliability Gaps
 
 ---
@@ -2749,6 +3058,60 @@ verification rather than being folded into an audit sweep.
 
 ---
 
+### [RG-22] Timed-out ffprobe processes are never reaped
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: `kill_on_drop(true)` on the ffprobe command.
+
+**Files:**
+- `src/media/analyzer.rs:31-52` — `run_ffprobe` wraps `Command::output()` in a 30s timeout with no `kill_on_drop(true)`.
+
+**Severity:** RG
+
+**Problem:**
+
+When the timeout fires, the `Err(_)` arm returns while the hung `ffprobe` child is
+still alive: dropping the `output()` future does not kill the child without
+`kill_on_drop(true)`, and the `Child` handle is dropped un-awaited, leaking a
+zombie/process entry per hang. On a slow/stuck NAS mount this accumulates processes
+and FDs exactly when the system is already struggling, and every leaked child holds
+its input file handle open.
+
+**Fix:**
+
+1. Build the command with `.kill_on_drop(true)` before `.output()` so a timeout (or
+   any early drop) terminates the child.
+2. Test: run a hanging stub `ffprobe` (e.g. `sleep`-masquerading script earlier on
+   `PATH`), assert `run_ffprobe` errors *and* no child survives past the timeout.
+
+---
+
+### [RG-23] One bad watch directory fails the entire watcher refresh
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: per-directory errors collected; watchable dirs installed; combined error names bad paths. Test covers partial refresh.
+
+**Files:**
+- `src/system/watcher.rs:280-288` — `watch()` returns `Err` on the first unwatched dir.
+- `src/server/mod.rs:960-973` — `refresh_file_watcher` only logs the error.
+
+**Severity:** RG
+
+**Problem:**
+
+If any single directory in a refresh cannot be watched (deleted path, lost mount,
+permissions), `watch()` aborts the loop with `Err` — and since `*inner` is only
+assigned on success, the *previous* watch set keeps running unchanged. The operator
+gets one log line while the watcher silently keeps watching removed directories and
+never picks up the legitimate ones from the same refresh.
+
+**Fix:**
+
+1. Collect per-directory errors, install the watcher for every watchable dir, and
+   return a combined error naming the failed paths so the UI/log can surface them.
+2. Test: refresh with one missing dir + one good dir — good dir watched, error names
+   the missing one.
+
+---
+
 ## UX Gaps
 
 ---
@@ -3057,6 +3420,104 @@ With a 400-job queue filtered to Completed, the strip reads "0 active / 12 faile
 1. Either label honestly ("on this page") or fetch real counts — the backend already returns totals for stats endpoints; a single lightweight `/api/stats/summary`-style call refreshed with the poll keeps them truthful.
 2. Extract the limit into one constant shared by `fetchJobs` and the footer text.
 3. Track `total_count` from the API response if available, else keep the `jobs.length < LIMIT` heuristic but accept the empty-last-page edge case explicitly in a comment.
+
+---
+
+### [UX-14] SSE status patch leaves the row in the wrong tab until refetch
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: SSE status handler drops rows via a tab-membership predicate (ref-kept, no reconnect).
+
+**Files:**
+- `web/src/components/jobs/useJobSSE.ts:35-41,72-74,87` — `status` events `map` over the current page.
+- `web/src/components/jobs/JobsTable.tsx:257,266,275` — row actions already reflect the new status.
+
+**Severity:** UX
+
+**Problem:**
+
+A `status` event patches the row in place without checking the tab filter, so e.g. a
+`queued`-tab row that flips to `encoding` stays visible there — while its context menu
+already offers new-status actions. The 300ms throttled `fetchJobs` corrects it, but in
+the interim the tab contradicts itself.
+
+**Fix:**
+
+1. In the SSE status handler, drop rows whose new status no longer matches the active
+   tab filter (same predicate the fetch uses), or trigger an immediate silent refetch
+   on tab-membership change instead of waiting for the throttle.
+
+---
+
+### [UX-15] Cancel reports success when it cancelled nothing
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: batch cancel toasts the real count; single cancel on ineligible jobs is 409.
+
+**Files:**
+- `src/server/jobs.rs:242-284` — `request_job_cancel` returns `Ok(false)` for ineligible states.
+- `src/server/jobs.rs:429-486,546-552` — both cancel handlers map any `Ok(_)` to success.
+- `web/src/components/JobManager.tsx:847-861` — batch Cancel toasts success unconditionally and is never disabled.
+
+**Severity:** UX
+
+**Problem:**
+
+Cancelling completed/failed selections returns 200 with `count: 0` and a success
+toast. The operator believes something was cancelled; nothing was.
+
+**Fix:**
+
+1. Return the actually-cancelled count from the backend and have the frontend toast
+   `"Cancelled N job(s)"` — or `"Nothing to cancel"` when 0 — instead of unconditional
+   success. Consider disabling batch Cancel when no selected job is cancellable,
+   mirroring Restart/Delete.
+
+---
+
+### [UX-16] Search misses output paths, IDs, and statuses
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: search covers output_path (indexed), status, and numeric id; test extended.
+
+**Files:**
+- `src/db/jobs.rs:664-704` — search `WHERE` only covers `input_path` plus decision/failure text.
+- `web/src/components/jobs/types.ts:30-45`, `JobsToolbar.tsx:102,173` — "Search files or explanations…".
+
+**Severity:** UX
+
+**Problem:**
+
+`Job.output_path`, the numeric job ID, `status`, and encoder are never matched, so
+pasting an output filename from the detail view or a job ID yields "No jobs found"
+despite the promise of the placeholder.
+
+**Fix:**
+
+1. Extend the search predicate to `output_path LIKE` (indexed), exact numeric ID
+   match when the term parses as an integer, and `status LIKE`.
+2. E2E: search by output filename and by ID both land on the row.
+
+---
+
+### [UX-17] Mutations strand the pager on a now-empty page
+
+**Status: RESOLVED (2026-09-28).** Fixed 2026-09-28: empty page steps back; enqueue jumps to page 1.
+
+**Files:**
+- `web/src/components/JobManager.tsx:688-704,626-653,907-920` — post-mutation `fetchJobs()` with no page clamp.
+- `src/server/jobs.rs:318-322` — backend only does `page.max(1)` with no total count.
+
+**Severity:** UX
+
+**Problem:**
+
+Enqueue, batch restart/delete, and clear-completed refetch on the current page. A
+user on page 2 whose page empties sees "Showing 0 jobs" with Next disabled and must
+page back manually; a fresh enqueue on page N is invisible because new rows land on
+page 1.
+
+**Fix:**
+
+1. After a mutation, if the page comes back empty and `page > 1`, step back one page
+   and refetch (bounded loop, terminates at page 1); after enqueue, jump to page 1.
 
 ---
 

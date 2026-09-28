@@ -101,7 +101,13 @@ export function JobsToolbar({
                             type="text"
                             placeholder="Search files or explanations..."
                             value={searchInput}
-                            onChange={(e) => setSearchInput(e.target.value)}
+                            onChange={(e) => {
+                                // A new query starts at page 1 (P2-60):
+                                // staying on page N with fewer hits renders
+                                // a phantom empty state.
+                                setSearchInput(e.target.value);
+                                setPage(1);
+                            }}
                             className="w-full bg-helios-surface border border-helios-line/20 rounded-lg pl-9 pr-4 py-2 text-sm text-helios-ink focus:border-helios-solar outline-none"
                         />
                     </div>
@@ -173,7 +179,10 @@ export function JobsToolbar({
                                     type="text"
                                     placeholder="Search files or explanations..."
                                     value={searchInput}
-                                    onChange={(e) => setSearchInput(e.target.value)}
+                                    onChange={(e) => {
+                                        setSearchInput(e.target.value);
+                                        setPage(1);
+                                    }}
                                     className="ml-2 min-w-0 flex-1 bg-transparent text-sm text-helios-ink outline-none placeholder:text-helios-slate"
                                 />
                             </div>

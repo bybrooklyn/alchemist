@@ -549,7 +549,14 @@ pub(crate) async fn cancel_job_handler(
 ) -> impl IntoResponse {
     match state.db.get_job_by_id(id).await {
         Ok(Some(job)) => match request_job_cancel(&state, &job).await {
-            Ok(_) => api_ok_response(),
+            Ok(true) => api_ok_response(),
+            // UX-15: cancelling a job that is not cancellable must not
+            // look like success — the UI toasts whatever this returns.
+            Ok(false) => api_error_response(
+                StatusCode::CONFLICT,
+                "CANCEL_NOTHING_TO_CANCEL",
+                "Job is not in a cancellable state.",
+            ),
             Err(e) if is_row_not_found(&e) => {
                 api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found")
             }
@@ -704,8 +711,13 @@ pub(crate) async fn update_job_priority_handler(
     axum::Json(payload): axum::Json<UpdateJobPriorityPayload>,
 ) -> impl IntoResponse {
     match state.db.set_job_priority(id, payload.priority).await {
-        Ok(_) => axum::Json(serde_json::json!({ "id": id, "priority": payload.priority }))
+        Ok(true) => axum::Json(serde_json::json!({ "id": id, "priority": payload.priority }))
             .into_response(),
+        Ok(false) => api_error_response(
+            StatusCode::CONFLICT,
+            "PRIORITY_JOB_INELIGIBLE",
+            "Job priority can only be changed while the job is queued and unarchived.",
+        ),
         Err(e) if is_row_not_found(&e) => {
             api_error_response(StatusCode::NOT_FOUND, "JOB_NOT_FOUND", "Job not found")
         }

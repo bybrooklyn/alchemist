@@ -541,9 +541,17 @@ impl Db {
     }
 
     /// Set job priority
-    pub async fn set_job_priority(&self, id: i64, priority: i32) -> Result<()> {
+    /// Set a job's queue priority. Only eligible rows (not archived, not
+    /// mid-flight) can be reprioritized — changing priority mid-encode has
+    /// no effect on the running job, and archived rows never re-enter the
+    /// queue, so both were silent no-ops presented as success (P2-61).
+    /// Returns `Ok(true)` when applied, `Ok(false)` when the row exists but
+    /// is ineligible; a genuinely missing id still errors `RowNotFound`.
+    pub async fn set_job_priority(&self, id: i64, priority: i32) -> Result<bool> {
         let result = sqlx::query(
-            "UPDATE jobs SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE jobs SET priority = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND archived = 0
+               AND status NOT IN ('analyzing', 'encoding', 'remuxing', 'resuming')",
         )
         .bind(priority)
         .bind(id)
@@ -551,12 +559,19 @@ impl Db {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(crate::error::AlchemistError::Database(
-                sqlx::Error::RowNotFound,
-            ));
+            let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM jobs WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            if exists.is_none() {
+                return Err(crate::error::AlchemistError::Database(
+                    sqlx::Error::RowNotFound,
+                ));
+            }
+            return Ok(false);
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Increment attempt count
@@ -628,14 +643,18 @@ impl Db {
     pub async fn get_jobs_filtered(&self, query: JobFilterQuery) -> Result<Vec<Job>> {
         let pool = &self.pool;
         timed_query("get_jobs_filtered", || async {
+            // TD-26: the table never renders `input_metadata_json` (the
+            // detail modal fetches it separately), so select NULL instead of
+            // the blob; VMAF comes from the `es` join alone, not a second
+            // correlated subquery. This is the 5s-poll hot path.
             let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
                 "SELECT j.id, j.input_path, j.output_path, j.status,
                         (SELECT reason FROM decisions WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as decision_reason,
                         COALESCE(j.priority, 0) as priority,
                         COALESCE(CAST(j.progress AS REAL), 0.0) as progress,
                         COALESCE(j.attempt_count, 0) as attempt_count,
-                        (SELECT vmaf_score FROM encode_stats WHERE job_id = j.id) as vmaf_score,
-                        j.created_at, j.updated_at, j.input_metadata_json, j.source_device
+                        es.vmaf_score as vmaf_score,
+                        j.created_at, j.updated_at, NULL as input_metadata_json, j.source_device
                  FROM jobs j
                  LEFT JOIN encode_stats es ON es.job_id = j.id
                  WHERE 1 = 1 "
@@ -670,6 +689,19 @@ impl Db {
                 qb.push(" AND (j.input_path LIKE ");
                 qb.push_bind(pattern.clone());
                 qb.push(" ESCAPE '\\'");
+                // UX-16: output paths (indexed), statuses, and numeric IDs
+                // are searchable too — pasting an output filename from the
+                // detail view or a job id must land on the row.
+                qb.push(" OR j.output_path LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                qb.push(" OR j.status LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                if let Ok(id) = search.trim().parse::<i64>() {
+                    qb.push(" OR j.id = ");
+                    qb.push_bind(id);
+                }
                 qb.push(
                     " OR EXISTS (
                         SELECT 1 FROM decisions d
@@ -1505,6 +1537,80 @@ mod tests {
     use std::path::Path;
     use std::time::SystemTime;
 
+    /// P2-61: priority writes apply only to eligible rows. Active and
+    /// archived jobs return `Ok(false)` without changing anything; a
+    /// missing id still errors.
+    #[tokio::test]
+    async fn set_job_priority_rejects_active_and_archived_jobs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut db_path = std::env::temp_dir();
+        let token: u64 = rand::random();
+        db_path.push(format!("alchemist_priority_guard_{}.db", token));
+
+        let db = Db::new(db_path.to_string_lossy().as_ref()).await?;
+
+        let _ = db
+            .enqueue_job(
+                Path::new("priority-active.mkv"),
+                Path::new("priority-active-out.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let active = db
+            .get_job_by_input_path("priority-active.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing active job"))?;
+        db.update_job_status(active.id, JobState::Encoding).await?;
+        assert!(!db.set_job_priority(active.id, 10).await?);
+
+        let _ = db
+            .enqueue_job(
+                Path::new("priority-archived.mkv"),
+                Path::new("priority-archived-out.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let archived = db
+            .get_job_by_input_path("priority-archived.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing archived job"))?;
+        sqlx::query("UPDATE jobs SET archived = 1 WHERE id = ?")
+            .bind(archived.id)
+            .execute(&db.pool)
+            .await?;
+        assert!(!db.set_job_priority(archived.id, 10).await?);
+
+        let _ = db
+            .enqueue_job(
+                Path::new("priority-queued.mkv"),
+                Path::new("priority-queued-out.mkv"),
+                SystemTime::UNIX_EPOCH,
+            )
+            .await?;
+        let queued = db
+            .get_job_by_input_path("priority-queued.mkv")
+            .await?
+            .ok_or_else(|| std::io::Error::other("missing queued job"))?;
+        assert!(db.set_job_priority(queued.id, 10).await?);
+        assert_eq!(
+            db.get_job_by_input_path("priority-queued.mkv")
+                .await?
+                .ok_or_else(|| std::io::Error::other("missing queued job"))?
+                .priority,
+            10
+        );
+
+        assert!(
+            db.set_job_priority(queued.id + 1_000_000, 10)
+                .await
+                .is_err()
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
     /// Keyset pagination over the analysis selection: consecutive pages
     /// are disjoint and jointly complete, and a row that gains a decision
     /// between pages shifts neither page (the cursor derives from the
@@ -2221,6 +2327,18 @@ mod tests {
         let path_matches = db.get_jobs_filtered(query("path-needle")).await?;
         assert_eq!(path_matches.len(), 1);
         assert_eq!(path_matches[0].id, path_job.id);
+
+        // UX-16: output paths and numeric ids are searchable too.
+        let output_matches = db.get_jobs_filtered(query("path-needle.mkv")).await?;
+        assert!(
+            output_matches.iter().any(|job| job.id == path_job.id),
+            "output filename must match the row"
+        );
+        let id_matches = db
+            .get_jobs_filtered(query(&path_job.id.to_string()))
+            .await?;
+        assert_eq!(id_matches.len(), 1);
+        assert_eq!(id_matches[0].id, path_job.id);
 
         drop(db);
         let _ = std::fs::remove_file(db_path);
