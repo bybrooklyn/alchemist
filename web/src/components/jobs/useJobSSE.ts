@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import type { Job, JobDetail } from "./types";
 
@@ -9,6 +9,10 @@ interface UseJobSSEOptions {
     focusedJobIdRef: MutableRefObject<number | null>;
     refreshFocusedJobRef: MutableRefObject<() => Promise<void>>;
     encodeStartTimes: MutableRefObject<Map<number, number>>;
+    /** Whether a row with the given status belongs in the current view
+     *  (UX-14). Rows that transition out are dropped immediately instead
+     *  of lingering until the throttled refetch. */
+    shouldKeepRow?: (status: string) => boolean;
 }
 
 export function useJobSSE({
@@ -18,13 +22,18 @@ export function useJobSSE({
     focusedJobIdRef,
     refreshFocusedJobRef,
     encodeStartTimes,
+    shouldKeepRow,
 }: UseJobSSEOptions): void {
+    // The effect below subscribes once; keep the latest tab predicate
+    // in a ref so tab switches apply without reconnecting the stream.
+    const keepRef = useRef(shouldKeepRow);
+    keepRef.current = shouldKeepRow;
+
     useEffect(() => {
         let eventSource: EventSource | null = null;
         let cancelled = false;
         let reconnectTimeout: number | null = null;
         let reconnectAttempts = 0;
-
         // Coalesce job-list refreshes. Status/decision/lagged events arrive in
         // bursts during a large library scan (thousands of jobs analyzed back
         // to back); firing a full `/api/jobs` refetch per event hammered the
@@ -69,9 +78,20 @@ export function useJobSSE({
                     } else if (terminalStatuses.includes(status)) {
                         encodeStartTimes.current.delete(job_id);
                     }
-                    setJobs((prev) =>
-                        prev.map((job) => job.id === job_id ? { ...job, status } : job)
-                    );
+                    setJobs((prev) => {
+                        const next: Job[] = [];
+                        for (const job of prev) {
+                            if (job.id !== job_id) {
+                                next.push(job);
+                                continue;
+                            }
+                            if (keepRef.current && !keepRef.current(status)) {
+                                continue;
+                            }
+                            next.push({ ...job, status });
+                        }
+                        return next;
+                    });
                     setFocusedJob((prev) =>
                         prev?.job.id === job_id
                             ? {

@@ -27,9 +27,16 @@ const ANALYZER_REPORT_CACHE_SCHEMA: &str = "analysis_report_v1";
 static FFPROBE_VERSION_MARKER: OnceCell<String> = OnceCell::const_new();
 
 async fn run_ffprobe(args: &[&str], path: &Path) -> Result<std::process::Output> {
+    // kill_on_drop: dropping the `output()` future on timeout must take the
+    // hung child with it, or every slow-mount hang leaks a process holding
+    // the input file open (RG-22).
     match tokio::time::timeout(
         std::time::Duration::from_secs(FFPROBE_TIMEOUT_SECS),
-        Command::new("ffprobe").args(args).arg(path).output(),
+        Command::new("ffprobe")
+            .kill_on_drop(true)
+            .args(args)
+            .arg(path)
+            .output(),
     )
     .await
     {
@@ -95,6 +102,18 @@ fn file_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
 
 fn file_size_i64(metadata: &std::fs::Metadata) -> i64 {
     i64::try_from(metadata.len()).unwrap_or(i64::MAX)
+}
+
+/// Resolve the container size for `MediaMetadata`: the probe value when it
+/// parses, otherwise the filesystem size (ffprobe reports `"N/A"` for
+/// inputs it cannot size — mapping that to 0 bytes skipped files as "too
+/// small", P2-55). Falls back to 0 only when both are unavailable.
+fn probe_size_or_fs_size(probe_size: &str, fs_size_bytes: Option<i64>) -> u64 {
+    probe_size
+        .parse()
+        .ok()
+        .or_else(|| fs_size_bytes.and_then(|size| u64::try_from(size).ok()))
+        .unwrap_or(0)
 }
 
 /// Optional secondary identity hint for the probe cache (PERF-3).
@@ -182,6 +201,10 @@ pub struct SideData {
 pub struct Disposition {
     pub default: Option<i32>,
     pub forced: Option<i32>,
+    /// Cover art embedded as a video stream (P2-57). Must never be selected
+    /// as the feature video: it would pass the "No video stream found" gate
+    /// for audio files and poison BPP/resolution verdicts.
+    pub attached_pic: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -192,10 +215,19 @@ pub struct Tags {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Format {
+    /// Probe-shape gaps degrade to warnings downstream, never to a
+    /// whole-document deserialization failure (P2-56): ffprobe omits these
+    /// fields for inputs it cannot fully describe, and every consumer
+    /// already handles the missing case (`Missing*` warnings, fs-size
+    /// fallback, `parse().is_err()` checks).
+    #[serde(default)]
     pub format_name: String,
     pub format_long_name: Option<String>,
+    #[serde(default)]
     pub duration: String,
+    #[serde(default)]
     pub size: String,
+    #[serde(default)]
     pub bit_rate: String,
 }
 
@@ -206,6 +238,14 @@ impl AnalyzerTrait for FfmpegAnalyzer {
         let path = path.to_path_buf();
 
         let output = run_ffprobe(FFPROBE_ANALYZE_ARGS, &path).await?;
+
+        // Filesystem size as a fallback for the probe's `size` field, which
+        // ffprobe reports as "N/A" for inputs it cannot size (P2-55). The
+        // probe value stays authoritative when parseable.
+        let fs_size_bytes = tokio::fs::metadata(&path)
+            .await
+            .ok()
+            .map(|metadata| file_size_i64(&metadata));
 
         tokio::task::spawn_blocking(move || {
             let metadata: FfprobeMetadata =
@@ -343,7 +383,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 color_space: video_stream.color_space.clone(),
                 color_range: video_stream.color_range.clone(),
                 dynamic_range,
-                size_bytes: metadata.format.size.parse().unwrap_or(0),
+                size_bytes: probe_size_or_fs_size(&metadata.format.size, fs_size_bytes),
                 video_bitrate_bps: video_stream.bit_rate.as_deref().and_then(parse_u64),
                 container_bitrate_bps: parse_u64(&metadata.format.bit_rate),
                 fps,
@@ -755,19 +795,35 @@ fn infer_bit_depth(stream: &Stream) -> Option<u8> {
 
 fn bit_depth_from_pix_fmt(pix_fmt: &str) -> Option<u8> {
     let fmt = pix_fmt.to_ascii_lowercase();
-    let depth_candidates = [
-        (16u8, ["p16", "p016", "16le", "16be"]),
-        (14u8, ["p14", "p014", "14le", "14be"]),
-        (12u8, ["p12", "p012", "12le", "12be"]),
-        (10u8, ["p10", "p010", "10le", "10be"]),
-        (9u8, ["p09", "p9", "9le", "9be"]),
-        (8u8, ["p08", "p8", "8le", "8be"]),
+    let depth_candidates: [(u8, &[&str]); 6] = [
+        (
+            16u8,
+            &[
+                "p16", "p016", "16le", "16be", "48le", "48be", "64le", "64be",
+            ],
+        ),
+        (14u8, &["p14", "p014", "14le", "14be"]),
+        (12u8, &["p12", "p012", "12le", "12be"]),
+        (10u8, &["p10", "p010", "10le", "10be"]),
+        (9u8, &["p09", "p9", "9le", "9be"]),
+        (8u8, &["p08", "p8", "8le", "8be"]),
     ];
 
     for (depth, patterns) in depth_candidates.iter() {
         if patterns.iter().any(|pattern| fmt.contains(pattern)) {
             return Some(*depth);
         }
+    }
+
+    // Base 8-bit families carry no numeric depth designator (P2-54).
+    // Exact match only: substring matching here would misread e.g.
+    // `rgb48le` (16-bit) via a stray `8le`.
+    const EIGHT_BIT_FAMILIES: &[&str] = &[
+        "yuv420p", "yuvj420p", "yuv422p", "yuvj422p", "yuv444p", "yuvj444p", "yuv410p", "yuv411p",
+        "yuv440p", "nv12", "nv21", "nv16", "nv24", "gray", "gray8", "pal8", "rgb24", "bgr24",
+    ];
+    if EIGHT_BIT_FAMILIES.contains(&fmt.as_str()) {
+        return Some(8);
     }
 
     None
@@ -1068,6 +1124,16 @@ fn select_video_stream(streams: &[Stream]) -> Option<&Stream> {
     let mut best_is_default = false;
 
     for stream in streams.iter().filter(|s| s.codec_type == "video") {
+        // Embedded cover art is a video stream but never the feature (P2-57).
+        if stream
+            .disposition
+            .as_ref()
+            .and_then(|d| d.attached_pic)
+            .unwrap_or(0)
+            == 1
+        {
+            continue;
+        }
         let is_default = stream
             .disposition
             .as_ref()
@@ -1653,5 +1719,79 @@ mod tests {
             Err(err) => panic!("default analyzer report failed to encode: {err}"),
         };
         assert_eq!(serialized, "{}");
+    }
+
+    #[test]
+    fn bit_depth_recognizes_base_8_bit_families() {
+        // P2-54: the most common pixel formats carry no numeric depth
+        // marker and must still resolve to 8 rather than unknown.
+        for pix_fmt in [
+            "yuv420p", "yuvj420p", "yuv422p", "yuv444p", "yuv410p", "nv12", "nv21", "gray",
+            "rgb24", "bgr24", "YUV420P",
+        ] {
+            assert_eq!(
+                bit_depth_from_pix_fmt(pix_fmt),
+                Some(8),
+                "{pix_fmt} must resolve to 8-bit"
+            );
+        }
+        assert_eq!(bit_depth_from_pix_fmt("yuv420p10le"), Some(10));
+        assert_eq!(bit_depth_from_pix_fmt("yuv444p12le"), Some(12));
+        // rgb48le is 16-bit per channel: the 48-bit markers must win over
+        // the stray "8le" (P2-54 secondary misclassification).
+        assert_eq!(bit_depth_from_pix_fmt("rgb48le"), Some(16));
+        assert_eq!(bit_depth_from_pix_fmt("not-a-format"), None);
+    }
+
+    #[test]
+    fn probe_size_falls_back_to_filesystem_size() {
+        // P2-55: ffprobe "N/A" must not become a 0-byte verdict.
+        assert_eq!(probe_size_or_fs_size("1000000", Some(999)), 1_000_000);
+        assert_eq!(probe_size_or_fs_size("N/A", Some(12345)), 12345);
+        assert_eq!(probe_size_or_fs_size("", None), 0);
+    }
+
+    #[test]
+    fn select_video_stream_ignores_attached_pictures() {
+        // P2-57: an mjpeg cover must not pass the video gate for an
+        // otherwise audio-only file, nor shadow a real video stream.
+        let mut cover = stream("video", "mjpeg");
+        cover.width = Some(500);
+        cover.height = Some(500);
+        cover.disposition = Some(Disposition {
+            default: Some(1),
+            forced: None,
+            attached_pic: Some(1),
+        });
+        let mut feature = stream("video", "h264");
+        feature.width = Some(1920);
+        feature.height = Some(1080);
+
+        let streams = vec![cover, feature];
+        let selected = select_video_stream(&streams);
+        assert_eq!(
+            selected.map(|s| s.codec_name.as_deref()),
+            Some(Some("h264"))
+        );
+
+        let audio_only = vec![stream("audio", "mp3")];
+        assert!(select_video_stream(&audio_only).is_none());
+    }
+
+    #[test]
+    fn ffprobe_format_tolerates_missing_fields() {
+        // P2-56: shape gaps degrade, they must not fail the whole document.
+        let metadata: FfprobeMetadata = match serde_json::from_str(
+            r#"{
+                "streams": [{"codec_type": "video", "codec_name": "h264"}],
+                "format": {"format_name": "matroska,webm"}
+            }"#,
+        ) {
+            Ok(metadata) => metadata,
+            Err(err) => panic!("sparse probe document failed to decode: {err}"),
+        };
+        assert_eq!(metadata.format.duration, "");
+        assert_eq!(metadata.format.size, "");
+        assert_eq!(metadata.format.bit_rate, "");
     }
 }

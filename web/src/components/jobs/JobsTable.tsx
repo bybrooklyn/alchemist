@@ -251,9 +251,13 @@ export function JobsTable({
                                                 >
                                                     <button role="menuitem" onClick={() => { closeMenu(); void fetchJobDetails(job.id); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">View details</button>
                                                     <button role="menuitem" onClick={() => { closeMenu(); void copyInputPath(job.input_path); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Copy input path</button>
-                                                    <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, job.priority + 10, "Priority boosted"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Boost priority (+10)</button>
-                                                    <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, job.priority - 10, "Priority lowered"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Lower priority (-10)</button>
-                                                    <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, 0, "Priority reset"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Reset priority</button>
+                                                    {!isJobActive(job) && (
+                                                        <>
+                                                            <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, job.priority + 10, "Priority boosted"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Boost priority (+10)</button>
+                                                            <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, job.priority - 10, "Priority lowered"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Lower priority (-10)</button>
+                                                            <button role="menuitem" onClick={() => { closeMenu(); void handlePriority(job, 0, "Priority reset"); }} className="w-full px-4 py-2 text-left text-xs font-semibold text-helios-ink hover:bg-helios-surface-soft">Reset priority</button>
+                                                        </>
+                                                    )}
                                                     {(job.status === "failed" || job.status === "cancelled") && (
                                                         <button
                                                             role="menuitem"

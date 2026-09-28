@@ -36,6 +36,11 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
     const detailOpen = focusedJob !== null;
     const detailOpenRef = useRef(detailOpen);
 
+    // Sequence guard for competing detail fetches (P2-62): without it a
+    // slow response for row A can overwrite row B's detail when clicked in
+    // quick succession. Mirrors fetchSeqRef in JobManager.
+    const detailSeqRef = useRef(0);
+
     useEffect(() => {
         detailOpenRef.current = focusedJob !== null;
     }, [focusedJob]);
@@ -81,15 +86,24 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
     }, [detailOpen]);
 
     const openJobDetails = useCallback(async (id: number) => {
+        const seq = ++detailSeqRef.current;
         setDetailLoading(true);
         try {
             const data = await apiJson<JobDetail>(`/api/jobs/${id}/details`);
+            if (seq !== detailSeqRef.current) {
+                return;
+            }
             setFocusedJob(data);
         } catch (error) {
+            if (seq !== detailSeqRef.current) {
+                return;
+            }
             const message = isApiError(error) ? error.message : "Failed to fetch job details";
             showToast({ kind: "error", title: "Jobs", message });
         } finally {
-            setDetailLoading(false);
+            if (seq === detailSeqRef.current) {
+                setDetailLoading(false);
+            }
         }
     }, []);
 

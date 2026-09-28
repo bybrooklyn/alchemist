@@ -473,24 +473,28 @@ export function JobDetailModal({
                                 {/* Action Toolbar */}
                                 <div className="flex items-center justify-between pt-4 border-t border-helios-line/10">
                                     <div className="flex gap-2">
-                                        <button
-                                            onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority + 10, "Priority boosted")}
-                                            className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                        >
-                                            Boost +10
-                                        </button>
-                                        <button
-                                            onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority - 10, "Priority lowered")}
-                                            className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                        >
-                                            Lower -10
-                                        </button>
-                                        <button
-                                            onClick={() => void handlePriority(focusedJob.job, 0, "Priority reset")}
-                                            className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
-                                        >
-                                            Reset
-                                        </button>
+                                        {!isJobActive(focusedJob.job) && (
+                                            <>
+                                                <button
+                                                    onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority + 10, "Priority boosted")}
+                                                    className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                                >
+                                                    Boost +10
+                                                </button>
+                                                <button
+                                                    onClick={() => void handlePriority(focusedJob.job, focusedJob.job.priority - 10, "Priority lowered")}
+                                                    className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                                >
+                                                    Lower -10
+                                                </button>
+                                                <button
+                                                    onClick={() => void handlePriority(focusedJob.job, 0, "Priority reset")}
+                                                    className="px-3 py-2 border border-helios-line/20 bg-helios-surface text-helios-slate rounded-lg text-sm font-bold hover:bg-helios-surface-soft transition-all"
+                                                >
+                                                    Reset
+                                                </button>
+                                            </>
+                                        )}
                                         {(focusedJob.job.status === "failed" || focusedJob.job.status === "cancelled") && (
                                             <button
                                                 onClick={() =>

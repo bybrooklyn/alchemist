@@ -266,7 +266,11 @@ impl FileWatcher {
         )
         .map_err(|e| AlchemistError::Watch(format!("Failed to create watcher: {}", e)))?;
 
-        // Watch all directories
+        // Watch all directories. A single bad path must not take down the
+        // whole refresh (RG-23): install every watchable directory and
+        // report the failures together, so the operator sees the bad path
+        // instead of silently keeping a stale watch set.
+        let mut failures = Vec::new();
         for watch_path in directories {
             info!(
                 "Watching directory: {:?} (recursive: {})",
@@ -279,19 +283,22 @@ impl FileWatcher {
             };
             if let Err(e) = watcher.watch(&watch_path.path, mode) {
                 error!("Failed to watch {:?}: {}", watch_path.path, e);
-                // Continue trying others? Or fail?
-                // Failing strictly is probably safer to alert user
-                return Err(AlchemistError::Watch(format!(
-                    "Failed to watch {:?}: {}",
-                    watch_path.path, e
-                )));
+                failures.push(format!("{:?}: {e}", watch_path.path));
             }
         }
 
         info!("File watcher updated for {} directories", directories.len());
 
         *inner = Some(watcher);
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AlchemistError::Watch(format!(
+                "Failed to watch {} directorie(s): {}",
+                failures.len(),
+                failures.join("; ")
+            )))
+        }
     }
 }
 
@@ -619,5 +626,50 @@ mod tests {
             let _ = std::fs::remove_file(path);
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+
+    /// RG-23: one unwatched directory must not take down the refresh — the
+    /// good directory stays watched (files queue) while the error names the
+    /// bad one.
+    #[tokio::test]
+    async fn watcher_refresh_tolerates_one_bad_directory() -> anyhow::Result<()> {
+        let db_path = temp_db_path("alchemist_watch_partial");
+        let watch_dir = temp_watch_dir("alchemist_watch_partial_good");
+        std::fs::create_dir_all(&watch_dir)?;
+        let missing = temp_watch_dir("alchemist_watch_partial_missing");
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let watcher = FileWatcher::new(db.clone(), None);
+        let result = watcher.watch(&[
+            WatchPath {
+                path: watch_dir.clone(),
+                recursive: false,
+            },
+            WatchPath {
+                path: missing.clone(),
+                recursive: false,
+            },
+        ]);
+        assert!(
+            result.is_err(),
+            "refresh with a missing directory must still report the failure"
+        );
+        let message = match result {
+            Err(err) => err.to_string(),
+            Ok(()) => panic!("expected watch() to fail with a missing directory"),
+        };
+        assert!(
+            message.contains(&missing.to_string_lossy().into_owned()),
+            "error must name the bad directory: {message}"
+        );
+
+        let input_path = watch_dir.join("survivor.mp4");
+        std::fs::write(&input_path, b"source")?;
+        wait_for_queued_jobs(db.as_ref(), 1).await?;
+
+        watcher.watch(&[])?;
+        drop(db);
+        cleanup_paths(&[watch_dir, db_path]);
+        Ok(())
     }
 }

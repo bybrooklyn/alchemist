@@ -391,7 +391,24 @@ function JobManager() {
                 return;
             }
             setJobs(data);
+            // Prune selection to visible rows (P2-59): after a delete,
+            // clear-completed, or external archive, dead IDs would otherwise
+            // ride along into the next batch and fail the whole batch with
+            // 409 BATCH_ACTION_CONFLICT.
+            const visibleIds = new Set(data.map((job) => job.id));
+            setSelected((prev) => {
+                if ([...prev].every((id) => visibleIds.has(id))) {
+                    return prev;
+                }
+                return new Set([...prev].filter((id) => visibleIds.has(id)));
+            });
             setActionError(null);
+            // A mutation may have emptied this page (UX-17): step back so
+            // the user never sits on a "Showing 0 jobs" page. The page
+            // effect refetches after the state update.
+            if (data.length === 0 && page > 1) {
+                setPage(page - 1);
+            }
         } catch (e) {
             if (seq !== fetchSeqRef.current) {
                 return;
@@ -545,6 +562,13 @@ function JobManager() {
         focusedJobIdRef,
         refreshFocusedJobRef,
         encodeStartTimes,
+        // Drop rows the moment they transition out of the active tab
+        // instead of leaving them visible until the throttled refetch
+        // (UX-14). An empty filter list (all/archived tabs) keeps everything.
+        shouldKeepRow: (status: string) => {
+            const filter = getStatusFilter(activeTab);
+            return filter.length === 0 || filter.includes(status);
+        },
     });
 
     useEffect(() => {
@@ -628,18 +652,35 @@ function JobManager() {
         setActionError(null);
 
         try {
-            await apiAction("/api/jobs/batch", {
-                method: "POST",
-                body: JSON.stringify({
-                    action,
-                    ids: Array.from(selected)
-                })
-            });
+            // Batch cancel reports how many jobs it actually cancelled
+            // (UX-15): toast the real outcome instead of unconditional
+            // success so "nothing to cancel" is visible.
+            let message = `${action[0].toUpperCase()}${action.slice(1)} request sent for selected jobs.`;
+            if (action === "cancel") {
+                const result = await apiJson<{ count: number }>("/api/jobs/batch", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        action,
+                        ids: Array.from(selected)
+                    })
+                });
+                message = result.count === 0
+                    ? "Nothing to cancel: no selected job could be cancelled."
+                    : `Cancelled ${result.count} job${result.count === 1 ? "" : "s"}.`;
+            } else {
+                await apiAction("/api/jobs/batch", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        action,
+                        ids: Array.from(selected)
+                    })
+                });
+            }
             setSelected(new Set());
             showToast({
                 kind: "success",
                 title: "Jobs",
-                message: `${action[0].toUpperCase()}${action.slice(1)} request sent for selected jobs.`,
+                message,
             });
             await fetchJobs();
             requestAnimationFrame(() => {
@@ -700,6 +741,9 @@ function JobManager() {
             });
             setEnqueueDialogOpen(false);
             setEnqueuePath("");
+            // New rows land on page 1 (UX-17): jump there so the enqueue
+            // is visible instead of refetching a possibly distant page.
+            setPage(1);
             await fetchJobs();
         } catch (error) {
             const message = isApiError(error) ? error.message : "Failed to enqueue file";

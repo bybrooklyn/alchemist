@@ -99,7 +99,7 @@ impl Scanner {
             let Ok(entry) = entry_result else {
                 continue;
             };
-            if !entry.file_type().is_file() {
+            if !is_scannable_file(&entry) {
                 continue;
             }
             let Some(ext) = entry.path().extension().and_then(|value| value.to_str()) else {
@@ -127,6 +127,7 @@ impl Scanner {
         // Keep preview output stable without asking WalkDir to pre-enumerate
         // and sort every child of a potentially huge directory.
         files.sort_by(|left, right| left.path.cmp(&right.path));
+        dedupe_symlink_targets(&mut files);
 
         BoundedScanResult {
             files,
@@ -209,7 +210,7 @@ impl Scanner {
             });
 
             for entry in walker.filter_map(|e| e.ok()) {
-                if entry.file_type().is_file()
+                if is_scannable_file(&entry)
                     && let Some(ext) = entry.path().extension().and_then(|s| s.to_str())
                     && self.extensions.contains(&ext.to_lowercase())
                 {
@@ -240,9 +241,17 @@ impl Scanner {
         };
         // Deterministic ordering
         final_files.sort_by(|a, b| a.path.cmp(&b.path));
+        dedupe_symlink_targets(&mut final_files);
 
         final_files
     }
+}
+
+/// Drop symlink-vs-target duplicates (P2-58): entries are sorted, so the
+/// lexicographically smallest path wins deterministically.
+fn dedupe_symlink_targets(files: &mut Vec<DiscoveredMedia>) {
+    let mut seen = std::collections::HashSet::new();
+    files.retain(|media| seen.insert(dedupe_identity(&media.path)));
 }
 
 fn resolve_source_root(path: &Path, source_roots: &[PathBuf]) -> Option<PathBuf> {
@@ -251,6 +260,32 @@ fn resolve_source_root(path: &Path, source_roots: &[PathBuf]) -> Option<PathBuf>
         .filter(|root| path.starts_with(root))
         .max_by_key(|root| root.components().count())
         .cloned()
+}
+
+/// Whether a walk entry is a media file worth enqueueing (P2-58).
+/// WalkDir never follows symlinks, and `file_type().is_file()` is false for
+/// the link itself — so symlinked files were silently absent from every
+/// library. A symlink pointing at a file is enqueued by its link path
+/// (transcodes read through the link fine); symlinked *directories* are
+/// still never descended, avoiding cycle risk entirely.
+fn is_scannable_file(entry: &walkdir::DirEntry) -> bool {
+    if entry.file_type().is_file() {
+        return true;
+    }
+    if entry.file_type().is_symlink() {
+        return std::fs::metadata(entry.path())
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false);
+    }
+    false
+}
+
+/// Canonical identity for link-vs-target dedupe (P2-58): a symlink and its
+/// target resolve to the same bytes and must not become two jobs. Falls
+/// back to the link path when canonicalization fails (dangling links are
+/// filtered by `is_scannable_file` first, so this is just defensive).
+fn dedupe_identity(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
@@ -441,5 +476,29 @@ mod tests {
         if let Ok(file) = fs::File::open(p) {
             let _ = file.set_modified(very_old);
         }
+    }
+
+    /// P2-58: a symlink to a media file is discovered exactly once — the
+    /// link and its target must not become two jobs for the same bytes.
+    /// Unix-only: Windows requires privileges for symlinks.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_media_is_discovered_once() -> anyhow::Result<()> {
+        let root = unique_temp_dir("symlink");
+        let real = root.join("real.mkv");
+        fs::write(&real, b"data")?;
+        std::os::unix::fs::symlink(&real, root.join("link.mkv"))?;
+        std::os::unix::fs::symlink(root.join("missing.mkv"), root.join("dangling.mkv"))?;
+
+        let found = Scanner::new().scan_with_recursion(vec![(root.clone(), true)]);
+        let paths: Vec<_> = found.iter().map(|m| m.path.clone()).collect();
+        assert_eq!(found.len(), 1, "link + target dedupe to one: {paths:?}");
+        assert!(
+            !paths.iter().any(|p| p.ends_with("dangling.mkv")),
+            "dangling links stay excluded: {paths:?}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
     }
 }
