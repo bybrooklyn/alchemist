@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, type Target } from "framer-motion";
 import { cn } from "../../lib/cn";
-import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
+import { focusableElements, restoreFocus, setAppShellInert, trapTabNavigation } from "../../lib/focusUtils";
 
 function originInitial(originRect: DOMRect): Target {
     const buttonCenterX = originRect.left + originRect.width / 2;
@@ -107,36 +107,14 @@ export default function Modal({
                 return;
             }
 
-            const root = panelRef.current;
-            if (!root) {
-                return;
-            }
-
-            const focusables = focusableElements(root);
-            if (focusables.length === 0) {
-                event.preventDefault();
-                root.focus();
-                return;
-            }
-
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const current = document.activeElement as HTMLElement | null;
-
-            if (event.shiftKey && current === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && current === last) {
-                event.preventDefault();
-                first.focus();
-            }
+            trapTabNavigation(event, panelRef.current);
         };
 
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
             setAppShellInert(false);
-            lastFocusedRef.current?.focus();
+            restoreFocus(lastFocusedRef);
         };
     }, [open, manageFocus]);
 

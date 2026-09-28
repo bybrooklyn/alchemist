@@ -1,6 +1,7 @@
 // Shared types for job management components
 
 export { formatBytes, formatDurationClock as formatDuration } from "../../lib/format";
+import { isApiError } from "../../lib/api";
 
 export interface ExplanationView {
     category: "decision" | "failure";
@@ -147,6 +148,28 @@ export const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
 
 export function isJobActive(job: Job): boolean {
     return ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
+}
+
+/** Render a job-action API failure, appending per-job `#id (status)`
+ *  detail when the backend reports blocked rows. Shared by JobManager's
+ *  batch actions and the job-detail controller so both surfaces explain
+ *  partial failures identically. */
+export function formatJobActionError(error: unknown, fallback: string): string {
+    if (!isApiError(error)) {
+        return fallback;
+    }
+
+    const blocked = Array.isArray((error.body as { blocked?: unknown } | undefined)?.blocked)
+        ? ((error.body as { blocked?: Array<{ id?: number; status?: string }> }).blocked ?? [])
+        : [];
+    if (blocked.length === 0) {
+        return error.message;
+    }
+
+    const summary = blocked
+        .map((job) => `#${job.id ?? "?"} (${job.status ?? "unknown"})`)
+        .join(", ");
+    return `${error.message}: ${summary}`;
 }
 
 export function retryCountdown(job: Job): string | null {

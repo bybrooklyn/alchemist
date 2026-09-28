@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiJson, isApiError } from "./api";
+import { createPollingLifecycle } from "./pollingStore";
 
 // Shared engine-status polling, mirroring statsStore.ts's singleton pattern.
 // HeaderActions and the Dashboard paused/draining banner used to each run
@@ -52,8 +53,6 @@ let snapshot: EngineStatusSnapshot = {
 };
 
 const listeners = new Set<(value: EngineStatusSnapshot) => void>();
-let pollTimer: number | null = null;
-let polling = false;
 
 function emit(): void {
     for (const listener of listeners) {
@@ -61,28 +60,27 @@ function emit(): void {
     }
 }
 
-function currentIntervalMs(): number {
+function currentIntervalMs(): number | null {
     if (snapshot.status?.status === "draining") {
         return DRAINING_INTERVAL_MS;
     }
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return HIDDEN_INTERVAL_MS;
-    }
-    return VISIBLE_INTERVAL_MS;
+    return null;
 }
 
-function scheduleNextPoll(): void {
-    if (!polling || typeof window === "undefined") {
-        return;
-    }
-
-    if (pollTimer !== null) {
-        window.clearTimeout(pollTimer);
-    }
-
-    pollTimer = window.setTimeout(() => {
+// Singleton polling loop shared by every subscriber (see pollingStore.ts).
+// Previously this file carried its own copy of the timer/visibility
+// lifecycle, identical to statsStore.ts's.
+const lifecycle = createPollingLifecycle({
+    visibleIntervalMs: VISIBLE_INTERVAL_MS,
+    hiddenIntervalMs: HIDDEN_INTERVAL_MS,
+    intervalOverrideMs: currentIntervalMs,
+    poll: () => {
         void pollNow();
-    }, currentIntervalMs());
+    },
+});
+
+function scheduleNextPoll(): void {
+    lifecycle.scheduleNextPoll();
 }
 
 async function pollNow(): Promise<EngineStatus | null> {
@@ -106,10 +104,7 @@ async function pollNow(): Promise<EngineStatus | null> {
 /** Force an immediate poll, bypassing the current timer — used to confirm an
  *  action's optimistic status update against the server. */
 export async function refreshEngineStatusNow(): Promise<EngineStatus | null> {
-    if (pollTimer !== null && typeof window !== "undefined") {
-        window.clearTimeout(pollTimer);
-        pollTimer = null;
-    }
+    lifecycle.cancelScheduled();
     return pollNow();
 }
 
@@ -139,57 +134,17 @@ export function applyEngineActionStatus(actionStatus: EngineActionStatus): void 
     scheduleNextPoll();
 }
 
-function onVisibilityChange(): void {
-    if (!polling) {
-        return;
-    }
-
-    if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        if (pollTimer !== null && typeof window !== "undefined") {
-            window.clearTimeout(pollTimer);
-            pollTimer = null;
-        }
-        void pollNow();
-        return;
-    }
-
-    scheduleNextPoll();
-}
-
-function startPolling(): void {
-    if (polling || typeof window === "undefined") {
-        return;
-    }
-
-    polling = true;
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    void pollNow();
-}
-
-function stopPolling(): void {
-    if (!polling) {
-        return;
-    }
-
-    polling = false;
-    document.removeEventListener("visibilitychange", onVisibilityChange);
-    if (pollTimer !== null && typeof window !== "undefined") {
-        window.clearTimeout(pollTimer);
-        pollTimer = null;
-    }
-}
-
 function subscribe(listener: (value: EngineStatusSnapshot) => void): () => void {
     listeners.add(listener);
     listener(snapshot);
     if (listeners.size === 1) {
-        startPolling();
+        lifecycle.startPolling();
     }
 
     return () => {
         listeners.delete(listener);
         if (listeners.size === 0) {
-            stopPolling();
+            lifecycle.stopPolling();
         }
     };
 }

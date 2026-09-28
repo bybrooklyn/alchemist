@@ -8,7 +8,7 @@ import ConfirmDialog from "./ui/ConfirmDialog";
 import Modal from "./ui/Modal";
 import { withErrorBoundary } from "./ErrorBoundary";
 import type { Job, TabType, SortField, CountMessageResponse, SavedJobView } from "./jobs/types";
-import { isJobActive } from "./jobs/types";
+import { formatJobActionError, isJobActive } from "./jobs/types";
 import { useJobSSE } from "./jobs/useJobSSE";
 import { JobsToolbar } from "./jobs/JobsToolbar";
 import { JobsTable } from "./jobs/JobsTable";
@@ -341,24 +341,6 @@ function JobManager() {
             document.removeEventListener("keydown", handleKeyDown);
         };
     }, [compactSearchOpen, searchInput]);
-
-    const formatJobActionError = (error: unknown, fallback: string) => {
-        if (!isApiError(error)) {
-            return fallback;
-        }
-
-        const blocked = Array.isArray((error.body as { blocked?: unknown } | undefined)?.blocked)
-            ? ((error.body as { blocked?: Array<{ id?: number; status?: string }> }).blocked ?? [])
-            : [];
-        if (blocked.length === 0) {
-            return error.message;
-        }
-
-        const summary = blocked
-            .map((job) => `#${job.id ?? "?"} (${job.status ?? "unknown"})`)
-            .join(", ");
-        return `${error.message}: ${summary}`;
-    };
 
     const getStatusFilter = (tab: TabType) => {
         switch (tab) {
