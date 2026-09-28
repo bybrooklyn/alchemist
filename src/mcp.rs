@@ -194,14 +194,26 @@ impl McpServer {
 
     async fn tool_recent_jobs(&self, arguments: Value) -> std::result::Result<Value, String> {
         let limit = parse_limit(arguments, 10, 50)?;
+        // Bounded in SQL. This used to load every non-archived job — each with two
+        // correlated subqueries — and then `take(limit)` in Rust, so asking for 10
+        // recent jobs materialized the entire jobs table on a large library.
         let jobs = self
             .db
-            .get_all_jobs()
+            .get_jobs_filtered(crate::db::JobFilterQuery {
+                limit: limit as i64,
+                offset: 0,
+                statuses: None,
+                search: None,
+                sort_by: Some("updated_at".to_string()),
+                sort_desc: true,
+                archived: Some(false),
+                reason_code: None,
+                failure_code: None,
+            })
             .await
             .map_err(|err| err.to_string())?;
         let jobs: Vec<Value> = jobs
             .into_iter()
-            .take(limit)
             .map(|job| {
                 json!({
                     "id": job.id,

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiAction, apiJson, isApiError } from "../../lib/api";
 import { showToast } from "../../lib/toast";
 import { normalizeDecisionExplanation, normalizeFailureExplanation } from "./JobExplanations";
-import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
+import { focusableElements, restoreFocus, setAppShellInert, trapTabNavigation } from "../../lib/focusUtils";
 import type {
     ConfirmConfig,
     EncodeStats,
@@ -11,25 +11,7 @@ import type {
     JobDetail,
     LogEntry,
 } from "./types";
-import { jobDetailEmptyState } from "./types";
-
-function formatJobActionError(error: unknown, fallback: string) {
-    if (!isApiError(error)) {
-        return fallback;
-    }
-
-    const blocked = Array.isArray((error.body as { blocked?: unknown } | undefined)?.blocked)
-        ? ((error.body as { blocked?: Array<{ id?: number; status?: string }> }).blocked ?? [])
-        : [];
-    if (blocked.length === 0) {
-        return error.message;
-    }
-
-    const summary = blocked
-        .map((job) => `#${job.id ?? "?"} (${job.status ?? "unknown"})`)
-        .join(", ");
-    return `${error.message}: ${summary}`;
-}
+import { formatJobActionError, jobDetailEmptyState } from "./types";
 
 interface UseJobDetailControllerOptions {
     onRefresh?: () => Promise<void>;
@@ -47,8 +29,19 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
         confirmOpenRef.current = confirmState !== null;
     }, [confirmState]);
 
+    // The dialog lifecycle (inert, initial focus, focus restore) must run once
+    // per open/close — not on every SSE-driven `focusedJob` identity change,
+    // which would re-capture `detailLastFocusedRef` from inside the modal and
+    // bounce focus to the panel's first element mid-interaction.
+    const detailOpen = focusedJob !== null;
+    const detailOpenRef = useRef(detailOpen);
+
     useEffect(() => {
-        if (!focusedJob) {
+        detailOpenRef.current = focusedJob !== null;
+    }, [focusedJob]);
+
+    useEffect(() => {
+        if (!detailOpen) {
             return;
         }
 
@@ -66,7 +59,7 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
         }
 
         const onKeyDown = (event: KeyboardEvent) => {
-            if (!focusedJob || confirmOpenRef.current) {
+            if (!detailOpenRef.current || confirmOpenRef.current) {
                 return;
             }
 
@@ -76,44 +69,16 @@ export function useJobDetailController(options: UseJobDetailControllerOptions = 
                 return;
             }
 
-            if (event.key !== "Tab") {
-                return;
-            }
-
-            const dialogRoot = detailDialogRef.current;
-            if (!dialogRoot) {
-                return;
-            }
-
-            const focusables = focusableElements(dialogRoot);
-            if (focusables.length === 0) {
-                event.preventDefault();
-                dialogRoot.focus();
-                return;
-            }
-
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const current = document.activeElement as HTMLElement | null;
-
-            if (event.shiftKey && current === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && current === last) {
-                event.preventDefault();
-                first.focus();
-            }
+            trapTabNavigation(event, detailDialogRef.current);
         };
 
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
             setAppShellInert(false);
-            if (detailLastFocusedRef.current) {
-                detailLastFocusedRef.current.focus();
-            }
+            restoreFocus(detailLastFocusedRef);
         };
-    }, [focusedJob]);
+    }, [detailOpen]);
 
     const openJobDetails = useCallback(async (id: number) => {
         setDetailLoading(true);

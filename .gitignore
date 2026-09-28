@@ -4,8 +4,11 @@
 /target/
 
 # Frontend/Node
+# Keep these anchored to the frontend. A bare `dist/` also matches source
+# directories in vendored codec trees (rav1e ships src/asm/*/dist/), and any
+# tool that honours ignore rules while copying will silently drop them.
 node_modules/
-dist/
+/web/dist/
 .astro/
 .build/
 .docusaurus/

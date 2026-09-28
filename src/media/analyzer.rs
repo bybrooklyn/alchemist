@@ -132,7 +132,12 @@ pub struct Chapter {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Stream {
-    pub codec_name: String,
+    /// ffprobe omits this entirely for streams it cannot name a codec for —
+    /// the common case is a font/attachment stream embedded in an MKV
+    /// (codec_type "attachment", e.g. a `font.ttf` with mimetype
+    /// "application/x-truetype-font"). Treat `None` as an unknown codec:
+    /// deterministically not lossless, not burnable, not heavy.
+    pub codec_name: Option<String>,
     pub codec_type: String,
     pub pix_fmt: Option<String>,
     pub width: Option<u32>,
@@ -156,6 +161,16 @@ pub struct Stream {
     pub field_order: Option<String>,
     #[serde(default)]
     pub side_data_list: Vec<SideData>,
+}
+
+impl Stream {
+    /// The stream's codec name, or `"unknown"` when ffprobe omitted it.
+    /// `"unknown"` never matches a recognized codec name, so every
+    /// codec-name comparison downstream treats it as safe/inert by
+    /// construction (not lossless, not burnable, not heavy).
+    fn codec_name_or_unknown(&self) -> &str {
+        self.codec_name.as_deref().unwrap_or("unknown")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -215,7 +230,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 .enumerate()
                 .map(|(stream_index, stream)| SubtitleStreamMetadata {
                     stream_index,
-                    codec_name: stream.codec_name.clone(),
+                    codec_name: stream.codec_name_or_unknown().to_string(),
                     language: stream.tags.as_ref().and_then(|tags| tags.language.clone()),
                     title: stream.tags.as_ref().and_then(|tags| tags.title.clone()),
                     default: stream
@@ -230,7 +245,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                         .and_then(|disposition| disposition.forced)
                         .unwrap_or(0)
                         == 1,
-                    burnable: subtitle_codec_is_burnable(&stream.codec_name),
+                    burnable: subtitle_codec_is_burnable(stream.codec_name_or_unknown()),
                 })
                 .collect::<Vec<_>>();
             let audio_streams = metadata
@@ -240,7 +255,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 .enumerate()
                 .map(|(stream_index, stream)| AudioStreamMetadata {
                     stream_index,
-                    codec_name: stream.codec_name.clone(),
+                    codec_name: stream.codec_name_or_unknown().to_string(),
                     language: stream.tags.as_ref().and_then(|tags| tags.language.clone()),
                     title: stream.tags.as_ref().and_then(|tags| tags.title.clone()),
                     channels: stream.channels,
@@ -316,7 +331,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
             let media_metadata = MediaMetadata {
                 path: path.clone(),
                 duration_secs,
-                codec_name: video_stream.codec_name.clone(),
+                codec_name: video_stream.codec_name_or_unknown().to_string(),
                 width: video_stream.width.or(video_stream.coded_width).unwrap_or(0),
                 height: video_stream
                     .height
@@ -333,7 +348,7 @@ impl AnalyzerTrait for FfmpegAnalyzer {
                 container_bitrate_bps: parse_u64(&metadata.format.bit_rate),
                 fps,
                 container: metadata.format.format_name.clone(),
-                audio_codec: audio_stream.map(|s| s.codec_name.clone()),
+                audio_codec: audio_stream.map(|s| s.codec_name_or_unknown().to_string()),
                 audio_bitrate_bps,
                 audio_channels: audio_stream.and_then(|s| s.channels),
                 audio_is_heavy,
@@ -706,7 +721,7 @@ impl Analyzer {
             "pcm_s32le",
             "pcm_f32le",
         ];
-        heavy_codecs.contains(&stream.codec_name.to_lowercase().as_str())
+        heavy_codecs.contains(&stream.codec_name_or_unknown().to_lowercase().as_str())
     }
 }
 
@@ -832,7 +847,7 @@ fn build_analyzer_report(
         || streams
             .iter()
             .filter(|stream| stream.codec_type == "audio")
-            .any(|stream| audio_codec_is_lossless(&stream.codec_name))
+            .any(|stream| audio_codec_is_lossless(stream.codec_name_or_unknown()))
     {
         push_label(&mut labels, AnalyzerLabel::LosslessAudio);
     }
@@ -1083,7 +1098,7 @@ mod tests {
 
     fn stream(codec_type: &str, codec_name: &str) -> Stream {
         Stream {
-            codec_name: codec_name.to_string(),
+            codec_name: Some(codec_name.to_string()),
             codec_type: codec_type.to_string(),
             pix_fmt: None,
             width: None,
@@ -1149,7 +1164,7 @@ mod tests {
     #[test]
     fn test_should_transcode_audio() {
         let heavy = Stream {
-            codec_name: "truehd".into(),
+            codec_name: Some("truehd".into()),
             codec_type: "audio".into(),
             pix_fmt: None,
             width: None,
@@ -1176,7 +1191,7 @@ mod tests {
         assert!(Analyzer::should_transcode_audio(&heavy));
 
         let standard = Stream {
-            codec_name: "ac3".into(),
+            codec_name: Some("ac3".into()),
             codec_type: "audio".into(),
             pix_fmt: None,
             width: None,
@@ -1203,7 +1218,7 @@ mod tests {
         assert!(!Analyzer::should_transcode_audio(&standard));
 
         let atmos_eac3 = Stream {
-            codec_name: "eac3".into(),
+            codec_name: Some("eac3".into()),
             codec_type: "audio".into(),
             pix_fmt: None,
             width: None,
@@ -1230,7 +1245,7 @@ mod tests {
         assert!(!Analyzer::should_transcode_audio(&atmos_eac3));
 
         let lossless_pcm = Stream {
-            codec_name: "pcm_s32le".into(),
+            codec_name: Some("pcm_s32le".into()),
             codec_type: "audio".into(),
             pix_fmt: None,
             width: None,
@@ -1560,6 +1575,68 @@ mod tests {
             Err(err) => panic!("ffprobe metadata json failed to decode: {err}"),
         };
         assert_eq!(metadata.chapters.len(), 2);
+    }
+
+    #[test]
+    fn ffprobe_metadata_parses_stream_with_missing_codec_name() {
+        // ffprobe omits codec_name entirely for streams it cannot name a
+        // codec for — the common real-world case is a font attachment
+        // embedded in an MKV. Before Stream::codec_name became
+        // Option<String>, this whole probe document was rejected with
+        // "missing field codec_name", excluding the file from the library.
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2
+                },
+                {
+                    "codec_type": "attachment",
+                    "tags": {
+                        "filename": "font.ttf",
+                        "mimetype": "application/x-truetype-font"
+                    }
+                }
+            ],
+            "format": {
+                "format_name": "matroska,webm",
+                "duration": "60.0",
+                "size": "1000000",
+                "bit_rate": "1000000"
+            }
+        }"#;
+
+        let metadata: FfprobeMetadata = match serde_json::from_str(json) {
+            Ok(metadata) => metadata,
+            Err(err) => panic!("ffprobe metadata with attachment stream failed to decode: {err}"),
+        };
+
+        assert_eq!(metadata.streams.len(), 3);
+        let attachment = &metadata.streams[2];
+        assert_eq!(attachment.codec_type, "attachment");
+        assert_eq!(attachment.codec_name, None);
+
+        // A missing codec name must behave as a safe, deterministic unknown
+        // codec rather than panicking anywhere downstream.
+        assert_eq!(attachment.codec_name_or_unknown(), "unknown");
+        assert!(!Analyzer::should_transcode_audio(attachment));
+        assert!(!audio_codec_is_lossless(attachment.codec_name_or_unknown()));
+        assert!(!subtitle_codec_is_burnable(
+            attachment.codec_name_or_unknown()
+        ));
+
+        let video_stream = match select_video_stream(&metadata.streams) {
+            Some(stream) => stream,
+            None => panic!("video stream should still be selected"),
+        };
+        assert_eq!(video_stream.codec_name.as_deref(), Some("h264"));
     }
 
     #[test]

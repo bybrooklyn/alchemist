@@ -1,6 +1,6 @@
 # Audit Findings
 
-Last updated: 2026-08-08
+Last updated: 2026-09-27
 
 ---
 
@@ -246,6 +246,141 @@ Net user-visible effect: on an affected host the entire library "encodes" but pr
 3. In `src/media/pipeline.rs`, detect encoder-open failures from FFmpeg stderr ("Could not open encoder", "Error while opening encoder", "Invalid argument" at session create) and route them to a non-Transient outcome: trigger the planned CPU fallback if `allow_fallback`, else classify `JobFailure::EncoderUnavailable` so the job stops retrying and the UI surfaces an actionable reason.
 4. Add a probe-time CQ validation: when constant-quality is requested for VideoToolbox, run a one-frame `-q:v` probe and cache whether it opened; only emit `-q:v` when it did.
 5. Tests: a unit test asserting probe args and real-encode args use the same `-allow_sw` policy; a `map_failure`/stderr-classifier test that an encoder-open failure is not `Transient`.
+
+---
+
+### [P1-15] One unreadable file freezes the entire encode queue — the auto-analysis pass never terminates
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/processor.rs` — `_run_analysis_pass` re-queries at offset 0 until the batch is empty.
+- `src/media/pipeline.rs` — `analyze_job_only`'s failure paths set `Failed` without recording a decision.
+- `src/db/jobs.rs` — `get_jobs_for_analysis_batch` selection predicate.
+
+**Severity:** P1
+
+**Problem:**
+
+`get_jobs_for_analysis_batch` selects `status IN ('queued', 'failed') AND NOT EXISTS
+(SELECT 1 FROM decisions WHERE job_id = j.id)`. `_run_analysis_pass` loops on that query
+at offset 0 and relies on analyzed jobs dropping out of the set:
+
+```rust
+loop {
+    let batch = self.db.get_jobs_for_analysis_batch(0, batch_size).await?;
+    if batch.is_empty() { break; }
+    for job in batch { pipeline.analyze_job_only(job).await; }
+}
+```
+
+`analyze_job_only`'s three failure paths — `analysis_failed`, `profile_lookup_failed`,
+`planning_failed` — write a `logs` row and a `job_failure_explanations` row and set the
+job to `Failed`. None writes a `decisions` row, and `failed` is **inside** the selection
+set. The job is therefore re-selected on the next iteration, forever.
+
+Consequences, from a single unreadable, missing, permission-denied, or unsupported file:
+
+1. `analyze_pending_jobs_boot` never returns, so `set_boot_analyzing(false)` never runs.
+   `run_loop` blocks on `if self.is_paused() || self.is_boot_analyzing()`, so the engine
+   claim loop **never starts a single job** — the whole queue is dead for the life of the
+   process.
+2. The stuck pass holds the `analysis_semaphore` permit forever, so every later
+   watcher-triggered pass `try_acquire`s and silently skips.
+3. ffprobe is respawned on the bad file continuously, and each iteration inserts another
+   `logs` row — the same unbounded-DB-growth class as the P1 log flood.
+
+`analyze_with_cache` does not cache negative results, and `probe_cache_key_for_path`
+fails before ffprobe even runs when the file is missing, so nothing short-circuits it.
+
+**Fix (applied):**
+
+1. `analyze_job_only` now records a decision (`record_job_decision(job_id, "skip", &reason)`)
+   on the `analysis_failed` and `planning_failed` paths, so the job leaves the selection
+   set. `explanations::decision_from_legacy` already had dedicated `analysis_failed` and
+   `planning_failed` **Decision** arms, confirming this was the intended shape.
+2. `profile_lookup_failed` deliberately still records **no** decision: it is a transient
+   database error, not a property of the file, so the job stays eligible for the next pass.
+3. `_run_analysis_pass` tracks the job ids it has already attempted in this pass and stops
+   when a batch contains none that are new, logging a warning. This guarantees termination
+   for the transient case above and for any future predicate drift.
+4. Regression test: `media::pipeline::tests::analysis_failure_leaves_the_auto_analysis_selection_set`
+   asserts the failed job is gone from `get_jobs_for_analysis_batch` afterwards. Its sibling
+   `analyze_job_only_marks_job_failed_without_decision_on_profile_lookup_failure` still
+   asserts the opposite for the transient path, pinning both halves.
+
+---
+
+### [P1-16] Disabling the last schedule window strands the engine paused, and the UI cannot recover it
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/scheduler.rs` — `check_schedule`'s `enabled_windows.is_empty()` early return.
+- `src/media/processor.rs` — `Agent::resume` / `Agent::is_paused`.
+
+**Severity:** P1
+
+**Problem:**
+
+`check_schedule` returned early when no enabled windows exist, with the comment "No
+schedule active -> Do nothing, leave current state alone". `set_scheduler_paused(false)`
+was reachable *only* from the `in_window` branch below it, so the early return could never
+clear an already-set pause.
+
+Reproduction: configure an off-peak window (say 01:00–06:00). At midday the scheduler sets
+`scheduler_paused = true`. Now disable or delete that window — `settings.rs` calls
+`state.scheduler.trigger()`, `check_schedule` runs, finds no enabled windows, and returns
+without clearing the flag.
+
+The engine is now permanently paused. `Agent::resume()` only clears the *manual* `paused`
+flag and `is_paused()` is `paused || scheduler_paused`, so the UI's Resume button reports
+success and changes nothing. Only restarting the process recovers it, because
+`scheduler_paused` is constructed `false`.
+
+**Fix (applied):**
+
+`check_schedule` now clears the scheduler pause before returning when no enabled window
+remains — "no schedule" means "no restriction", matching the semantics used everywhere
+else. Regression test:
+`scheduler::tests::no_enabled_windows_clears_an_existing_scheduler_pause` (verified to
+fail against the pre-fix code).
+
+---
+
+### [P1-17] A stalled FFmpeg process is reported as a user cancellation
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/orchestrator.rs` — `run_ffmpeg_command`'s 120 s stall watchdog and its `killed` flag.
+- `src/media/pipeline.rs` — the `AlchemistError::Cancelled` arm of `process_job`.
+
+**Severity:** P1
+
+**Problem:**
+
+`run_ffmpeg_command` sets one `killed` flag for two very different events — the user's
+cancel channel firing, and the watchdog killing a process that produced no stderr for 120
+seconds — then returns `Err(AlchemistError::Cancelled)` for both.
+
+A hung encoder therefore looked exactly like someone pressing Cancel:
+
+- the job was written as `Cancelled`, not `Failed`;
+- no failure explanation was recorded, so the UI showed no reason;
+- `map_failure` was never consulted, so the transient retry never ran;
+- telemetry logged `failure_reason: "cancelled"`.
+
+A hardware encoder that wedges — the most common cause — produced a queue full of jobs
+the user never cancelled, with no diagnostic anywhere.
+
+**Fix (applied):**
+
+A separate `stalled` flag distinguishes the watchdog kill. It now returns
+`AlchemistError::FFmpeg("FFmpeg produced no output for 120s and was killed as stalled.
+Last output:\n…")`, which `map_failure` classifies as `JobFailure::Transient` — so the job
+is marked `Failed`, gets a real explanation, and is retried with backoff. The user's
+cancel channel still returns `Cancelled`.
 
 ---
 
@@ -1214,6 +1349,304 @@ The setup wizard needs a server-side folder preview, but the endpoint accepts ar
 
 ---
 
+### [P2-44] Save View crashes on plain-HTTP deployments — `crypto.randomUUID()` requires a secure context
+
+**Files:**
+- `web/src/components/JobManager.tsx:229–236` — `saveCurrentView` builds `id: \`custom-${crypto.randomUUID()}\`` outside any try block.
+- `web/src/components/JobManager.tsx:276–287` — `handleSaveViewSubmit` awaits `saveCurrentView` with no catch, so the rejection is unhandled.
+
+**Severity:** P2
+
+**Problem:**
+
+`crypto.randomUUID()` is only available in secure contexts (HTTPS or localhost). Alchemist explicitly supports plain-HTTP LAN operation (session cookies are non-`Secure` by default for exactly this reason), so on `http://192.168.x.x:3000` the call throws `TypeError: crypto.randomUUID is not a function`. Because the ID generation happens *before* the optimistic state update and outside the `try`, the exception propagates out of `saveCurrentView`, `handleSaveViewSubmit`'s `finally` resets the spinner but nothing catches the error, and the user sees a stuck-open dialog with no toast. The same API is also used by nothing else in the codebase — this is the only call site.
+
+**Fix:**
+
+1. In `JobManager.tsx`, replace the UUID with an insecure-context-safe generator:
+   ```ts
+   // before
+   id: `custom-${crypto.randomUUID()}`,
+   // after
+   id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+   ```
+   The ID only needs local uniqueness within one browser's saved-views list; it is persisted as an opaque string.
+2. Wrap the body of `handleSaveViewSubmit`'s await in try/catch (or make `saveCurrentView` itself never throw) so unexpected failures always surface the existing "Failed to save view" toast instead of an unhandled rejection.
+
+---
+
+### [P2-45] Modal focus/inert management re-runs on every parent render — focus is stolen mid-interaction and restored to stale elements
+
+**Files:**
+- `web/src/components/ui/Modal.tsx:67–128` — the focus-trap effect keys on `[open, manageFocus, disableClose, onClose]`; every caller passes an inline arrow, so `onClose` is a new identity each render.
+- `web/src/components/jobs/useJobDetailController.tsx:50–116` — the equivalent effect keys on `[focusedJob]`, whose object identity changes on every SSE-driven refresh of the focused job.
+- `web/src/components/JobManager.tsx:979, 1025` — examples of inline `onClose` arrows passed to `Modal`/`ConfirmDialog`.
+
+**Severity:** P2
+
+**Problem:**
+
+Each effect teardown calls `setAppShellInert(false)` + `lastFocusedRef.current?.focus()`, then setup re-runs `setAppShellInert(true)` + focuses the panel's first focusable. With unstable deps, that cycle runs on **every parent render while the modal is open** — and the Jobs page re-renders constantly (SSE progress ticks, the 30 s `tick` interval, controlled-input typing). Two concrete failures:
+
+1. While a dialog with a text input is open (Enqueue/SaveView via ConfirmDialog's Modal), any parent re-render can bounce focus away from the input mid-typing.
+2. In `useJobDetailController`, setup records `detailLastFocusedRef.current = document.activeElement` — after an SSE refresh re-runs the effect, that is an element *inside* the open modal. On close, cleanup focuses the unmounting element instead of the table row that opened the modal, dropping keyboard focus to `<body>`.
+
+**Fix:**
+
+1. In `Modal.tsx`, hold the latest callback in a ref so identity churn doesn't re-run the lifecycle:
+   ```ts
+   const onCloseRef = useRef(onClose);
+   useEffect(() => { onCloseRef.current = onClose; });
+   // key the trap effect on [open, manageFocus] only; call onCloseRef.current()
+   ```
+   Same treatment for `disableClose` if callers toggle it while open.
+2. In `useJobDetailController.tsx`, split the effect: capture `detailLastFocusedRef` and set inert once when `focusedJob` transitions `null → non-null` (key on `focusedJob !== null`, or a separate `isOpen` boolean), and keep the Tab/Escape handler in its own listener registered once; read the current focused job from a ref inside the handler instead of closing over it.
+3. Verify manually: open Save View, type continuously while jobs poll — caret must never jump; open a job detail during an active encode, let progress events fire, press Escape — focus must return to the originating row.
+
+---
+
+### [P2-46] Jobs list fetch has no ordering guard — a slow older response overwrites the newer view state
+
+**Files:**
+- `web/src/components/JobManager.tsx:368–411` — `fetchJobs` closes over tab/sort/page/search at call time and unconditionally `setJobs(data)`; there is no sequence token or AbortController.
+- `web/src/components/JobManager.tsx:421–438` — the 5 s poll plus SSE-triggered throttled refreshes multiply concurrent in-flight requests across filter changes.
+
+**Severity:** P2
+
+**Problem:**
+
+Changing tab/sort/page/search fires a new `fetchJobs` immediately (the `useEffect` on `[fetchJobs]`), but the previous request keeps running. Responses resolve out of order whenever the older query is slower (large library, cold SQLite page cache): e.g. switch Queued → Failed, the Failed response lands first, then the stale Queued payload arrives and `setJobs` renders queued rows under the Failed tab with `Page 1` semantics of a dead filter. The same race applies to the debounced search path. Unlike UX-4 (fixed for the detail modal), the list fetch was never guarded.
+
+**Fix:**
+
+1. Add a monotonically increasing request token:
+   ```ts
+   const fetchSeq = useRef(0);
+   const fetchJobs = useCallback(async (silent = false) => {
+       const seq = ++fetchSeq.current;
+       // …
+       const data = await apiJson<Job[]>(`/api/jobs/table?${params}`);
+       if (seq !== fetchSeq.current) return; // superseded
+       setJobs(data);
+   }, [/* … */]);
+   ```
+   An AbortController per fetch aborted when a newer one starts is a stricter alternative; the token is sufficient because responses are cheap to discard.
+2. Apply the same guard where the poll and SSE callbacks funnel through `fetchJobsRef` (they already reuse `fetchJobs`, so the single guard covers all entry points).
+
+---
+
+### [P2-47] Row selection is keyboard-dead and leaks across filter changes — batch actions can target rows the user cannot see
+
+**Files:**
+- `web/src/components/jobs/JobsTable.tsx:115–123` — checkbox toggles in `onClick` with `onChange={() => {}}`.
+- `web/src/components/jobs/JobsTable.tsx:64–69` — header select-all `checked={jobs.every(j => selected.has(j.id))}` counts cross-page selections.
+- `web/src/components/JobManager.tsx:604–611, 619–646` — selection is never cleared on tab/page/sort/search change; `handleBatch` submits whatever ids remain in the Set.
+
+**Severity:** P2
+
+**Problem:**
+
+Three compounding defects:
+
+1. **Keyboard:** a native checkbox toggles on Space via `change`, but `onChange` is a noop and the real handler sits in `onClick` (which does not fire on keyboard activation). Keyboard users cannot select rows at all.
+2. **Leak:** selecting rows on the "All" tab, then switching to "Queued", keeps the invisible ids selected. The batch bar still advertises "N jobs selected" and Delete/Cancel will act on rows matching neither the visible tab nor page. Combined with the server-side eligibility checks from P2-34 this no longer corrupts data, but it silently deletes/requeues history the operator believes they cancelled out of.
+3. **Header state:** with 3 of 50 visible rows plus 40 stale ids from another page selected, `selected.size === jobs.length` misfires and `every()` reports a false positive/negative for indeterminate state.
+
+**Fix:**
+
+1. Move the toggle into `onChange={(e) => toggleSelect(job.id, e.nativeEvent.shiftKey)}` and drop the onClick/noop pair (keep `e.stopPropagation()`).
+2. Clear selection when the query shape changes — add `setSelected(new Set()); setSelectionAnchor(null);` inside the existing effect that refetches on `[activeTab, sortBy, sortDesc, page, debouncedSearch, reasonCode, failureCode]` changes (a dedicated effect keyed identically is cleaner than touching `fetchJobs`).
+3. Header select-all should reflect only loaded rows: `checked={jobs.length > 0 && jobs.every(...)}` stays, but since (2) guarantees `selected ⊆ current page`, both `every()` and the size comparison become truthful again.
+
+---
+
+### [P2-48] Unbounded `IN (...)` bind lists — a library-wide reanalyze is impossible past ~32k jobs
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/db/jobs.rs` — `batch_cancel_jobs`, `batch_delete_jobs`, `batch_restart_jobs`, `batch_reanalyze_jobs`, `get_jobs_by_ids`, `get_resume_sessions_by_job_ids`, `get_job_decision_explanations`, `get_job_failure_explanations`.
+- `src/server/scan.rs` — `reanalyze_library_root_handler` collects every non-active job under a watch folder.
+
+**Severity:** P2
+
+**Problem:**
+
+Every one of these built a single `IN (...)` clause with one bound variable per id.
+SQLite's `SQLITE_MAX_VARIABLE_NUMBER` defaults to 32766, and exceeding it fails the whole
+statement with "too many SQL variables".
+
+This is reachable in ordinary use, not only under abuse. `reanalyze_library_root_handler`
+does:
+
+```rust
+let jobs = state.db.get_jobs_under_root_path(&watch_dir.path).await?;
+let ids: Vec<i64> = jobs.into_iter().filter(|j| !j.is_active()).map(|j| j.id).collect();
+state.db.batch_reanalyze_jobs(&ids).await
+```
+
+— i.e. every job under the folder, and `batch_reanalyze_jobs` then binds that list four
+separate times. Any library past roughly 32k files could never be re-analyzed; the
+endpoint returned a 500 with an opaque SQL error. `POST /api/jobs/batch` has the same
+shape from the client side (axum's 2 MB default body limit still allows ~250k ids).
+
+**Fix (applied):**
+
+A shared `ID_CHUNK = 500` in `src/db/jobs.rs`; every id-list query now iterates
+`ids.chunks(ID_CHUNK)`, accumulating `rows_affected` / extending the result collection.
+`batch_reanalyze_jobs` and `batch_restart_jobs` do all their chunks inside one
+transaction, so the batch stays all-or-nothing. `get_jobs_by_ids` re-sorts once across
+chunks to preserve its newest-first contract. Regression test:
+`db::jobs::tests::batch_updates_apply_across_id_chunks`.
+
+---
+
+### [P2-49] Restart and reanalyze leave the previous run's failure explanation attached
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/db/jobs.rs` — `batch_restart_jobs`, `batch_reanalyze_jobs`, `reanalyze_jobs_under_path`.
+
+**Severity:** P2
+
+**Problem:**
+
+`batch_reanalyze_jobs` deleted the job's `decisions`, `job_resume_sessions` and
+`encode_stats` rows, and `batch_restart_jobs` reset status/progress/attempt_count — but
+neither touched `job_failure_explanations`, and neither did `reanalyze_jobs_under_path`.
+
+`jobs_table_handler` attaches `get_job_failure_explanations(&job_ids)` to every row, so a
+job that had been restarted or re-analyzed kept rendering its old failure banner in the
+jobs table and the detail modal while sitting healthy in the queue — and kept it even
+after the retry completed successfully.
+
+**Fix (applied):**
+
+All three paths now delete the job's `job_failure_explanations` row. `batch_restart_jobs`
+scopes its delete with a subquery matching the same eligibility predicate as its `UPDATE`
+(`archived = 0 AND status NOT IN ('analyzing','encoding','remuxing','resuming')`), so an
+ineligible id never loses its explanation without also being restarted. Regression test:
+`db::jobs::tests::restart_and_reanalyze_clear_stale_failure_explanations`.
+
+---
+
+### [P2-50] FFmpeg failure diagnostics are 20 lines of `-progress` fields instead of the error
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/orchestrator.rs` — the `last_lines` ring buffer in `run_ffmpeg_command`.
+
+**Severity:** P2
+
+**Problem:**
+
+`last_lines` keeps the final 20 stderr lines and they become the `"FFmpeg failed (…). Last
+output:\n…"` message stored as the job's failure summary. With `-progress pipe:2`, ffmpeg
+emits ~11 `key=value` field lines per ~0.5 s tick, so by the time a failure surfaces the
+buffer holds about two ticks of `frame=`/`fps=`/`out_time_ms=` and nothing else. The
+actual error had already been pushed out.
+
+This is the same root cause as the `-progress` log flood fixed earlier; that fix filtered
+the *logging* path but the diagnostics buffer was still unfiltered.
+
+**Fix (applied):**
+
+`last_lines` now skips lines matching `is_progress_fragment`, so it retains 20 lines of
+real diagnostic output. The stall-watchdog message added in P1-17 reuses the same buffer.
+
+---
+
+### [P2-51] Telemetry is awaited inline in the encode pipeline, holding the worker permit
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/pipeline.rs` — `emit_telemetry_event`.
+- `src/telemetry.rs` — `send_event`'s retry/backoff schedule.
+
+**Severity:** P2
+
+**Problem:**
+
+`emit_telemetry_event` ended in `let _ = crate::telemetry::send_event(event).await;`, and
+`send_event` makes up to three HTTP attempts with a 4 s client timeout each plus 200 ms
+and 800 ms backoff — about 13 seconds when the ingest endpoint is unreachable or slow.
+
+It is called on `job_started` and `job_finished`, both inside `process_job`, which runs
+holding the agent's concurrency permit. With telemetry enabled and the endpoint down,
+every job paid roughly 26 seconds of dead time during which its worker slot was
+unavailable to any other job. On a `concurrent_jobs = 1` host that is pure throughput
+loss.
+
+**Fix (applied):**
+
+`tokio::spawn(crate::telemetry::send_event(event))`. Telemetry is best-effort by
+definition and must never gate the pipeline. All four call sites route through the single
+`emit_telemetry_event` choke point, so this is one change.
+
+---
+
+### [P2-52] MCP `recent_jobs` materializes the entire jobs table to return ten rows
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/mcp.rs` — `tool_recent_jobs`.
+- `src/db/jobs.rs` — `get_all_jobs` (removed).
+
+**Severity:** P2
+
+**Problem:**
+
+```rust
+let limit = parse_limit(arguments, 10, 50)?;
+let jobs = self.db.get_all_jobs().await?;
+let jobs: Vec<Value> = jobs.into_iter().take(limit)...
+```
+
+`get_all_jobs` has no `LIMIT` and runs two correlated subqueries per row (latest decision
+reason, VMAF score). Asking for ten recent jobs loaded and decorated every non-archived
+row in the database first.
+
+**Fix (applied):**
+
+`tool_recent_jobs` now uses the existing paginated `get_jobs_filtered` with
+`limit`/`offset: 0`/`sort_by: "updated_at"`/`sort_desc: true`, which bounds the work in
+SQL and preserves the ordering. `get_all_jobs` had no other caller and was deleted.
+
+---
+
+### [P2-53] Watcher stability sweep blocks a runtime worker, unbounded, once per second
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/system/watcher.rs` — the `interval.tick()` arm of the pending-file loop.
+
+**Severity:** P2
+
+**Problem:**
+
+Every second the loop ran `pending.retain(|key, state| state.poll(&key.path))`, and
+`PendingState::poll` calls `std::fs::metadata` — blocking I/O executed directly on the
+tokio worker driving the task. The ready branch then did another `path.exists()` plus
+`std::fs::metadata` per file.
+
+`pending` is unbounded: a bulk import puts every arriving media file in it, so the sweep
+could stat thousands of paths synchronously, every tick, and each stat can be slow on a
+network mount.
+
+**Fix (applied):**
+
+The whole sweep moved into a single `tokio::task::spawn_blocking` per tick (the map is
+moved in with `std::mem::take` and handed back), so the cost is one handoff regardless of
+how many files are pending. The per-ready-file stat now uses `tokio::fs::metadata`, which
+also removes the redundant `exists()` + `metadata` double-stat.
+
+---
+
 ## Technical Debt
 
 ---
@@ -1454,6 +1887,342 @@ The broader web gate remains red after the UX-9 dialog replacement and the jobs-
 **Resolution:** The stale native-dialog and button selectors were replaced with
 the current themed-dialog and ARIA-menu contracts, retaining the existing
 confirmation-dialog assertions.
+
+---
+
+### [TD-15] Byte/duration/time formatting duplicated five ways with divergent behavior
+
+**Status: RESOLVED.** New `web/src/lib/format.ts` houses `formatBytes` (now
+negative-safe, rendering `"-42 KB"` instead of collapsing legitimate negative
+savings to `"0 B"`), `formatDurationClock`, `formatDurationHuman`, and
+`formatRelativeTime`; every listed copy now delegates or imports from it.
+`retryCountdown` gained a comment pointing at the `src/db/jobs.rs` backoff
+query it mirrors. Sweeping for duplicates also turned up two the original
+finding missed — `ConversionTool.tsx`'s own `formatDuration` (a third,
+second-granular duration style, kept as `formatDurationPrecise` since
+`formatDurationHuman` would misreport short source clips) and
+`LibraryDoctor.tsx`'s `formatRelativeTime` (kept its distinct
+"Never scanned" null-case text via a thin `formatLastScanTime` wrapper) —
+both consolidated too.
+
+**Files:**
+- `web/src/components/jobs/types.ts:173–186` — canonical exported `formatBytes` (`toFixed(2)`) + `formatDuration` (HH:MM:SS).
+- `web/src/components/Dashboard.tsx:67–73` — private `formatBytes` with `toFixed(1)`; `Dashboard.tsx:93–104` — private `formatDuration` with humanized "3h 20m" semantics.
+- `web/src/components/WatchFolders.tsx:34`, `web/src/components/StatsCharts.tsx:130`, `web/src/components/ConversionTool.tsx:1162` — three more private `formatBytes` copies.
+- `web/src/components/Dashboard.tsx:240–252` — private `formatRelativeTime` despite the shared `web/src/components/ui/TimeDisplay.tsx`.
+- `web/src/components/jobs/types.ts:150–171` — `retryCountdown` hardcodes the server's 5/15/60/360-minute backoff schedule client-side.
+
+**Severity:** TD
+
+**Problem:**
+
+The same conceptual helpers are re-implemented per component and have already drifted: the same byte value renders with one decimal on the Dashboard and two in job details; every copy separately mishandles negative/NaN input (`Math.log` → `"NaN undefined"`); relative-time rendering exists both as a shared component and as an inline function; and if the backend retry backoff ever changes, the Jobs table silently lies about "Retrying in 47m".
+
+**Fix:**
+
+1. Create `web/src/lib/format.ts` housing `formatBytes`, `formatDuration` (both variants named distinctly, e.g. `formatDurationClock` / `formatDurationHuman`), and `formatRelativeTime`; make all copies delegate or delete-and-import.
+2. Guard `formatBytes` against non-finite/negative input (return `"0 B"` / `"-"`).
+3. Leave `retryCountdown` as-is but add a comment tying the constants to the backend processor schedule, or derive from a settings field if one is exposed.
+
+---
+
+### [TD-16] Unused `devalue` dependency ships in package.json
+
+**Status: RESOLVED.** The direct `dependencies` entry is removed; the
+`overrides` pin for `devalue` stays, since that's pinning the version Astro
+itself pulls in transitively — an unrelated, still-needed entry.
+
+**Files:**
+- `web/package.json` — `"devalue": "^5.8.2"` under dependencies; no import of `devalue` exists anywhere under `web/src`.
+
+**Severity:** TD
+
+**Problem:**
+
+The dependency is dead weight — it inflates install time and audit surface for zero use.
+
+**Fix:** Remove the line and run `bun install`.
+
+---
+
+### [TD-17] Hydration/bundle granularity: everything is `client:load` and SettingsPanel statically imports all eleven tabs
+
+**Status: PARTIALLY RESOLVED — scoped down from the original fix, see below.**
+
+Done: SettingsPanel's 11 tabs are now `React.lazy` + `Suspense`-loaded instead
+of statically imported — measured, not assumed: the production build now
+produces 11 separate per-tab chunks (~5-29KB each) that only fetch when a tab
+opens, confirmed via `bun run build` chunk output before/after. `OfflineBanner`,
+`SystemStatus`, `StatsChartsSafe`, and `SavingsOverviewSafe` moved from
+`client:load` to `client:idle` — each is either non-interaction-critical
+(offline detection, a sidebar widget) or the deferred-content example the
+original finding named directly (`StatsCharts`). `client:load` was kept
+exactly as instructed for JobManager, HeaderActions, AuthGuard, and
+ToastRegion. The full `just test-e2e` suite (43/43) and `just check` pass
+against these changes.
+
+Deferred: the fix's other named examples — `ResourceMonitor` and the
+`AppearanceSettings` preview — are **not** independent Astro islands today;
+they're plain child components rendered inside the `Dashboard` and
+`SettingsPanel` React trees. Giving them their own `client:idle` hydration
+means extracting them into standalone islands mounted directly in
+`index.astro`/inside the (now-lazy) `AppearanceSettings` tab, which changes
+each parent's composition and layout, not just a directive. That's a real
+restructuring with its own regression surface, and the fix note itself flags
+"measure TTI/bundle hash deltas before/after rather than assuming" — this
+session had no Lighthouse/real-browser-timing access to validate a change of
+that shape safely (Playwright's own browser binary had to be installed
+mid-session just to run the existing e2e suite; a manual visual pass hit a
+sandboxed `sudo` prompt for Chrome). Recommend a dedicated follow-up with
+real timing numbers before attempting the island extraction.
+
+2026-09-27 decision: still deferred. `ResourceMonitor` is self-contained
+(no props, own fetching) so extraction is feasible, but it sits inside
+`Dashboard`'s grid — a standalone `client:idle` island would move it out
+of the grid and change the dashboard layout, and the `AppearanceSettings`
+preview already ships inside the lazy-loaded tab. No TTI timing access
+exists to validate the win, so this stays a follow-up with numbers.
+
+**Files:**
+- `web/src/pages/*.astro` — all 18 islands hydrate via `client:load`/`client:only`; none use `client:idle`/`client:visible`.
+- `web/src/components/SettingsPanel.tsx:4–14` — imports every settings tab eagerly into one island.
+- framer-motion is imported by 13 components including small ones (`ToastRegion`, `HeaderActions`).
+
+**Severity:** TD
+
+**Problem:**
+
+Every page pays for its island's full JavaScript at load, even below-the-fold or interaction-gated widgets. The settings island parses and includes ~5,000 lines of tab components the user may never open. This is the largest remaining lever on first-load JS after the lucide removal.
+
+**Fix:**
+
+1. Switch non-critical islands to `client:idle` (e.g. ResourceMonitor, StatsCharts, AppearanceSettings previews).
+2. Lazy-load settings tabs with `React.lazy` + `Suspense` keyed off `activeTab`.
+3. Measure TTI/bundle hash deltas before/after rather than assuming; keep `client:load` for JobManager, HeaderActions, AuthGuard, ToastRegion.
+
+---
+
+### [TD-18] `apiFetch`'s 401 path returns a never-resolving promise and discards the return URL
+
+**Status: RESOLVED.** The 401 path now rejects with the real `ApiError` (via
+`toApiError`) instead of `new Promise(() => {})`, so awaiting callers' catch
+paths run deterministically. The redirect preserves the origin path as
+`?next=`, and `login.astro` honors it post-login through a `safeNextPath()`
+guard that rejects anything but a same-origin relative path and refuses to
+send the user back into `/login` or `/setup` (both `next` being
+attacker-influenceable query input and an open-redirect risk otherwise).
+
+**Files:**
+- `web/src/lib/api.ts:174–181` — on 401 outside auth pages it navigates to `/login` and returns `new Promise(() => {})`.
+
+**Severity:** TD
+
+**Problem:**
+
+The never-settling promise means every awaiting caller leaks its continuation until page unload — harmless today because navigation destroys the context, but it makes `void fetch()` call sites impossible to reason about in tests and would hang a future SPA router. Additionally the original path is not preserved, so users re-authenticate straight to `/` instead of where they were.
+
+**Fix:**
+
+1. Reject with a typed error (or at minimum resolve with an unusable sentinel `Response`) instead of `new Promise(() => {})`, so callers' `catch` paths run deterministically.
+2. Redirect to `/login?next=${encodeURIComponent(path + search)}` and honor it in `login.astro` post-login.
+
+---
+
+### [TD-19] Minor frontend correctness/a11y cluster
+
+**Status: RESOLVED**, all four:
+1. `ConfirmDialog` wraps `onConfirm()` in try/catch, keeps the dialog open,
+   and toasts the error instead of an unhandled rejection.
+2. `ToastRegion` dropped the redundant dedicated `aria-live` region and kept
+   the per-toast `role="alert"`/`role="status"` — the option that preserves
+   the urgency distinction between error and non-error toasts, which
+   dropping the per-toast role in favor of the region would have flattened.
+3. `JobsTable`'s context-menu `onContextMenu` now clamps `x`/`y` against
+   `window.innerWidth/innerHeight` (minus the menu's known `w-44` width and a
+   worst-case all-actions-visible height estimate) before setting position.
+4. Verified this is a real WCAG failure, not just aesthetic clash: computed
+   actual contrast ratios for the 8 light-background theme profiles
+   (`ivory`, `cloud`, `mint`, `linen`, `sunlit`, `sage`, `sprout`, `glow`) —
+   the shared dark-tuned `--status-*` colors measured as low as ~1.8:1
+   against them (WCAG AA needs 4.5:1). Those 8 profiles now get darker
+   overrides verified at 5.1–6.4:1; every other (dark-background) profile
+   keeps the shared root values, which already clear AA comfortably, with a
+   comment at each block cross-referencing the other.
+
+**Files:**
+- `web/src/components/ui/ConfirmDialog.tsx:62–70` — `await onConfirm()` without catch: a throwing confirm handler becomes an unhandled rejection and leaves the dialog open.
+- `web/src/components/ui/ToastRegion.tsx:126, 131` — toasts render a dedicated `aria-live` region *and* `role="alert"`/`role="status"` on each toast, so screen readers announce most messages twice.
+- `web/src/components/jobs/JobsTable.tsx:103–107, 226–230` — context-menu coordinates are used raw as `fixed` left/top; menus opened near the viewport edge overflow offscreen.
+- `web/src/styles/global.css:15–28` — only the root profile defines `--status-success/warning/error`, so all 40+ themes share Helios' green/amber/red regardless of palette fit.
+
+**Severity:** TD
+
+**Problem:**
+
+Four small, unrelated defects that don't warrant individual entries but are worth batching: unhandled rejection risk in the shared dialog; duplicate SR announcements; an offscreen context menu on edge clicks; and status colors that visually clash with deliberately-tuned palettes (e.g. neon cyan/magenta keeping Helios orange-era status hues).
+
+**Fix:**
+
+1. Wrap `onConfirm()` in try/catch inside ConfirmDialog; keep the dialog open and toast the error.
+2. Drop the redundant per-toast `role` (keep the live region), or drop the live region and keep roles — not both.
+3. Clamp menu position: `left: Math.min(x, window.innerWidth - menuWidth - 8)` (same for top) at render time.
+4. Define per-profile `--status-*` overrides for themes where the defaults clash, or document the intentional sharing next to the token block.
+
+---
+
+### [TD-20] `process_job`'s failure exits repeated the same four-step block eight times
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/pipeline.rs` — `process_job`, `mark_job_failed`.
+
+**Severity:** TD
+
+**Problem:**
+
+Eight separate failure exits in `process_job` each hand-wrote the same sequence: a
+`tracing::error!`, a `record_job_log`, a `failure_from_summary` + `record_job_failure_explanation`,
+and an `update_job_state(Failed)` with its own `if let Err` warning. About 90 lines of
+copy-paste, already drifting (two variants of the warning message, one site ordering the
+log before the explanation).
+
+**Fix (applied):**
+
+Extracted `Pipeline::mark_job_failed(job_id, message)`, which does all four steps. Each
+call site keeps its own explicit `return Err(JobFailure::…)`, because the classification
+is the part that genuinely differs. Net ~55 lines removed and the four steps can no longer
+diverge between exits.
+
+One trap worth recording: `process_job` binds `explanation` in an enclosing scope to the
+job's *decision* explanation. Removing the local `let explanation = failure_from_summary(…)`
+from the "Transcode failed" block made a later `explanation.code` silently resolve to that
+outer decision code — it compiled clean. The block now computes an explicitly named
+`failure_explanation` for the attempt row.
+
+---
+
+### [TD-21] Enqueue fetched watch dirs twice and swallowed the first fetch's error
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/jobs.rs` — `enqueue_job_from_submitted_path`.
+
+**Severity:** TD
+
+**Problem:**
+
+`get_watch_dirs()` was called once to build the path allow-list — with the result
+discarded on error via `if let Ok(...)` — and again later for source-root resolution,
+where the same failure correctly returned a 500. So a database blip silently narrowed the
+allow-list and rejected a legitimate path as `ENQUEUE_PATH_FORBIDDEN`, which is both wrong
+and misleading to debug.
+
+**Fix (applied):**
+
+Loaded once, up front, returning `ENQUEUE_WATCH_DIRS_LOAD_FAILED` on error, and reused for
+both purposes.
+
+---
+
+### [TD-22] `?page=` can overflow the jobs-table offset computation
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/jobs.rs` — `jobs_table_handler`.
+
+**Severity:** TD
+
+**Problem:**
+
+`let offset = (page - 1) * limit;` with `page` clamped only at the bottom (`.max(1)`).
+`?page=9223372036854775807` overflows `i64`: a panic in a debug build, a wrapped negative
+`OFFSET` in a release one.
+
+**Fix (applied):** `page.saturating_sub(1).saturating_mul(limit)`.
+
+---
+
+### [TD-23] `formatBytes` reads past the start of the unit table for sub-byte values
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `web/src/lib/format.ts` — `formatBytes`.
+
+**Severity:** TD
+
+**Problem:**
+
+`Math.min(Math.floor(Math.log(abs) / Math.log(k)), BYTE_UNITS.length - 1)` is only clamped
+at the top. For `0 < |bytes| < 1` the log is negative, so the index is negative and
+`BYTE_UNITS[-1]` is `undefined` — rendering e.g. `"0.5 undefined"`. Same class as the
+`"NaN undefined"` bug the consolidation into `format.ts` was written to fix.
+
+**Fix (applied):** clamped at both ends with `Math.max(…, 0)`.
+
+---
+
+### [TD-24] Blocking `std::fs::metadata` in the conversion start handler
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/server/conversion.rs` — `start_conversion_handler`.
+
+**Severity:** TD
+
+**Problem:**
+
+A `std::fs::metadata` call sat two lines below an awaited `tokio::fs::create_dir_all` in
+the same async handler — blocking I/O on the runtime for no reason, and inconsistent with
+its immediate neighbour.
+
+**Fix (applied):** switched to `tokio::fs::metadata`.
+
+---
+
+### [TD-25] `set_concurrent_jobs` can over-reduce when the limit is lowered twice in a row
+
+**Status: RESOLVED (2026-09-27).** The reduction branch no longer spawns a
+detached task per call. The whole adjustment (delta computation plus
+permit acquire/release) now runs under the `held_permits` mutex, so
+consecutive reductions compose instead of racing; raises drain parked
+permits first as before. Test
+`consecutive_reductions_park_exactly_the_composed_delta` drives 4 → 3 → 2
+with a permit held and asserts 2 usable slots plus release on raise.
+
+**Files:**
+- `src/media/processor.rs` — `set_concurrent_jobs`, the reduction branch.
+
+**Severity:** TD
+
+**Problem:**
+
+Lowering the limit spawns a task that acquires `reduce_by` permits and parks them in
+`held_permits`. It guards against a concurrent *raise* with
+`if limit.load() > target_limit { … }`, but not against a second *lower*. Going 4 → 3 → 2
+in quick succession spawns two tasks, targeting 3 and 2; the flag is already 2, so
+neither task's guard trips, and both park their permits — 3 held against a semaphore of 4,
+leaving 1 usable slot where 2 was requested.
+
+Self-corrects on the next `set_concurrent_jobs` that raises the limit (it drains
+`held_permits` first), and the window requires two mode changes inside the time it takes
+to acquire a permit — i.e. while a long encode holds one. Low impact, but the
+lock-free-atomics-plus-spawned-task design is the reason it is hard to reason about.
+
+**Fix:**
+
+1. Serialize the whole adjustment under the existing `held_permits` mutex instead of an
+   atomic plus a detached task: take the lock, compute the delta against `held.len()`, and
+   acquire/release inside it.
+2. Or give each reduction a monotonically increasing generation number and have the task
+   bail when `generation != current`.
+   Option 1 is preferred — it removes the concurrency rather than sequencing it.
+3. Test: drive 4 → 3 → 2 with a permit held, then assert `semaphore.available_permits() +
+   in_flight == 2`.
 
 ---
 
@@ -1793,6 +2562,193 @@ Once a conversion job id is set, the component hits `/api/conversion/jobs/{id}` 
 
 ---
 
+### [RG-16] Dashboard one-shot fetches go stale: Queue ETA, weekly stats, and engine banner never refresh
+
+**Status: RESOLVED.** New `web/src/lib/engineStatusStore.ts` mirrors
+`statsStore.ts`'s singleton-polling pattern for `/api/engine/status` — one
+shared 5s (15s hidden) poll now serves both `HeaderActions` and the Dashboard
+banner via `useEngineStatus()`, so they can no longer disagree. The store
+also self-accelerates to a 1s interval whenever status is `"draining"`,
+which subsumed and replaced `HeaderActions`' own local fast-poll effect (see
+RG-18). `applyEngineActionStatus()` lets a Start/Stop action push its result
+to every subscriber immediately rather than waiting for the next tick.
+`weekStats` (a 7-day rolling aggregate) is deliberately left as a one-shot
+fetch per the fix's own scope — it doesn't meaningfully change tick to tick,
+so polling it would be pure waste. Queue ETA now refreshes on every other
+jobs-poll tick (~10s).
+
+**Files:**
+- `web/src/components/Dashboard.tsx:215–238` — `fetchWeekStats`/`fetchQueueEta` run once on mount; the Queue ETA panel keeps its initial estimate until reload.
+- `web/src/components/Dashboard.tsx:196–198, 258–267` — engine status fetched once for the paused banner while `HeaderActions.tsx:130–132` polls it every 5 s — two islands can disagree about the same engine.
+
+**Severity:** RG
+
+**Problem:**
+
+The dashboard is the landing page for long-running sessions. After a queue drains (or the user starts the engine from the header), "About X left" and "ENGINE PAUSED" remain on screen indefinitely. The infrastructure to fix this already exists — `web/src/lib/statsStore.ts` is a shared visibility-aware polling singleton used by Dashboard/HeaderActions for stat cards — but ETA and engine status bypass it.
+
+**Fix:**
+
+1. Extend the `statsStore` singleton pattern with an engine-status slice (or a second tiny store) that HeaderActions writes to after every poll/action and the dashboard banner reads; one fetch per 5 s serves both.
+2. Refresh `queue-eta` alongside the existing jobs poll (`Dashboard.tsx:200–207`) at a lower cadence (e.g. every other tick or 15 s), keeping the non-critical error swallowing.
+
+---
+
+### [RG-17] Convert status poll has no backoff or stop on persistent failure
+
+**Status: RESOLVED.** The poll now stops after 5 consecutive errors instead
+of looping forever, and `ConversionTool` renders an inline "Lost contact with
+this conversion" banner with a Retry button (resets the error count and
+restarts polling) rather than silently going quiet after the one-time toast
+at error #3.
+
+**Files:**
+- `web/src/components/ConversionTool.tsx:243–265` — the 2 s interval keeps firing as long as the status is non-terminal; consecutive errors only toast once at three strikes.
+
+**Severity:** RG
+
+**Problem:**
+
+RG-15's fix correctly stops polling on terminal states, but if the job id becomes permanently invalid (server restart cleared the row, retention expiry deleted it) the effect polls a guaranteed-404 every 2 s forever, surfacing one warning toast at error #3 and then silently looping. An idle background tab thus generates load proportional to how long the page stays open.
+
+**Fix:**
+
+1. Track consecutive errors; stop the interval after N (e.g. 5) and render an inline "Lost contact with this conversion" state with a Retry button.
+2. Optionally switch to exponential intervals (2s → 4s → 8s capped at 30s) instead of stopping outright.
+
+---
+
+### [RG-18] Drain fast-poll fires unhandled rejections and ignores cancellation
+
+**Status: RESOLVED**, twice over. First fixed in place (try/catch + a
+`cancelled` guard mirroring the sibling `load`/`pollStatus` effects). Then,
+as part of RG-16's engine-status consolidation, the entire local fast-poll
+effect was deleted — the shared `engineStatusStore` now self-accelerates its
+own polling to 1s while draining, so there's no longer a second poll loop in
+`HeaderActions` to leak a rejection or outlive its intent.
+
+**Files:**
+- `web/src/components/HeaderActions.tsx:82–86` — `refreshEngineStatus` throws on any non-OK response.
+- `web/src/components/HeaderActions.tsx:140–149` — the 1 s draining poll invokes it via `void refreshEngineStatus()` with no catch and no `cancelled` flag.
+
+**Severity:** RG
+
+**Problem:**
+
+During a drain (which by definition happens when shutting down for updates), each failed status request produces an unhandled promise rejection in the console; the interval also outlives the component's intent because the fast-poll effect lacks the `cancelled` guard its sibling effects use. Cosmetic today, but it pollutes logs during exactly the shutdown windows where diagnostics matter.
+
+**Fix:** Mirror the `load`/`pollStatus` pattern already in the same file: wrap the fast poll body in try/catch and check a `cancelled` boolean from the effect cleanup before `setEngineStatus`.
+
+---
+
+### [RG-19] Free-space guardrail enumerates every mount synchronously on the async runtime
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/system/disk_space.rs` — `available_bytes_for_path`.
+- `src/media/processor.rs` — `disk_guardrail_should_hold`, called from `run_loop`.
+
+**Severity:** RG
+
+**Problem:**
+
+`available_bytes_for_path` calls `Disks::new_with_refreshed_list()`, which enumerates and
+`statvfs`-refreshes every mounted filesystem. It is a plain synchronous function called
+directly from the async `disk_guardrail_should_hold`, which `run_loop` invokes on every
+iteration — at least every 5 s while idle, and before each job claim.
+
+Fine on a laptop; on a host with a stale NFS/SMB mount, `statvfs` can block for seconds,
+and it blocks the tokio worker thread driving the engine loop for that whole time.
+
+**Fix (applied):**
+
+The probe now runs inside `tokio::task::spawn_blocking`; a `JoinError` fails open (returns
+"do not hold"), matching the guardrail's documented fail-open contract.
+
+---
+
+### [RG-20] Library-health issues store unbounded ffmpeg stderr
+
+**Status: RESOLVED (2026-09-04).**
+
+**Files:**
+- `src/media/health.rs` — `categorize_health_output`.
+
+**Severity:** RG
+
+**Problem:**
+
+`HealthIssueReport.raw_output` was the full trimmed stderr, persisted per health issue.
+`summary` is capped at 200 characters but `raw_output` had no bound, and a badly damaged
+file makes ffmpeg emit thousands of decode-error lines even under `-v error`. One corrupt
+file could write megabytes into the health-issues table.
+
+**Fix (applied):**
+
+Capped at `MAX_RAW_OUTPUT_CHARS = 4096` with a `\n[output clipped]` marker. The marker
+deliberately avoids the word "truncated", because the categorizer matches that string to
+detect a truncated *media file* — using it would have misclassified every oversized error
+dump as `TruncatedFile`. Regression test:
+`media::health::tests::oversized_output_is_clipped_without_forcing_truncated_category`
+asserts both the cap and the category.
+
+---
+
+### [RG-21] Config → database projection is not atomic
+
+**Status: RESOLVED (2026-09-27).** The four `replace_*` bodies moved into
+`_tx` variants taking the caller's transaction (existing pool-based
+functions are thin wrappers), and `project_config_to_db` now goes through
+`Db::replace_config_projection`, which commits watch dirs, notification
+targets, schedule windows, file settings, and the theme preference in one
+transaction. Test `config_projection_is_atomic_across_tables` drops
+`schedule_windows` mid-projection and asserts the watch-dir write rolls
+back.
+
+**Files:**
+- `src/settings.rs` — `project_config_to_db`.
+- `src/db/config.rs` — `replace_watch_dirs`, `replace_notification_targets`, `replace_schedule_windows`, `replace_file_settings_projection`.
+
+**Severity:** RG
+
+**Problem:**
+
+```rust
+db.replace_watch_dirs(...).await?;
+db.replace_notification_targets(...).await?;
+db.replace_schedule_windows(...).await?;
+db.replace_file_settings_projection(...).await?;
+```
+
+Four independent `replace_*` calls, each its own transaction, with `?` between them. A
+failure on the second leaves watch dirs replaced from the new config while notification
+targets, schedule windows and file settings still reflect the old one — and the caller
+reports an error, so the operator has no reason to expect a partial write.
+
+Impact is bounded: the TOML file remains the declared source of truth (`source_of_truth:
+"toml"`), and the next successful save or the next `load_and_project` on startup repairs
+the projection. But between those points, the scheduler and watcher read a DB state that
+matches neither the old nor the new config.
+
+**Not fixed here deliberately.** The fix needs all four `replace_*` functions to take a
+`&mut Transaction` instead of borrowing the pool, which changes signatures across
+`src/db/config.rs` and every other caller. That is the config write path — the highest
+data-safety-risk surface in the app — and it deserves its own change with its own
+verification rather than being folded into an audit sweep.
+
+**Fix:**
+
+1. Add `replace_*_tx(&mut Transaction<'_, Sqlite>, …)` variants holding the current
+   bodies; keep the existing pool-based functions as thin wrappers that open a transaction
+   and delegate, so no other caller changes.
+2. Rewrite `project_config_to_db` to open one transaction, call the four `_tx` variants
+   and the `active_theme_id` preference write inside it, and commit once.
+3. Test: inject a failure in the third call (e.g. drop `schedule_windows`) and assert the
+   watch-dir table is unchanged afterwards.
+
+---
+
 ## UX Gaps
 
 ---
@@ -2008,6 +2964,102 @@ absent on mobile.
 
 ---
 
+### [UX-11] No `prefers-reduced-motion` support anywhere in the frontend
+
+**Status: RESOLVED.** `global.css` gained a
+`@media (prefers-reduced-motion: reduce)` block collapsing animation/
+transition durations to near-zero and forcing `scroll-behavior: auto`
+(covers Tailwind's `animate-pulse` skeletons too, with no per-instance
+changes needed). Every island root that uses framer-motion (directly or via
+descendants) is now wrapped in `<MotionConfig reducedMotion="user">`: the
+`withErrorBoundary` HOC wraps it once for the 8 islands that go through it
+(Dashboard, JobManager, ConversionTool, LogViewer, LibraryIntelligence,
+SettingsPanel, SavingsOverview, StatsCharts), plus direct wraps in
+`HeaderActions`, `ToastRegion`, `SystemStatus`, and `SetupWizard` (which
+covers all its step descendants). `OfflineBanner`/`AuthGuard`/`ThemeBootstrap`
+were checked and use no framer-motion, so were left alone.
+
+**Files:**
+- `web/src/styles/global.css` — 548 lines, zero `prefers-reduced-motion` rules; `body { scroll-behavior: smooth }` is unconditional (line 473).
+- 13 components import framer-motion (`Modal`, `ToastRegion`, `JobsTable`, all setup steps) with no `MotionConfig reducedMotion="user"` or `useReducedMotion` gating.
+- Tailwind `animate-pulse` used on loading skeletons throughout.
+
+**Severity:** UX
+
+**Problem:**
+
+Users with the OS reduce-motion setting still get every zoom/slide/parallax animation, animated smooth scrolling, and pulsing elements. This is a WCAG 2.3.3 (Animation from Interactions) gap and a common accessibility-audit finding for self-hosted software.
+
+**Fix:**
+
+1. Wrap hydrated React roots (or the Layout's island tree) in `<MotionConfig reducedMotion="user">` from framer-motion — one line per entry point disables transform/layout animations while keeping opacity.
+2. Add to global.css:
+   ```css
+   @media (prefers-reduced-motion: reduce) {
+       html { scroll-behavior: auto; }
+       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+   }
+   ```
+
+---
+
+### [UX-12] Mobile sidebar drawer leaks its scroll lock across view transitions and lacks Escape/focus semantics
+
+**Status: RESOLVED.** `initSidebar` (which already re-runs on
+`astro:after-swap`) now unconditionally resets `document.body.style.overflow`
+on every run, so a drawer left open can't survive into the next page as an
+unscrollable body. Escape now closes the drawer (listener added on open,
+removed on close), opening it focuses the first nav link, and nav anchors
+get `aria-current="page"` when active.
+
+**Files:**
+- `web/src/components/Sidebar.astro:111–121` — `openSidebar()` sets `document.body.style.overflow = "hidden"`; nothing resets it on navigation.
+- `web/src/components/Sidebar.astro:102–131` — `initSidebar` re-binds on `astro:after-swap` but never restores overflow, traps focus, or handles Escape; active links lack `aria-current="page"`.
+
+**Severity:** UX
+
+**Problem:**
+
+On mobile, opening the drawer then tapping a nav link triggers an Astro view-transition swap that rebuilds the DOM — the new page renders with `body.overflow` still `hidden`, leaving the app unscrollable until a reload. The drawer also can't be dismissed with Escape (hardware keyboards on tablets) and doesn't move focus, so screen-reader users get no announcement when it opens.
+
+**Fix:**
+
+1. In the existing script, add `document.addEventListener("astro:before-swap", closeSidebar)` (or unconditionally reset `document.body.style.overflow = ""` inside the `after-swap` handler).
+2. On open: focus the first nav link; add a keydown listener mapping Escape → `closeSidebar()`.
+3. Render `aria-current={isActive ? "page" : undefined}` on nav anchors.
+
+---
+
+### [UX-13] Jobs counters and pagination present current-page data as queue-wide truth
+
+**Status: RESOLVED**, via the fix's honest-labeling path rather than wiring
+in real counts: `/api/jobs/table` has no total-count field, and the global
+`/api/stats` totals aren't scoped to the current tab/filter, so reusing them
+here would trade one kind of misleading number for another. The header strip
+now reads "N active on this page" etc. with a tooltip spelling out the
+scope, the `50` limit is a single `JOBS_PAGE_LIMIT` constant shared by the
+fetch and the footer text, and the empty-last-page Next-button edge case is
+called out in a comment at the constant's definition.
+
+**Files:**
+- `web/src/components/JobManager.tsx:615–617, 708–721` — active/failed/completed header counts are computed from the ≤50 loaded rows but displayed as if global ("N active").
+- `web/src/components/JobManager.tsx:897` — "Showing N jobs (Limit 50)" hardcodes the limit that also lives in `fetchJobs`.
+- `web/src/components/JobManager.tsx:909` — Next enables at exactly 50 rows even when page 2 is empty.
+
+**Severity:** UX
+
+**Problem:**
+
+With a 400-job queue filtered to Completed, the strip reads "0 active / 12 failed / 50 completed" — numbers that contradict the dashboard on the same screen. Operators triaging failures by these counts draw wrong conclusions. The off-by-one Next button yields a blank page.
+
+**Fix:**
+
+1. Either label honestly ("on this page") or fetch real counts — the backend already returns totals for stats endpoints; a single lightweight `/api/stats/summary`-style call refreshed with the poll keeps them truthful.
+2. Extract the limit into one constant shared by `fetchJobs` and the footer text.
+3. Track `total_count` from the API response if available, else keep the `jobs.length < LIMIT` heuristic but accept the empty-last-page edge case explicitly in a comment.
+
+---
+
 ## Feature Gaps
 
 ---
@@ -2164,3 +3216,140 @@ The full web gate now passes 98/98. The complete local release gate and isolated
 release-binary smoke also pass for `0.3.5-rc.4`. Stable promotion still requires
 external platform and hardware qualification, published-artifact smoke checks,
 and the required RC soak.
+
+**The 2026-08-22 deep frontend sweep (four P2, three RG, three UX, five TD):**
+
+Fix in this order:
+
+1. **[P2-44] Save View broken on plain HTTP** — **RESOLVED.** `crypto.randomUUID()` (secure-context-only) replaced with a plain timestamp+random id; the save path now catches and surfaces failures instead of leaving the dialog silently stuck.
+2. **[P2-45] Modal focus churn** — **RESOLVED.** `Modal`'s focus/inert effect is keyed on `[open, manageFocus]` instead of re-running on every parent render; `useJobDetailController` keys its effect on a derived `detailOpen` boolean instead of job identity.
+3. **[P2-46] Jobs fetch race + [P2-47] selection leak** — **RESOLVED.** `JobManager.tsx` sequence-guards fetches/refreshes so a stale response can't overwrite newer state or clear a newer spinner; row selection clears whenever the query shape changes, and the checkbox is keyboard-operable (`onClick` captures the shift modifier, `onChange` toggles) with `aria-label`s added for screen readers.
+4. **[RG-16..18]** staleness/polling gaps — **RESOLVED** in the 2026-08-25 sweep below.
+5. **[UX-11..13], [TD-15..19]** — **RESOLVED** (TD-17 partially) in the 2026-08-25 sweep below.
+
+`lucide-react` was removed this round in favor of a vendored `web/src/components/icons`
+module — **reverted in the 2026-08-25 re-evaluation below.** The "bundle-delta numbers"
+this entry originally pointed to in the changelog never existed; see that sweep for the
+actual measured number and why it didn't justify keeping the vendored copy.
+
+**The 2026-08-25 re-evaluation sweep (one P1, one reversed dependency decision):**
+
+Triggered by a request to look at deployment-readiness from a fresh angle and to
+re-examine the still-uncommitted lucide-react removal above before it landed.
+
+1. **[P1-15] Unthrottled FFmpeg progress-line logging floods the `logs` table and every
+   SSE subscriber** — **RESOLVED.** `orchestrator.rs` called `observer.on_log()` for
+   *every* raw ffmpeg stderr line, including the ~11 machine-readable `-progress pipe:2`
+   fields (`frame=`, `fps=`, `bitrate=`, `total_size=`, `out_time*=`, `dup_frames=`,
+   `drop_frames=`, `speed=`, `progress=`) emitted on every ~0.5s tick — each one a
+   separate `INSERT INTO logs` plus an SSE broadcast, unlike the progress-bar path
+   (`on_progress`), which was already correctly throttled. A single 2-hour 1080p encode
+   produced on the order of 150,000 unthrottled inserts/broadcasts; a real library
+   churning through a normal workload would grow the `logs` table far faster than the
+   daily retention prune could keep up, with no operator-visible signal until the DB was
+   already large. Fixed by factoring the existing single-token `key=value`-no-spaces
+   heuristic `FFmpegProgressState::ingest_line` already used to recognize progress
+   fields out into `is_progress_fragment()`, and skipping `on_log` for any line that
+   matches it. `-nostats` is already passed, so this is the only progress-format ffmpeg
+   emits to stderr in this codebase; genuine diagnostic/warning/error lines are
+   unaffected since they contain spaces or no `=`.
+2. **lucide-react removal — reverted.** The stated rationale ("install/audit surface is
+   gone") was true but never the actual cost driver: `bun audit`'s ignore list
+   (`scripts/run_bun_audit.py`) has never once contained a lucide-react advisory, so
+   nothing was actually flagging it. The claimed "bundle-delta numbers" cited by this
+   file and the changelog were never produced anywhere in the repo. A real isolated-build
+   measurement (baseline worktree at 9a4f94d9 vs. the vendored-icon working tree) put the
+   true production savings at **~6.9KB gzip of JS** (~7.9KB across the full `dist/`) —
+   real, but for a self-hosted app that isn't shipped over the wire repeatedly, not worth
+   trading for a 666-line hand-maintained SVG file with no generator, no build-time check
+   against upstream, a silently-wrong-on-typo failure mode, and copied ISC-licensed path
+   data that was never added to `LICENSES.md`. All 74 vendored icons were independently
+   verified byte-identical to upstream lucide-react 1.27.0 before the revert, so nothing
+   was lost by reverting other than the module itself. `lucide-react` is restored as a
+   direct dependency; the four P2-44..47 fixes above are unaffected and remain in place.
+   The `web/src/vendor/{eventemitter3,prop-types,react-transition-group,tiny-invariant}`
+   files were checked as part of this sweep and are clean-room reimplementations with no
+   copied code or license headers, not third-party source — no `LICENSES.md` entry is
+   needed for them.
+
+**Later the same day: the remaining 2026-08-22 backlog — [RG-16..18], [UX-11..13],
+[TD-15..19] — all resolved** (TD-17 partially; see its own entry above for what was
+deferred and why). See each finding's own **Status** line above for implementation
+detail; summary: `web/src/lib/format.ts` and `web/src/lib/engineStatusStore.ts` are new
+shared modules (byte/duration/relative-time formatting, and a `statsStore`-pattern
+singleton for `/api/engine/status`); `SettingsPanel`'s 11 tabs are `React.lazy` +
+`Suspense`; `MotionConfig reducedMotion="user"` now wraps every framer-motion-using
+island; the 8 light-background theme profiles got contrast-verified `--status-*`
+overrides instead of inheriting Helios' dark-tuned colors.
+
+Verification: `cargo test` (full suite), `cargo clippy --all-targets --all-features -- -D
+warnings -D clippy::unwrap_used -D clippy::expect_used`, `just check` (fmt, clippy,
+frontend typecheck+build, native mac check) all pass. `just test-e2e` — the full
+Playwright suite, 43/43 — passes against the changed frontend (its browser binary needed
+a fresh `playwright install`; the first run's 43/43 *failures* were that missing binary,
+not a regression, confirmed by rerunning after installing it and getting 43/43 passes).
+A manual in-browser pass was attempted for the parts e2e covers less directly (reduced
+motion, the context-menu clamp, the light-theme status colors) but the sandboxed
+Playwright-MCP browser required a `sudo`-gated Chrome install this session couldn't
+complete non-interactively — code-level verification (contrast math, chunk-split output,
+line-level diffs) stands in for it here.
+
+---
+
+**The 2026-09-04 sweep (three P1, six P2, one RG, four TD resolved; two documented open).**
+
+This round deliberately targeted the subsystems earlier sweeps had never covered —
+`processor.rs`, `scheduler.rs`, `watcher.rs`, `mcp.rs`, `health.rs`, `disk_space.rs`,
+`telemetry.rs`, `metrics.rs`, `webhooks.rs`, `settings.rs`, `db/events.rs` had zero
+mentions in this file — plus a re-read of the orchestrator and the batch DB layer. That is
+where all of the new findings came from; the frontend and auth/middleware paths were
+re-swept and produced only [TD-23].
+
+**Fix these first, in this order:**
+
+1. **[P1-15] Auto-analysis pass never terminates.** Highest impact by a distance: one
+   unreadable file in the library leaves the engine claim loop permanently blocked, so
+   *nothing* encodes until the process is restarted — and it recurs on the next restart
+   because the file is still there.
+2. **[P1-16] Scheduler pause is unrecoverable.** Reachable by a normal settings action
+   (disabling the last off-peak window), and the UI's own Resume button cannot undo it.
+3. **[P1-17] Stalled FFmpeg reported as cancelled.** Silently mislabels the failure mode
+   operators most need to see, and suppresses the retry.
+4. **[P2-48] Unbounded `IN (...)` binds**, then **[P2-51] inline telemetry**, then the
+   rest of the P2s.
+
+Still open and deliberately deferred, each with a fix recipe in its own entry:
+**[RG-21]** config→DB projection atomicity (needs a transaction-threading change through
+`src/db/config.rs`; the config write path deserves its own change and verification) and
+**[TD-25]** `set_concurrent_jobs` double-reduction race (low impact, self-correcting).
+
+Verification: `just check-rust` (fmt, clippy with `-D clippy::unwrap_used -D
+clippy::expect_used`, `cargo check --all-targets`), `just test` (356 tests across the lib
+and all integration suites), and `just check-web` (typecheck, production build, and the
+full Playwright suite at 98/98) all exit 0.
+
+`just check` as a whole does **not** pass on this machine, for an environment reason
+unrelated to these changes: its `mac-check` leg fails with `external macro implementation
+type 'SwiftUIMacros.StateMacro' could not be found; plugin for module 'SwiftUIMacros' not
+found` on every `@State` in the SwiftUI sources. `xcode-select -p` points at
+`/Library/Developer/CommandLineTools`, there is no full Xcode installed, and
+`/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/` contains only
+`libObservationMacros.dylib` and `libSwiftMacros.dylib` — the SwiftUI macro plugin ships
+with Xcode, not the Command Line Tools. This sweep touched no Swift file (`git status
+native/` is clean) and the same failure reproduces on the unmodified tree. The mac target
+still needs to be checked on a machine with full Xcode before release.
+`web-e2e` also needed `bunx playwright install chromium` first — without the browser
+binary all 98 tests fail in 0 ms, which is a missing dependency, not a regression (the
+same trap is recorded in the 2026-08-22 entry).
+
+Five regression
+tests were added — `analysis_failure_leaves_the_auto_analysis_selection_set`,
+`no_enabled_windows_clears_an_existing_scheduler_pause`,
+`batch_updates_apply_across_id_chunks`,
+`restart_and_reanalyze_clear_stale_failure_explanations`, and
+`oversized_output_is_clipped_without_forcing_truncated_category`. The scheduler test was
+confirmed to fail against the pre-fix code before the fix was restored; the P1-15 test is
+pinned against its sibling `analyze_job_only_marks_job_failed_without_decision_on_profile_lookup_failure`,
+which still asserts the opposite for the transient path. P1-17 has no automated test — the
+watchdog's 120 s timeout is not configurable, and making it so to test a three-line flag
+change was not worth the surface.

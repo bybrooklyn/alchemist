@@ -1,5 +1,7 @@
 use crate::error::{AlchemistError, Result};
-use crate::media::ffmpeg::{FFmpegCommandBuilder, FFmpegProgress, FFmpegProgressState};
+use crate::media::ffmpeg::{
+    FFmpegCommandBuilder, FFmpegProgress, FFmpegProgressState, is_progress_fragment,
+};
 use crate::media::pipeline::TranscodePlan;
 use crate::system::hardware::HardwareInfo;
 use std::collections::{HashMap, HashSet};
@@ -317,6 +319,7 @@ impl Transcoder {
         let mut reader = BufReader::new(stderr).lines();
         let mut kill_rx = kill_rx;
         let mut killed = false;
+        let mut stalled = false;
         let mut last_lines = std::collections::VecDeque::with_capacity(20);
         let mut progress_state = FFmpegProgressState::default();
         let mut first_frame_logged = false;
@@ -335,9 +338,17 @@ impl Transcoder {
                                 } else {
                                     line
                                 };
-                                last_lines.push_back(line.clone());
-                                if last_lines.len() > 20 {
-                                    last_lines.pop_front();
+                                // Keep only real diagnostic output here. With
+                                // `-progress pipe:2` ffmpeg emits ~11 `key=value`
+                                // field lines every tick, so an unfiltered ring
+                                // buffer holds nothing but two ticks of progress
+                                // by the time a failure is reported — burying the
+                                // actual error in "Last output:".
+                                if !is_progress_fragment(&line) {
+                                    last_lines.push_back(line.clone());
+                                    if last_lines.len() > 20 {
+                                        last_lines.pop_front();
+                                    }
                                 }
 
                                 // Detect VideoToolbox software fallback
@@ -350,7 +361,9 @@ impl Transcoder {
                                 }
 
                                 if let Some(observer) = observer.as_ref() {
-                                    observer.on_log(line.clone()).await;
+                                    if !is_progress_fragment(&line) {
+                                        observer.on_log(line.clone()).await;
+                                    }
 
                                     if let Some(total_duration) = total_duration
                                         && let Some(progress) = progress_state.ingest_line(&line) {
@@ -376,6 +389,7 @@ impl Transcoder {
                             error!("Job {:?} stalled: No output from FFmpeg for 2 minutes. Killing process...", job_id);
                             let _ = child.kill().await;
                             killed = true;
+                            stalled = true;
                             if let Some(id) = job_id {
                                 match self.cancel_channels.lock() {
                                     Ok(mut channels) => { channels.remove(&id); }
@@ -420,6 +434,19 @@ impl Transcoder {
                     e.into_inner().remove(&id);
                 }
             }
+        }
+
+        if stalled {
+            // A watchdog kill is a failure, not a user cancellation. Reporting it
+            // as `Cancelled` marked the job `cancelled`, skipped the failure
+            // explanation, suppressed the transient retry, and logged the
+            // telemetry failure_reason as "cancelled" — so a hung encoder looked
+            // exactly like someone pressing Cancel.
+            let error_detail = last_lines.make_contiguous().join("\n");
+            return Err(AlchemistError::FFmpeg(format!(
+                "FFmpeg produced no output for 120s and was killed as stalled. Last output:\n{}",
+                error_detail
+            )));
         }
 
         if killed {

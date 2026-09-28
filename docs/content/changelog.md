@@ -5,6 +5,191 @@ description: Release history for Alchemist.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-27
+
+### Security hardening
+
+- The Content-Security-Policy no longer allows `script-src 'unsafe-inline'`.
+  The first-paint theme bootstrap moved from an inline script to the
+  externally served `web/public/theme-init.js`, and `base-uri 'self'` /
+  `form-action 'self'` were added. Astro's build-injected island scripts
+  are covered by a fresh per-response nonce injected at serve time, so the
+  policy stays strict without a hash registry. `scripts/check_csp_baseline.py`,
+  now part of `just check` and `just release-verify`, guards the static
+  policy, the nonce injector, and the absence of DOM-XSS sinks (SEC-3).
+- Outbound notification secrets are now write-only. Reads (notification
+  targets GET, settings bundle, and the `config_updated` SSE event, which
+  read-only tokens may subscribe to) echo a `********` sentinel instead of
+  webhook URLs, tokens, and passwords; the test endpoint and bundle PUT
+  resolve the sentinel against storage so round-trips preserve secrets
+  (SEC-4).
+- Closed the remaining open audit items: `set_concurrent_jobs` reductions
+  are serialized under the `held_permits` mutex so rapid limit changes
+  cannot over-park permits (TD-25), and the config-to-database projection
+  commits watch dirs, notification targets, schedule windows, file
+  settings, and the theme preference in a single transaction (RG-21).
+
+### Engine and analysis fixes
+
+- FFprobe streams without a `codec_name` (typically font attachments in
+  Matroska files) no longer reject the entire probe document. The field is
+  optional and falls back to the inert value `"unknown"`, which matches no
+  lossless, burnable, or heavy codec (#9).
+- The server engine can now start unpaused by configuration. The new
+  `system.start_paused` option defaults to `true`, preserving existing
+  behavior; set it to `false` to process queued work immediately after a
+  restart or unattended upgrade. Setup mode always starts paused (#10).
+- The auto-analysis pass now pages by keyset instead of re-fetching offset
+  zero, so a full batch of jobs that fail without recording a decision can
+  no longer starve the rest of the library or spin the pass forever (#11).
+- Balanced-mode device exclusion ignores archived rows, interrupted jobs
+  are reset even when archived (without unarchiving them), and
+  `update_job_status` refuses to move an archived row into an active state
+  — so a stale archived active row can no longer block its whole device
+  (#12).
+
+
+### Queue and engine correctness
+
+- A single unreadable file in the library no longer freezes the entire encode
+  queue. The auto-analysis pass selects jobs by "queued or failed, and has no
+  decision recorded" and loops until that set is empty — but a job whose
+  analysis failed was marked `failed` without a decision row, so it stayed
+  selected forever. The boot pass never returned, which left the engine's claim
+  loop permanently blocked: nothing encoded until the process was restarted, and
+  the same file re-triggered it on the next start. Failed analyses now record
+  their decision, and the pass additionally stops if a batch contains only jobs
+  it has already attempted (`audit.md` P1-15).
+- Disabling or deleting the last off-peak schedule window no longer strands the
+  engine paused. The scheduler skipped its "clear the pause" branch when no
+  windows were enabled, and because `Resume` only clears the *manual* pause, the
+  UI could not recover the engine — only restarting the process could (P1-16).
+- An FFmpeg process killed by the 120-second stall watchdog is now reported as a
+  failure instead of a cancellation. It previously returned the same error as a
+  user cancel, so a hung encoder produced a job marked `cancelled` with no
+  failure explanation, no retry, and telemetry recording the reason as
+  "cancelled" (P1-17).
+- Restarting or re-analyzing a job now clears the previous run's failure
+  explanation, so a requeued job stops rendering a stale failure banner while it
+  sits healthy in the queue (P2-49).
+
+### Performance and scale
+
+- Job id lists are chunked before being bound into SQL. Every batch query built
+  one `IN (...)` clause with a variable per id, and SQLite's limit is 32766 — so
+  re-analyzing a watch folder, which passes *every* job under it, failed
+  outright on libraries past roughly 32k files (P2-48).
+- Telemetry is no longer awaited inside the encode pipeline. With telemetry
+  enabled and the ingest endpoint unreachable, each job's start and finish events
+  blocked for about 13 seconds apiece while holding the worker's concurrency
+  permit (P2-51).
+- The filesystem watcher's per-second stability sweep now runs on the blocking
+  pool. It stat-ed every pending file synchronously on a tokio worker, and the
+  pending set is unbounded during a bulk import (P2-53). The disk-space guardrail
+  probe, which enumerates and refreshes every mount on each engine-loop
+  iteration, moved off the runtime for the same reason (RG-19).
+- The MCP `recent_jobs` tool no longer loads the whole jobs table — with two
+  correlated subqueries per row — to return at most 50 rows (P2-52).
+
+### Diagnostics
+
+- An FFmpeg failure's "Last output" is real diagnostic output again. The
+  20-line context buffer was unfiltered, so with `-progress` emitting ~11 field
+  lines per tick it contained nothing but two ticks of `frame=`/`fps=` by the
+  time a failure surfaced, with the actual error already pushed out (P2-50).
+- Library-health issues cap the stored ffmpeg stderr at 4KB. A badly damaged
+  file could emit thousands of decode-error lines and write all of them to the
+  database (RG-20).
+
+### Internal
+
+- Upgraded Astro to 7.3.3 and refreshed the audited frontend overrides for
+  `baseline-browser-mapping`, `browserslist`, `devalue`, `fast-uri`,
+  `js-yaml`, `sharp`, `smol-toml`, and `svgo` to patched releases.
+- Updated transitive `rustls` to 0.23.45 to fix RUSTSEC-2026-0285, including
+  its compatible `aws-lc` and `rustls-webpki` lockfile dependencies.
+- Removed the unused direct `tokio-stream` Rust dependency and the unused
+  `playwright` frontend dependency. SQLx continues to supply `tokio-stream`
+  transitively, while browser tests remain owned by `web-e2e` through
+  `@playwright/test`.
+- `process_job`'s eight failure exits shared one `mark_job_failed` helper
+  instead of each hand-writing the same log/explanation/state-transition
+  sequence (TD-20). Enqueue loads watch folders once instead of twice, and no
+  longer silently narrows the path allow-list when that load fails (TD-21).
+  Also fixed: an `i64` overflow on an absurd `?page=` value (TD-22), a negative
+  array index in `formatBytes` for sub-byte values (TD-23), and a blocking
+  `std::fs::metadata` in the conversion start handler (TD-24).
+
+### Frontend reliability and accessibility
+
+- Fixed four frontend defects surfaced by the deep frontend audit (see
+  `audit.md` P2-44 through P2-47): Save View no longer crashes on plain-HTTP
+  deployments (`crypto.randomUUID` required a secure context); modal focus and
+  inert management no longer churn on every parent render, which stole focus
+  mid-typing and broke focus restore around live SSE updates; jobs list fetches
+  are sequence-guarded so slow older responses can no longer overwrite newer
+  filter/tab/page state; and job row selection is keyboard-operable and clears
+  when the query changes so batch actions can never target invisible rows.
+- Byte/duration/relative-time formatting, previously reimplemented seven
+  different ways across the frontend with drifting behavior (mismatched
+  decimal precision, negative values silently collapsing to `"0 B"` instead
+  of displaying, `Math.log` producing `"NaN undefined"` on bad input), is now
+  centralized in `web/src/lib/format.ts`.
+- The Dashboard's engine-paused banner and the header's engine controls now
+  share a single polling store (`web/src/lib/engineStatusStore.ts`) instead
+  of independently fetching `/api/engine/status` — they could previously
+  disagree about the same engine, and the dashboard's queue-ETA/banner never
+  refreshed after the initial load. A Start/Stop action now updates both
+  instantly instead of waiting for the next poll tick.
+- The Convert tool's status poll now stops after 5 consecutive failures and
+  shows a "Lost contact with this conversion" banner with a Retry button,
+  instead of polling a dead job indefinitely with only a one-time toast.
+- Settings' 11 tabs are now lazy-loaded (`React.lazy`/`Suspense`) instead of
+  all being eagerly bundled into one island — previously the largest chunk
+  in the app. Every framer-motion animation in the frontend now honors the
+  OS `prefers-reduced-motion` setting (WCAG 2.3.3), and CSS transitions/
+  animations/smooth-scroll are disabled under it too.
+- The 8 light-background theme profiles (ivory, cloud, mint, linen, sunlit,
+  sage, sprout, glow) no longer inherit status colors tuned for a dark
+  background — contrast against those palettes measured as low as ~1.8:1
+  (WCAG AA needs 4.5:1); they now get their own verified-contrast overrides.
+- The mobile sidebar drawer no longer leaves the page unscrollable after a
+  nav-triggered view transition, closes on Escape, and moves focus to the
+  first nav link when opened.
+- A session expiring mid-request no longer hangs the calling code forever
+  (`apiFetch`'s 401 handler returned a promise that never resolved); it now
+  rejects immediately and round-trips the page you were on via `?next=` so
+  re-login returns you there instead of the dashboard.
+- `ConfirmDialog` no longer produces a silent unhandled rejection and a
+  stuck-open dialog when its confirm handler throws; the error is toasted
+  and the dialog stays open. The jobs-table right-click context menu no
+  longer renders partially offscreen near a viewport edge. Toasts announce
+  once to screen readers instead of twice (a dedicated live region and each
+  toast's own `role="alert"`/`"status"` were both firing).
+- Removed the unused direct `devalue` dependency from `web/package.json`
+  (an unrelated transitive-version `overrides` pin for the same package,
+  used by Astro itself, is unaffected).
+
+### Reliability
+
+- FFmpeg's raw `-progress` field lines (`frame=`, `fps=`, `out_time_ms=`, ...)
+  are no longer persisted to the `logs` table or broadcast over SSE. They were
+  previously logged unfiltered on every ~0.5s tick (~11 lines per tick), which
+  could silently grow the database by hundreds of thousands of rows over a
+  single long encode. The progress-bar path was already correctly throttled;
+  this brings the raw-log path in line with it.
+
+### Documentation
+
+- `audit.md`'s 2026-08-22 deep frontend sweep (four P2, three RG, three UX,
+  five TD) is now fully resolved, including the RG/UX/TD backlog that
+  originally shipped as "batch opportunistically." A 2026-08-25
+  re-evaluation reverted the `lucide-react` removal (kept as `lucide-react`;
+  the measured production bundle savings from vendoring were real but
+  marginal — about 7KB gzip — and not worth owning a hand-maintained,
+  unlicensed-for-attribution copy of the icon SVG data with no update path),
+  and added a new P1 for the log-flood fix above.
+
 ## [0.3.5-rc.4] - 2026-08-08
 
 ### Dependency maintenance

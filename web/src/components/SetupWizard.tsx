@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MotionConfig } from "framer-motion";
 import { apiAction, apiJson, isApiError } from "../lib/api";
 import AdminAccountStep from "./setup/AdminAccountStep";
 import LibraryStep from "./setup/LibraryStep";
@@ -368,16 +369,18 @@ export default function SetupWizard() {
     })();
 
     return (
-        <SetupFrame
-            step={step}
-            configMutable={configMutable}
-            canComplete={canComplete}
-            error={error}
-            submitting={submitting}
-            onBack={handleBack}
-            onNext={() => void handleNext()}
-        >
-            {currentStep}
-        </SetupFrame>
+        <MotionConfig reducedMotion="user">
+            <SetupFrame
+                step={step}
+                configMutable={configMutable}
+                canComplete={canComplete}
+                error={error}
+                submitting={submitting}
+                onBack={handleBack}
+                onNext={() => void handleNext()}
+            >
+                {currentStep}
+            </SetupFrame>
+        </MotionConfig>
     );
 }

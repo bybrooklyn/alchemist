@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { apiJson, isApiError } from "../lib/api";
+import { formatBytes } from "../lib/format";
 import { Skeleton } from "./ui/Skeleton";
 
 interface AggregatedStats {
@@ -125,14 +126,6 @@ export default function StatsCharts() {
         }
 
         setLoading(false);
-    };
-
-    const formatBytes = (bytes: number) => {
-        if (bytes === 0) return "0 B";
-        const k = 1024;
-        const sizes = ["B", "KB", "MB", "GB", "TB"];
-        const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
     };
 
     const formatTime = (seconds: number) => {

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X, type LucideIcon } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import { subscribeToToasts, type ToastKind, type ToastMessage } from "../../lib/toast";
 
 const DEFAULT_DURATION_MS = 3500;
@@ -114,23 +114,12 @@ export default function ToastRegion() {
     // Clear every pending timer on unmount.
     useEffect(() => clearAllTimers, [clearAllTimers]);
 
-    const liveMessage = useMemo(() => {
-        if (toasts.length === 0) {
-            return "";
-        }
-        const top = toasts[0];
-        return top.title ? `${top.title}: ${top.message}` : top.message;
-    }, [toasts]);
-
     if (toasts.length === 0) {
-        return <div className="sr-only" aria-live="polite" aria-atomic="true">{liveMessage}</div>;
+        return null;
     }
 
     return (
-        <>
-            <div className="sr-only" aria-live="polite" aria-atomic="true">
-                {liveMessage}
-            </div>
+        <MotionConfig reducedMotion="user">
             <div className="fixed top-4 right-4 z-[300] flex w-[min(92vw,360px)] flex-col gap-2 pointer-events-none">
                 <AnimatePresence initial={false}>
                     {toasts.map((toast) => {
@@ -172,6 +161,6 @@ export default function ToastRegion() {
                     })}
                 </AnimatePresence>
             </div>
-        </>
+        </MotionConfig>
     );
 }

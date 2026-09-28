@@ -24,8 +24,23 @@ pub enum HealthIssueCategory {
     Unknown,
 }
 
+/// Upper bound on the stored `raw_output`. A badly damaged file can make ffmpeg
+/// emit thousands of decode-error lines even under `-v error`, and the whole
+/// blob is persisted per health issue; cap it so one corrupt file cannot bloat
+/// the database. The categorization below only ever inspects the leading lines.
+const MAX_RAW_OUTPUT_CHARS: usize = 4096;
+
 pub fn categorize_health_output(stderr: &str) -> HealthIssueReport {
-    let raw_output = stderr.trim().to_string();
+    let trimmed = stderr.trim();
+    let raw_output = if trimmed.chars().count() > MAX_RAW_OUTPUT_CHARS {
+        // Deliberately not the word "truncated": the categorizer below matches
+        // that string to detect a truncated *media file*, so using it here would
+        // misclassify every oversized error dump as TruncatedFile.
+        let head: String = trimmed.chars().take(MAX_RAW_OUTPUT_CHARS).collect();
+        format!("{head}\n[output clipped]")
+    } else {
+        trimmed.to_string()
+    };
     let normalized = raw_output.to_ascii_lowercase();
 
     let (category, summary) = if normalized.contains("moov atom not found")
@@ -148,5 +163,18 @@ mod tests {
         let report = categorize_health_output("first line\nsecond line");
         assert_eq!(report.category, HealthIssueCategory::Unknown);
         assert_eq!(report.summary, "first line");
+    }
+
+    #[test]
+    fn oversized_output_is_clipped_without_forcing_truncated_category() {
+        let noisy = format!(
+            "Error while decoding stream #0:0: garbage\n{}",
+            "x".repeat(MAX_RAW_OUTPUT_CHARS * 2)
+        );
+        let report = categorize_health_output(&noisy);
+        assert!(report.raw_output.chars().count() <= MAX_RAW_OUTPUT_CHARS + 32);
+        assert!(report.raw_output.ends_with("[output clipped]"));
+        // The clip marker must not steal the TruncatedFile classification.
+        assert_eq!(report.category, HealthIssueCategory::CorruptVideo);
     }
 }

@@ -10,6 +10,8 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { apiJson, isApiError } from "../lib/api";
+import { useEngineStatus } from "../lib/engineStatusStore";
+import { formatBytes, formatDurationHuman, formatRelativeTime } from "../lib/format";
 import { useSharedStats } from "../lib/statsStore";
 import { showToast } from "../lib/toast";
 import ResourceMonitor from "./ResourceMonitor";
@@ -64,14 +66,6 @@ const DEFAULT_STATS = {
     concurrent_limit: 1,
 };
 
-function formatBytes(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
 function StatCard({ label, value, icon: Icon, colorClass }: StatCardProps) {
     return (
         <div className="px-4 py-3 rounded-lg bg-helios-surface border border-helios-line/30 hover:bg-helios-surface-soft transition-colors">
@@ -90,19 +84,6 @@ function isActiveStatus(status: string): boolean {
     return ["analyzing", "encoding", "remuxing", "resuming"].includes(status.toLowerCase());
 }
 
-function formatDuration(seconds: number): string {
-    const totalMinutes = Math.max(1, Math.round(seconds / 60));
-    if (totalMinutes < 60) return `${totalMinutes}m`;
-
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours < 24) return `${hours}h ${minutes}m`;
-
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    return `${days}d ${remainingHours}h`;
-}
-
 function Dashboard() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [activeJobs, setActiveJobs] = useState<Job[]>([]);
@@ -116,7 +97,8 @@ function Dashboard() {
     } | null>(null);
     const [queueEta, setQueueEta] = useState<QueueEtaResponse | null>(null);
     const [queueEtaLoading, setQueueEtaLoading] = useState(true);
-    const [engineStatus, setEngineStatus] = useState<"paused" | "running" | "draining">("paused");
+    const { status: sharedEngineStatus } = useEngineStatus();
+    const engineStatus = sharedEngineStatus?.status ?? "paused";
     const { stats: sharedStats, error: statsError } = useSharedStats();
     const stats = sharedStats ?? DEFAULT_STATS;
 
@@ -162,7 +144,18 @@ function Dashboard() {
             }
         };
 
+        const fetchQueueEta = async () => {
+            try {
+                setQueueEta(await apiJson<QueueEtaResponse>("/api/stats/queue-eta"));
+            } catch {
+                // Non-critical estimate; dashboard still renders without it.
+            } finally {
+                setQueueEtaLoading(false);
+            }
+        };
+
         void fetchJobs();
+        void fetchQueueEta();
         void (async () => {
             try {
                 const bundleResponse = await apiJson<SettingsBundleResponse>("/api/settings/bundle");
@@ -193,13 +186,17 @@ function Dashboard() {
                 // Ignore setup redirect lookup failures here; dashboard data fetches handle their own UX.
             }
         })();
-        void apiJson<{ status: "paused" | "running" | "draining" }>("/api/engine/status")
-            .then((data) => setEngineStatus(data.status))
-            .catch((e) => { console.debug("Dashboard: engine status fetch failed", e); });
-
+        // Queue ETA moves far more slowly than the job list, so it refreshes
+        // on every other jobs-poll tick (~10s) rather than every tick.
+        let tick = 0;
         const pollVisible = () => {
-            if (document.visibilityState === "visible") {
-                void fetchJobs();
+            if (document.visibilityState !== "visible") {
+                return;
+            }
+            void fetchJobs();
+            tick += 1;
+            if (tick % 2 === 0) {
+                void fetchQueueEta();
             }
         };
 
@@ -224,32 +221,8 @@ function Dashboard() {
                 // not critical — panel just won't show
             }
         };
-        const fetchQueueEta = async () => {
-            try {
-                setQueueEta(await apiJson<QueueEtaResponse>("/api/stats/queue-eta"));
-            } catch {
-                // Non-critical estimate; dashboard still renders without it.
-            } finally {
-                setQueueEtaLoading(false);
-            }
-        };
         void fetchWeekStats();
-        void fetchQueueEta();
     }, []);
-
-    const formatRelativeTime = (iso?: string) => {
-        if (!iso) return "Just now";
-        const then = new Date(iso).getTime();
-        if (Number.isNaN(then)) return "Just now";
-        const diff = Math.max(0, Date.now() - then);
-        const minutes = Math.floor(diff / 60000);
-        if (minutes < 1) return "Just now";
-        if (minutes < 60) return `${minutes}m ago`;
-        const hours = Math.floor(minutes / 60);
-        if (hours < 24) return `${hours}h ago`;
-        const days = Math.floor(hours / 24);
-        return `${days}d ago`;
-    };
 
     return (
         <div className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden">
@@ -455,7 +428,7 @@ function Dashboard() {
                                         {queueEta.remaining_jobs === 0
                                             ? "Queue is clear"
                                             : queueEta.est_seconds_remaining !== null
-                                                ? `About ${formatDuration(queueEta.est_seconds_remaining)} left`
+                                                ? `About ${formatDurationHuman(queueEta.est_seconds_remaining)} left`
                                                 : "Unavailable"}
                                     </span>
                                 </div>

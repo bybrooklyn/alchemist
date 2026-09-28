@@ -147,6 +147,7 @@ requires at least one day in every window.
 | `log_retention_days` | int | `30` | Log retention period in days |
 | `metrics_enabled` | bool | `false` | Enable the Prometheus `/metrics` endpoint |
 | `engine_mode` | string | `"balanced"` | Runtime engine mode: `background`, `balanced`, or `throughput` |
+| `start_paused` | bool | `true` | Whether the background processing engine starts paused when the server boots, waiting for an explicit user action before it picks up jobs. Set to `false` to have it start running immediately |
 | `https_only` | bool | `false` | Add HSTS when Alchemist is served behind HTTPS. Do not enable for plain HTTP |
 | `trusted_proxies` | list | `[]` | Explicit reverse proxy IPs whose forwarded headers are trusted. Empty preserves private-range proxy compatibility |
 | `arr_path_translations` | list | `[]` | Optional path prefix mappings for ARR webhook ingestion, each entry `{ from, to }`; longest matching `from` prefix wins |

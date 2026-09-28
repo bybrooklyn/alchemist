@@ -1,5 +1,6 @@
 import React, { Component, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
+import { MotionConfig } from "framer-motion";
 
 interface Props {
   children: ReactNode;
@@ -62,7 +63,11 @@ export const withErrorBoundary = <P extends object>(
   return function WithErrorBoundary(props: P) {
     return (
       <ErrorBoundary moduleName={moduleName}>
-        <WrappedComponent {...props} />
+        {/* Honors the OS prefers-reduced-motion setting for every
+            framer-motion animation in this island's tree. */}
+        <MotionConfig reducedMotion="user">
+          <WrappedComponent {...props} />
+        </MotionConfig>
       </ErrorBoundary>
     );
   };

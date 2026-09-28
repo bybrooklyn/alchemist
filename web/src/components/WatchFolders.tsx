@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, Play, Pencil, Eye } from "lucide-react";
 import { apiAction, apiJson, isApiError } from "../lib/api";
+import { formatBytes } from "../lib/format";
 import { showToast } from "../lib/toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import ServerDirectoryPicker from "./ui/ServerDirectoryPicker";
@@ -29,18 +30,6 @@ interface LibraryPreviewResponse {
         encode: number;
     };
     samples: LibraryPreviewSample[];
-}
-
-function formatBytes(bytes: number): string {
-    if (bytes <= 0) return "0 B";
-    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let value = bytes;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-    return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 interface WatchDir {

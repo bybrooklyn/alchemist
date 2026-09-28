@@ -142,6 +142,22 @@ pub(crate) async fn enqueue_job_from_submitted_path(
         ));
     }
 
+    // Loaded once and reused for both the allow-list check and source-root
+    // resolution below. Previously this was fetched twice, and the first fetch
+    // swallowed its error — a database blip silently narrowed the allow-list and
+    // rejected a legitimate path as FORBIDDEN, while the second fetch of the same
+    // data correctly returned a 500.
+    let watch_dirs = match state.db.get_watch_dirs().await {
+        Ok(watch_dirs) => watch_dirs,
+        Err(err) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ENQUEUE_WATCH_DIRS_LOAD_FAILED",
+                err.to_string(),
+            ));
+        }
+    };
+
     // Security check: path must be inside an allowed root
     let mut allowed_roots: Vec<PathBuf> = {
         let config = state.config.read().await;
@@ -152,11 +168,7 @@ pub(crate) async fn enqueue_job_from_submitted_path(
             .map(PathBuf::from)
             .collect()
     };
-    if let Ok(watch_dirs) = state.db.get_watch_dirs().await {
-        for wd in watch_dirs {
-            allowed_roots.push(PathBuf::from(wd.path));
-        }
-    }
+    allowed_roots.extend(watch_dirs.iter().map(|wd| PathBuf::from(&wd.path)));
 
     let mut is_allowed = false;
     for root in allowed_roots {
@@ -192,17 +204,6 @@ pub(crate) async fn enqueue_job_from_submitted_path(
             "File type is not supported for enqueue.".to_string(),
         ));
     }
-
-    let watch_dirs = match state.db.get_watch_dirs().await {
-        Ok(watch_dirs) => watch_dirs,
-        Err(err) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "ENQUEUE_WATCH_DIRS_LOAD_FAILED",
-                err.to_string(),
-            ));
-        }
-    };
 
     let discovered = crate::media::pipeline::DiscoveredMedia {
         path: canonical_path.clone(),
@@ -316,7 +317,9 @@ pub(crate) async fn jobs_table_handler(
 
     let limit = limit.unwrap_or(50).clamp(1, 200);
     let page = page.unwrap_or(1).max(1);
-    let offset = (page - 1) * limit;
+    // Saturating: an absurd `?page=` (up to i64::MAX) would otherwise overflow —
+    // a panic in a debug build, and a negative OFFSET in a release one.
+    let offset = page.saturating_sub(1).saturating_mul(limit);
 
     let statuses = if let Some(s) = status {
         let mut list = Vec::new();

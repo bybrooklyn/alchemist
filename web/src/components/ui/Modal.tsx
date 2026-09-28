@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, type Target } from "framer-motion";
 import { cn } from "../../lib/cn";
-import { focusableElements, setAppShellInert } from "../../lib/focusUtils";
+import { focusableElements, restoreFocus, setAppShellInert, trapTabNavigation } from "../../lib/focusUtils";
 
 function originInitial(originRect: DOMRect): Target {
     const buttonCenterX = originRect.left + originRect.width / 2;
@@ -62,6 +62,20 @@ export default function Modal({
     const [mounted, setMounted] = useState(false);
     const manageFocus = trapFocus && !externalPanelRef;
 
+    // Callers routinely pass inline arrows (and toggle `disableClose` while
+    // submits are in flight). Keeping them in refs lets the focus lifecycle
+    // below run strictly on open/close instead of churning — teardown steals
+    // focus back to the trigger and re-focusses the panel's first element on
+    // every parent render otherwise.
+    const onCloseRef = useRef(onClose);
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    });
+    const disableCloseRef = useRef(disableClose);
+    useEffect(() => {
+        disableCloseRef.current = disableClose;
+    });
+
     useEffect(() => setMounted(true), []);
 
     useEffect(() => {
@@ -83,8 +97,8 @@ export default function Modal({
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
-                if (!disableClose) {
-                    onClose();
+                if (!disableCloseRef.current) {
+                    onCloseRef.current();
                 }
                 return;
             }
@@ -93,39 +107,16 @@ export default function Modal({
                 return;
             }
 
-            const root = panelRef.current;
-            if (!root) {
-                return;
-            }
-
-            const focusables = focusableElements(root);
-            if (focusables.length === 0) {
-                event.preventDefault();
-                root.focus();
-                return;
-            }
-
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const current = document.activeElement as HTMLElement | null;
-
-            if (event.shiftKey && current === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && current === last) {
-                event.preventDefault();
-                first.focus();
-            }
+            trapTabNavigation(event, panelRef.current);
         };
 
         document.addEventListener("keydown", onKeyDown);
         return () => {
             document.removeEventListener("keydown", onKeyDown);
             setAppShellInert(false);
-            lastFocusedRef.current?.focus();
+            restoreFocus(lastFocusedRef);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, manageFocus, disableClose, onClose]);
+    }, [open, manageFocus]);
 
     if (!mounted) {
         return null;

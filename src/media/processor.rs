@@ -149,8 +149,23 @@ impl Agent {
 
         let output_dir = std::path::Path::new(&next.output_path)
             .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let available = crate::system::disk_space::available_bytes_for_path(output_dir);
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+        // Enumerating and refreshing every mount is blocking syscall work, and a
+        // stale network mount can make it hang for seconds. This runs on every
+        // engine-loop iteration, so keep it off the async worker.
+        let probe_dir = output_dir.clone();
+        let available = match tokio::task::spawn_blocking(move || {
+            crate::system::disk_space::available_bytes_for_path(&probe_dir)
+        })
+        .await
+        {
+            Ok(available) => available,
+            Err(e) => {
+                debug!("Disk guardrail: free-space probe failed: {e}");
+                return false;
+            }
+        };
 
         if crate::system::disk_space::is_below_min_free(available, min_gb) {
             let free_gib = available.map_or(0.0, crate::system::disk_space::as_gib);
@@ -405,9 +420,38 @@ impl Agent {
 
         let batch_size: i64 = 100;
         let mut total_analyzed: usize = 0;
+        // Every iteration used to re-query at offset 0 and relied on analyzed
+        // jobs dropping out of the selection. A job that cannot be moved out
+        // of it (e.g. a transient DB error on the profile lookup, which
+        // leaves the job `failed` with no decision row) would otherwise be
+        // re-selected forever: the boot pass never returns, `analyzing_boot`
+        // stays set, and the engine claim loop never starts a single job.
+        // Tracking what this pass has already attempted guarantees
+        // termination regardless of why a job stays selected — it is simply
+        // retried on the next pass instead.
+        let mut attempted: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+        // Keyset cursor: the (priority, created_at, id) of the last job
+        // seen in the previous page, in the same sort order the query
+        // uses. A job whose analysis fails gets no decision row, so it
+        // stays in the underlying result set — paging by OFFSET would
+        // keep re-fetching the same still-failing jobs forever once a
+        // full batch of them accumulates. Keyset paging only depends on
+        // the last row's own sort key, so every job is attempted at most
+        // once per pass and the pass always reaches jobs that sort after
+        // the failing ones. Failed jobs are picked up again on a later
+        // pass, once something else has changed. The `attempted` set above
+        // is retained as a backstop: with the cursor advancing past every
+        // fetched row it should never trip, but the termination guarantee
+        // no longer depends on any single mechanism.
+        let mut cursor: Option<(i32, chrono::DateTime<chrono::Utc>, i64)> = None;
 
         loop {
-            let batch = match self.db.get_jobs_for_analysis_batch(0, batch_size).await {
+            let batch = match self
+                .db
+                .get_jobs_for_analysis_batch_after(cursor, batch_size)
+                .await
+            {
                 Ok(b) => b,
                 Err(e) => {
                     error!("Auto-analysis: fetch failed: {e}");
@@ -419,10 +463,31 @@ impl Agent {
                 break;
             }
 
-            let batch_len = batch.len();
+            // Advance the cursor from the last row BEFORE analyzing the
+            // page, so a job that remains eligible after a failed analysis
+            // is still attempted only once in this pass.
+            if let Some(last) = batch.last() {
+                cursor = Some((last.priority, last.created_at, last.id));
+            }
+
+            let still_selected = batch.len();
+            let fresh: Vec<_> = batch
+                .into_iter()
+                .filter(|job| attempted.insert(job.id))
+                .collect();
+            if fresh.is_empty() {
+                warn!(
+                    "Auto-analysis: {still_selected} job(s) remain selected after \
+                     already being analyzed this pass; stopping to avoid a spin. \
+                     They will be retried on the next pass."
+                );
+                break;
+            }
+
+            let batch_len = fresh.len();
             debug!("Auto-analysis: analyzing {} job(s)...", batch_len);
 
-            for job in batch {
+            for job in fresh {
                 let pipeline = self.pipeline();
                 match pipeline.analyze_job_only(job).await {
                     Ok(_) => {}
@@ -477,11 +542,19 @@ impl Agent {
         self.manual_override.load(Ordering::SeqCst)
     }
 
+    /// Adjust the concurrency limit. The whole adjustment — delta
+    /// computation and permit acquire/release — runs under the
+    /// `held_permits` mutex so two rapid adjustments cannot interleave.
+    /// Previously the reduction branch spawned a detached task per call
+    /// guarded only by an atomic flag, so a 4 → 3 → 2 sequence could park
+    /// more permits than requested (TD-25). Reductions may wait here while
+    /// in-flight jobs release permits; that serialization is the point.
     pub async fn set_concurrent_jobs(&self, new_limit: usize) {
         if new_limit == 0 {
             return;
         }
 
+        let mut held = self.held_permits.lock().await;
         let current = self.semaphore_limit.load(Ordering::SeqCst);
         if new_limit == current {
             return;
@@ -493,7 +566,6 @@ impl Agent {
         );
 
         if new_limit > current {
-            let mut held = self.held_permits.lock().await;
             let mut increase = new_limit - current;
 
             if !held.is_empty() {
@@ -510,33 +582,18 @@ impl Agent {
             return;
         }
 
-        let reduce_by = current - new_limit;
+        // Reduction: park exactly (current - new_limit) permits. `current`
+        // is the live target (every adjustment updates it under this lock),
+        // so consecutive reductions compose instead of each re-deriving a
+        // delta from a stale value.
         self.semaphore_limit.store(new_limit, Ordering::SeqCst);
-
-        let semaphore = self.semaphore.clone();
-        let held = self.held_permits.clone();
-        let limit = self.semaphore_limit.clone();
-        let target_limit = new_limit;
-        tokio::spawn(async move {
-            let mut acquired = Vec::with_capacity(reduce_by);
-            for _ in 0..reduce_by {
-                match semaphore.clone().acquire_owned().await {
-                    Ok(permit) => {
-                        if limit.load(Ordering::SeqCst) > target_limit {
-                            drop(permit);
-                            break;
-                        }
-                        acquired.push(permit);
-                    }
-                    Err(_) => break,
-                }
+        let reduce_by = current - new_limit;
+        for _ in 0..reduce_by {
+            match self.semaphore.clone().acquire_owned().await {
+                Ok(permit) => held.push(permit),
+                Err(_) => break,
             }
-            if acquired.is_empty() || limit.load(Ordering::SeqCst) > target_limit {
-                return;
-            }
-            let mut held_guard = held.lock().await;
-            held_guard.extend(acquired);
-        });
+        }
     }
 
     pub async fn run_loop(self: Arc<Self>) {
@@ -788,5 +845,238 @@ mod retry_tests {
             job_failure_code(&JobFailure::EncoderUnavailable),
             "encoder_unavailable"
         );
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use crate::system::hardware::{HardwareInfo, ProbeSummary, Vendor};
+
+    async fn test_agent(
+        concurrent_jobs: usize,
+    ) -> std::result::Result<Agent, Box<dyn std::error::Error>> {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_concurrency_test_{}.db",
+            rand::random::<u64>()
+        ));
+        let db = Arc::new(crate::db::Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let mut config_value = crate::config::Config::default();
+        config_value.transcode.concurrent_jobs = concurrent_jobs;
+        let agent = Agent::new(
+            db,
+            Arc::new(crate::Transcoder::new()),
+            Arc::new(RwLock::new(config_value)),
+            HardwareState::new(Some(HardwareInfo {
+                vendor: Vendor::Cpu,
+                device_path: None,
+                supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+                backends: Vec::new(),
+                detection_notes: Vec::new(),
+                selection_reason: String::new(),
+                probe_summary: ProbeSummary::default(),
+            })),
+            Arc::new(crate::db::EventChannels::default()),
+            true,
+        )
+        .await;
+        Ok(agent)
+    }
+
+    /// Regression test for TD-25: lowering the limit twice in quick
+    /// succession must park exactly the composed delta, not over-reduce.
+    /// With one permit held by in-flight work, driving 4 → 3 → 2 must
+    /// leave exactly 2 usable slots total (1 free + 1 in flight).
+    #[tokio::test]
+    async fn consecutive_reductions_park_exactly_the_composed_delta()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let agent = test_agent(4).await?;
+
+        // Simulate one in-flight encode holding a permit.
+        let _in_flight = agent.semaphore.clone().acquire_owned().await?;
+
+        agent.set_concurrent_jobs(3).await;
+        agent.set_concurrent_jobs(2).await;
+
+        assert_eq!(
+            agent.semaphore.available_permits() + 1,
+            2,
+            "4 → 3 → 2 with one permit in flight must leave 2 usable slots"
+        );
+        assert_eq!(
+            agent.held_permits.lock().await.len(),
+            2,
+            "exactly two permits must be parked"
+        );
+
+        // Raising the limit must release the parked permits.
+        agent.set_concurrent_jobs(4).await;
+        assert_eq!(
+            agent.semaphore.available_permits(),
+            3,
+            "raising back to 4 must free the parked permits (4 total, 1 in flight)"
+        );
+
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod analysis_pass_tests {
+    use super::*;
+    use crate::system::hardware::{HardwareInfo, ProbeSummary, Vendor};
+    use std::process::Command;
+    use std::time::Duration;
+
+    fn ffmpeg_ready() -> bool {
+        let ffmpeg = Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        let ffprobe = Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        ffmpeg && ffprobe
+    }
+
+    /// A full batch (100) of jobs whose analysis fails, followed by one
+    /// analysable job, must all be attempted within a single pass, and the
+    /// pass must terminate. Regression test for the auto-analysis pass
+    /// getting stuck re-fetching the same failing batch forever once it
+    /// fills up (OFFSET-based paging never advances past jobs that never
+    /// earn a decision row).
+    #[tokio::test]
+    async fn auto_analysis_pass_terminates_past_a_full_batch_of_failing_jobs() -> anyhow::Result<()>
+    {
+        if !ffmpeg_ready() {
+            return Ok(());
+        }
+
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_analysis_pass_keyset_{}.db",
+            rand::random::<u64>()
+        ));
+        let temp_root = std::env::temp_dir().join(format!(
+            "alchemist_analysis_pass_keyset_{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&temp_root)?;
+
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+
+        // More failing jobs than one batch (batch_size == 100). Each points
+        // at an input file that does not exist, so analysis fails quickly
+        // and deterministically (ffprobe errors immediately) and the job
+        // is left failed with no decision row.
+        const FAILING_JOB_COUNT: usize = 101;
+        let mut failing_ids = Vec::with_capacity(FAILING_JOB_COUNT);
+        for i in 0..FAILING_JOB_COUNT {
+            let input = temp_root.join(format!("missing_{i:03}.mkv"));
+            let output = temp_root.join(format!("missing_{i:03}-alchemist.mkv"));
+            db.enqueue_job(&input, &output, std::time::SystemTime::UNIX_EPOCH)
+                .await?;
+            let job = db
+                .get_job_by_input_path(input.to_string_lossy().as_ref())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing enqueued failing job"))?;
+            failing_ids.push(job.id);
+        }
+
+        // One real, analysable job enqueued last so it sorts after every
+        // failing job (same priority, later created_at / higher id).
+        let good_input = temp_root.join("good.mkv");
+        let good_output = temp_root.join("good-alchemist.mkv");
+        let ffmpeg_status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&good_input)
+            .status()?;
+        if !ffmpeg_status.success() {
+            return Err(anyhow::anyhow!(
+                "ffmpeg failed to create analysable test input"
+            ));
+        }
+        db.enqueue_job(&good_input, &good_output, std::time::SystemTime::UNIX_EPOCH)
+            .await?;
+        let good_job = db
+            .get_job_by_input_path(good_input.to_string_lossy().as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing enqueued analysable job"))?;
+
+        let config = Arc::new(RwLock::new(crate::config::Config::default()));
+        let hardware_state = HardwareState::new(Some(HardwareInfo {
+            vendor: Vendor::Cpu,
+            device_path: None,
+            supported_codecs: vec!["av1".to_string(), "hevc".to_string(), "h264".to_string()],
+            backends: Vec::new(),
+            detection_notes: Vec::new(),
+            selection_reason: String::new(),
+            probe_summary: ProbeSummary::default(),
+        }));
+        let event_channels = Arc::new(EventChannels::default());
+
+        let agent = Agent::new(
+            db.clone(),
+            Arc::new(Transcoder::new()),
+            config,
+            hardware_state,
+            event_channels,
+            false,
+        )
+        .await;
+
+        // Bounded timeout: on the old OFFSET(0)-forever code this pass
+        // never terminates, because the same failing batch keeps being
+        // re-fetched. Fail the test cleanly instead of hanging the suite.
+        let pass_result =
+            tokio::time::timeout(Duration::from_secs(30), agent.analyze_pending_jobs_boot()).await;
+        assert!(
+            pass_result.is_ok(),
+            "auto-analysis pass did not terminate within the timeout"
+        );
+
+        // The job sorting after the failing batch must have been reached
+        // and analysed.
+        assert!(
+            db.get_job_decision(good_job.id).await?.is_some(),
+            "job sorting after the failing batch was never analysed"
+        );
+        let good_job_after = db
+            .get_job_by_id(good_job.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing analysable job after pass"))?;
+        assert_ne!(good_job_after.status, crate::db::JobState::Failed);
+
+        // No failing job was attempted more than once in this pass: each
+        // logs exactly one "analysis_failed" entry.
+        for id in failing_ids {
+            let logs = db.get_logs_for_job(id, 10).await?;
+            let failure_logs = logs
+                .iter()
+                .filter(|entry| entry.message.starts_with("analysis_failed"))
+                .count();
+            assert_eq!(
+                failure_logs, 1,
+                "job {id} was attempted {failure_logs} time(s) in one pass, expected exactly 1"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(temp_root);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

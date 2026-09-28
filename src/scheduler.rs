@@ -57,7 +57,16 @@ impl Scheduler {
         let enabled_windows: Vec<_> = windows.into_iter().filter(|w| w.enabled).collect();
 
         if enabled_windows.is_empty() {
-            // No schedule active -> Do nothing, leave current state alone
+            // No schedule active -> no restriction. This must clear an existing
+            // scheduler pause, not just skip: leaving it set stranded the engine
+            // permanently paused whenever the last window was disabled or deleted
+            // while outside it. `Agent::resume()` only clears the *manual* pause,
+            // and `is_paused()` ORs the two, so the UI's Resume button could not
+            // recover it either — only a process restart could.
+            if self.agent.is_scheduler_paused() {
+                info!("No enabled schedule windows remain — clearing scheduler pause.");
+                self.agent.set_scheduler_paused(false);
+            }
             return Ok(());
         }
 
@@ -152,4 +161,76 @@ fn parse_schedule_minutes(value: &str) -> Option<u32> {
         return None;
     }
     Some(hour * 60 + minute)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Transcoder;
+    use crate::system::hardware::{HardwareInfo, HardwareState, ProbeSummary, Vendor};
+    use tokio::sync::RwLock;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    async fn test_scheduler()
+    -> std::result::Result<(Scheduler, Arc<Agent>, std::path::PathBuf), Box<dyn std::error::Error>>
+    {
+        let db_path = std::env::temp_dir().join(format!(
+            "alchemist_scheduler_test_{}.db",
+            rand::random::<u64>()
+        ));
+        let db = Arc::new(Db::new(db_path.to_string_lossy().as_ref()).await?);
+        let (jobs_tx, _) = tokio::sync::broadcast::channel(16);
+        let (config_tx, _) = tokio::sync::broadcast::channel(16);
+        let (system_tx, _) = tokio::sync::broadcast::channel(16);
+        let agent = Arc::new(
+            Agent::new(
+                db.clone(),
+                Arc::new(Transcoder::new()),
+                Arc::new(RwLock::new(crate::config::Config::default())),
+                HardwareState::new(Some(HardwareInfo {
+                    vendor: Vendor::Cpu,
+                    device_path: None,
+                    supported_codecs: Vec::new(),
+                    backends: Vec::new(),
+                    detection_notes: Vec::new(),
+                    selection_reason: String::new(),
+                    probe_summary: ProbeSummary::default(),
+                })),
+                Arc::new(crate::db::EventChannels {
+                    jobs: jobs_tx,
+                    config: config_tx,
+                    system: system_tx,
+                }),
+                true,
+            )
+            .await,
+        );
+
+        Ok((Scheduler::new(db, agent.clone()), agent, db_path))
+    }
+
+    /// Removing (or disabling) the last schedule window must release the
+    /// scheduler pause. It used to early-return and leave `scheduler_paused`
+    /// set forever: `Agent::resume()` only clears the *manual* pause and
+    /// `is_paused()` ORs the two, so the UI's Resume button could not recover
+    /// the engine — only restarting the process could.
+    #[tokio::test]
+    async fn no_enabled_windows_clears_an_existing_scheduler_pause() -> TestResult {
+        let (scheduler, agent, db_path) = test_scheduler().await?;
+
+        agent.set_scheduler_paused(true);
+        assert!(agent.is_scheduler_paused());
+
+        scheduler.check_schedule().await?;
+
+        assert!(
+            !agent.is_scheduler_paused(),
+            "engine left paused by a schedule that no longer exists"
+        );
+
+        drop(scheduler);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
 }

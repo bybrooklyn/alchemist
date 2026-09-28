@@ -498,9 +498,10 @@ pub(crate) async fn start_conversion_job_handler(
         );
     }
     let output_path = output_dir.join(format!("{file_stem}.{}", settings.output_container));
-    let mtime = std::fs::metadata(&input_path)
-        .and_then(|metadata| metadata.modified())
-        .unwrap_or(std::time::SystemTime::now());
+    let mtime = match fs::metadata(&input_path).await.and_then(|m| m.modified()) {
+        Ok(mtime) => mtime,
+        Err(_) => std::time::SystemTime::now(),
+    };
 
     if let Err(err) = state.db.enqueue_job(&input_path, &output_path, mtime).await {
         return api_error_response(

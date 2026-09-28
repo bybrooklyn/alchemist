@@ -1,5 +1,8 @@
 // Shared types for job management components
 
+export { formatBytes, formatDurationClock as formatDuration } from "../../lib/format";
+import { isApiError } from "../../lib/api";
+
 export interface ExplanationView {
     category: "decision" | "failure";
     code: string;
@@ -147,10 +150,35 @@ export function isJobActive(job: Job): boolean {
     return ["analyzing", "encoding", "remuxing", "resuming"].includes(job.status);
 }
 
+/** Render a job-action API failure, appending per-job `#id (status)`
+ *  detail when the backend reports blocked rows. Shared by JobManager's
+ *  batch actions and the job-detail controller so both surfaces explain
+ *  partial failures identically. */
+export function formatJobActionError(error: unknown, fallback: string): string {
+    if (!isApiError(error)) {
+        return fallback;
+    }
+
+    const blocked = Array.isArray((error.body as { blocked?: unknown } | undefined)?.blocked)
+        ? ((error.body as { blocked?: Array<{ id?: number; status?: string }> }).blocked ?? [])
+        : [];
+    if (blocked.length === 0) {
+        return error.message;
+    }
+
+    const summary = blocked
+        .map((job) => `#${job.id ?? "?"} (${job.status ?? "unknown"})`)
+        .join(", ");
+    return `${error.message}: ${summary}`;
+}
+
 export function retryCountdown(job: Job): string | null {
     if (job.status !== "failed") return null;
     if (!job.attempt_count || job.attempt_count === 0) return null;
 
+    // Mirrors the dequeue eligibility schedule in src/db/jobs.rs (the CASE WHEN
+    // over attempt_count in get_next_queued_job / its sibling query) — update
+    // both together if the backend backoff ever changes.
     const backoffMins =
         job.attempt_count === 1 ? 5
         : job.attempt_count === 2 ? 15
@@ -168,21 +196,6 @@ export function retryCountdown(job: Job): string | null {
     const hrs = Math.floor(remainingMins / 60);
     const mins = remainingMins % 60;
     return mins > 0 ? `Retrying in ${hrs}h ${mins}m` : `Retrying in ${hrs}h`;
-}
-
-export function formatBytes(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-export function formatDuration(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return [h, m, s].map(v => v.toString().padStart(2, "0")).join(":");
 }
 
 export function logLevelClass(level: string): string {

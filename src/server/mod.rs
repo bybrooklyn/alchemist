@@ -1299,6 +1299,96 @@ fn sanitize_asset_path(raw: &str) -> Option<String> {
 
 // Static asset handlers
 
+/// Inject a fresh CSP nonce into every src-less `<script>` tag of a served
+/// HTML page and return the rewritten bytes plus the matching `script-src`
+/// value.
+///
+/// Astro injects inline scripts (island hydration runtime) into built HTML,
+/// which cannot satisfy a static `script-src 'self'`. Rewriting them at
+/// serve time with a per-response nonce keeps the policy strict without a
+/// build-time hash registry. Tags carrying `src=` are external files and
+/// are left untouched. Returns `None` when the bytes are not valid UTF-8,
+/// in which case the caller serves the page unmodified under the static
+/// policy (SEC-3).
+fn inject_csp_nonce(html: &[u8]) -> Option<(Vec<u8>, String)> {
+    let text = std::str::from_utf8(html).ok()?;
+    let nonce: String = Uuid::new_v4().simple().to_string();
+    let mut out = String::with_capacity(text.len() + 256);
+    let mut rest = text;
+    let mut injected = 0u32;
+    while let Some(start) = find_script_tag_open(rest) {
+        let tag_end = rest[start..].find('>')?;
+        let tag = &rest[start..start + tag_end];
+        out.push_str(&rest[..start]);
+        if has_src_attribute(tag) {
+            out.push_str(tag);
+            out.push('>');
+        } else {
+            out.push_str(&tag[.."<script".len()]);
+            out.push_str(&format!(r#" nonce="{nonce}""#));
+            out.push_str(&tag["<script".len()..]);
+            out.push('>');
+            injected += 1;
+        }
+        rest = &rest[start + tag_end + 1..];
+    }
+    out.push_str(rest);
+    let script_src = format!("'self' 'nonce-{nonce}'");
+    debug_assert!(injected > 0, "HTML page served without any inline script");
+    Some((out.into_bytes(), script_src))
+}
+
+/// Locate the next `<script` tag open (ASCII case-insensitive) in `text`.
+/// The byte after `script` must not be alphanumeric so `<scripts>`-style
+/// prefixes never match.
+fn find_script_tag_open(text: &str) -> Option<usize> {
+    const NEEDLE: &[u8] = b"<script";
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(NEEDLE.len())).find(|&i| {
+        bytes[i..i + NEEDLE.len()].eq_ignore_ascii_case(NEEDLE)
+            && bytes
+                .get(i + NEEDLE.len())
+                .is_none_or(|next| !next.is_ascii_alphanumeric())
+    })
+}
+
+/// Whether a `<script ...` tag span (without the closing `>`) references an
+/// external file via a `src=` attribute.
+fn has_src_attribute(tag: &str) -> bool {
+    const NEEDLE: &[u8] = b"src=";
+    let bytes = tag.as_bytes();
+    (0..bytes.len().saturating_sub(NEEDLE.len())).any(|i| {
+        bytes[i..i + NEEDLE.len()].eq_ignore_ascii_case(NEEDLE)
+            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+    })
+}
+
+/// Serve pre-rendered HTML with a per-response CSP nonce (see
+/// [`inject_csp_nonce`]). The nonce-bearing policy replaces the static
+/// middleware value for this response.
+fn html_response_with_nonce(content: Vec<u8>) -> Response {
+    match inject_csp_nonce(&content) {
+        Some((body, script_src)) => (
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    &format!(
+                        "default-src 'self'; script-src {script_src}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+                    ),
+                ),
+            ],
+            body,
+        )
+            .into_response(),
+        None => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            content,
+        )
+            .into_response(),
+    }
+}
+
 async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     static_handler(State(state), Uri::from_static("/index.html")).await
 }
@@ -1320,6 +1410,9 @@ async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl I
 
     if let Some(content) = load_static_asset(&path) {
         let mime = mime_guess::from_path(&path).first_or_octet_stream();
+        if mime.essence_str() == "text/html" {
+            return html_response_with_nonce(content);
+        }
         return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
     }
 
@@ -1327,8 +1420,7 @@ async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl I
     if !path.contains('.') {
         let index_path = format!("{}/index.html", path);
         if let Some(content) = load_static_asset(&index_path) {
-            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-            return ([(header::CONTENT_TYPE, mime.as_ref())], content).into_response();
+            return html_response_with_nonce(content);
         }
     }
 
@@ -1353,13 +1445,7 @@ async fn static_handler(State(_state): State<Arc<AppState>>, uri: Uri) -> impl I
     if !path.contains('.')
         && let Some(content) = load_static_asset("404.html")
     {
-        let mime = mime_guess::from_path("404.html").first_or_octet_stream();
-        return (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, mime.as_ref())],
-            content,
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, html_response_with_nonce(content)).into_response();
     }
 
     // Default fallback to 404 for missing files.

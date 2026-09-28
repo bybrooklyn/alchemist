@@ -185,6 +185,8 @@ check-u:
     cargo check --all-targets
     @echo "── API contract ──"
     python3 scripts/check_api_contract.py
+    @echo "── CSP baseline ──"
+    python3 scripts/check_csp_baseline.py
     @echo "── Docker runtime contract ──"
     python3 scripts/check_docker_runtime_contract.py
     @echo "── Frontend typecheck ──"
@@ -366,6 +368,8 @@ release-verify:
     actionlint .github/workflows/*.yml
     @echo "── API contract ──"
     python3 scripts/check_api_contract.py
+    @echo "── CSP baseline ──"
+    python3 scripts/check_csp_baseline.py
     @echo "── Docker runtime contract ──"
     python3 scripts/check_docker_runtime_contract.py
     @echo "── Web verify ──"

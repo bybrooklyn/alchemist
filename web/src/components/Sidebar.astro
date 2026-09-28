@@ -77,6 +77,7 @@ const navItems = [
                 return (
                     <a
                         href={href}
+                        aria-current={isActive ? "page" : undefined}
                         class:list={[
                             "flex items-center gap-3 px-3 py-2 rounded-md border-l-2 border-transparent transition-colors whitespace-nowrap",
                             isActive
@@ -94,7 +95,7 @@ const navItems = [
 
     <div class="mt-auto">
         <div class="border-t border-helios-line/30 pt-3">
-            <SystemStatus client:load />
+            <SystemStatus client:idle />
         </div>
     </div>
 </aside>
@@ -108,21 +109,34 @@ const navItems = [
 
         if (!hamburger || !closeBtn || !backdrop || !sidebar) return;
 
+        function onKeydown(event: KeyboardEvent) {
+            if (event.key === "Escape") closeSidebar();
+        }
+
         function openSidebar() {
             sidebar!.classList.remove("hidden");
             backdrop!.classList.remove("hidden");
             document.body.style.overflow = "hidden";
+            document.addEventListener("keydown", onKeydown);
+            sidebar!.querySelector<HTMLAnchorElement>("nav a")?.focus();
         }
 
         function closeSidebar() {
             sidebar!.classList.add("hidden");
             backdrop!.classList.add("hidden");
             document.body.style.overflow = "";
+            document.removeEventListener("keydown", onKeydown);
         }
 
         hamburger.addEventListener("click", openSidebar);
         closeBtn.addEventListener("click", closeSidebar);
         backdrop.addEventListener("click", closeSidebar);
+
+        // A nav-link click triggers an Astro view-transition swap that
+        // rebuilds this DOM before closeSidebar's own class/overflow changes
+        // would run — reset unconditionally so a drawer left open never
+        // survives into the next page as an unscrollable body.
+        document.body.style.overflow = "";
     }
 
     // Run on initial load and after Astro view transitions

@@ -22,6 +22,9 @@
         --text-primary: 240 234 225;
         --text-muted: 176 164 148;
         --border-subtle: 66 58 48;
+        /* Shared by every dark-background profile that doesn't redefine
+           these — see the light-profile override block below for why the
+           8 near-white profiles need their own darker values instead. */
         --status-success: 70 185 118;
         --status-warning: 239 169 57;
         --status-error: 232 92 90;
@@ -368,6 +371,25 @@
         --border-subtle: 220 224 200;
     }
 
+    /* The shared --status-* hues on :root (below) are tuned for a dark
+       bg-main and stay well above WCAG AA contrast on every dark profile, so
+       they're deliberately left shared rather than hand-tuned per theme.
+       These 8 profiles are the exception: their near-white bg-main drops the
+       shared colors as low as ~1.8:1 contrast, so they get darker overrides
+       that hold >=4.5:1 (verified against each profile's own bg-main). */
+    [data-color-profile="ivory"],
+    [data-color-profile="cloud"],
+    [data-color-profile="mint"],
+    [data-color-profile="linen"],
+    [data-color-profile="sunlit"],
+    [data-color-profile="sage"],
+    [data-color-profile="sprout"],
+    [data-color-profile="glow"] {
+        --status-success: 22 101 52;
+        --status-warning: 146 90 8;
+        --status-error: 180 30 30;
+    }
+
     [data-color-profile="midnight"] {
         --bg-main: 0 0 0;
         --bg-panel: 0 0 0;
@@ -545,4 +567,21 @@
 
 *::-webkit-scrollbar-thumb:hover {
     background-color: rgba(var(--accent-primary), 0.45);
+}
+
+/* WCAG 2.3.3 (Animation from Interactions): honor the OS reduce-motion
+   setting for CSS-driven animation/transitions (incl. Tailwind's
+   animate-pulse skeletons) and smooth scrolling. framer-motion animations
+   are gated separately via <MotionConfig reducedMotion="user"> in Layout.astro. */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }
